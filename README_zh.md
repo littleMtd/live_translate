@@ -10,13 +10,13 @@
 
 - **浮動字幕覆蓋層** — 透明tkinter窗口，始終置頂，可拖動
 - **多個STT引擎** — SenseVoice-Small（本機GPU）或Groq Whisper（雲備用）
-- **多個翻譯後端** — Gemini、Claude、Google翻譯、Ollama（本機）、NVIDIA NIM
+- **多個 Translation Engine** — Gemini、Claude、Google Translate、Ollama（本機）、NVIDIA NIM
 - **按模式選擇引擎** — 為直播模式和剪輯模式配置不同的後端
 - **主播資料庫** — 針對特定虛擬主播的內置少樣本提示集（스텔라이브 히나、릴파、챈나、MW:MEU）
-- **持久翻譯緩存** — SQLite with LRU驅逐；重複句子零API代幣成本
-- **提示緩存** — 直播模式下啟用Anthropic提示緩存（降低代幣成本~90%）
+- **持久 Cache** — SQLite with LRU 驅逐；重複句子零 API 代幣成本
+- **Prompt Cache** — 直播模式下啟用 Anthropic Prompt Cache（降低代幣成本~90%）
 - **暫停/繼續** — 空格鍵或切換按鈕凍結管道，無需關閉窗口
-- **Tauri儀表板** — 可選桌面UI用於實時配置編輯和緩存統計
+- **Tauri Dashboard** — 可選桌面 UI 用於實時配置編輯和 Cache 統計
 
 ---
 
@@ -28,7 +28,7 @@
 | Python 3.11+ | 使用 `str \| None` 聯合語法 |
 | 虛擬音頻線纜 | [VB-Cable](https://vb-audio.com/Cable/)（免費）或NVIDIA RTX Voice |
 | GPU（可選） | SenseVoice本機STT需要；最少~2GB顯存 |
-| Rust + Node.js | 僅構建Tauri儀表板時需要 |
+| Rust + Node.js | 僅構建 Tauri Dashboard 時需要 |
 
 ---
 
@@ -110,22 +110,22 @@ live-subtitle-env\Scripts\python.exe main.py --stt-only
 
 ---
 
-## Tauri儀表板（可選）
+## Tauri Dashboard（可選）
 
-Tauri儀表板是一個獨立桌面應用，可讓您控制管道並檢查緩存，無需接觸終端。
+Tauri Dashboard 是一個獨立桌面應用，可讓您控制 Pipeline 並檢查 Cache，無需接觸終端。
 
 ### 可用功能
 
 | 功能 | 詳情 |
 |------|------|
-| 啟動/停止管道 | 作為子進程啟動或終止 `main.py` |
-| 配置編輯器 | 編輯字幕外觀、翻譯設定和STT選項；更改寫入 `logs/live_translate_config.json` |
-| 緩存統計 | 顯示總條目數、總緩存命中數、最後使用時間戳和DB檔案大小 |
-| 清空緩存 | 刪除翻譯資料庫中的所有行 |
+| 啟動/停止 Pipeline | 作為 Subprocess 啟動或終止 `main.py` |
+| Config Editor | 編輯字幕外觀、翻譯設定和 STT 選項；更改寫入 `logs/live_translate_config.json` |
+| Cache 統計 | 顯示總條目數、總 Cache 命中數、最後使用時間戳和 DB 文件大小 |
+| 清空 Cache | 刪除翻譯資料庫中的所有行 |
 
-> **注意：** 在儀表板中所做的配置更改在**下次Python重啟**時生效 — 它們寫入JSON匯出檔案，不直接修改 `config.py`。
+> **注意：** 在 Dashboard 中所做的配置更改在**下次 Python 重啟**時生效 — 它們寫入 JSON 導出文件，不直接修改 `config.py`。
 
-> **注意：** 儀表板從 `logs/live_translate_config.json` 讀取配置，Python啟動時會寫入此檔案。請在執行 `main.py` 至少一次後打開儀表板，否則配置面板將顯示"找不到配置 — 請先執行Python"錯誤。
+> **注意：** Dashboard 從 `logs/live_translate_config.json` 讀取配置，Python 啟動時會寫入此文件。請在執行 `main.py` 至少一次後打開 Dashboard，否則配置面板將顯示"找不到配置 — 請先執行 Python"錯誤。
 
 ### 前置要求
 
@@ -142,12 +142,12 @@ cd src-frontend
 npm install
 cd ..
 
-# 2. 啟動儀表板（啟動Vite開發伺服器 + Tauri窗口）
+# 2. 啟動 Dashboard（啟動 Vite Dev Server + Tauri 窗口）
 cd src-tauri
 cargo tauri dev
 ```
 
-Tauri窗口在 `http://localhost:5173` 打開。Vue元件更改時熱重載激活。
+Tauri 窗口在 `http://localhost:5173` 打開。Vue 組件更改時熱重載激活。
 
 ### 構建可分發的二進位檔案
 
@@ -218,13 +218,13 @@ model: str = "qwen2.5:3b"
 
 ---
 
-## 翻譯引擎參考
+## Translation Engine 參考
 
-| 引擎 | 需要密鑰 | 說明 |
+| Engine | 需要密鑰 | 說明 |
 |------|---------|------|
-| Claude (Haiku / Sonnet) | `ANTHROPIC_API_KEY` | 直播模式下支持提示緩存 |
+| Claude (Haiku / Sonnet) | `ANTHROPIC_API_KEY` | 直播模式下支持 Prompt Cache |
 | Gemini Flash | `GEMINI_API_KEY` | 快速、經濟高效 |
-| Google翻譯 v2 | `GOOGLE_TRANSLATE_API_KEY` | 無LLM上下文；最快的備用方案 |
+| Google Translate v2 | `GOOGLE_TRANSLATE_API_KEY` | 無 LLM 上下文；最快的備用方案 |
 | Ollama | — | 完全本機；需要 `ollama serve` 執行 |
 | NVIDIA NIM | `NVIDIA_API_KEY` | 雲託管開源模型；免費套餐可用 |
 
