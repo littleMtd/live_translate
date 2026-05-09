@@ -15,7 +15,7 @@
 - **主播 Profile** — 針對特定 VTuber 的內建 Few-shot 提示組（스텔라이브 히나、릴파、챈나、MW:MEU）
 - **持久化快取** — SQLite 搭配 LRU 淘汰；重複句子不消耗多餘 API Token
 - **Prompt Cache** — 直播模式啟用 Anthropic Prompt Cache（可降低約 90% Token 費用）
-- **Tauri Dashboard** — 選用的桌面 UI，可即時編輯設定並查看快取統計
+- **Tauri Dashboard** — 選用的桌面 UI，可即時編輯設定並查看快取統計(還沒做好，等更新)
 
 ---
 
