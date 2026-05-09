@@ -1001,7 +1001,12 @@ def _build_engine_chain() -> "list[TranslationEngine]":
         if not e.available:
             log.error("NvidiaEngine unavailable — check NVIDIA_API_KEY")
             return []
-        return [e]
+        fallbacks = [fb for name in cfg.translation.engine_chain
+                     if (fb := _make_engine(name)) is not None]
+        if fallbacks:
+            log.info("NvidiaEngine ready with fallback chain: %s",
+                     [fb.engine_name for fb in fallbacks])
+        return [e] + fallbacks
     engines = [e for name in cfg.translation.engine_chain
                if (e := _make_engine(name)) is not None]
     if not engines:
@@ -1059,8 +1064,8 @@ class Translator:
                 self._recent.append((text, cached))
             return cached
 
-        # C: DB lookup — complete sentences only
-        if not incomplete and self._engines:
+        # C: DB lookup — complete sentences only; skip in live mode (near-zero hit rate)
+        if not incomplete and self._engines and cfg.translation.translation_mode != "live":
             db_result = self._db_lookup(text, self._engines[self._active_idx], prompt_ver)
             if db_result:
                 self._cache_store(text, incomplete, db_result, prompt_ver)

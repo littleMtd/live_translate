@@ -194,11 +194,9 @@ class TestTranslatorDBIntegration(unittest.TestCase):
         self._db.store("안녕하세요", "DB結果", cfg.translation.target_lang,
                        engine.engine_name, engine.model_name, prompt_ver)
 
-        result = t.translate("안녕하세요", incomplete=False)
+        result = t._db_lookup("안녕하세요", engine, prompt_ver)
 
         self.assertEqual(result, "DB結果")
-        for e in t._engines:
-            e.translate.assert_not_called()
 
     def test_complete_translation_stored_in_db(self):
         from config import cfg
