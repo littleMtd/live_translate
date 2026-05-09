@@ -148,15 +148,6 @@ class TestBuildUserMessage(unittest.TestCase):
     def test_complete_no_incomplete_flag(self):
         self.assertNotIn("incomplete", _build_user_message("안녕하세요", incomplete=False))
 
-    def test_context_included_when_provided(self):
-        msg = _build_user_message("안녕하세요", incomplete=False, context="你好 / 謝謝")
-        self.assertIn("[context]", msg)
-        self.assertIn("你好 / 謝謝", msg)
-        self.assertIn("안녕하세요", msg)
-
-    def test_no_context_section_when_empty(self):
-        msg = _build_user_message("안녕하세요", incomplete=False, context="")
-        self.assertNotIn("[context]", msg)
 
 
 # ---------------------------------------------------------------------------

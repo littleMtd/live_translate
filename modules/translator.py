@@ -81,11 +81,10 @@ def _write_history(ko: str, zh: str) -> None:
         f.write(f"[{ts}] {ko}\n        → {zh}\n")
 
 
-def _build_user_message(text: str, incomplete: bool, context: str = "") -> str:
-    flag = " (incomplete sentence, translate as best as possible)" if incomplete else ""
-    if context:
-        return f"[context]: {context}\ninput{flag}: {text}"
-    return f"input{flag}: {text}"
+def _build_user_message(text: str, incomplete: bool) -> str:
+    if incomplete:
+        return f"input (incomplete sentence, translate as best as possible): {text}"
+    return f"input: {text}"
 
 
 _STREAMER_PROFILES: dict[str, str] = {
@@ -431,208 +430,84 @@ def _build_base_prompt() -> str:
         "[Translation Examples]\n\n"
 
         "例 1（一般問候）\n"
-        "input:안녕하세요, 오늘 방송에 오신 걸 환영해요!\n"
-        "output:大家好，歡迎來到今天的直播！\n\n"
+        "input: 안녕하세요, 오늘 방송에 오신 걸 환영해요!\n"
+        "output: 大家好，歡迎來到今天的直播！\n\n"
 
-        "例 2（激動反應）\n"
-        "input:진짜 대박이다 ㅋㅋㅋ\n"
-        "output:真的太猛了哈哈哈\n\n"
+        "例 2（激動反應 + ㅋ）\n"
+        "input: 진짜 대박이다 ㅋㅋㅋ\n"
+        "output: 真的太猛了哈哈哈\n\n"
 
-        "例 3（韓國人名＋呼格助詞 아）\n"
-        "input:민준아, 같이 게임 하자!\n"
-        "output:民俊，一起來玩遊戲吧！\n\n"
+        "例 3（韓文名 + 아 呼格，閉音節）\n"
+        "input: 민준아, 같이 게임 하자!\n"
+        "output: 民俊，一起來玩遊戲吧！\n\n"
 
-        "例 4（保留遊戲名，不翻譯）\n"
-        "input:지금 Valorant 레이팅 올리는 중이에요\n"
-        "output:現在正在打 Valorant 升分\n\n"
+        "例 4（保留遊戲名）\n"
+        "input: 지금 Valorant 레이팅 올리는 중이에요\n"
+        "output: 現在正在打 Valorant 升分\n\n"
 
-        "例 5（抖內感謝）\n"
-        "input:후원해주셔서 감사합니다! 정말 감동이에요\n"
-        "output:感謝打賞！真的好感動\n\n"
+        "例 5（後援感謝）\n"
+        "input: 후원해주셔서 감사합니다! 정말 감동이에요\n"
+        "output: 感謝打賞！真的好感動\n\n"
 
-        "例 6（不完整句子）\n"
-        "input (incomplete sentence, translate as best as possible):지금 게임 하고\n"
-        "output:現在在玩遊戲\n\n"
+        "例 6（不完整句）\n"
+        "input (incomplete sentence, translate as best as possible): 지금 게임 하고\n"
+        "output: 現在在玩遊戲\n\n"
 
-        "例 7（STT幻覺：無意義外語音節）\n"
-        "input:아 gesch musste 진짜 힘들다\n"
-        "output:啊，真的好累\n\n"
+        "例 7（STT 幻覺：無意義外語音節）\n"
+        "input: 아 gesch musste 진짜 힘들다\n"
+        "output: 啊，真的好累\n\n"
 
-        "例 8（直播圈俚語：뱅송＝直播）\n"
-        "input:뱅송 터졌다 ㅋㅋ\n"
-        "output:直播炸了哈哈\n\n"
+        "例 8（직播圈俚語：뱅송＝直播）\n"
+        "input: 뱅송 터졌다 ㅋㅋ\n"
+        "output: 直播炸了哈哈\n\n"
 
-        "例 9（下播用語：방종＝結束直播）\n"
-        "input:방종할게요 다음에 봐요\n"
-        "output:要結束直播了，下次見\n\n"
+        "例 9（下播：방종）\n"
+        "input: 방종할게요 다음에 봐요\n"
+        "output: 要結束直播了，下次見\n\n"
 
-        "例 10（運氣被針對：억까）\n"
-        "input:억까당하는 중 ㅠㅠ\n"
-        "output:被運氣針對中 QQ\n\n"
+        "例 10（운氣被針對：억까）\n"
+        "input: 억까당하는 중 ㅠㅠ\n"
+        "output: 被運氣針對中 QQ\n\n"
 
-        "例 11（重複哽爛梗：뇌절）\n"
-        "input:이거 너무 뇌절 아님?\n"
-        "output:這也太一直重複了吧？\n\n"
+        "例 11（韓文名 + 이 呼格，閉音節）\n"
+        "input: 세율이한테 물어봐\n"
+        "output: 去問世律\n\n"
 
-        "例 12（名字＋呼格助詞 이，音節結尾）\n"
-        "input:세율이한테 물어봐\n"
-        "output:去問世律\n\n"
+        "例 12（STT 幻覺：夾雜日文假名）\n"
+        "input: 진짜 すごい 너무 잘한다\n"
+        "output: 真的太厲害了\n\n"
 
-        "例 13（多句連續感謝觀眾）\n"
-        "input:감사합니다! 오늘도 와주셔서 너무 기뻐요. 열심히 할게요!\n"
-        "output:謝謝！今天也來了真的好開心，我會加油的！\n\n"
+        "例 13（꿀잼）\n"
+        "input: 이 게임 진짜 꿀잼이에요\n"
+        "output: 這遊戲真的超好玩\n\n"
 
-        "例 14（失敗／被淘汰的激動反應）\n"
-        "input:아 진짜 왜 이래 ㅠㅠ 미쳤다 너무 억울해\n"
-        "output:啊真的是怎樣啦 QQ 好冤枉喔\n\n"
+        "例 14（-네 驚覺）\n"
+        "input: 생각보다 어렵네\n"
+        "output: 比想像中難欸\n\n"
 
-        "例 15（遊戲技能名：保留英文不翻）\n"
-        "input:지금 Omen ult 쓸게요 조심하세요\n"
-        "output:現在要用 Omen ult，大家小心\n\n"
+        "例 15（-잖아 理所當然陳述）\n"
+        "input: 그건 당연히 되잖아요\n"
+        "output: 那當然可以嘛\n\n"
 
-        "例 16（觀眾ID出現時保留）\n"
-        "input:kimchi_fan님 감사합니다! 최고예요\n"
-        "output:謝謝 kimchi_fan！你最棒了\n\n"
+        "例 16（遊戲死亡）\n"
+        "input: 아 죽었다! 다시 해야 해 ㅠㅠ\n"
+        "output: 啊死了！要重來 QQ\n\n"
 
-        "例 17（撒嬌語氣：～語尾＋ㅠ）\n"
-        "input:나 좀 도와줘요~ 너무 어려워요 ㅠㅠ\n"
-        "output:來幫幫我嘛～好難喔 QQ\n\n"
+        "例 17（勝利歡呼）\n"
+        "input: 이겼어! 드디어 이겼다!\n"
+        "output: 贏了！終於贏了！\n\n"
 
-        "例 18（STT幻聽：夾雜日文假名）\n"
-        "input:진짜 すごい 너무 잘한다\n"
-        "output:真的太厲害了\n\n"
+        "例 18（失敗冤枉反應）\n"
+        "input: 아 진짜 왜 이래 ㅠㅠ 미쳤다 너무 억울해\n"
+        "output: 啊真的是怎樣啦 QQ 好冤枉喔\n\n"
 
-        "例 19（STT斷句：句子被切成片段）\n"
-        "input (incomplete sentence, translate as best as possible):지금 그 아이템 있으면 아마\n"
-        "output:現在如果有那個道具的話大概\n\n"
+        "例 19（方向即時反應）\n"
+        "input: 왼쪽! 왼쪽으로 가요!\n"
+        "output: 左邊！往左走！\n\n"
 
-        "例 20（韓國人名＋呼格助詞 야，開放音節）\n"
-        "input:수아야, 나 이거 어떻게 해?\n"
-        "output:秀雅，我這個怎麼辦啊？\n\n"
-
-        "例 21（韓國人名＋야，連呼兩人）\n"
-        "input:지호야 태민아 빨리 와!\n"
-        "output:智浩、泰民，快來！\n\n"
-
-        "例 22（英雄聯盟角色名：保留不翻）\n"
-        "input:Yasuo로 솔로킬 땄어요 ㅋㅋ\n"
-        "output:用 Yasuo 拿到單殺了哈哈\n\n"
-
-        "例 23（電競選手名：保留不翻）\n"
-        "input:Faker 선수처럼 하고 싶다\n"
-        "output:想打得像 Faker 選手一樣\n\n"
-
-        "例 24（訂閱通知）\n"
-        "input:구독 감사합니다! 처음 구독이에요?\n"
-        "output:謝謝訂閱！是第一次訂閱嗎？\n\n"
-
-        "例 25（多人抖內連謝）\n"
-        "input:star_user님, moon_fan님 후원 감사해요!\n"
-        "output:謝謝 star_user、moon_fan 的打賞！\n\n"
-
-        "例 26（純語氣詞：肯定回應）\n"
-        "input:네 맞아요\n"
-        "output:對對對\n\n"
-
-        "例 27（純語氣詞：猶豫／思考）\n"
-        "input:음... 어... 그게\n"
-        "output:嗯…欸…就是那個\n\n"
-
-        "例 28（實況圈：노잼 vs 꿀잼）\n"
-        "input:이 게임 진짜 꿀잼이에요\n"
-        "output:這遊戲真的超好玩\n\n"
-
-        "例 29（實況圈：실화냐）\n"
-        "input:이게 실화냐 ㅋㅋㅋ\n"
-        "output:這是真的嗎哈哈哈\n\n"
-
-        "例 30（形容詞＋네：驚覺發現）\n"
-        "input:생각보다 어렵네\n"
-        "output:比想像中難欸\n\n"
-
-        "例 31（形容詞＋구나：意外領悟）\n"
-        "input:아 그래서 그랬구나!\n"
-        "output:啊，所以是這樣啊！\n\n"
-
-        "例 32（-잖아：理所當然的陳述）\n"
-        "input:그건 당연히 되잖아요\n"
-        "output:那當然可以嘛\n\n"
-
-        "例 33（-잖아：反駁對方）\n"
-        "input:제가 먼저 했잖아요!\n"
-        "output:明明是我先做的嘛！\n\n"
-
-        "例 34（遊戲死亡反應）\n"
-        "input:아 죽었다! 다시 해야 해 ㅠㅠ\n"
-        "output:啊死了！要重來 QQ\n\n"
-
-        "例 35（勝利歡呼）\n"
-        "input:이겼어! 드디어 이겼다!\n"
-        "output:贏了！終於贏了！\n\n"
-
-        "例 36（遊戲機制說明）\n"
-        "input:이 스킬은 쿨타임이 길어서 아껴야 해요\n"
-        "output:這個技能冷卻時間長，要省著用\n\n"
-
-        "例 37（向觀眾提問）\n"
-        "input:여러분은 어떻게 생각해요?\n"
-        "output:大家覺得怎麼樣？\n\n"
-
-        "例 38（承認失誤）\n"
-        "input:아, 내가 실수했다 미안해요\n"
-        "output:啊，我失誤了，不好意思\n\n"
-
-        "例 39（疲勞表達）\n"
-        "input:좀 힘들어요 잠깐 쉬어야 할 것 같아요\n"
-        "output:有點累了，我覺得要休息一下\n\n"
-
-        "例 40（謙虛回應稱讚）\n"
-        "input:아이고 별말씀을요~ 감사합니다!\n"
-        "output:哎呀哪裡哪裡～謝謝！\n\n"
-
-        "例 41（提醒注意）\n"
-        "input:조심해요! 거기 함정 있어요\n"
-        "output:小心！那裡有陷阱\n\n"
-
-        "例 42（吃播反應）\n"
-        "input:우와 너무 맛있어요! 진짜 맛집이에요\n"
-        "output:哇好好吃！真的是超讚的店\n\n"
-
-        "例 43（保留英文縮寫：MVP）\n"
-        "input:MVP 받았어요! 드디어 MVP야!\n"
-        "output:拿到 MVP 了！終於 MVP！\n\n"
-
-        "例 44（反問：-나? 不確定語氣）\n"
-        "input:이게 맞나? 잘 모르겠다\n"
-        "output:這樣對嗎？我不太確定\n\n"
-
-        "例 45（進行式：-고 있다）\n"
-        "input:지금 레벨업 하고 있어요\n"
-        "output:現在正在升等\n\n"
-
-        "例 46（驚訝難置信）\n"
-        "input:대박 이게 어떻게 된 거야\n"
-        "output:太猛了，這是怎麼搞的\n\n"
-
-        "例 47（方向指示 / 即時反應）\n"
-        "input:왼쪽! 왼쪽으로 가요!\n"
-        "output:左邊！往左走！\n\n"
-
-        "例 48（招募訂閱／按讚）\n"
-        "input:좋아요랑 구독 부탁해요!\n"
-        "output:麻煩點讚和訂閱！\n\n"
-
-        "例 49（協作請求）\n"
-        "input:같이 공격할게요 준비됐어요?\n"
-        "output:我們一起攻擊，準備好了嗎？\n\n"
-
-        "例 50（觀賽讚嘆）\n"
-        "input:저 선수 플레이 진짜 미쳤다\n"
-        "output:那個選手打得真的太猛了\n\n"
-
-        "例 51（道具/裝備介紹）\n"
-        "input:이 아이템 공격력이 너무 높아요\n"
-        "output:這個道具攻擊力超高\n"
+        "例 20（訂閱按讚）\n"
+        "input: 좋아요랑 구독 부탁해요!\n"
+        "output: 麻煩點讚和訂閱！\n"
     )
     profile = _STREAMER_PROFILES.get(cfg.translation.streamer_profile, "")
     if profile and cfg.translation.use_profile:
@@ -673,15 +548,15 @@ class TranslationEngine(ABC):
 
     @abstractmethod
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  context: str = "") -> str | None:
+                  history: list[tuple[str, str]] | None = None) -> str | None:
         """
         Translate text. Return None on any failure.
 
         text:          raw source text (Korean)
         system_prompt: evolved prompt — LLM engines use it;
-                       direct-translation engines (DeepL, Google Translate) may ignore it.
+                       direct-translation engines (Google Translate) may ignore it.
         incomplete:    True if the sentence is a fragment.
-        context:       recent translations (zh) as a single string, for LLM context.
+        history:       recent (ko, zh) pairs; LLM engines prepend as multi-turn messages.
                        Direct-translation engines ignore this.
         """
         ...
@@ -717,11 +592,23 @@ class GeminiEngine(TranslationEngine):
         return self._client is not None
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  context: str = "") -> str | None:
+                  history: list[tuple[str, str]] | None = None) -> str | None:
         if self._client is None:
             return None
         try:
             from google.genai import types as genai_types
+            contents = []
+            for ko, zh in (history or []):
+                contents.append(genai_types.Content(
+                    role="user", parts=[genai_types.Part(text=f"input: {ko}")]
+                ))
+                contents.append(genai_types.Content(
+                    role="model", parts=[genai_types.Part(text=zh)]
+                ))
+            contents.append(genai_types.Content(
+                role="user",
+                parts=[genai_types.Part(text=_build_user_message(text, incomplete))],
+            ))
             config = genai_types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 max_output_tokens=cfg.translation.max_tokens,
@@ -731,7 +618,7 @@ class GeminiEngine(TranslationEngine):
             _t0 = time.monotonic()
             resp = self._client.models.generate_content(
                 model=cfg.translation.gemini_model,
-                contents=_build_user_message(text, incomplete, context),
+                contents=contents,
                 config=config,
             )
             log.info("Gemini translate: %.0fms", (time.monotonic() - _t0) * 1000)
@@ -778,7 +665,7 @@ class ClaudeEngine(TranslationEngine):
         return self._client is not None
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  context: str = "") -> str | None:
+                  history: list[tuple[str, str]] | None = None) -> str | None:
         if self._client is None:
             return None
         try:
@@ -786,12 +673,17 @@ class ClaudeEngine(TranslationEngine):
             system_content: dict = {"type": "text", "text": system_prompt}
             if cfg.translation.translation_mode == "live":
                 system_content["cache_control"] = {"type": "ephemeral"}
+            messages = []
+            for ko, zh in (history or []):
+                messages.append({"role": "user", "content": f"input: {ko}"})
+                messages.append({"role": "assistant", "content": zh})
+            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
             resp = self._client.messages.create(
                 model=cfg.translation.model,
                 max_tokens=cfg.translation.max_tokens,
                 temperature=cfg.translation.temperature,
                 system=[system_content],
-                messages=[{"role": "user", "content": _build_user_message(text, incomplete, context)}],
+                messages=messages,
                 timeout=5.0,
             )
             log.info("Claude translate: %.0fms", (time.monotonic() - _t0) * 1000)
@@ -836,7 +728,7 @@ class GoogleTranslateEngine(TranslationEngine):
         return bool(self._api_key)
 
     def translate(self, text: str, _system_prompt: str, _incomplete: bool,
-                  _context: str = "") -> str | None:  # pyright: ignore[reportUnusedParameter]
+                  _history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
         if not self._api_key:
             return None
         try:
@@ -895,17 +787,20 @@ class OllamaEngine(TranslationEngine):
         return True
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  context: str = "") -> str | None:
+                  history: list[tuple[str, str]] | None = None) -> str | None:
         import urllib.request
         import urllib.error
         import json as _json
 
+        messages = [{"role": "system", "content": system_prompt}]
+        for ko, zh in (history or []):
+            messages.append({"role": "user", "content": f"input: {ko}"})
+            messages.append({"role": "assistant", "content": zh})
+        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+
         payload = _json.dumps({
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": _build_user_message(text, incomplete, context)},
-            ],
+            "messages": messages,
             "stream": False,
             "temperature": cfg.translation.temperature,
             "max_tokens": cfg.translation.max_tokens,
@@ -971,19 +866,22 @@ class NvidiaEngine(TranslationEngine):
         return bool(self._api_key)
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  context: str = "") -> str | None:
+                  history: list[tuple[str, str]] | None = None) -> str | None:
         if not self._api_key:
             return None
         import urllib.request
         import urllib.error
         import json as _json
 
+        messages = [{"role": "system", "content": system_prompt}]
+        for ko, zh in (history or []):
+            messages.append({"role": "user", "content": f"input: {ko}"})
+            messages.append({"role": "assistant", "content": zh})
+        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+
         payload = _json.dumps({
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": _build_user_message(text, incomplete, context)},
-            ],
+            "messages": messages,
             "temperature": cfg.translation.temperature,
             "max_tokens": cfg.translation.max_tokens,
             # Disable thinking mode for Qwen3.x thinking models — not needed for translation
@@ -1087,7 +985,7 @@ class Translator:
         self._engines: list[TranslationEngine] = _build_engine_chain()
         self._active_idx = 0
         self._probe_counter = 0
-        self._recent: deque[str] = deque(maxlen=cfg.translation.context_window)
+        self._recent: deque[tuple[str, str]] = deque(maxlen=cfg.translation.context_window)
 
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         text = text.strip()
@@ -1105,7 +1003,7 @@ class Translator:
             self._evolver.record(text, slang_result)
             _write_history(text, slang_result)
             if not incomplete:
-                self._recent.append(text)
+                self._recent.append((text, slang_result))
             return slang_result
 
         system_prompt = self._evolver.build_system_prompt(_BASE_PROMPT)
@@ -1116,7 +1014,7 @@ class Translator:
         if cached:
             log.debug("Cache hit: %s", text[:20])
             if not incomplete:
-                self._recent.append(text)
+                self._recent.append((text, cached))
             return cached
 
         # C: DB lookup — complete sentences only
@@ -1124,22 +1022,22 @@ class Translator:
             db_result = self._db_lookup(text, self._engines[self._active_idx], prompt_ver)
             if db_result:
                 self._cache_store(text, incomplete, db_result, prompt_ver)
-                self._recent.append(text)
+                self._recent.append((text, db_result))
                 return db_result
 
-        context = " / ".join(self._recent)
-        result = self._call_with_fallback(text, system_prompt, incomplete, context)
+        history = list(self._recent)
+        result = self._call_with_fallback(text, system_prompt, incomplete, history)
         if result:
             self._cache_store(text, incomplete, result, prompt_ver)
             self._evolver.record(text, result)
             _write_history(text, result)
             if not incomplete:
-                self._recent.append(text)
+                self._recent.append((text, result))
                 self._db_store(text, result, self._engines[self._active_idx], prompt_ver)
         return result
 
     def _call_with_fallback(self, text: str, system_prompt: str, incomplete: bool,
-                            context: str = "") -> str | None:
+                            history: list[tuple[str, str]] | None = None) -> str | None:
         if not self._engines:
             return None
 
@@ -1147,7 +1045,7 @@ class Translator:
             self._probe_counter += 1
             if self._probe_counter >= _FALLBACK_PROBE_EVERY:
                 self._probe_counter = 0
-                probe = self._engines[0].translate(text, system_prompt, incomplete, context)
+                probe = self._engines[0].translate(text, system_prompt, incomplete, history)
                 if probe and not _looks_untranslated(probe, text):
                     log.info("Primary engine %s recovered — switching back",
                              self._engines[0].engine_name)
@@ -1157,7 +1055,7 @@ class Translator:
                           self._engines[self._active_idx].engine_name)
 
         for i in range(self._active_idx, len(self._engines)):
-            result = self._engines[i].translate(text, system_prompt, incomplete, context)
+            result = self._engines[i].translate(text, system_prompt, incomplete, history)
             if result and not _looks_untranslated(result, text):
                 if i > self._active_idx:
                     log.warning("Engine %s failed — switching to %s",
