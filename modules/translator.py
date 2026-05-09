@@ -1064,8 +1064,8 @@ class Translator:
                 self._recent.append((text, cached))
             return cached
 
-        # C: DB lookup — complete sentences only; skip in live mode (near-zero hit rate)
-        if not incomplete and self._engines and cfg.translation.translation_mode != "live":
+        # C: DB lookup — complete sentences only
+        if not incomplete and self._engines:
             db_result = self._db_lookup(text, self._engines[self._active_idx], prompt_ver)
             if db_result:
                 self._cache_store(text, incomplete, db_result, prompt_ver)
