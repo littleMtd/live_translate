@@ -1,0 +1,204 @@
+import sys
+
+# Stub missing packages so the module under test can be imported without a venv
+from unittest.mock import MagicMock, patch
+if "sounddevice" not in sys.modules:
+    sys.modules["sounddevice"] = MagicMock()
+
+import queue
+import unittest
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    # Stub numpy so audio_capture.py can be imported; RMS tests are skipped anyway
+    if "numpy" not in sys.modules:
+        sys.modules["numpy"] = MagicMock()
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestRms(unittest.TestCase):
+
+    def test_silence_is_zero(self):
+        from modules.audio_capture import _rms
+        audio = np.zeros(1600, dtype=np.float32)
+        self.assertAlmostEqual(_rms(audio), 0.0)
+
+    def test_full_amplitude_sine(self):
+        from modules.audio_capture import _rms
+        t = np.linspace(0, 1, 16000)
+        audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+        # RMS of sine = 1/sqrt(2) ≈ 0.707
+        self.assertAlmostEqual(_rms(audio), 1.0 / np.sqrt(2), places=2)
+
+    def test_rms_above_threshold_for_loud_audio(self):
+        from modules.audio_capture import _rms
+        from config import cfg
+        loud = np.ones(1600, dtype=np.float32) * 0.5
+        self.assertGreater(_rms(loud), cfg.audio.volume_threshold)
+
+    def test_rms_below_threshold_for_silence(self):
+        from modules.audio_capture import _rms
+        from config import cfg
+        silent = np.zeros(1600, dtype=np.float32)
+        self.assertLess(_rms(silent), cfg.audio.volume_threshold)
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestVadState(unittest.TestCase):
+    """Tests for _VadState — the VAD chunking state machine."""
+
+    # Use small sample-rate-equivalent values so tests run instantly
+    _SR = 100          # fake "sample rate" for config patching
+    _THRESHOLD = 0.01
+    _SILENCE_SEC = 0.1   # silence_gate  = 10 samples
+    _MIN_SEC = 0.05      # min_speech     =  5 samples
+    _MAX_SEC = 0.5       # max_speech     = 50 samples
+
+    def _make_cfg(self):
+        m = MagicMock()
+        m.audio.sample_rate = self._SR
+        m.audio.volume_threshold = self._THRESHOLD
+        m.audio.vad_silence_sec = self._SILENCE_SEC
+        m.audio.vad_min_speech_sec = self._MIN_SEC
+        m.audio.vad_max_speech_sec = self._MAX_SEC
+        return m
+
+    def _loud(self, n=10):
+        return np.ones(n, dtype=np.float32) * 0.5   # rms = 0.5 >> threshold
+
+    def _quiet(self, n=10):
+        return np.zeros(n, dtype=np.float32)
+
+    def test_emit_after_speech_then_silence(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))   # speech_samples=10 >= min 5
+            vad.push(self._quiet(10))  # silent_samples=10 >= gate 10 → emit
+        self.assertFalse(q.empty(), "Expected chunk to be emitted")
+        chunk = q.get_nowait()
+        self.assertEqual(len(chunk), 20)
+
+    def test_no_emit_silence_below_gate(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(5))   # silent_samples=5 < gate 10 → no emit
+        self.assertTrue(q.empty())
+
+    def test_no_emit_speech_below_min(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(3))    # speech_samples=3 < min 5
+            vad.push(self._quiet(10))  # silence gate hit, but not enough speech
+        self.assertTrue(q.empty())
+
+    def test_emit_at_max_speech_with_enough_speech(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            # Push 5 loud frames of 10 samples each → total=50 >= max 50
+            for _ in range(5):
+                vad.push(self._loud(10))
+        self.assertFalse(q.empty(), "Expected force-emit at max_speech")
+
+    def test_reset_at_max_speech_without_speech(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            # Push 5 quiet frames → max hit, but no speech → discard
+            for _ in range(5):
+                vad.push(self._quiet(10))
+        self.assertTrue(q.empty(), "Silence-only max should be discarded, not emitted")
+
+    def test_reset_clears_state(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad._reset()
+            self.assertEqual(vad._speech_samples, 0)
+            self.assertEqual(vad._silent_samples, 0)
+            self.assertEqual(vad._total_samples, 0)
+            self.assertEqual(vad._buf, [])
+
+    def test_emitted_chunk_is_float32(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+        chunk = q.get_nowait()
+        self.assertEqual(chunk.dtype, np.float32)
+
+    def test_queue_full_drops_oldest_and_enqueues_new(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue(maxsize=1)
+        sentinel = np.zeros(1, dtype=np.float32)
+        q.put_nowait(sentinel)   # fill the queue
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))   # triggers emit → should drain + re-add
+        self.assertFalse(q.empty())
+        chunk = q.get_nowait()
+        self.assertEqual(len(chunk), 20)  # the new chunk, not the sentinel
+
+    def test_speech_samples_reset_after_emit(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))   # emit
+            # After emit, state should be clean
+            self.assertEqual(vad._speech_samples, 0)
+            self.assertEqual(vad._silent_samples, 0)
+
+
+class TestFindLoopbackDevice(unittest.TestCase):
+
+    def _mock_devices(self, names: list[str]) -> list[dict]:
+        return [{"name": n} for n in names]
+
+    def test_finds_stereo_mix(self):
+        import modules.audio_capture as ac
+        with patch.object(ac.sd, "query_devices",
+                          return_value=self._mock_devices(["Microphone", "Stereo Mix"])):
+            self.assertEqual(ac._find_loopback_device(), 1)
+
+    def test_finds_loopback_keyword(self):
+        import modules.audio_capture as ac
+        with patch.object(ac.sd, "query_devices",
+                          return_value=self._mock_devices(["Microphone", "WASAPI Loopback"])):
+            self.assertEqual(ac._find_loopback_device(), 1)
+
+    def test_returns_none_when_not_found(self):
+        import modules.audio_capture as ac
+        with patch.object(ac.sd, "query_devices",
+                          return_value=self._mock_devices(["Microphone", "Speaker"])):
+            self.assertIsNone(ac._find_loopback_device())
+
+    def test_device_name_config_takes_priority(self):
+        import modules.audio_capture as ac
+        mock_cfg = MagicMock()
+        mock_cfg.audio.device_name = "custom_device"
+        with patch.object(ac.sd, "query_devices",
+                          return_value=self._mock_devices(["Stereo Mix", "MY_CUSTOM_DEVICE"])), \
+             patch("modules.audio_capture.cfg", mock_cfg):
+            self.assertEqual(ac._find_loopback_device(), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

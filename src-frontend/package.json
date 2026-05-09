@@ -1,0 +1,27 @@
+{
+  "name": "live-translate-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "type-check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "vue": "^3.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0",
+    "@vue/test-utils": "^2.4",
+    "@vitest/coverage-v8": "^2.0",
+    "typescript": "^5.3",
+    "vite": "^5.0",
+    "vitest": "^2.0",
+    "vue-tsc": "^2.0",
+    "jsdom": "^24.0"
+  }
+}

@@ -1,0 +1,7 @@
+python-dotenv
+sounddevice
+soundfile
+numpy
+anthropic
+google-genai
+groq

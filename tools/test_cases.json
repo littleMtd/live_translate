@@ -1,0 +1,50 @@
+[
+  {
+    "id": "greeting",
+    "ko": "안녕하세요, 오늘 방송에 오신 걸 환영해요!",
+    "note": "standard greeting",
+    "incomplete": false
+  },
+  {
+    "id": "slang_basic",
+    "ko": "진짜 대박이다 ㅋㅋㅋ",
+    "note": "slang + laughter",
+    "incomplete": false
+  },
+  {
+    "id": "cut_mid",
+    "ko": "지금 게임 하고",
+    "note": "mid-sentence cut",
+    "incomplete": true
+  },
+  {
+    "id": "emotion_surprise",
+    "ko": "헐 이게 뭐야 진짜 어떻게 된 거야",
+    "note": "surprise + confusion",
+    "incomplete": false
+  },
+  {
+    "id": "gaming",
+    "ko": "와 지금 클리어 했어요! 너무 어려웠는데",
+    "note": "game clear moment",
+    "incomplete": false
+  },
+  {
+    "id": "donation",
+    "ko": "후원 감사합니다 정말 열심히 할게요",
+    "note": "donation thanks",
+    "incomplete": false
+  },
+  {
+    "id": "complex_ending",
+    "ko": "오늘 날씨가 너무 좋은데 밖에 나가고 싶지 않아요 ㅋㅋ",
+    "note": "compound sentence with slang",
+    "incomplete": false
+  },
+  {
+    "id": "filler",
+    "ko": "아 맞다 그리고 오늘 이거 해볼 건데요",
+    "note": "filler words",
+    "incomplete": false
+  }
+]

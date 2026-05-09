@@ -1,0 +1,30 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+live-subtitle-env/
+*.egg-info/
+.DS_Store
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Local logs and audio test files
+logs/
+audio/
+*.log
+
+# IDE and test tooling
+.pytest_cache/
+.vscode/
+.idea/
+
+# Rust build artifacts (src-tauri)
+src-tauri/target/
+src-tauri/gen/
+
+# Node / frontend build artifacts
+src-frontend/node_modules/
+src-frontend/dist/
