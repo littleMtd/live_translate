@@ -26,6 +26,26 @@ _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
 _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
 
 
+def _is_hallucinated(text: str) -> bool:
+    """Return True if the transcription looks like a Whisper hallucination."""
+    chars = [c for c in text if not c.isspace()]
+    if not chars:
+        return True
+    # Japanese hiragana/katakana appearing in Korean-only audio = hallucination
+    japanese = sum(1 for c in chars if "぀" <= c <= "ゟ" or "゠" <= c <= "ヿ")
+    if japanese > cfg.stt.max_japanese_chars:
+        log.debug("STT rejected (Japanese kana=%d): %s", japanese, text[:40])
+        return True
+    # Repetition loop: Whisper sometimes outputs the same phrase many times
+    words = text.split()
+    if len(words) >= 6:
+        half = words[:len(words) // 2]
+        if " ".join(half) in text[len(" ".join(half)):]:
+            log.debug("STT rejected (repetition loop): %s", text[:40])
+            return True
+    return False
+
+
 class STTEngine:
     def __init__(self):
         self._sense_voice = None
@@ -33,6 +53,7 @@ class STTEngine:
         self._use_groq = (cfg.stt.primary_engine == "groq")
         self._consecutive_none = 0
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
+        self._last_transcript: str = ""
         if self._use_groq:
             self._init_groq()
         else:
@@ -72,6 +93,7 @@ class STTEngine:
             result = self._transcribe_sensevoice(audio)
             if result is not None:
                 self._consecutive_none = 0
+                self._last_transcript = result
                 return result
             # SenseVoice failed — fall through to Groq
             self._use_groq = True
@@ -93,6 +115,7 @@ class STTEngine:
         result = self._transcribe_groq(audio)
         if result is not None:
             self._consecutive_none = 0
+            self._last_transcript = result
         else:
             self._consecutive_none += 1
             if self._consecutive_none == _CONSECUTIVE_NONE_WARN:
@@ -138,15 +161,59 @@ class STTEngine:
             buf.seek(0)
             buf.name = "audio.wav"
 
+            prompt_parts = []
+            if cfg.stt.groq_prompt:
+                prompt_parts.append(cfg.stt.groq_prompt)
+            if self._last_transcript:
+                prompt_parts.append(self._last_transcript[-120:])
+            dynamic_prompt = " ".join(prompt_parts) or None
+
             resp = self._groq_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
                 file=buf,
                 language=cfg.stt.language,
-                prompt=cfg.stt.groq_prompt or None,
-                response_format="text",
+                prompt=dynamic_prompt,
+                response_format="verbose_json",
+                temperature=0.0,
             )
-            text = resp.strip() if resp else ""
+
+            # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
+            detected_lang = getattr(resp, "language", None)
+            if detected_lang:
+                lang_lower = detected_lang.lower()
+                if lang_lower in ("ja", "japanese"):
+                    log.warning("Groq STT rejected (lang=%s): %s",
+                                detected_lang, getattr(resp, "text", "")[:40])
+                    return None
+                if lang_lower not in ("ko", "korean"):
+                    log.warning("Groq STT unexpected lang=%s (passing through): %s",
+                                detected_lang, getattr(resp, "text", "")[:40])
+
+            # Confidence filtering via segment metadata
+            segments = getattr(resp, "segments", None) or []
+            if segments:
+                avg_no_speech  = sum(s.get("no_speech_prob",   0) for s in segments) / len(segments)
+                avg_logprob    = sum(s.get("avg_logprob",       0) for s in segments) / len(segments)
+                avg_comp_ratio = sum(s.get("compression_ratio", 0) for s in segments) / len(segments)
+                log.debug("Groq segment stats: no_speech=%.2f logprob=%.2f comp=%.2f",
+                          avg_no_speech, avg_logprob, avg_comp_ratio)
+                if avg_no_speech > cfg.stt.no_speech_threshold:
+                    log.warning("Groq STT rejected (no_speech_prob=%.2f): %s",
+                                avg_no_speech, getattr(resp, "text", "")[:40])
+                    return None
+                if avg_logprob < cfg.stt.avg_logprob_threshold:
+                    log.warning("Groq STT rejected (avg_logprob=%.2f): %s",
+                                avg_logprob, getattr(resp, "text", "")[:40])
+                    return None
+                if avg_comp_ratio > 2.4:
+                    log.warning("Groq STT rejected (compression_ratio=%.2f): %s",
+                                avg_comp_ratio, getattr(resp, "text", "")[:40])
+                    return None
+
+            text = (getattr(resp, "text", "") or "").strip()
             if not text:
+                return None
+            if _is_hallucinated(text):
                 return None
             log.debug("Groq: %s", text)
             return text

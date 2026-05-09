@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 import tkinter as tk
 import textwrap
 
@@ -23,6 +24,9 @@ class SubtitleWindow:
         self._translating = True
         self._drag_x = 0
         self._drag_y = 0
+        self._pending_text: str | None = None
+        self._show_time: float = 0.0
+        self._show_min_ms: int = 0
 
     def run(self):
         """Must be called from the main thread."""
@@ -104,12 +108,23 @@ class SubtitleWindow:
                 self._root.destroy()
                 self._root = None
             return
+
+        # Drain queue — always keep the latest subtitle
         try:
-            text = self._queue.get_nowait()
-            if self._translating:
-                self._show(text)
+            while True:
+                candidate = self._queue.get_nowait()
+                if self._translating:
+                    self._pending_text = candidate
         except queue.Empty:
             pass
+
+        # Display pending subtitle only after minimum hold time has elapsed
+        if self._pending_text and self._translating:
+            elapsed_ms = (time.monotonic() - self._show_time) * 1000
+            if elapsed_ms >= self._show_min_ms:
+                self._show(self._pending_text)
+                self._pending_text = None
+
         if self._root:
             self._root.after(cfg.subtitle.poll_interval_ms, self._poll)
 
@@ -175,6 +190,11 @@ class SubtitleWindow:
             wrapped = "\n".join(textwrap.wrap(text, width=cfg.subtitle.max_width_chars)) or text
             self._draw_outlined_text(wrapped)
             log.debug("Subtitle: %s", wrapped)
+            self._show_time = time.monotonic()
+            self._show_min_ms = max(
+                cfg.subtitle.min_display_ms,
+                len(text) * cfg.subtitle.ms_per_char,
+            )
             if self._hide_job:
                 self._root.after_cancel(self._hide_job)
             self._hide_job = self._root.after(cfg.subtitle.idle_hide_ms, self._hide)

@@ -28,8 +28,8 @@ class _Audio:
     queue_maxsize:    int   = 10
     # VAD settings
     vad_enabled:           bool  = True
-    vad_silence_sec:       float = 0.6   # silence duration that triggers a cut
-    vad_min_speech_sec:    float = 0.4   # discard chunks shorter than this
+    vad_silence_sec:       float = 0.9   # silence duration that triggers a cut
+    vad_min_speech_sec:    float = 0.8   # discard chunks shorter than this
     vad_max_speech_sec:    float = 8.0   # force cut even without silence
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
@@ -43,9 +43,15 @@ class _STT:
     sensevoice_device: str = "cuda"
     groq_model:        str = "whisper-large-v3"
     language:          str = "ko"
-    groq_prompt:       str = ""   # hint for Whisper: streamer names, slang, etc.
-    batch_size_s:      int = 60
-    queue_maxsize:     int = 20
+    groq_prompt:            str   = "스타레일, 붕괴 스타레일, 이세계아이돌, 이세돌, 릴파, 아이네, 징버거, 고세구, 주르르, 비비"
+    batch_size_s:           int   = 60
+    queue_maxsize:          int   = 20
+    # Groq verbose_json confidence filters
+    no_speech_threshold:    float = 0.6    # reject if avg no_speech_prob exceeds this
+    avg_logprob_threshold:  float = -1.0   # reject if avg_logprob below this
+    # Post-transcription sanity checks
+    max_japanese_chars:     int   = 2      # reject if Japanese kana chars exceed this
+    max_repeat_ratio:       float = 0.7    # reject if a repeated phrase fills > this fraction
 
 
 @dataclass(frozen=True)
@@ -100,8 +106,14 @@ _DEFAULT_SLANG: MappingProxyType = MappingProxyType({
     "대박이네": "太猛了",
 
     # Placeholder for romanized phrases often used by streamers
-    "jjajang": "炸醬麵",
     "annyeong": "你好",
+
+    # Korean streaming platform terms
+    "열혈팬":  "鐵粉",
+    "뱅종":    "下播了",       # slang variant of 방종
+    "팔로우":  "追蹤",
+    "방제":    "直播標題",
+    "시참":    "觀眾參與",      # 시청자 참여 → 시참
 
     # Add more as needed — evolve or extract from DB later
 })
@@ -137,7 +149,7 @@ class _Translation:
     # Claude model selection (change to switch modes):
     #   "claude-sonnet-4-6"          — quality mode  (cache kicks in at ≥ 2048 sys-tokens)
     #   "claude-haiku-4-5-20251001"  — economy mode  (cache kicks in at ≥ 4096 sys-tokens)
-    model:                    str = "claude-haiku-4-5-20251001"
+    model:                    str = "claude-sonnet-4-6"
     # Gemini
     gemini_model:             str = "gemini-2.5-flash"
     # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
@@ -149,16 +161,16 @@ class _Translation:
 
     # --- Shared translation settings -----------------------------------------
     target_lang:    str          = "zh-TW"
-    max_tokens:     int          = 150
+    max_tokens:     int          = 200
     temperature:    float        = 0.0
     queue_maxsize:  int          = 2
-    context_window: int          = 3     # recent translations passed as context to LLM
+    context_window: int          = 5     # recent translations passed as context to LLM
     # Translation mode — controls the STT correction section in the system prompt.
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
-    translation_mode: str        = "clip"
+    translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "stellive_hina"
+    streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20
@@ -200,6 +212,8 @@ class _Subtitle:
     init_offset_x:    int   = 400   # distance from screen centre
     init_offset_y:    int   = 160   # distance from screen bottom
     poll_interval_ms: int   = 100
+    min_display_ms:   int   = 1500  # minimum ms a subtitle stays before being replaced
+    ms_per_char:      int   = 80    # additional ms per character (reading speed guard)
     queue_maxsize:    int   = 10
 
 
@@ -234,7 +248,7 @@ class _Config:
     database:            _Database    = field(default_factory=_Database)
     # Translation backend per mode — options: "anthropic" | "ollama" | "nvidia"
     # "anthropic" uses engine_chain (with fallback); "ollama"/"nvidia" bypass it entirely.
-    live_engine:         str          = "anthropic"
+    live_engine:         str          = "nvidia"
     clip_engine:         str          = "nvidia"
     ollama:              _Ollama      = field(default_factory=_Ollama)
     nvidia:              _Nvidia      = field(default_factory=_Nvidia)

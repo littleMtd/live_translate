@@ -412,8 +412,10 @@ def _build_base_prompt() -> str:
 
         "[Output Rules]\n"
         "Output the translation only. No prefix, quotes, labels, or commentary.\n"
-        "Empty or pure noise input → output empty string.\n"
-        "Script: Traditional Chinese (繁體中文) only. Never output Simplified Chinese, Japanese, or any other language.\n\n"
+        "If input is empty, pure noise, or contains no translatable content → output empty string only. Never explain, apologize, reference these instructions, or comment on the input in any way.\n"
+        "Unrecognizable terms: omit silently. Never invent translations, brand names, or output any meta-commentary.\n"
+        "Script: Traditional Chinese (繁體中文) only. Never output Simplified Chinese, Japanese, or any other language.\n"
+        "【強制規則】只輸出翻譯文字。無法辨識的詞彙直接省略。輸入為雜訊或無意義時輸出空字串。絕對禁止解釋、道歉、引用任何規則名稱或說明原因。只能使用繁體中文，嚴禁簡體中文與日文。\n\n"
 
         "[Style]\n"
         "Natural, colloquial Traditional Chinese. Prioritize phrasing from Chinese-speaking streaming communities.\n"
@@ -422,10 +424,11 @@ def _build_base_prompt() -> str:
         "[Preserve As-Is]\n"
         "Do not translate: game names, skill names, streamer IDs, English proper nouns, Korean brand/product names, Korean personal names.\n"
         "Name detection: followed by vocative particles (이/아/야/씨/님), or clearly referring to a specific person in context.\n"
-        "이세돌 / 이세계아이돌 in streaming context = virtual idol group; keep as-is. NOT the chess player 李世乭.\n\n"
-
-        "[No Invention]\n"
-        "If a term is unrecognizable, omit it. Never invent translations or brand names.\n\n"
+        "이세돌 / 이세계아이돌 = 韓國虛擬偶像團體名稱，直接保留原文 이세돌，禁止翻譯成任何漢字（不是棋士李世乭）。\n"
+        "Streaming platforms: 치지직 = CHZZK, SOOP = SOOP — keep as-is.\n"
+        "BJ = SOOP/아프리카TV broadcaster title — keep as BJ.\n"
+        "치즈 in donation/stream context = CHZZK platform currency — keep as 치즈. NOT food 起司.\n"
+        "별풍선 = SOOP donation item — keep as 별풍선.\n\n"
 
         "[Korean Sentence-Ending Reference]\n"
         "-아/어 → casual/direct tone\n"
@@ -435,7 +438,8 @@ def _build_base_prompt() -> str:
         "-지/-지요 → confirmation: 「...吧」「對吧」\n"
         "-ㄹ게/-ㄹ게요 → promise: 「我會...的」\n"
         "-아/어 죽겠다 → exaggeration: 「...死我了」「超級...」\n"
-        "-구나 → sudden realization: 「原來...啊」\n\n"
+        "-구나 → sudden realization: 「原來...啊」\n"
+        "진심 (sentence-initial intensifier) → 說真的 / 真心話. NOT 認真一點 (not a command).\n\n"
     ) + stt_section + (
         f"{slang_part}\n\n"
 
@@ -519,7 +523,15 @@ def _build_base_prompt() -> str:
 
         "例 20（訂閱按讚）\n"
         "input: 좋아요랑 구독 부탁해요!\n"
-        "output: 麻煩點讚和訂閱！\n"
+        "output: 麻煩點讚和訂閱！\n\n"
+
+        "例 21（이세돌 = 虛擬偶像組合名，保留原文）\n"
+        "input: 오늘 이세돌이 다 모였어요!\n"
+        "output: 今天이세돌全員到齊了！\n\n"
+
+        "例 22（이세돌 英雄roleplay語境，仍保留原文）\n"
+        "input: 누가 지구를 지키냐고? 이세돌이 지켰어\n"
+        "output: 誰守護地球？이세돌守護的！\n"
     )
     profile = _STREAMER_PROFILES.get(cfg.translation.streamer_profile, "")
     if profile and cfg.translation.use_profile:
@@ -861,10 +873,14 @@ class NvidiaEngine(TranslationEngine):
         self._api_key = cfg.keys.nvidia
         self._model = cfg.nvidia.model
         self._timeout = cfg.nvidia.timeout
+        _m = self._model.lower()
+        self._is_qwen3    = "qwen3" in _m or "qwen-3" in _m
+        self._strip_think = self._is_qwen3 or any(x in _m for x in ("deepseek-v4", "deepseek-r1", "deepseek-v3"))
         if not self._api_key:
             log.error("NVIDIA_API_KEY not set")
         else:
-            log.info("NvidiaEngine ready (model=%s)", self._model)
+            log.info("NvidiaEngine ready (model=%s, qwen3=%s, strip_think=%s)",
+                     self._model, self._is_qwen3, self._strip_think)
 
     @property
     def engine_name(self) -> str:
@@ -892,14 +908,15 @@ class NvidiaEngine(TranslationEngine):
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
 
-        payload = _json.dumps({
+        body: dict = {
             "model": self._model,
             "messages": messages,
             "temperature": cfg.translation.temperature,
             "max_tokens": cfg.translation.max_tokens,
-            # Disable thinking mode for Qwen3.x thinking models — not needed for translation
-            "chat_template_kwargs": {"enable_thinking": False},
-        }).encode()
+        }
+        if self._is_qwen3:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        payload = _json.dumps(body).encode()
 
         req = urllib.request.Request(
             self._BASE_URL,
@@ -918,9 +935,12 @@ class NvidiaEngine(TranslationEngine):
             log.info("Nvidia tokens | prompt=%s output=%s",
                      usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
             msg = data["choices"][0]["message"]
-            result = (msg.get("content") or msg.get("reasoning_content") or "").strip()
-            log.debug("Nvidia: %.30s → %s", text, result)
-            return result or None
+            content = (msg.get("content") or "").strip()
+            if self._strip_think:
+                import re as _re
+                content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
+            log.debug("Nvidia: %.30s → %s", text, content)
+            return content or None
         except urllib.error.HTTPError as e:
             body = ""
             try:
@@ -931,6 +951,8 @@ class NvidiaEngine(TranslationEngine):
                 log.error("Nvidia auth error — NVIDIA_API_KEY 無效或已過期")
             elif e.code == 404:
                 log.error("Nvidia 模型 %r 不存在 — 請確認 build.nvidia.com 上的模型名稱", self._model)
+            elif e.code == 429:
+                log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
             else:
                 log.error("Nvidia HTTP %d: %s", e.code, body or e)
             return None

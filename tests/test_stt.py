@@ -76,6 +76,9 @@ def _make_engine_sv() -> STTEngine:
     eng._sense_voice = MagicMock()
     eng._groq_client = None
     eng._use_groq = False
+    eng._consecutive_none = 0
+    eng._sv_fallback_counter = 0
+    eng._last_transcript = ""
     return eng
 
 
@@ -139,12 +142,24 @@ class TestTranscribeSenseVoice(unittest.TestCase):
 # STTEngine._transcribe_groq  (mocked client, numpy required)
 # ---------------------------------------------------------------------------
 
+def _make_groq_resp(text: str, language: str = "ko") -> MagicMock:
+    """Build a mock verbose_json Groq response object."""
+    resp = MagicMock()
+    resp.text = text
+    resp.language = language
+    resp.segments = []
+    return resp
+
+
 def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng = STTEngine.__new__(STTEngine)
     eng._sense_voice = None
     eng._use_groq = True
     eng._groq_client = MagicMock()
-    eng._groq_client.audio.transcriptions.create.return_value = response_text
+    eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(response_text)
+    eng._consecutive_none = 0
+    eng._sv_fallback_counter = 0
+    eng._last_transcript = ""
     return eng
 
 
@@ -201,7 +216,7 @@ class TestTranscribeFallback(unittest.TestCase):
         eng = _make_engine_sv()
         eng._sense_voice.generate.return_value = _sv_response("<|BGM|>")
         groq_mock = MagicMock()
-        groq_mock.audio.transcriptions.create.return_value = "Groq result"
+        groq_mock.audio.transcriptions.create.return_value = _make_groq_resp("Groq result")
         eng._groq_client = groq_mock
 
         with patch.object(eng, "_init_groq"):   # prevent real Groq init
