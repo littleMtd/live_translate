@@ -153,6 +153,7 @@ def _make_translator(cache=None):
     t._cache = cache if cache is not None else {}
     t._active_idx = 0
     t._probe_counter = 0
+    t._last_input = ""
     t._recent = deque(maxlen=3)
     t._engines = [_mock_engine("gemini"), _mock_engine("claude")]
     return t

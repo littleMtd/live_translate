@@ -184,11 +184,12 @@ class TestFindLoopbackDevice(unittest.TestCase):
                           return_value=self._mock_devices(["Microphone", "WASAPI Loopback"])):
             self.assertEqual(ac._find_loopback_device(), 1)
 
-    def test_returns_none_when_not_found(self):
+    def test_raises_when_not_found(self):
         import modules.audio_capture as ac
         with patch.object(ac.sd, "query_devices",
                           return_value=self._mock_devices(["Microphone", "Speaker"])):
-            self.assertIsNone(ac._find_loopback_device())
+            with self.assertRaises(RuntimeError):
+                ac._find_loopback_device()
 
     def test_device_name_config_takes_priority(self):
         import modules.audio_capture as ac

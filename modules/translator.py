@@ -1021,11 +1021,18 @@ class Translator:
         self._active_idx = 0
         self._probe_counter = 0
         self._recent: deque[tuple[str, str]] = deque(maxlen=cfg.translation.context_window)
+        self._last_input: str = ""
 
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         text = text.strip()
         if not text:
             return None
+
+        # Suppress consecutive identical inputs (VAD double-cut of the same segment)
+        if text == self._last_input:
+            log.debug("Duplicate input suppressed: %.40s", text)
+            return None
+        self._last_input = text
 
         if len(text) < _MIN_TRANSLATE_CHARS:
             log.debug("Skipping: too short (%d chars)", len(text))
@@ -1069,6 +1076,9 @@ class Translator:
             if not incomplete:
                 self._recent.append((text, result))
                 self._db_store(text, result, self._engines[self._active_idx], prompt_ver)
+        else:
+            # API failure — allow next identical input to retry rather than staying suppressed
+            self._last_input = ""
         return result
 
     def _call_with_fallback(self, text: str, system_prompt: str, incomplete: bool,

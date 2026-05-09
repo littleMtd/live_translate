@@ -219,8 +219,11 @@ def _find_loopback_device() -> int | None:
             log.info("Auto-detected loopback device [%d]: %s", i, dev["name"])
             return i
 
-    log.warning("No loopback device found — run 'python modules/audio_capture.py' to list devices")
-    return None
+    raise RuntimeError(
+        "No loopback audio device found. "
+        "Install VB-Cable or enable 'Stereo Mix', then restart. "
+        "Run 'python modules/audio_capture.py' to list available devices."
+    )
 
 
 if __name__ == "__main__":

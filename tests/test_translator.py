@@ -73,6 +73,7 @@ def _make_translator() -> Translator:
     t._cache = OrderedDict()
     t._active_idx = 0
     t._probe_counter = 0
+    t._last_input = ""
     t._recent = deque(maxlen=3)
     t._engines = [_mock_engine(name) for name in ("gemini", "claude")]
     return t
