@@ -87,7 +87,7 @@ _DEFAULT_SLANG: MappingProxyType = MappingProxyType({
     "좋아요":  "按讚",
 
     # Shortened words / casual forms
-    "ㄷㄷ":    "好害怕 / 震驚",
+    "ㄷㄷ":    "震驚",
     "ㅂㅂ":    "掰掰",
     "ㄴㄴ":    "不要",
 
@@ -99,18 +99,9 @@ _DEFAULT_SLANG: MappingProxyType = MappingProxyType({
     "아싸":    "耶（成功）",
     "대박이네": "太猛了",
 
-    # filler / interjections
-    "음":      "嗯",
-    "아":      "啊",
-
     # Placeholder for romanized phrases often used by streamers
     "jjajang": "炸醬麵",
     "annyeong": "你好",
-
-    # Korean school subjects (국어 = Korean language class, NOT 國語/國文)
-    "국어":     "韓文課",
-    "영어":     "英文課",
-    "수학":     "數學課",
 
     # Add more as needed — evolve or extract from DB later
 })

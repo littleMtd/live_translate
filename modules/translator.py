@@ -238,7 +238,7 @@ _STREAMER_PROFILES: dict[str, str] = {
 
         "例 73（ISEDOL 成員合體直播：全員集合）\n"
         "input:오늘 이세돌 다 모였어요 진짜 오랜만이에요\n"
-        "output:今天Isegye Idol全員到齊了，真的好久不見\n\n"
+        "output:今天이세돌全員到齊了，真的好久不見\n\n"
 
         "例 74（릴파 Valorant：排名用語）\n"
         "input:오늘 플래티넘 찍어야 해요 무조건이에요\n"
@@ -270,7 +270,7 @@ _STREAMER_PROFILES: dict[str, str] = {
 
         "例 81（ISEDOL 합숙：一起熬夜）\n"
         "input:어젯밤에 이세돌이랑 같이 밤새서 완전 피곤해요\n"
-        "output:昨晚跟Isegye Idol一起熬了夜，整個人超累\n\n"
+        "output:昨晚跟이세돌一起熬了夜，整個人超累\n\n"
 
         "例 82（릴파 遊戲賭局：提議對賭）\n"
         "input:이거 이기면 내가 다음 방송 주제 정할게 내기해요\n"
@@ -411,7 +411,7 @@ def _build_base_prompt() -> str:
         "[Preserve As-Is]\n"
         "Do not translate: game names, skill names, streamer IDs, English proper nouns, Korean brand/product names, Korean personal names.\n"
         "Name detection: followed by vocative particles (이/아/야/씨/님), or clearly referring to a specific person in context.\n"
-        "이세돌 in streaming context = virtual idol group 이세계아이돌; translate as Isegye Idol. NOT the chess player 李世乭.\n\n"
+        "이세돌 / 이세계아이돌 in streaming context = virtual idol group; keep as-is. NOT the chess player 李世乭.\n\n"
 
         "[No Invention]\n"
         "If a term is unrecognizable, omit it. Never invent translations or brand names.\n\n"
