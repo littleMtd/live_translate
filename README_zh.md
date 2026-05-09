@@ -11,11 +11,11 @@
 - **浮動字幕覆蓋層** — 透明tkinter窗口，始終置頂，可拖動
 - **多個STT引擎** — SenseVoice-Small（本機GPU）或Groq Whisper（雲備用）
 - **多個 Translation Engine** — Gemini、Claude、Google Translate、Ollama（本機）、NVIDIA NIM
-- **按模式選擇引擎** — 為直播模式和剪輯模式配置不同的後端
+- **按模式選擇 Engine** — 為直播模式和剪輯模式配置不同的 Backend
 - **主播資料庫** — 針對特定虛擬主播的內置少樣本提示集（스텔라이브 히나、릴파、챈나、MW:MEU）
 - **持久 Cache** — SQLite with LRU 驅逐；重複句子零 API 代幣成本
 - **Prompt Cache** — 直播模式下啟用 Anthropic Prompt Cache（降低代幣成本~90%）
-- **暫停/繼續** — 空格鍵或切換按鈕凍結管道，無需關閉窗口
+- **暫停/繼續** — 空格鍵或切換按鈕凍結 Pipeline，無需關閉窗口
 - **Tauri Dashboard** — 可選桌面 UI 用於實時配置編輯和 Cache 統計
 
 ---
@@ -93,10 +93,10 @@ python -c "import sounddevice; print(sounddevice.query_devices())"
 ## 使用方法
 
 ```bash
-# 完整管道 — STT + 翻譯 + 字幕覆蓋層
+# 完整 Pipeline — STT + 翻譯 + 字幕覆蓋層
 live-subtitle-env\Scripts\python.exe main.py
 
-# 僅STT模式 — 列印識別的句子，無翻譯（用於調試）
+# 僅 STT 模式 — 列印識別的句子，無翻譯（用於調試）
 live-subtitle-env\Scripts\python.exe main.py --stt-only
 ```
 
@@ -104,7 +104,7 @@ live-subtitle-env\Scripts\python.exe main.py --stt-only
 
 | 操作 | 效果 |
 |------|------|
-| `空格` 或切換按鈕 | 暫停/繼續管道 |
+| `空格` 或切換按鈕 | 暫停/繼續 Pipeline |
 | 拖動 | 在螢幕上移動窗口 |
 | `Esc` 或雙擊 | 退出 |
 
@@ -162,12 +162,12 @@ cargo tauri build
 
 ## 配置
 
-所有設定都在 [`config.py`](config.py) 中。最常改動的選項：
+所有設定都在 [`config.py`](config.py) 中。最常改動的 Options：
 
-### 選擇翻譯引擎
+### 選擇 Translation Engine
 
 ```python
-# 按模式選擇引擎："anthropic"（Gemini/Claude鏈）| "ollama" | "nvidia"
+# 按模式選擇 Engine："anthropic"（Gemini/Claude Chain）| "ollama" | "nvidia"
 live_engine: str = "anthropic"   # 當 translation_mode = "live" 時使用
 clip_engine: str = "nvidia"      # 當 translation_mode = "clip" 時使用
 ```
