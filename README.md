@@ -6,16 +6,15 @@
 
 ---
 
-## 功能特性
+## 功能
 
 - **浮動字幕疊加** — 透明 tkinter 視窗，始終置頂，可自由拖移
 - **多個 STT 引擎** — SenseVoice-Small（本機 GPU）或 Groq Whisper（雲端備用）
 - **多個翻譯引擎** — Gemini、Claude、Google Translate、Ollama（本機）、NVIDIA NIM
 - **依模式選擇引擎** — 直播模式與剪輯模式可各自設定不同後端
 - **主播 Profile** — 針對特定 VTuber 的內建 Few-shot 提示組（스텔라이브 히나、릴파、챈나、MW:MEU）
-- **持久化快取** — SQLite 搭配 LRU 淘汰；重複句子不消耗任何 API Token
+- **持久化快取** — SQLite 搭配 LRU 淘汰；重複句子不消耗多餘 API Token
 - **Prompt Cache** — 直播模式啟用 Anthropic Prompt Cache（可降低約 90% Token 費用）
-- **暫停 / 繼續** — 空白鍵或切換按鈕凍結 Pipeline，不需關閉視窗
 - **Tauri Dashboard** — 選用的桌面 UI，可即時編輯設定並查看快取統計
 
 ---
