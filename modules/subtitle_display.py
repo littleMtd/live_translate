@@ -18,7 +18,7 @@ class SubtitleWindow:
         self._pause = pause_event
         self._all_queues = all_queues or [subtitle_queue]
         self._root: tk.Tk | None = None
-        self._label: tk.Label | None = None
+        self._canvas: tk.Canvas | None = None
         self._toggle_btn: tk.Button | None = None
         self._hide_job = None
         self._drag_x = 0
@@ -30,13 +30,16 @@ class SubtitleWindow:
         root = tk.Tk()
         self._root = root
 
-        root.overrideredirect(True)       # no title bar
+        root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.attributes("-alpha", cfg.subtitle.alpha)
+        # Make bg colour fully transparent so text floats directly over the stream.
+        # -transparentcolor is Windows-only; harmless on other platforms (ignored).
+        root.attributes("-transparentcolor", cfg.subtitle.bg)
         root.configure(bg=cfg.subtitle.bg)
 
-        # Top bar: toggle button (right) + drag handle (left)
-        top = tk.Frame(root, bg=cfg.subtitle.bg)
+        # Control bar (always visible — drag handle lives here)
+        top = tk.Frame(root, bg=cfg.subtitle.ctrl_bg)
         top.pack(fill="x")
 
         self._toggle_btn = tk.Button(
@@ -44,8 +47,8 @@ class SubtitleWindow:
             text="⏸ 翻譯",
             font=("Microsoft JhengHei", 9),
             fg=cfg.subtitle.fg,
-            bg="#333333",
-            activebackground="#555555",
+            bg=cfg.subtitle.ctrl_bg,
+            activebackground="#333333",
             activeforeground=cfg.subtitle.fg,
             relief="flat",
             bd=0,
@@ -54,31 +57,28 @@ class SubtitleWindow:
         )
         self._toggle_btn.pack(side="right", padx=6, pady=2)
 
-        label = tk.Label(
+        # Canvas for outlined text (bg matches transparent key → invisible background)
+        canvas = tk.Canvas(
             root,
-            text="",
-            font=cfg.subtitle.font,
-            fg=cfg.subtitle.fg,
             bg=cfg.subtitle.bg,
-            wraplength=cfg.subtitle.wraplength,
-            justify="center",
-            padx=cfg.subtitle.padx,
-            pady=cfg.subtitle.pady,
+            highlightthickness=0,
+            bd=0,
+            width=1,
+            height=1,
         )
-        label.pack()
-        self._label = label
+        canvas.pack(padx=cfg.subtitle.padx, pady=cfg.subtitle.pady)
+        self._canvas = canvas
 
         # Position bottom-centre of primary screen
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
         root.geometry(f"+{sw // 2 - cfg.subtitle.init_offset_x}+{sh - cfg.subtitle.init_offset_y}")
 
-        # Drag support on all surfaces
-        for widget in (root, top, label):
+        # Drag via control bar (canvas bg is click-through when transparent)
+        for widget in (root, top, self._toggle_btn):
             widget.bind("<ButtonPress-1>", self._on_drag_start)
             widget.bind("<B1-Motion>", self._on_drag_motion)
 
-        # ESC or double-click to quit; Space to toggle
         root.bind("<Escape>", lambda e: self._quit())
         root.bind("<Double-Button-1>", lambda e: self._quit())
         root.bind("<space>", lambda e: self._toggle_translation())
@@ -125,6 +125,58 @@ class SubtitleWindow:
         if self._root:
             self._root.after(cfg.subtitle.poll_interval_ms, self._poll)
 
+    def _draw_outlined_text(self, text: str):
+        canvas = self._canvas
+        canvas.delete("all")
+
+        ow = cfg.subtitle.outline_width
+        pad = ow + cfg.subtitle.padx
+
+        # Measure rendered text size with a temporary probe item
+        probe = canvas.create_text(
+            pad, pad,
+            text=text,
+            font=cfg.subtitle.font,
+            anchor="nw",
+            width=cfg.subtitle.wraplength,
+            justify="center",
+        )
+        bbox = canvas.bbox(probe)
+        canvas.delete(probe)
+        if not bbox:
+            return
+
+        cw = (bbox[2] - bbox[0]) + pad * 2
+        ch = (bbox[3] - bbox[1]) + pad * 2
+        canvas.config(width=cw, height=ch)
+        cx, cy = cw // 2, ch // 2
+
+        # Outline: draw at 8 surrounding positions
+        for dx in (-ow, 0, ow):
+            for dy in (-ow, 0, ow):
+                if dx == 0 and dy == 0:
+                    continue
+                canvas.create_text(
+                    cx + dx, cy + dy,
+                    text=text,
+                    font=cfg.subtitle.font,
+                    fill=cfg.subtitle.outline_color,
+                    anchor="center",
+                    width=cfg.subtitle.wraplength,
+                    justify="center",
+                )
+
+        # Main text on top
+        canvas.create_text(
+            cx, cy,
+            text=text,
+            font=cfg.subtitle.font,
+            fill=cfg.subtitle.fg,
+            anchor="center",
+            width=cfg.subtitle.wraplength,
+            justify="center",
+        )
+
     def _show(self, text: str):
         if self._root is None:
             return
@@ -133,7 +185,7 @@ class SubtitleWindow:
             return
         try:
             wrapped = "\n".join(textwrap.wrap(text, width=cfg.subtitle.max_width_chars)) or text
-            self._label.config(text=wrapped)
+            self._draw_outlined_text(wrapped)
             log.debug("Subtitle: %s", wrapped)
             if self._hide_job:
                 self._root.after_cancel(self._hide_job)
@@ -143,7 +195,9 @@ class SubtitleWindow:
 
     def _hide(self):
         try:
-            self._label.config(text="")
+            if self._canvas:
+                self._canvas.delete("all")
+                self._canvas.config(width=1, height=1)
         except tk.TclError:
             pass
         self._hide_job = None

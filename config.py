@@ -196,9 +196,12 @@ class _Translation:
 class _Subtitle:
     idle_hide_ms:     int   = 30000 # hide after this ms if no new translation arrives
     font:             tuple = ("Microsoft JhengHei", 22, "bold")
-    bg:               str   = "#000000"
+    bg:               str   = "#010101"   # transparent-key colour (near-black); do not use #000000
+    ctrl_bg:          str   = "#1a1a1a"   # control bar background (stays visible)
     fg:               str   = "#FFFFFF"
-    alpha:            float = 0.82
+    outline_color:    str   = "#000000"
+    outline_width:    int   = 2           # pixels; 1 = thin, 2 = standard, 3 = thick
+    alpha:            float = 1.0         # full window opacity; bg transparency via -transparentcolor
     max_width_chars:  int   = 36
     wraplength:       int   = 700
     padx:             int   = 16
