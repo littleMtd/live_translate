@@ -36,7 +36,17 @@ def _looks_untranslated(result: str, source: str) -> bool:
     if len(chars) < 6:
         return False  # too short for ratio to be meaningful (single Korean name is OK)
     hangul = sum(1 for c in chars if "가" <= c <= "힣")
-    return (hangul / len(chars)) > _HANGUL_RATIO_THRESHOLD
+    if (hangul / len(chars)) > _HANGUL_RATIO_THRESHOLD:
+        return True
+    # Japanese hiragana/katakana should never appear in zh-TW output
+    japanese = sum(1 for c in chars if "぀" <= c <= "ゟ" or "゠" <= c <= "ヿ")
+    if japanese > 2:
+        return True
+    # Result much longer than source likely means hallucinated continuation
+    src_chars = len([c for c in source if not c.isspace()])
+    if len(chars) > src_chars * 3 and len(chars) > 40:
+        return True
+    return False
 
 
 def _usage_value(usage, *names: str):
@@ -402,7 +412,8 @@ def _build_base_prompt() -> str:
 
         "[Output Rules]\n"
         "Output the translation only. No prefix, quotes, labels, or commentary.\n"
-        "Empty or pure noise input → output empty string.\n\n"
+        "Empty or pure noise input → output empty string.\n"
+        "Script: Traditional Chinese (繁體中文) only. Never output Simplified Chinese, Japanese, or any other language.\n\n"
 
         "[Style]\n"
         "Natural, colloquial Traditional Chinese. Prioritize phrasing from Chinese-speaking streaming communities.\n"
@@ -513,6 +524,7 @@ def _build_base_prompt() -> str:
     profile = _STREAMER_PROFILES.get(cfg.translation.streamer_profile, "")
     if profile and cfg.translation.use_profile:
         base += "\n\n" + profile
+    base += "\n\n---\nTranslate the next input. Output the translation only."
     return base
 
 _BASE_PROMPT = _build_base_prompt()

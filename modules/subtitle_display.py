@@ -19,11 +19,10 @@ class SubtitleWindow:
         self._all_queues = all_queues or [subtitle_queue]
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
-        self._toggle_btn: tk.Button | None = None
         self._hide_job = None
+        self._translating = True
         self._drag_x = 0
         self._drag_y = 0
-        self._translating = True
 
     def run(self):
         """Must be called from the main thread."""
@@ -33,31 +32,11 @@ class SubtitleWindow:
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.attributes("-alpha", cfg.subtitle.alpha)
-        # Make bg colour fully transparent so text floats directly over the stream.
-        # -transparentcolor is Windows-only; harmless on other platforms (ignored).
+        # -transparentcolor makes bg pixels fully transparent + click-through (Windows only)
         root.attributes("-transparentcolor", cfg.subtitle.bg)
         root.configure(bg=cfg.subtitle.bg)
 
-        # Control bar (always visible — drag handle lives here)
-        top = tk.Frame(root, bg=cfg.subtitle.ctrl_bg)
-        top.pack(fill="x")
-
-        self._toggle_btn = tk.Button(
-            top,
-            text="⏸ 翻譯",
-            font=("Microsoft JhengHei", 9),
-            fg=cfg.subtitle.fg,
-            bg=cfg.subtitle.ctrl_bg,
-            activebackground="#333333",
-            activeforeground=cfg.subtitle.fg,
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self._toggle_translation,
-        )
-        self._toggle_btn.pack(side="right", padx=6, pady=2)
-
-        # Canvas for outlined text (bg matches transparent key → invisible background)
+        # Canvas only — no control bar, window is fully transparent
         canvas = tk.Canvas(
             root,
             bg=cfg.subtitle.bg,
@@ -74,10 +53,9 @@ class SubtitleWindow:
         sh = root.winfo_screenheight()
         root.geometry(f"+{sw // 2 - cfg.subtitle.init_offset_x}+{sh - cfg.subtitle.init_offset_y}")
 
-        # Drag via control bar (canvas bg is click-through when transparent)
-        for widget in (root, top, self._toggle_btn):
-            widget.bind("<ButtonPress-1>", self._on_drag_start)
-            widget.bind("<B1-Motion>", self._on_drag_motion)
+        # Drag via text pixels — canvas bg is click-through but text pixels are not
+        canvas.bind("<ButtonPress-1>", self._on_drag_start)
+        canvas.bind("<B1-Motion>", self._on_drag_motion)
 
         root.bind("<Escape>", lambda e: self._quit())
         root.bind("<Double-Button-1>", lambda e: self._quit())
@@ -100,15 +78,25 @@ class SubtitleWindow:
             self._drain_all_queues()
             if self._pause:
                 self._pause.clear()
-            self._toggle_btn.config(text="⏸ 翻譯")
+            self._flash("▶")
             log.info("Pipeline resumed")
         else:
             if self._pause:
                 self._pause.set()
-            self._hide()
             self._drain_all_queues()
-            self._toggle_btn.config(text="▶ 翻譯")
+            self._flash("⏸")
             log.info("Pipeline paused")
+
+    def _flash(self, symbol: str, ms: int = 1500):
+        if self._root is None:
+            return
+        try:
+            self._draw_outlined_text(symbol)
+            if self._hide_job:
+                self._root.after_cancel(self._hide_job)
+            self._hide_job = self._root.after(ms, self._hide)
+        except tk.TclError:
+            pass
 
     def _poll(self):
         if self._stop.is_set():
