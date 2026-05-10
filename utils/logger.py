@@ -31,6 +31,8 @@ def _configure_root() -> None:
         ))
         root.addHandler(handler)
     root.setLevel(_LOG_LEVEL)
+    for noisy in ("httpx", "httpcore", "urllib3", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:
