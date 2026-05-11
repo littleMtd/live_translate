@@ -383,7 +383,139 @@ _STREAMER_PROFILES: dict[str, str] = {
 }
 
 
+_STREAMER_PROFILES_QWEN: dict[str, str] = {
+    "stellive_hina": (
+        "【시라유키 히나 (Qwen 專化)】\n"
+        "Streamer: 시라유키 히나 (Stellive). Fan name: 해둥이 (海洞). Signature game: Minecraft (포포 서버), Sekiro, Valorant.\n"
+        "Personality: 夜貓直播主，多巴胺充沛，撒嬌，玩遊戲常比較卡關。\n\n"
+
+        "1. 粉絲互動（해둥이）\n"
+        "input:해둥이들 오늘도 와줘서 고마워! 기니까 꽉 안아줄게\n"
+        "output:해둥이們今天也來了謝謝，既然都來了就給你們一個大擁抱\n\n"
+
+        "2. 深夜開台 (新的一天，同時維持夜貓身份)\n"
+        "input:지금 새벽 3시인데 해둥이들 아직 안 잤어?\n"
+        "output:現在早上三點了，해둥이們還沒睡嗎？\n\n"
+
+        "3. 도파민 모드 (多巴胺直播，快樂能量)\n"
+        "input:아 이거 봐봐 도파민 넘친다 진짜ㅋㅋ 완전 쌀 수 없어\n"
+        "output:啊你看我的多巴胺都爆炸了真的哈哈完全停不下來\n\n"
+
+        "4. 말벌 (丟下一切追稀有寶可夢，Pokémon焦點轉移)\n"
+        "input:어? 저기 희귀 포켓몬이! 다른 거 다 잊어 그것만 봐\n"
+        "output:咦？那邊有稀有寶可夢！其他都別管只看那個\n\n"
+
+        "5. 카바 사기 自嘲 (封面詐欺梗)\n"
+        "input:내가 커버 사기 맞죠? 처음엔 조용한 줄 알지?\n"
+        "output:我就是封面詐欺對吧，一開始以為我文靜嗎？\n\n"
+
+        "6. Sekiro 挫折反應\n"
+        "input:세키로 진짜... 또 죽었어 이거 어떻게 이래ㅠㅠ\n"
+        "output:隻狼真的……又死了，這玩法到底是怎樣ㅠㅠ"
+    ),
+
+    "isegye_lilpa": (
+        "【릴파 / 이세계아이돌 (Qwen 專化)】\n"
+        "Streamer: 릴파 (이세계아이돌 member). Fan name: 박쥐단 (蝙蝠團) / 이파리 (이세돌粉絲). Signature game: LoL, Valorant, Minecraft.\n"
+        "Personality: 開朗愛玩，나비다梗，징버거梗常出現，與성원互動活躍。\n\n"
+
+        "1. 粉絲問候（박쥐단）\n"
+        "input:박쥐단들 오늘도 잘 놀고 있어? 나는 지금 엄청 즐거운데 함께해줘서 고마워\n"
+        "output:박쥐단們今天也玩得開心嗎？我現在超開心謝謝你們陪著我\n\n"
+
+        "2. 나비다 Meme (看到蝴蝶分心走神)\n"
+        "input:어 잠깐만... 나비다! 이 방송 2분만 멈췄다 올게 꼭 있어\n"
+        "output:欸等等……有蝴蝶！這直播暫停2分鐘，一定要來啦\n\n"
+
+        "3. 징버거 梗 (짐버거)\n"
+        "input:당신은 이 게임을 이겨야 합니다. 아 미안해 징버거 생각났어\n"
+        "output:你這盤要贏。啊不好意思想到징버거去了\n\n"
+
+        "4. LoL 排名 (Valorant 배열 焦慮)\n"
+        "input:아 이겨야 돼 다이아 떨어질 수 없어 이파리들 기원해줄래\n"
+        "output:啊一定要贏掉不能從鑽石掉下來，이파리們替我祈禱\n\n"
+
+        "5. Minecraft 建築 (공사 중 相對樂觀)\n"
+        "input:여기다 진짜 멋진 집 지을 거예요 이파리들 봐줄 거죠\n"
+        "output:在這裡要蓋個超酷的房子，이파리們要看喔\n\n"
+
+        "6. 成員互動 (팀 컬래버)\n"
+        "input:아이네 언니 빨리 와! 우리 이 미션 같이 깼으면 좋겠어\n"
+        "output:아이네姐姐快來！我好想跟妳一起破這關"
+    ),
+
+    "hades_chxxnnx": (
+        "【챈나 / HADES (Qwen 專化)】\n"
+        "Streamer: 챈나 (HADES group). Members: 솜펀치, 연초록, 큐마, 싱귤. No official fan name.\n"
+        "Personality: HADES 막內，撒嬌，常跟成員互動，有時遊戲卡關會求助。\n\n"
+
+        "1. 成員召喚（솜펀치 호출）\n"
+        "input:솜펀치 언니 나 혼자 심심한데 와줄 수 있어? 제발이야\n"
+        "output:솜펀치姐姐我一個人好無聊，能來陪我嗎，拜託了\n\n"
+
+        "2. 멤버 응원（큐마 칭찬）\n"
+        "input:큐마 이 부분 너무 잘했어 너라서 진짜 다행이야\n"
+        "output:큐마這段超厲害，幸好有妳\n\n"
+
+        "3. 연초록 팬 梗 (連初綠沒反應)\n"
+        "input:연초록이 또 연락이 안 되네 진짜 이 사람 원래 이래\n"
+        "output:연초록又沒反應了，這人總是這樣\n\n"
+
+        "4. 싱귤 노래 응원\n"
+        "input:싱귤이 노래하는 거 진짜 듣고 싶은데 언제 할 거야\n"
+        "output:好想聽싱귤唱歌，什麼時候唱啦\n\n"
+
+        "5. 게임 中 도움 요청\n"
+        "input:어 이거 어떻게 하는 거야 나 자꾸 죽네 도와줄 사람\n"
+        "output:欸這怎麼玩啊我一直死掉有人能幫我嗎\n\n"
+
+        "6. HADES 활동 감사\n"
+        "input:하데스 다함께 방송할 수 있어서 진짜 행복해 다들 좋아\n"
+        "output:能和HADES一起直播真的很開心，大家都超好"
+    ),
+
+    "mwmeu": (
+        "【MW:MEU (Qwen 專化)】\n"
+        "Streamer: MW:MEU group. Members: 지한 (최고령언니), 이비, 수아, 리츠, 초은. Fan name: WENs (웬즈).\n"
+        "Personality: 5人組グループ，成員彼此互相照應，粉絲 WENs 忠誠度高。\n\n"
+
+        "1. 粉絲問候（웬즈）\n"
+        "input:웬즈들 오늘도 우리랑 시간 함께해줘서 정말 감사해 항상 사랑해\n"
+        "output:웬즈們今天也跟我們一起真的超謝謝你們，永遠愛你們\n\n"
+
+        "2. 지한 멤버 호출（最高령언니的角色）\n"
+        "input:지한이 언니 나 이 부분 모르는데 좀 가르쳐줄래 제발\n"
+        "output:지한姐姐我不懂這裡，能教我嗎，拜託\n\n"
+
+        "3. 이비 응원\n"
+        "input:이비 이 노래 너무 좋다 목소리 진짜 천상의 목소리 같아\n"
+        "output:이비這首歌超好聽，妳的聲音真的像仙籟\n\n"
+
+        "4. 수아 칭찬（맑은 음성）\n"
+        "input:수아 목소리 듣고 있으면 진짜 기분이 좋아져 계속해줄래\n"
+        "output:聽수아唱歌心情會變好，一直唱好嗎\n\n"
+
+        "5. 리츠·초은 互動\n"
+        "input:리츠랑 초은이가 또 뭔가 하고 있다 진짜 이 두 사람 항상 재밌어\n"
+        "output:리츠和초은又在搞什麼，這兩人真的超好玩\n\n"
+
+        "6. WENs 팬덤 感謝\n"
+        "input:웬즈들이 있으니까 우리도 계속 열심히 할 수 있어 고마워 사랑해\n"
+        "output:有웬즈們的支持我們才能繼續加油，謝謝你們，愛你們"
+    ),
+}
+
+
+def _is_qwen_model() -> bool:
+    """检查当前后端是否为 Qwen 模型"""
+    if cfg.live_engine == "nvidia":
+        model = cfg.nvidia.model.lower()
+        return "qwen" in model
+    return False
+
+
 def _build_base_prompt() -> str:
+    """生成通用 system prompt（兼容所有引擎）"""
     slang_lines = "\n".join(f"  {k} → {v}" for k, v in cfg.translation.slang.items())
     slang_part = (
         f"\n【常用詞彙對照】（以下詞彙出現於句子中時，請依此翻譯）\n{slang_lines}"
@@ -417,9 +549,23 @@ def _build_base_prompt() -> str:
         "Script: Traditional Chinese (繁體中文) only. Never output Simplified Chinese, Japanese, or any other language.\n"
         "【強制規則】只輸出翻譯文字。無法辨識的詞彙直接省略。輸入為雜訊或無意義時輸出空字串。絕對禁止解釋、道歉、引用任何規則名稱或說明原因。只能使用繁體中文，嚴禁簡體中文與日文。\n\n"
 
+        "[STT Error Detection]\n"
+        "If output contains > 30% rare/archaic Hangul with low semantic coherence (e.g., rare surnames standing alone like '고지야'), consider output uncertain.\n"
+        "Pattern examples to flag: same number repeated twice ('21개월...21개월'), isolated rare surnames, foreign fragments with no Korean context.\n"
+        "For highly uncertain cases, prefer empty output or short fallback over forced translation.\n\n"
+
         "[Style]\n"
         "Natural, colloquial Traditional Chinese. Prioritize phrasing from Chinese-speaking streaming communities.\n"
         "Keep tone and emotion. Do not literally translate Korean particles.\n\n"
+
+        "[Colloquial & Crude Language]\n"
+        "드럽다/드럽게 → 爛透了 / 糟到不行 / 爛到不行 (NOT literal 污穢). Preserve strong negative tone.\n"
+        "막 (verbal habit/filler) → 就是 / 每天 / 一直 depending on context. When used as emphasis, can be omitted.\n"
+        "맨날 → 每天 / 一直 (frequency marker).\n"
+        "어쩌고 / 어쩔 → omit or keep as ellipsis if used as conversational filler without substance.\n"
+        "식으로 / 같은 → -style / -like (preserve sense, don't over-translate).\n"
+        "뭔가 → 有點 / 好像 (not always necessary to translate).\n"
+        "Rule: Preserve speaker's casual, potentially crude tone. DO NOT sanitize, over-formalize, or weaken emotional intensity.\n\n"
 
         "[Preserve As-Is]\n"
         "Do not translate: game names, skill names, streamer IDs, English proper nouns, Korean brand/product names, Korean personal names.\n"
@@ -428,7 +574,10 @@ def _build_base_prompt() -> str:
         "Streaming platforms: 치지직 = CHZZK, SOOP = SOOP — keep as-is.\n"
         "BJ = SOOP/아프리카TV broadcaster title — keep as BJ.\n"
         "치즈 in donation/stream context = CHZZK platform currency — keep as 치즈. NOT food 起司.\n"
-        "별풍선 = SOOP donation item — keep as 별풍선.\n\n"
+        "별풍선 = SOOP donation item — keep as 별풍선.\n"
+        "Pokemon/Game characters: Chikorita, Pidgeot, Pikachu, etc. → keep English names or official localized names. Do NOT invent Chinese names.\n"
+        "Streamer-specific terms: VVIP, 기부자, 후원자, 알바 → preserve Korean when referring to personal branding or job titles.\n"
+        "Food/product names if unclear (e.g., '파이리빵', '내미쉬') → keep original Korean rather than guessing.\n\n"
 
         "[Korean Sentence-Ending Reference]\n"
         "-아/어 → casual/direct tone\n"
@@ -531,7 +680,27 @@ def _build_base_prompt() -> str:
 
         "例 22（이세돌 英雄roleplay語境，仍保留原文）\n"
         "input: 누가 지구를 지키냐고? 이세돌이 지켰어\n"
-        "output: 誰守護地球？이세돌守護的！\n"
+        "output: 誰守護地球？이세돌守護的！\n\n"
+
+        "例 23（遊戲角色 - 寶可夢保留英文名）\n"
+        "input: 치코리타가 귀여우니까 선택했어\n"
+        "output: 因為Chikorita超可愛所以選了\n\n"
+
+        "例 24（粗俗用語 - 保留強度）\n"
+        "input: 이 게임 진짜 드럽게 어렵다\n"
+        "output: 這遊戲真的爛透了，超難\n\n"
+
+        "例 25（口語 - 重複數字邏輯檢查）\n"
+        "input: 21개월 아 21개월 받았어\n"
+        "output: 21 個月啊，我收到了\n\n"
+
+        "例 26（打工日常背景）\n"
+        "input: 편의점 알바 정말 힘들었어\n"
+        "output: 便利商店打工真的超累\n\n"
+
+        "例 27（個人品牌詞 - 保留韓文）\n"
+        "input: 나 VVIP 맞네\n"
+        "output: 我確實是VVIP呢\n"
     )
     profile = _STREAMER_PROFILES.get(cfg.translation.streamer_profile, "")
     if profile and cfg.translation.use_profile:
@@ -539,7 +708,184 @@ def _build_base_prompt() -> str:
     base += "\n\n---\nTranslate the next input. Output the translation only."
     return base
 
+
+def _build_qwen_optimized_prompt() -> str:
+    """Qwen 3.5-122B 专属优化 prompt - 充分利用强大能力，不限 token"""
+    slang_lines = "\n".join(f"  {k} → {v}" for k, v in cfg.translation.slang.items())
+    slang_part = (
+        f"\n【常用詞彙表】（優先使用以下對照）\n{slang_lines}"
+        if slang_lines else ""
+    )
+
+    stt_section = (
+        "[STT 原始字符串錯誤 - Qwen 必讀]\n"
+        "輸入來自語音識別(STT)，是**原始、未經編輯**的文本。\n"
+        "STT 常見問題：\n"
+        "· 幻覺詞彙 - 捏造不存在的詞（如'비맥스로''제트로''내미쉬'）\n"
+        "· 商業混入 - 廣告、網站推廣被當成語音（'사이트 들어가보세요''약사님께'）\n"
+        "· 語義破碎 - 多個無關詞拼接，完全無邏輯\n"
+        "· 重複無義 - 同一詞重複多次無新信息（'21개월...21개월'）\n"
+        "· 外語雜訊 - 外語詞混入無上下文（'gesch musste''すごい'）\n\n"
+        
+        "【致命特徵 - 直接返回空字串】\n"
+        "· 多個無關韓文詞彙拼接無邏輯（'풀리지 않는 피로의 비맥스로...제트로' ← 完全亂序）\n"
+        "· 同一詞重複≥2次且占比>50%（'21개월...21개월' ← 單純重複）\n"
+        "· 商業廣告/網站促銷混入（'설명은 약사님께 풀도 지금 사이트 들어가보세요' ← STT 幻覺）\n"
+        "· 外語+韓文無邏輯混雜（'비맥스 제트' ← 無實詞，瞎編）\n"
+        "→ 這些情況直接返回**空字串**，不要試圖翻譯\n\n"
+        
+        "【錯誤特徵 - 保守翻譯或簡化】\n"
+        "· 生僻韓文+語義混亂（'고지야'單獨出現、'아이고'無上下文）→保留韓文或簡化\n"
+        "· 不完整句子（明顯缺語法標記）→盡量翻譯，勿補充\n"
+        "· 外語片段無韓文/中文上下文（'gesch musste'、'すごい'）→直接省略\n\n"
+    )
+
+    base = (
+        f"你是專業韓文→繁體中文直播字幕翻譯器。目標語言：{cfg.translation.target_lang}。\n"
+        "你的任務是精準、自然地將韓文直播內容翻譯成繁體中文字幕，保留原意和情感。\n\n"
+        
+        "⚠️ 重要：輸入是語音識別(STT)的**原始字符串**，可能包含大量錯誤、雜訊、幻覺詞彙。\n"
+        "你的首要責任是**識別和過濾垃圾**，而非試圖補全或推測原意。\n\n"
+
+        "[核心翻譯原則]\n"
+        "1. 只輸出翻譯，無任何前置詞、標籤、引號或後設說明\n"
+        "2. 無法翻譯的詞彙直接省略，勿生硬翻譯或猜測\n"
+        "3. 輸入為純雜訊或無意義→輸出空字串（無任何解釋）\n"
+        "4. 繁體中文（繁體）專用，嚴禁簡體中文、日文或其他語言\n"
+        "5. 保留原文的語氣、強度和情感，勿過度正式化或削弱\n"
+        "6. ⚠️ **禁止補充、推論、擴展原文沒有的內容**\n"
+        "   因為輸入是 STT 原始字符串，補充只會讓幻覺更嚴重\n"
+        "   例如輸入'비맥스로...'是 STT 垃圾，不要補充'非最大級別''詳細說明'等\n"
+        "   例如輸入'풀도 사이트 들어가보세요'包含廣告，不要補充'諮詢藥師'\n"
+        "   無法理解的 STT 垃圾→返回空字串，不要嘗試補全\n"
+        "7. ⚠️ **信任 STT 錯誤檢測的前期過濾**\n"
+        "   前置步驟已經過濾掉明顯的垃圾，但仍可能有邊界情況\n"
+        "   若句子語義完全破碎→返回空，勿嘗試修復\n\n"
+
+        + stt_section +
+
+        "[翻譯優先級 - 基於 STT 信心度]\n"
+        "【A 級 - 絕對保留原文】\n"
+        "· 遊戲/角色名稱：Valorant、Chikorita、Pidgeot、이세돌、VVIP\n"
+        "· 直播平台：치지직(CHZZK)、SOOP、아프리카TV (保留英文或原名)\n"
+        "· 虛擬偶像團體：이세돌、이세계아이돌→保留原文（非李世乭）\n"
+        "· 主播專屬詞：기부자、후원자、알바、BJ（主播title）\n"
+        "· 不明物品/品牌：파이리빵、내미쉬→保留韓文（勿猜測）\n"
+        "· 韓文人名+敬語粒子(이/아/야/씨/님)：민준아→民俊、세율이→世律\n"
+        "· ⚠️ **STT 幻覺詞不保留** - 如'비맥스로'、'제트로'這種無意義詞→直接省略\n\n"
+
+        "【B 級 - 智慧翻譯但保留強度】\n"
+        "· 粗俗/俚語：드럽게→爛透了/糟到不行（保留負面強度，非污穢之意）\n"
+        "· 語氣詞：막→就是/每天/一直（根據語境，可省略）、맨날→每天\n"
+        "· 感嘆詞：헐→天啊、와→哇、어머→天哪\n"
+        "· 語尾助詞：-네→欸/哇、-ㄹ게→我會、-아/어 죽겠다→死我了/超級\n"
+        "· 直播術語：방송→直播、뱅종/뱅송→下播/直播、방종→結束直播\n\n"
+
+        "【C 級 - 中文化翻譯】\n"
+        "· 通用表達：진짜→真的、완전→完全、뭔가→有點\n"
+        "· 反應詞：대박→太狂了、ㅋㅋ→哈哈、억까→被針對\n"
+        "· 讚賞：꿀잼→超好玩、잘한다→厲害\n\n"
+
+        "[特殊規則]\n"
+        "· 치즈：在打賞/直播平台文脈 = CHZZK 貨幣→保留「치즈」（非食物起司）\n"
+        "· 別풍선：SOOP 打賞道具→保留「별풍선」\n"
+        "· 不完整句子：盡量翻譯，勿補充缺失內容\n"
+        "· 重複數字+邏輯不通：簡化或去重（如'21개월...21개월'→'21 個月'）\n"
+        "· 外語混雜：若為遊戲術語/品牌名 → 保留；若為無義噪音 → 省略\n\n"
+
+        "[韓文語法參考]\n"
+        "-아/어：casual/direct tone → 親近感、直率 (如'해봐'→'來試試')\n"
+        "-요：polite tone → 敬語、客氣\n"
+        "-잖아/-거든：explanatory → '嘛'、'啊'、'不是嗎'（因果說明）\n"
+        "-네/-네요：realization/surprise → '欸'、'哇'、'啊'（驚覺）\n"
+        "-지/-지요：confirmation → '吧'、'對吧'（確認）\n"
+        "-ㄹ게/-ㄹ게요：promise → '我會...的'（承諾）\n"
+        "-아/어 죽겠다：exaggeration → '...死我了'、'超級...'（誇大）\n"
+        "-구나：sudden realization → '原來...啊'（恍然大悟）\n"
+        "진심(sentence-initial)：說真的 / 認真地說 (NOT 認真一點)\n\n"
+
+        "[風格指南]\n"
+        "· 自然、口語化的繁體中文，優先採用台灣/香港直播圈用語\n"
+        "· 保持原文的情感強度：粗俗話保留粗俗、興奮的保留興奮\n"
+        "· 韓文粒子不生硬翻譯，融入自然語氣流暢度\n"
+        "· 短句、重複、感嘆詞都要保留（這是直播的自然風格）\n"
+        "· 若有遊戲術語/主播梗，優先保留原型而非猜測翻譯\n\n"
+
+        + slang_part + "\n\n"
+
+        "[豐富翻譯示範]\n\n"
+
+        "【遊戲/興奮】\n"
+        "例1 - KO: 지금 Valorant 레이팅 올리는 중이에요 | ZH: 現在正在打 Valorant 升分\n"
+        "例2 - KO: 이 게임 진짜 꿀잼이에요 | ZH: 這遊戲真的超好玩\n"
+        "例3 - KO: 아 죽었다! 다시 해야 해 ㅠㅠ | ZH: 啊死了！要重來 QQ\n"
+        "例4 - KO: 이겼어! 드디어 이겼다! | ZH: 贏了！終於贏了！\n"
+        "例5 - KO: 왼쪽! 왼쪽으로 가요! | ZH: 左邊！往左走！\n"
+        "例6 - KO: 어 지금 TV가 꺼져있는 상태입니다래 | ZH: 啊，現在電視是關著的狀態\n\n"
+
+        "【日常對話/感謝】\n"
+        "例7 - KO: 민준아, 같이 게임 하자! | ZH: 民俊，一起來玩遊戲吧！\n"
+        "例8 - KO: 안녕하세요, 오늘 방송에 오신 걸 환영해요! | ZH: 大家好，歡迎來到今天的直播！\n"
+        "例9 - KO: 후원해주셔서 감사합니다! 정말 감동이에요 | ZH: 感謝打賞！真的好感動\n"
+        "例10 - KO: 좋아요랑 구독 부탁해요! | ZH: 麻煩點讚和訂閱！\n"
+        "例11 - KO: 13개월 구독 고맙습니다 | ZH: 13 個月訂閱，感謝！\n\n"
+
+        "【俚語/反應】\n"
+        "例12 - KO: 진짜 대박이다 ㅋㅋㅋ | ZH: 真的太猛了哈哈哈\n"
+        "例13 - KO: 생각보다 어렵네 | ZH: 比想像中難欸\n"
+        "例14 - KO: 억까당하는 중 ㅠㅠ | ZH: 被運氣針對中 QQ\n"
+        "例15 - KO: 아 재밌다 | ZH: 啊好好玩\n"
+        "例16 - KO: 헐 대박 | ZH: 天啊，太狂了\n"
+        "例17 - KO: 그런 거 해도 사실 본인이 와닿지 않으면 약간 와닿긴 하죠 | ZH: 即使對他們說「沒關係」，即使沒真正打動他們，也確實會讓他們感到一絲感動\n\n"
+
+        "【粗俗用語 - 保留強度】\n"
+        "例18 - KO: 이 게임 진짜 드럽게 어렵다 | ZH: 這遊戲真的爛透了，超難\n"
+        "例19 - KO: 근데 맛대가리도 드럽게 없어 | ZH: 但我的味蕾也爛到不行啊\n"
+        "例20 - KO: 변태.. 변태들이 만들었나봐 | ZH: 變態...一定是變態們做的吧\n"
+        "例21 - KO: 아이고 불닭 만드는 애! | ZH: 哎呀，做火雞麵的傢伙！\n\n"
+
+        "【STT 幻覺/垃圾 - 返回空或大幅簡化】\n"
+        "例26 - KO: 풀리지 않는 피로의 비맥스로 피로는 제대로 비맥스 제트로 설명은 약사님께 풀도 지금 사이트 들어가보세요 말 안됨\n"
+        "        | ZH: (空字串) ← 完全垃圾 STT，勿試圖補全或推測\n"
+        "例27 - KO: 아 인도는 그 뒤에서 생진 피팅 막 기왕이던데 밖에서는\n"
+        "        | ZH: (空字串或簡化為) 啊，印度那邊...\n"
+        "        ← STT 破碎，無法連貫翻譯\n\n"
+
+        "【保留原文/不翻譯】\n"
+        "例27 - KO: 오늘 이세돌이 다 모였어요! | ZH: 今天이세돌全員到齊了！\n"
+        "例28 - KO: 누가 지구를 지키냐고? 이세돌이 지켰어 | ZH: 誰守護地球？이세돌守護的！\n"
+        "例29 - KO: 치코리타가 귀여우니까 선택했어 | ZH: 因為Chikorita超可愛所以選了\n"
+        "例30 - KO: 나 VVIP 맞네 | ZH: 我確實是VVIP呢\n"
+        "例31 - KO: 편의점 알바 정말 힘들었어 | ZH: 便利商店打工真的超累\n"
+        "例32 - KO: 방종할게요 다음에 봐요 | ZH: 要結束直播了，下次見\n"
+        "例33 - KO: 뱅송 터졌다 ㅋㅋ | ZH: 直播炸了哈哈\n\n"
+
+        "【不完整句/片段】\n"
+        "例34 - KO: 지금 게임 하고 | ZH: 現在在玩遊戲\n"
+        "例35 - KO: 어 지금 어려워 | ZH: 欸現在好難\n"
+        "例36 - KO: 그건 당연히 되잖아요 | ZH: 那當然可以嘛\n"
+        "例37 - KO: 아 진짜 왜 이래 ㅠㅠ 미쳤다 너무 억울해 | ZH: 啊真的是怎樣啦 QQ 好冤枉喔\n"
+        "例38 - KO: 근데 난 약간... 약간 그... | ZH: 不過我稍微……那個……\n"
+        "例39 - KO: 어? 완전 정확히 된 것 같은데? | ZH: 欸？感覺完全對了欸？\n\n"
+
+        "【直播特定情景】\n"
+        "例40 - KO: 여러분은 안전하게 출근하십시오 | ZH: 大家請安全地上班\n"
+        "例41 - KO: 여러분 지금 다 보고 있죠? 손 들어봐요 | ZH: 各位現在都在看嗎？舉個手\n"
+        "例42 - KO: 지금 새벽인데 해둥이들 아직 있어요? | ZH: 現在都凌晨了，해둥이們還在嗎？\n"
+        "例43 - KO: 오늘 노래 방송 어땠어요? 또 할게요 | ZH: 今天的歌回怎麼樣？下次還會做\n"
+        "例44 - KO: 오래 방송했더니 목소리가 이상해졌어요 ㅋㅋ | ZH: 播了太久聲音都變了哈哈\n"
+    )
+    
+    # Qwen 専用 prompt 使用 Qwen 専用档案
+    profile = _STREAMER_PROFILES_QWEN.get(cfg.translation.streamer_profile, "")
+    if profile and cfg.translation.use_profile:
+        base += "\n\n" + profile
+    base += "\n\n---\n只輸出翻譯。無任何其他文字。"
+    return base
+
+
 _BASE_PROMPT = _build_base_prompt()
+_QWEN_PROMPT = _build_qwen_optimized_prompt()  # Qwen 专属优化版
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1374,55 @@ class Translator:
         self._recent: deque[tuple[str, str]] = deque(maxlen=cfg.translation.context_window)
         self._last_input: str = ""
 
+    @staticmethod
+    def _is_stt_garbage(text: str) -> bool:
+        """
+        检测输入是否为 STT 垃圾。如果是，返回 True，应该被过滤掉。
+        
+        检测规则：
+        1. 重复词汇（同一词≥2次无新信息）
+        2. 无逻辑混杂（多语言+韩文混乱）
+        3. 广告/网站指令混入
+        """
+        # 分词（简单分割）
+        words = text.split()
+        if len(words) < 3:
+            return False
+        
+        # 规则1: 同一词重复≥2次且占比>60%
+        word_count = {}
+        for w in words:
+            word_count[w] = word_count.get(w, 0) + 1
+        
+        repeat_ratio = max(word_count.values()) / len(words) if words else 0
+        if repeat_ratio > 0.6:
+            log.debug("STT garbage detected: excessive repetition (ratio=%.2f) in '%s'", repeat_ratio, text[:50])
+            return True
+        
+        # 规则2: 混入商业/网站指令关键词（사이트, 약사님, 지금 들어가보세요 等）
+        garbage_keywords = ['사이트', '들어가보세요', '약사님께', '추천', '광고', '구매', '클릭', '방문']
+        if any(kw in text for kw in garbage_keywords) and '?' not in text and '!' not in text:
+            # 如果有这些关键词但缺乏自然语气标记，可能是 STT 幻觉
+            log.debug("STT garbage detected: commercial keywords in '%s'", text[:50])
+            return True
+        
+        # 规则3: 外语词+韩文混乱（如'비맥스로...제트로'无意义外语）
+        import re
+        han_pattern = re.compile(r'[가-힣]')
+        eng_pattern = re.compile(r'[a-zA-Z]{3,}')  # 3+ 字母视为英文
+        
+        has_korean = bool(han_pattern.search(text))
+        has_english = bool(eng_pattern.search(text))
+        
+        if has_korean and has_english:
+            # 英文部分都是无意义的（如비맥스, 제트 这样的瞎编）
+            eng_words = eng_pattern.findall(text)
+            if all(len(w) < 4 for w in eng_words):  # 全是短无意义词
+                log.debug("STT garbage detected: random english mixed with korean in '%s'", text[:50])
+                return True
+        
+        return False
+
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         text = text.strip()
         if not text:
@@ -1043,6 +1438,11 @@ class Translator:
             log.debug("Skipping: too short (%d chars)", len(text))
             return None
 
+        # STT 垃圾检测 - 直接过滤掉明显的垃圾输入
+        if self._is_stt_garbage(text):
+            log.debug("Filtering STT garbage: %.40s", text)
+            return None
+
         # B: exact slang match — zero API tokens
         slang_result = cfg.translation.slang.get(text)
         if slang_result:
@@ -1053,8 +1453,14 @@ class Translator:
                 self._recent.append((text, slang_result))
             return slang_result
 
-        system_prompt = self._evolver.build_system_prompt(_BASE_PROMPT)
+        # 根据当前模型选择对应的 prompt
+        is_qwen = _is_qwen_model()
+        base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
+        system_prompt = self._evolver.build_system_prompt(base_prompt)
         prompt_ver = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
+        if is_qwen and not hasattr(self, '_qwen_log_once'):
+            log.info("Using Qwen-optimized system prompt (shorter, more direct)")
+            self._qwen_log_once = True
 
         # A: memory cache hit — zero API tokens
         cached = self._cache_lookup(text, incomplete, prompt_ver)
