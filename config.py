@@ -115,6 +115,30 @@ _DEFAULT_SLANG: MappingProxyType = MappingProxyType({
     "방제":    "直播標題",
     "시참":    "觀眾參與",      # 시청자 참여 → 시참
 
+    # Colloquial & crude language (per new prompt guidelines)
+    "드럽다":  "爛透了",
+    "드럽게":  "爛到不行",
+    "맨날":    "每天",
+    "막":      "就是",          # when used as verbal habit/filler
+    "뭔가":    "有點",          # 有時可省略
+    "어쩌고":  "（省略）",       # filler without substance
+    "식으로":  "-style",
+    
+    # Game/streaming context terms
+    "VVIP":    "VVIP",         # streamer branding term
+    "기부자":  "贊助者",
+    "후원자":  "支援者",
+    "알바":    "打工",
+    "뱅송":    "直播",         # slang for 방송
+    "억까":    "被針對",
+    "꿀잼":    "超好玩",
+    "방종":    "下播",
+    
+    # More reactions
+    "미쳤다":  "瘋了",
+    "개뻑이야": "爽死了",
+    "쌩쌩":    "嗖嗖",
+
     # Add more as needed — evolve or extract from DB later
 })
 
@@ -162,15 +186,15 @@ class _Translation:
     # --- Shared translation settings -----------------------------------------
     target_lang:    str          = "zh-TW"
     max_tokens:     int          = 200
-    temperature:    float        = 0.0
+    temperature:    float        = 0.1
     queue_maxsize:  int          = 2
-    context_window: int          = 5     # recent translations passed as context to LLM
+    context_window: int          = 10  # recent translations passed as context to LLM
     # Translation mode — controls the STT correction section in the system prompt.
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "hades_chxxnnx"
+    streamer_profile: str        = "stellive_hina"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20
