@@ -26,9 +26,9 @@ jobs:
         run: pip install -r requirements-ci.txt
 
       - name: Unit tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python -m pytest tests -q
         env:
-          # No real keys — all API calls are mocked in unit tests
+          # No real keys – all API calls are mocked in unit tests
           ANTHROPIC_API_KEY: ""
           GROQ_API_KEY: ""
           GEMINI_API_KEY: ""
