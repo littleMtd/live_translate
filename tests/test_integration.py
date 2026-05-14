@@ -323,5 +323,106 @@ class TestRealGroqSTT(unittest.TestCase):
                             "STT hallucinated text on silent audio")
 
 
+class TestShutdownOrdering(unittest.TestCase):
+    """B1 (#7) — reverse-join shutdown helper.
+
+    Scope is deliberately narrow: we verify the helper does not hang and that
+    a stuck thread produces a warning. We do NOT verify that residual queue
+    items get processed — that requires the full two-stage shutdown (#7b,
+    tracked separately).
+    """
+
+    @staticmethod
+    def _well_behaved_thread(stop: threading.Event, name: str) -> threading.Thread:
+        """A thread that watches stop_event and exits promptly."""
+        t = threading.Thread(
+            target=lambda: stop.wait(timeout=5),
+            name=name,
+            daemon=True,
+        )
+        t.start()
+        return t
+
+    @staticmethod
+    def _stuck_thread(name: str) -> tuple[threading.Thread, threading.Event]:
+        """A thread that ignores stop_event until an explicit release event fires."""
+        release = threading.Event()
+        t = threading.Thread(
+            target=lambda: release.wait(timeout=30),
+            name=name,
+            daemon=True,
+        )
+        t.start()
+        return t, release
+
+    def test_shutdown_does_not_hang(self):
+        from main import _shutdown_threads
+
+        stop = threading.Event()
+        threads = [
+            self._well_behaved_thread(stop, "Audio"),
+            self._well_behaved_thread(stop, "STT"),
+            self._well_behaved_thread(stop, "Translator"),
+        ]
+
+        started = time.monotonic()
+        stuck = _shutdown_threads(threads, stop, join_timeout=2.0)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(stuck, [])
+        for t in threads:
+            self.assertFalse(t.is_alive(), f"{t.name} still alive after shutdown")
+        # All threads watch the same stop_event and exit ~immediately; the whole
+        # shutdown should finish well within a single join_timeout window.
+        self.assertLess(elapsed, 2.0)
+
+    def test_shutdown_logs_warning_if_thread_stuck(self):
+        from main import _shutdown_threads
+
+        stop = threading.Event()
+        good = self._well_behaved_thread(stop, "Audio")
+        stuck_thread, release = self._stuck_thread("FrozenTranslator")
+
+        try:
+            with self.assertLogs(level="WARNING") as cm:
+                stuck = _shutdown_threads(
+                    [good, stuck_thread], stop, join_timeout=0.2
+                )
+
+            self.assertIn(stuck_thread, stuck)
+            self.assertNotIn(good, stuck)
+            self.assertTrue(
+                any("FrozenTranslator" in line and "did not stop" in line for line in cm.output),
+                f"Expected stuck-thread warning in logs, got: {cm.output}",
+            )
+        finally:
+            release.set()
+            stuck_thread.join(timeout=1)
+
+    def test_shutdown_joins_in_reverse_order(self):
+        """Threads are joined in reverse list order (consumer-to-producer)."""
+        from main import _shutdown_threads
+
+        join_order: list[str] = []
+        stop = threading.Event()
+
+        class _RecordingThread(threading.Thread):
+            def join(self, timeout=None):
+                join_order.append(self.name)
+                super().join(timeout=timeout)
+
+        threads = [
+            _RecordingThread(target=lambda: stop.wait(0.5), name="Audio",      daemon=True),
+            _RecordingThread(target=lambda: stop.wait(0.5), name="STT",        daemon=True),
+            _RecordingThread(target=lambda: stop.wait(0.5), name="Translator", daemon=True),
+        ]
+        for t in threads:
+            t.start()
+
+        _shutdown_threads(threads, stop, join_timeout=1.0)
+
+        self.assertEqual(join_order, ["Translator", "STT", "Audio"])
+
+
 if __name__ == "__main__":
     unittest.main()

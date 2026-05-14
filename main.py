@@ -58,6 +58,33 @@ def _handle_signal(sig, frame):
     stop_event.set()
 
 
+def _shutdown_threads(
+    threads: list[threading.Thread],
+    stop_event: threading.Event,
+    join_timeout: float,
+    logger=log,
+) -> list[threading.Thread]:
+    """Signal stop and reverse-join the pipeline.
+
+    Reverse order (consumer-to-producer) means subscribers wind down before
+    their upstream producers stop emitting. This only reorders the join
+    sequence and warns on stuck threads; it makes no promise that residual
+    queue items are consumed before exit. The follow-up two-stage shutdown
+    that handles in-flight queue items is tracked as future work (#7b).
+
+    Returns the threads still alive after the join attempt — useful for tests
+    and for callers that want to take further action (force terminate, etc.).
+    """
+    stop_event.set()
+    stuck: list[threading.Thread] = []
+    for t in reversed(threads):
+        t.join(timeout=join_timeout)
+        if t.is_alive():
+            logger.warning("Thread %s did not stop within %ss", t.name, join_timeout)
+            stuck.append(t)
+    return stuck
+
+
 def _stt_printer(sentence_queue: queue.Queue, stop_event: threading.Event) -> threading.Thread:
     """Reads sentences and prints them to console + log file. No API calls."""
     _LOG_DIR.mkdir(exist_ok=True)
@@ -127,11 +154,7 @@ def main():
         log.info("All background threads started. Opening subtitle window (Ctrl+C to quit).")
         subtitle_display.start(subtitle_queue, stop_event, pause_event, all_queues)
 
-    stop_event.set()
-    for t in threads:
-        t.join(timeout=cfg.thread_join_timeout)
-        if t.is_alive():
-            log.warning("Thread %s did not stop within %ds", t.name, cfg.thread_join_timeout)
+    _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
     log.info("Shutdown complete")
 
 
