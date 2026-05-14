@@ -126,6 +126,7 @@ class Translator:
         self._policy = TranslationPolicy(
             slang=cfg.translation.slang,
             min_translate_chars=_MIN_TRANSLATE_CHARS,
+            max_translate_chars=cfg.translation.max_translate_chars,
         )
         self._last_input: str = ""
 

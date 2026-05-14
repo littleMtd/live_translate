@@ -20,10 +20,12 @@ class TranslationPolicy:
         *,
         slang: Mapping[str, str],
         min_translate_chars: int = 2,
+        max_translate_chars: int = 500,
         last_input: str = "",
     ):
         self._slang = slang
         self._min_translate_chars = min_translate_chars
+        self._max_translate_chars = max_translate_chars
         self.last_input = last_input
 
     def prepare_input(self, text: str) -> str | None:
@@ -34,6 +36,13 @@ class TranslationPolicy:
 
         if reason == "duplicate":
             log.debug("Duplicate input suppressed: %.40s", text)
+            return None
+
+        # `too_long` deliberately runs before `last_input` is updated: an oversized
+        # STT hallucination must not poison the duplicate-suppression slot, otherwise
+        # the next legitimate input that happens to match it would be silently dropped.
+        if reason == "too_long":
+            log.debug("Skipping: too long (%d chars)", len(text))
             return None
         self.last_input = text
 
@@ -55,6 +64,8 @@ class TranslationPolicy:
             return "duplicate"
         if len(text) < self._min_translate_chars:
             return "too_short"
+        if len(text) > self._max_translate_chars:
+            return "too_long"
         if self.is_stt_garbage(text):
             return "stt_garbage"
         return None

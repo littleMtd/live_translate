@@ -126,6 +126,11 @@ class _Translation:
     temperature:    float        = 0.1
     queue_maxsize:  int          = 2
     context_window: int          = 10  # recent translations passed as context to LLM
+    # Safety cap on per-input length. Oversized inputs are almost always STT
+    # hallucinations (repeated phrases, chunk-boundary glitches). Rejecting them
+    # at the policy layer prevents a single bad input from burning a day's
+    # token budget. Counted in characters, not tokens.
+    max_translate_chars: int     = 500
     # Translation mode — controls the STT correction section in the system prompt.
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
     translation_mode: str        = "live"

@@ -45,9 +45,14 @@ def analyze_runtime_events(path: Path | None = None, top_n: int = 10) -> dict[st
         "translation_events": len(translation_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
+        "status_breakdown": _status_breakdown(translation_events),
         "by_result_source": _count_by(translation_events, "result_source"),
         "by_cache_status": _count_by(translation_events, "cache_status"),
         "by_engine": _count_by(translation_events, "engine"),
+        "by_filter_reason": _count_by(
+            [e for e in translation_events if e.get("filter_reason")],
+            "filter_reason",
+        ),
         "by_subtitle_emitted": _count_by(translation_events, "subtitle_emitted"),
         "quality_flags": [
             {"flag": flag, "count": count}
@@ -85,13 +90,35 @@ def _latency_summary(latencies: list[float]) -> dict[str, float | int]:
     if not latencies:
         return {"count": 0}
     ordered = sorted(latencies)
-    p95_index = min(len(ordered) - 1, int(len(ordered) * 0.95))
+    n = len(ordered)
+
+    def percentile(p: float) -> float:
+        return ordered[min(n - 1, int(n * p))]
+
     return {
-        "count": len(ordered),
+        "count": n,
         "avg": round(fmean(ordered), 2),
         "max": round(max(ordered), 2),
-        "p95": round(ordered[p95_index], 2),
+        "p50": round(percentile(0.50), 2),
+        "p95": round(percentile(0.95), 2),
+        "p99": round(percentile(0.99), 2),
     }
+
+
+def _status_breakdown(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Separate denominators for success / filtered / failed / other.
+
+    `by_status` shows the distribution as a list; this returns a flat dict so
+    callers (digest, dashboards) can compute ratios directly without parsing.
+    """
+    counts = {"total": len(events), "success": 0, "filtered": 0, "failed": 0, "other": 0}
+    for event in events:
+        status = event.get("status") or "other"
+        if status in counts and status != "total":
+            counts[status] += 1
+        else:
+            counts["other"] += 1
+    return counts
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -137,11 +164,13 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Runtime events: {report['event_path']}")
     print(f"Events: {report['total_events']} | Translations: {report['translation_events']}")
     print(f"Run IDs: {', '.join(report['run_ids'])}")
+    print(f"Status breakdown: {report['status_breakdown']}")
     print(f"Latency ms: {report['latency_ms']}")
     for title, key in (
         ("By status", "by_status"),
         ("By result source", "by_result_source"),
         ("By cache status", "by_cache_status"),
+        ("By filter reason", "by_filter_reason"),
         ("By subtitle emitted", "by_subtitle_emitted"),
         ("Quality flags", "quality_flags"),
     ):

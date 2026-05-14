@@ -494,5 +494,38 @@ class TestTranslateOptimizations(unittest.TestCase):
         t._memory.db_lookup.assert_not_called()
 
 
+class TestMaxTranslateCharsGuard(unittest.TestCase):
+    """#6 — oversized inputs must be rejected before reaching any engine."""
+
+    def _make_with_cap(self, cap: int = 10) -> Translator:
+        t = _make_translator()
+        # Replace the auto-built policy with one whose cap we control.
+        from modules.translation_policy import TranslationPolicy
+        from config import cfg
+        t._policy = TranslationPolicy(
+            slang=cfg.translation.slang,
+            min_translate_chars=2,
+            max_translate_chars=cap,
+        )
+        return t
+
+    def test_too_long_skips_engine_call(self):
+        t = self._make_with_cap(cap=10)
+        outcome = t.translate_event("x" * 50, incomplete=False)
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.filter_reason, "too_long")
+        self.assertIsNone(outcome.target_text)
+        for e in t._engines:
+            e.translate.assert_not_called()
+
+    def test_within_cap_reaches_engine(self):
+        t = self._make_with_cap(cap=100)
+        outcome = t.translate_event("안녕하세요", incomplete=False)
+        # Engine returns "你好" by default per _mock_engine
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "你好")
+        self.assertEqual(outcome.filter_reason, "")
+
+
 if __name__ == "__main__":
     unittest.main()

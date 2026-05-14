@@ -40,6 +40,24 @@ class TestTranslationPolicy(unittest.TestCase):
     def test_is_stt_garbage_allows_short_text(self):
         self.assertFalse(TranslationPolicy.is_stt_garbage("안녕하세요"))
 
+    # ---- max_translate_chars (#6) ----
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_rejection_reason_returns_too_long_for_oversized_input(self):
+        policy = TranslationPolicy(slang={}, max_translate_chars=10)
+
+        self.assertEqual(policy.rejection_reason("x" * 11), "too_long")
+        self.assertIsNone(policy.rejection_reason("x" * 10))
+
+    def test_prepare_input_rejects_oversized_input(self):
+        policy = TranslationPolicy(slang={}, max_translate_chars=10)
+
+        self.assertIsNone(policy.prepare_input("x" * 11))
+
+    def test_too_long_does_not_update_last_input(self):
+        # An oversized input must NOT poison last_input, otherwise a subsequent
+        # legitimate input matching it would be silently dropped as `duplicate`.
+        policy = TranslationPolicy(slang={}, max_translate_chars=10)
+
+        policy.prepare_input("x" * 11)
+
+        self.assertEqual(policy.last_input, "")
