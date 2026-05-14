@@ -10,11 +10,11 @@ This file is the entry point for Claude Code.
 
 ## Document Roles
 
-| Document | Scope | Owner |
-|----------|-------|-------|
-| `system.md` | Runtime pipeline, architecture, deployment roadmap | System design |
-| `sql.md` | SQLite schema, cache behavior, thread safety | Phase 1 backend |
-| `frontend-design.md` | Tauri app structure, Rust handlers, Vue components | Phase 2 frontend |
+| Document | Scope | Status |
+|----------|-------|--------|
+| `system.md` | Runtime pipeline, architecture, deployment roadmap | Reflects current code |
+| `sql.md` | SQLite schema, cache behavior, thread safety | Phase 1 ✅ implemented |
+| `frontend-design.md` | Tauri app structure, Rust handlers, Vue components | Phase 2 🚧 in progress (handlers + components scaffolded under `src-tauri/`, `src-frontend/`) |
 
 ## Rules
 

@@ -17,11 +17,11 @@ Do not duplicate these rules in `system.md`.
 4. Store prompt evolution metadata for future inspection
 5. Keep the database layer isolated from the rest of the pipeline
 
-## Phase 1 Scope
+## Phase 1 Scope — ✅ Implemented
 
-Start with persistent translation cache only.
+Persistent translation cache only. Stream session metadata and prompt-evolution tables (listed under *Suggested Tables* below) are still future work.
 
-Store a translation record when the app successfully translates a sentence, and reuse it when the same sentence appears again.
+The translator stores a record on every successful translation and reuses it when the same sentence reappears under the same engine / model / prompt version.
 
 Use the cache key:
 
@@ -92,7 +92,7 @@ If Phase 2 or Phase 3 introduces concurrent DB writes (e.g., multiple translator
 
 ## Suggested Tables
 
-### translations
+### translations — ✅ Implemented (`modules/db.py`)
 
 Fields:
 
@@ -114,7 +114,7 @@ Recommended constraints:
 - index on `last_used_at`
 - index on `hit_count` if ranking hot entries becomes useful
 
-### stream_sessions
+### stream_sessions — 📋 Planned (not yet implemented)
 
 Fields:
 
@@ -129,7 +129,7 @@ Recommended constraints:
 - one row per live session
 - index on `started_at`
 
-### prompt_evolution
+### prompt_evolution — 📋 Planned (not yet implemented)
 
 Fields:
 
@@ -151,19 +151,21 @@ The DB cache and in-memory cache use **different keys intentionally**:
 
 | Layer | Key | Scope | Stores incomplete? |
 |-------|-----|-------|-------------------|
-| In-memory (`translator.py`) | `(text, incomplete, prompt_ver)` | Session only | Yes (fast path for all input) |
-| DB `translations` table | `(source_text, target_lang, engine, model, prompt_version)` | Persistent | **Never** |
+| In-memory (`modules/translation_memory.py::TranslationMemory.cache`) | `(text, incomplete, prompt_ver)` | Session only | Yes (fast path for all input) |
+| DB `translations` table (`modules/db.py`) | `(source_text, target_lang, engine, model, prompt_version)` | Persistent | **Never** |
 
 The DB key includes `engine`, `model`, and `prompt_version` so that cache entries are invalidated when the engine, model, or system prompt changes.
 
-**Lookup order when integrating Phase 1:**
+**Lookup order (as implemented in `modules/translation_memory.py::lookup_existing_event`):**
 
-1. Check in-memory cache with `(text, incomplete)` — return immediately on hit
-2. If `incomplete=True`, skip DB — never read or write incomplete sentences to DB
-3. Check DB with `(source_text=text, target_lang, model, engine)` — return on hit, update `hit_count` + `last_used_at`
-4. Call API on miss
-5. Store result to in-memory cache always (both complete and incomplete)
-6. Store result to DB only if `incomplete=False`
+1. Check in-memory cache with `(text, incomplete, prompt_ver)` — return immediately on hit (counts as `memory_hit`).
+2. If `incomplete=True` or no active engine, skip DB — never read or write incomplete sentences to DB (counts as `skipped`).
+3. Check DB with `(source_text=text, target_lang, engine, model, prompt_version)` — on hit, update `hit_count` + `last_used_at`, mirror into in-memory cache, return as `db_hit`.
+4. On miss return `miss`; the translator then calls the API.
+5. On API success, store the result to in-memory cache always (both complete and incomplete).
+6. On API success, store the result to DB **only if `incomplete=False`**.
+
+The exact source label (`memory_hit` / `db_hit` / `skipped` / `miss`) is carried out of `lookup_existing_event` as a `MemoryLookup` dataclass and surfaces in `runtime_events.jsonl` as the `cache_status` field.
 
 **DB eviction:** apply LRU-style eviction based on `last_used_at` when row count exceeds a configurable limit (default: 50,000 rows). Configured in `config.py` as `cfg.database.db_cache_max_rows` (in `_Database` dataclass).
 

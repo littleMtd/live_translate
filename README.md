@@ -9,7 +9,7 @@
 ## 功能
 
 - **浮動字幕疊加** — 透明 tkinter 視窗，始終置頂，可自由拖移
-- **多個 STT 引擎** — SenseVoice-Small（本機 GPU）或 Groq Whisper（雲端備用）
+- **多個 STT 引擎** — Groq Whisper（雲端，預設）或 SenseVoice-Small（本機 GPU，可選）
 - **多個翻譯引擎** — Gemini、Claude、Google Translate、Ollama（本機）、NVIDIA NIM
 - **依模式選擇引擎** — 直播模式與剪輯模式可各自設定不同後端
 - **主播 Profile** — 針對特定 VTuber 的內建 Few-shot 提示組（스텔라이브 히나、릴파、챈나、MW:MEU）
@@ -166,9 +166,10 @@ cargo tauri build
 ### 選擇翻譯引擎
 
 ```python
-# 依模式選擇引擎："anthropic"（Gemini/Claude 鏈）| "ollama" | "nvidia"
-live_engine: str = "anthropic"   # translation_mode = "live" 時使用
-clip_engine: str = "nvidia"      # translation_mode = "clip" 時使用
+# 依模式選擇引擎："anthropic"（走 engine_chain 鏈）| "ollama" | "nvidia"
+# 預設兩個模式都走 NVIDIA NIM (Qwen3) 並以 engine_chain 作為 fallback。
+live_engine: str = "nvidia"   # translation_mode = "live" 時使用
+clip_engine: str = "nvidia"   # translation_mode = "clip" 時使用
 ```
 
 ### 選擇翻譯模式
@@ -190,7 +191,7 @@ groq_model:     str = "whisper-large-v3"
 載入特定主播的 Few-shot 範例，可提升粉絲用語的翻譯準確度：
 
 ```python
-streamer_profile: str = "stellive_hina"   # 見下表
+streamer_profile: str = "hades_chxxnnx"   # 見下表；預設套用 HADES / 챈나
 use_profile:      bool = True
 ```
 
@@ -221,7 +222,7 @@ model: str = "qwen2.5:3b"
 
 | 引擎 | 需要金鑰 | 說明 |
 |------|---------|------|
-| Claude (Haiku / Sonnet) | `ANTHROPIC_API_KEY` | 直播模式支援 Prompt Cache |
+| Claude (預設 `claude-sonnet-4-6`) | `ANTHROPIC_API_KEY` | 直播模式支援 Prompt Cache |
 | Gemini Flash | `GEMINI_API_KEY` | 速度快、費用低 |
 | Google Translate v2 | `GOOGLE_TRANSLATE_API_KEY` | 無 LLM 語境；最快的備用方案 |
 | Ollama | — | 完全本機執行；需先啟動 `ollama serve` |
@@ -235,27 +236,43 @@ model: str = "qwen2.5:3b"
 
 ```
 live_translate/
-├── main.py                  # 程式進入點
-├── config.py                # 所有執行期設定
-├── .env                     # API 金鑰（不提交至版本控制）
-├── .env.example             # 金鑰範本
+├── main.py                       # 程式進入點，組裝 pipeline threads
+├── config.py                     # 所有執行期設定（凍結 dataclass）
+├── .env                          # API 金鑰（不提交至版本控制）
+├── .env.example                  # 金鑰範本
 ├── modules/
-│   ├── audio_capture.py     # WASAPI 迴環擷取 + VAD
-│   ├── stt.py               # 語音轉文字（SenseVoice / Groq）
-│   ├── sentence_splitter.py # 韓語句子切割
-│   ├── translator.py        # 翻譯引擎 + 快取
-│   ├── db.py                # SQLite 持久化快取
-│   ├── subtitle_display.py  # 浮動 tkinter 疊加視窗
-│   └── prompt_evolver.py    # 動態提示增強（選用）
+│   ├── audio_capture.py          # WASAPI 迴環擷取 + Silero VAD（torch 缺席時降級為 RMS）
+│   ├── stt.py                    # 語音轉文字（Groq 預設，SenseVoice 可選）
+│   ├── stt_policy.py             # STT 品質過濾（no_speech / logprob / 幻覺偵測）
+│   ├── sentence_splitter.py      # 斷句排程 thread
+│   ├── sentence_buffer.py        # 句子累積與 force-cut 邏輯
+│   ├── pipeline_events.py        # 型別事件：TranscriptionEvent、SentenceEvent
+│   ├── translator.py             # 翻譯協調器（facade，含 TranslationOutcome）
+│   ├── translation_engines.py    # TranslationEngine ABC + 5 種引擎實作
+│   ├── translation_runtime.py    # Fallback 狀態機與快取運算函式
+│   ├── translation_memory.py     # 記憶體 LRU + SQLite write-through
+│   ├── translation_policy.py     # 輸入前處理、STT 垃圾偵測、slang 查表
+│   ├── translation_prompts.py    # 系統 prompt 建構 + Qwen 變體 + 主播 profile
+│   ├── streamer_profiles.py      # JSON-driven 主播 profile + STT glossary
+│   ├── db.py                     # SQLite 持久化快取（WAL、LRU、schema migration）
+│   ├── subtitle_display.py       # 浮動 tkinter 疊加視窗（透明、可暫停）
+│   └── prompt_evolver.py         # 動態 Gemini 提示增強（選用）
 ├── utils/
-│   ├── logger.py            # Windows UTF-8 日誌
-│   ├── queue_utils.py       # drain_put 工具函數
-│   ├── api_retry.py         # 錯誤分類 + 退避重試
-│   └── config_export.py     # 將設定匯出為 JSON 供 Tauri 使用
-├── src-tauri/               # Tauri Rust 後端（選用 Dashboard）
-├── src-frontend/            # Vue.js Dashboard 前端（選用）
-├── tests/                   # 單元測試 + 整合測試
-└── logs/                    # 翻譯紀錄 + DB（自動建立）
+│   ├── pipeline.py               # start_daemon_thread / poll_queue / pause helpers
+│   ├── queue_utils.py            # put_latest()：drain-all-keep-latest 策略
+│   ├── api_retry.py              # 錯誤分類 + 退避重試常數
+│   ├── metrics.py                # PipelineMetrics 計數器與延遲統計
+│   ├── runtime_events.py         # JSONL 翻譯事件日誌 + 品質指標
+│   ├── text_heuristics.py        # 韓語 NLP 常數（字尾、垃圾關鍵字、regex）
+│   ├── logger.py                 # Windows UTF-8 日誌
+│   ├── audio.py                  # 音訊工具函式（RMS 等）
+│   └── config_export.py          # 將設定匯出為 JSON 供 Tauri 使用
+├── src-tauri/                    # Tauri Rust 後端（選用 Dashboard）
+├── src-frontend/                 # Vue.js Dashboard 前端（選用）
+├── data/                         # JSON 資料（slang、streamer profiles、eval cases）
+├── scripts/                      # 工具腳本（分析快取、評估翻譯、debug pipeline 等）
+├── tests/                        # 單元測試 + 整合測試
+└── logs/                         # 翻譯紀錄、DB、runtime_events_*.jsonl（自動建立）
 ```
 
 ---

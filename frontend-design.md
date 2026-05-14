@@ -15,6 +15,23 @@ This document describes the desktop application architecture using Tauri (Rust b
 
 ---
 
+## Implementation Status (Phase 2 🚧)
+
+The dashboard is **in development**, not a green-field design:
+
+- Tauri Rust handlers exist under `src-tauri/src/` (`config.rs`, `cache.rs`, `stats.rs`, `python.rs`, `state.rs`, `paths.rs`, `main.rs`).
+- Vue components exist under `src-frontend/src/` (`Dashboard.vue`, `ConfigPanel.vue`, `CacheStats.vue`, `SystemStats.vue`, `client.ts`, `config.ts`) plus matching `*.test.ts` files.
+- The Python side already writes `logs/live_translate_config.json` on startup via `utils/config_export.py` (called from `main.py`); see "Python Config Bridge" below.
+
+**This document is therefore a hybrid spec + tutorial.** Code samples illustrate the intended architecture for readers new to Tauri/Rust/Vue — the actual files in the repo may diverge from these snippets as the implementation evolves. When the two disagree, the source files under `src-tauri/` and `src-frontend/` win.
+
+Two known gaps between this document and reality:
+
+1. **Tauri version** — examples below use Tauri v1 `invoke` paths (`@tauri-apps/api/tauri`). The current scaffolding may already be on Tauri v2 (`@tauri-apps/api`); double-check `src-frontend/package.json` and `src-tauri/Cargo.toml` before copying any snippet.
+2. **DTO subsets** — the `ConfigDto` Rust struct and TypeScript `ConfigDto` interface in this doc list only the fields the dashboard renders. `utils/config_export.py` actually writes every non-secret field of `cfg` (including `database`, `live_engine`, `clip_engine`, `ollama`, `nvidia`, and the full `_Translation` / `_Subtitle` schema). Treat the DTOs below as the UI-facing slice, not the full JSON shape.
+
+---
+
 ## Architecture
 
 ### High-Level Flow
@@ -53,49 +70,49 @@ Tauri 修改 config 後寫回同一 JSON 檔。Python 透過輪詢（或 `watchd
 > **Tauri v2 注意**：本文件範例使用 Tauri v1 API（`@tauri-apps/api/tauri`）。
 > Tauri v2 的 invoke 路徑改為 `@tauri-apps/api`，請在建立專案時確認版本。
 
-### Directory Structure
+### Directory Structure (actual)
 
 ```
 live_translate/
 ├── src-tauri/                          # Rust backend (Tauri)
 │   ├── Cargo.toml                      # Rust dependencies
 │   ├── tauri.conf.json                 # Tauri config
-│   ├── src/
+│   ├── src/                            # Flat layout — no handlers/ subdir
 │   │   ├── main.rs                     # Tauri app entry + command setup
-│   │   ├── handlers/
-│   │   │   ├── mod.rs                  # module exports
-│   │   │   ├── config.rs               # Config API
-│   │   │   ├── cache.rs                # Cache query API
-│   │   │   ├── stats.rs                # Statistics API
-│   │   │   └── python.rs               # Python subprocess bridge
-│   │   ├── state.rs                    # Tauri State management
-│   │   └── errors.rs                   # Error types
+│   │   ├── state.rs                    # AppState, shared mutex-protected state
+│   │   ├── paths.rs                    # Resolve config / db / venv paths
+│   │   ├── config.rs                   # get_config / update_config commands
+│   │   ├── cache.rs                    # get_cache_stats / clear_cache commands
+│   │   ├── stats.rs                    # get_system_stats command
+│   │   └── python.rs                   # start_python / stop_python commands
+│   ├── gen/                            # Tauri-generated artifacts
 │   └── icons/
 │
 ├── src-frontend/                       # Vue.js frontend
 │   ├── public/
 │   ├── src/
-│   │   ├── App.vue                     # Root component
 │   │   ├── main.ts                     # Vue entry
-│   │   ├── components/
-│   │   │   ├── ConfigPanel.vue         # Settings editor
-│   │   │   ├── CacheStats.vue          # Cache hit/miss display
-│   │   │   ├── SystemStats.vue         # CPU/memory/uptime
-│   │   │   └── Dashboard.vue           # Main layout
-│   │   ├── api/
-│   │   │   └── client.ts               # Tauri command caller
-│   │   └── types/
-│   │       └── config.ts               # TypeScript interfaces
+│   │   ├── App.vue                     # Root component
+│   │   ├── Dashboard.vue               # Main layout
+│   │   ├── ConfigPanel.vue             # Settings editor
+│   │   ├── CacheStats.vue              # Cache hit/miss display
+│   │   ├── SystemStats.vue             # CPU/memory/uptime
+│   │   ├── client.ts                   # Tauri command caller
+│   │   ├── config.ts                   # Config helpers + types
+│   │   └── *.test.ts                   # Vitest component tests
 │   ├── package.json
-│   └── vite.config.ts
+│   ├── vite.config.ts
+│   └── vitest.config.ts
 │
-├── main.py                             # (existing) Python entry
-├── config.py                           # (existing, extended for DB path)
-├── modules/                            # (existing) STT/translator/etc
-├── utils/                              # (existing) logger/etc
-├── logs/                               # SQLite cache location
+├── main.py                             # Python entry (also calls utils/config_export.write)
+├── config.py                           # Python dataclass config (single source of truth)
+├── modules/                            # STT / translator / db / subtitle_display / ...
+├── utils/                              # config_export / runtime_events / metrics / ...
+├── logs/                               # live_translate.db, live_translate_config.json, runtime_events_*.jsonl
 └── frontend-design.md                  # This file
 ```
+
+> The sample handler files later in this document (sections 1–6) describe one **possible** layout with a `handlers/` submodule and a dedicated `errors.rs`. The real `src-tauri/src/` keeps handlers at the top level and does not (yet) have a separate `errors.rs` — each handler uses `Result<T, String>` directly. Treat the samples as illustrative.
 
 ---
 
@@ -225,7 +242,7 @@ pub struct SplitterConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TranslationConfig {
-    pub engine_chain:   Vec<String>,  // e.g. ["google_translate", "gemini", "claude"]
+    pub engine_chain:   Vec<String>,  // current default: ["claude", "gemini", "google_translate"]
     pub target_lang:    String,       // "zh-TW"
     pub max_tokens:     u32,
     pub temperature:    f32,
@@ -657,15 +674,18 @@ export interface SttConfig {
 }
 
 export interface TranslationConfig {
-    engine_chain: string[];   // e.g. ["google_translate", "gemini", "claude"]
+    engine_chain: string[];   // current default: ["claude", "gemini", "google_translate"]
     max_tokens: number;
 }
 
+// UI-facing subset; field names match utils/config_export.py output.
+// Full schema (bg, outline_color, max_width_chars, etc.) is documented in config.py.
 export interface SubtitleConfig {
+    font_family: string;
     font_size: number;
-    opacity: number;
-    auto_hide_ms: number;
-    position: 'top' | 'center' | 'bottom';
+    font_style: string;
+    alpha: number;          // 0.1–1.0 (window opacity)
+    idle_hide_ms: number;   // ms before subtitle fades when no new translation arrives
 }
 
 export interface CacheStats {
@@ -841,24 +861,20 @@ main {
       </label>
       <label>
         Opacity:
-        <input v-model.number="localConfig.subtitle.opacity" type="range" min="0.1" max="1" step="0.1" />
-        {{ Math.round(localConfig.subtitle.opacity * 100) }}%
+        <input v-model.number="localConfig.subtitle.alpha" type="range" min="0.1" max="1" step="0.1" />
+        {{ Math.round(localConfig.subtitle.alpha * 100) }}%
       </label>
       <label>
-        Position:
-        <select v-model="localConfig.subtitle.position">
-          <option value="top">Top</option>
-          <option value="center">Center</option>
-          <option value="bottom">Bottom</option>
-        </select>
+        Idle hide (ms):
+        <input v-model.number="localConfig.subtitle.idle_hide_ms" type="number" min="1000" max="60000" step="500" />
       </label>
     </div>
-    
+
     <div class="section">
       <h3>Translation Engine</h3>
       <label>
         Engine Chain (comma-separated, first = primary):
-        <input v-model="engineChainInput" placeholder="google_translate,gemini,claude" />
+        <input v-model="engineChainInput" placeholder="claude,gemini,google_translate" />
       </label>
       <label>
         Max Tokens:
@@ -889,17 +905,18 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 // Deep-clone helper; returns a safe default when config hasn't loaded yet.
+// Values mirror config.py defaults — keep them in sync when config.py changes.
 const cloneOrDefault = (c: ConfigDto | null): ConfigDto =>
   c ? JSON.parse(JSON.stringify(c)) : {
     audio: { sample_rate: 16000, channels: 1, volume_threshold: 0.01,
-             vad_enabled: true, vad_silence_sec: 0.6,
-             vad_min_speech_sec: 0.4, vad_max_speech_sec: 8.0, queue_maxsize: 10 },
+             vad_enabled: true, vad_silence_sec: 0.9,
+             vad_min_speech_sec: 0.8, vad_max_speech_sec: 8.0, queue_maxsize: 10 },
     stt: { primary_engine: 'groq', language: 'ko', queue_maxsize: 20 },
     splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-    translation: { engine_chain: ['google_translate', 'gemini', 'claude'], target_lang: 'zh-TW',
-                   max_tokens: 150, temperature: 0.0, queue_maxsize: 2, slang: {} },
+    translation: { engine_chain: ['claude', 'gemini', 'google_translate'], target_lang: 'zh-TW',
+                   max_tokens: 200, temperature: 0.1, queue_maxsize: 2, slang: {} },
     subtitle: { font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
-                idle_hide_ms: 30000, alpha: 0.82, queue_maxsize: 10 },
+                idle_hide_ms: 30000, alpha: 1.0, queue_maxsize: 10 },
   };
 
 const localConfig = ref<ConfigDto>(cloneOrDefault(props.config));
