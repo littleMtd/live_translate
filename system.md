@@ -10,13 +10,15 @@ The pipeline captures system audio, converts speech to Korean text, splits text 
 ```text
 System audio capture (sounddevice + WASAPI)
         ↓
-STT engine: SenseVoice-Small primary, Groq fallback
+STT engine: Groq whisper-large-v3 primary, SenseVoice-Small fallback (configurable)
         ↓
 Sentence splitter: Korean ending rules + time window
         ↓
-Translator: engine chain (default: Google Translate → Gemini → Claude)
+Translator: engine chain (default: Claude → Gemini → Google Translate)
         ↓
 Subtitle display: tkinter overlay on the main thread
+        ↓
+runtime_events.jsonl: per-translation quality + status event log
 ```
 
 The stages communicate through `queue.Queue` objects.
@@ -35,16 +37,37 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 
 - `main.py`: entry point, starts threads, handles signals, validates config
 - `config.py`: all tunable parameters and API keys
+
+### Pipeline stages (`modules/`)
+
 - `modules/audio_capture.py`: system audio capture and VAD chunking
-- `modules/stt.py`: speech-to-text engine with fallback support
-- `modules/sentence_splitter.py`: sentence segmentation and force-cut logic
-- `modules/translator.py`: translation engine, cache, slang mapping, fallback logic
-- `modules/db.py`: SQLite persistent translation cache (Phase 1), LRU eviction, WAL mode
+- `modules/stt.py`: speech-to-text engine (Groq primary by default, SenseVoice optional local engine, configurable via `cfg.stt.primary_engine`)
+- `modules/stt_policy.py`: STT output quality filtering (no_speech, logprob, hallucination detection)
+- `modules/sentence_splitter.py`: sentence segmentation orchestration
+- `modules/sentence_buffer.py`: sentence accumulation, timing windows, force-cut logic
+- `modules/pipeline_events.py`: typed pipeline events — `TranscriptionEvent`, `SentenceEvent`
+- `modules/translator.py`: translation coordinator (facade)
+- `modules/translation_engines.py`: `TranslationEngine` ABC + Gemini, Claude, GoogleTranslate, Ollama, Nvidia implementations
+- `modules/translation_runtime.py`: fallback state machine and cache operation functions
+- `modules/translation_memory.py`: two-level cache — in-memory LRU → SQLite write-through
+- `modules/translation_policy.py`: input pre-processing, STT garbage detection, slang lookup
+- `modules/translation_prompts.py`: system prompt construction, Qwen variant, streamer profile injection
+- `modules/streamer_profiles.py`: JSON-driven streamer profiles and STT glossary builder
+- `modules/db.py`: SQLite persistent translation cache, LRU eviction, WAL mode, schema migration
 - `modules/subtitle_display.py`: tkinter subtitle window and pause/resume UI
-- `modules/prompt_evolver.py`: optional live prompt enrichment
+- `modules/prompt_evolver.py`: optional live prompt enrichment from recent successful translations
+
+### Utilities (`utils/`)
+
+- `utils/pipeline.py`: `start_daemon_thread`, `poll_queue`, pause helpers
+- `utils/queue_utils.py`: `put_latest()` — drain-all-keep-latest strategy for pipeline queues
+- `utils/api_retry.py`: `classify_error()` — shared API error classification
+- `utils/metrics.py`: `PipelineMetrics` — thread-safe counters and latency tracking, 60 s summary log
+- `utils/runtime_events.py`: `RuntimeEventWriter` + `translation_quality()` — JSONL event log written under `logs/runtime_events_YYYYMMDD.jsonl`; quality flags (`empty_target`, `low_target_cjk`, `long_target_ratio`, …) accompany every translation outcome
+- `utils/text_heuristics.py`: Korean NLP constants (sentence endings, STT garbage patterns, regex)
 - `utils/logger.py`: UTF-8 logger for Windows CJK output
-- `utils/queue_utils.py`: `drain_put()` — unified drain-all-keep-latest strategy for all pipeline queues
-- `utils/api_retry.py`: `classify_error()` + `_RETRY_DELAYS` — shared API error classification and backoff constants
+- `utils/audio.py`: audio utility functions
+- `utils/config_export.py`: exports runtime config to JSON for Tauri dashboard
 
 ## Configuration Layout
 
@@ -61,19 +84,30 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 
 ### STT
 
-- Primary: `SenseVoice-Small` local engine
-- Fallback: Groq `whisper-large-v3`
-- Goal: keep STT mostly local to control latency and cost
+- Primary (default): Groq `whisper-large-v3` cloud API — set via `cfg.stt.primary_engine = "groq"`
+- Optional local engine: `SenseVoice-Small` (FunASR) — set `cfg.stt.primary_engine = "sensevoice"` to prefer local on a GPU host
+- Recovery probe: when running on Groq with a previously-loaded SenseVoice, the engine retries SenseVoice every `_SENSEVOICE_PROBE_EVERY` calls so the host can recover from a transient local failure
+- Unavailable propagation: if both engines fail to initialize, the STT thread sets `stop_event` instead of polling forever — `main.py` then unwinds the pipeline cleanly
 
 ### Translation
 
-Ordered engine chain configured in `cfg.translation.engine_chain` (`config.py`).
+Two layers of selection:
+
+1. **Backend mode** — `cfg.live_engine` / `cfg.clip_engine` (default `"nvidia"`):
+   - `"nvidia"` — NIM-hosted Qwen3 as primary, with `engine_chain` as fallback
+   - `"ollama"` — local Ollama only, no fallback
+   - `"anthropic"` — bypass NIM and run the full `engine_chain` directly
+2. **Engine chain** — `cfg.translation.engine_chain`, the ordered fallback list used by the `nvidia` and `anthropic` modes.
+
+Default chain (`config.py`):
 
 | Priority | Engine | Model | Key |
 |---|---|---|---|
-| 1 | Google Translate v2 | google-translate-v2 | `GOOGLE_TRANSLATE_API_KEY` |
-| 2 | Gemini | gemini-2.5-flash | `GEMINI_API_KEY` |
-| 3 | Claude | claude-haiku-4-5 | `ANTHROPIC_API_KEY` |
+| 1 | Claude | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| 2 | Gemini | `gemini-2.5-flash` | `GEMINI_API_KEY` |
+| 3 | Google Translate v2 | `google-translate-v2` | `GOOGLE_TRANSLATE_API_KEY` |
+
+The translator tracks `active_idx` across failures and probes engines[0] every `_FALLBACK_PROBE_EVERY` calls to recover from transient primary outages.
 
 To add a new engine: see the step-by-step guide in `config.py` (`_Translation.engine_chain` comment block).
 
@@ -83,6 +117,15 @@ To add a new engine: see the step-by-step guide in `config.py` (`_Translation.en
 - API failures should not crash the whole app.
 - The subtitle overlay must stay responsive even if translation fails temporarily.
 - `pause_event` should freeze the pipeline and clear queued stale output.
+
+### Pipeline health
+
+The pipeline relies on each stage either making forward progress or shutting the whole graph down — silent zombie threads are a bug. Current guarantees:
+
+- `audio_capture.start()` resolves the loopback device **synchronously**; a missing device raises out of `start()` so `main.py` can `sys.exit(1)` with a clear error instead of leaving a dead daemon and empty `audio_queue`. Any exception inside the daemon `run()` also sets `stop_event` before returning.
+- `STTEngine.available` is `False` when both SenseVoice and Groq failed to initialize. The STT thread checks it on entry and sets `stop_event` rather than spinning on `audio_queue` forever.
+- `PromptEvolver` auto-disables (with a warning) when `cfg.translation.evolve_enabled=True` but `GEMINI_API_KEY` is empty — prevents a repeating auth error every `evolve_every` translations.
+- `RuntimeEventWriter.emit()` normalizes non-JSON-native values (numpy scalars, NaN/Inf, custom objects) before serialization and writes a fallback record if `json.dumps` still fails. The daily log filename is derived from the injected `clock` so tests and clock-skewed hosts route events into the right file.
 
 ## Test Coverage
 
