@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { invoke } from '@tauri-apps/api/core'
 import Dashboard from '../components/Dashboard.vue'
@@ -6,16 +6,29 @@ import Dashboard from '../components/Dashboard.vue'
 const mockInvoke = vi.mocked(invoke)
 
 const fakeConfig = {
-  audio: { sample_rate: 16000, channels: 1, volume_threshold: 0.01,
+  audio: { sample_rate: 16000, channels: 1, chunk_seconds: 3, device_name: 'CABLE Output', volume_threshold: 0.01,
            vad_enabled: true, vad_silence_sec: 0.6, vad_min_speech_sec: 0.4,
-           vad_max_speech_sec: 8.0, queue_maxsize: 10 },
-  stt: { primary_engine: 'groq', language: 'ko', queue_maxsize: 20 },
+           vad_max_speech_sec: 8.0, vad_silero_threshold: 0.5, queue_maxsize: 10 },
+  stt: { primary_engine: 'groq', sensevoice_model: 'iic/SenseVoiceSmall', sensevoice_device: 'cuda',
+         groq_model: 'whisper-large-v3', language: 'ko', groq_prompt: '', batch_size_s: 60,
+         queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
+         max_japanese_chars: 2, max_repeat_ratio: 0.7 },
   splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-  translation: { primary_engine: 'gemini', target_lang: 'zh-TW',
-                 max_tokens: 80, temperature: 0.0, queue_maxsize: 2, slang: {} },
-  subtitle: { font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
-              idle_hide_ms: 30000, alpha: 0.82, queue_maxsize: 10 },
+  translation: { engine_chain: ['claude', 'gemini', 'google_translate'], model: 'claude-sonnet-4-6',
+                 gemini_model: 'gemini-2.5-flash', google_translate_lang: 'zh-TW',
+                 target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
+                 context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
+                 use_profile: true, evolve_enabled: false, evolve_every: 20, slang: {} },
+  subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
+              bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
+              outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
+              padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
+              poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
   database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
+  live_engine: 'nvidia',
+  clip_engine: 'nvidia',
+  ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
+  nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
 }
 
 const fakeStats = { total_entries: 0, hit_count_sum: 0, last_used: 'Never', db_size_mb: 0 }
@@ -146,6 +159,25 @@ describe('Dashboard', () => {
     await flushPromises()
     expect(wrapper.find('.error-banner').exists()).toBe(true)
     expect(wrapper.find('.error-banner').text()).toContain('not found')
+  })
+
+  it('shows restart notice after saving config while Python is online', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') return Promise.resolve(fakeConfig)
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(true)
+      if (cmd === 'get_system_stats') return Promise.resolve(fakeSysStats)
+      if (cmd === 'update_config') return Promise.resolve(undefined)
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'ConfigPanel' }).vm.$emit('save', fakeConfig)
+    await flushPromises()
+
+    expect(mockInvoke).toHaveBeenCalledWith('update_config', { newConfig: fakeConfig })
+    expect(wrapper.find('.notice-banner').text()).toContain('Restart Python')
   })
 
   it('active tab button has active class', async () => {

@@ -4,16 +4,15 @@ import numpy as np
 import sounddevice as sd
 
 from config import cfg
+from utils.audio import rms as _rms
 from utils.logger import get_logger
-from utils.queue_utils import drain_put
+from utils.metrics import metrics
+from utils.pipeline import start_daemon_thread
+from utils.queue_utils import put_latest
 
 log = get_logger("audio_capture")
 
 _FIXED_BUF_MAX_SAMPLES = 8 * cfg.audio.sample_rate   # 8 seconds
-
-
-def _rms(audio: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(audio ** 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -120,10 +119,8 @@ class _VadState:
     def _emit(self) -> None:
         chunk = np.concatenate(self._buf)
         self._reset()
-        drained = drain_put(self._q, chunk)
-        if drained:
-            log.warning("audio_queue backlog cleared (%d chunks), keeping latest", drained)
-        else:
+        metrics.increment("audio.chunks")
+        if not put_latest(self._q, chunk, log, "audio_queue", "chunks"):
             log.debug("VAD chunk emitted: %.2fs", len(chunk) / cfg.audio.sample_rate)
 
     def _reset(self) -> None:
@@ -174,10 +171,8 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                     if _rms(chunk) < cfg.audio.volume_threshold:
                         log.debug("Silence detected, skipping chunk")
                         continue
-                    drained = drain_put(audio_queue, chunk.copy())
-                    if drained:
-                        log.warning("audio_queue backlog cleared (%d chunks), keeping latest",
-                                    drained)
+                    metrics.increment("audio.chunks")
+                    put_latest(audio_queue, chunk.copy(), log, "audio_queue", "chunks")
 
         mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
         log.info("Starting WASAPI loopback capture — mode=%s samplerate=%d",
@@ -196,9 +191,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
 
         log.info("Audio capture stopped")
 
-    t = threading.Thread(target=run, name="AudioCapture", daemon=True)
-    t.start()
-    return t
+    return start_daemon_thread("AudioCapture", run)
 
 
 def _find_loopback_device() -> int | None:

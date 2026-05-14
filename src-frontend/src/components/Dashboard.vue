@@ -38,6 +38,7 @@
     </main>
 
     <div v-if="errorMsg" class="error-banner">{{ errorMsg }}</div>
+    <div v-if="noticeMsg" class="notice-banner">{{ noticeMsg }}</div>
   </div>
 </template>
 
@@ -56,6 +57,7 @@ const cacheStats = ref<CacheStatsType | null>(null)
 const systemStats = ref<SystemStatsType | null>(null)
 const pythonRunning = ref(false)
 const errorMsg = ref<string | null>(null)
+const noticeMsg = ref<string | null>(null)
 let refreshInterval: ReturnType<typeof setInterval>
 
 onMounted(async () => {
@@ -73,6 +75,11 @@ const showError = (msg: string) => {
   setTimeout(() => (errorMsg.value = null), 4000)
 }
 
+const showNotice = (msg: string) => {
+  noticeMsg.value = msg
+  setTimeout(() => (noticeMsg.value = null), 5000)
+}
+
 const loadConfig = async () => {
   try {
     config.value = await client.getConfig()
@@ -85,6 +92,11 @@ const saveConfig = async (newConfig: ConfigDto) => {
   try {
     await client.updateConfig(newConfig)
     config.value = newConfig
+    showNotice(
+      pythonRunning.value
+        ? 'Config saved. Restart Python to apply runtime changes.'
+        : 'Config saved. It will apply when Python starts.',
+    )
   } catch (e) {
     showError(`Save failed: ${e}`)
   }
@@ -204,6 +216,19 @@ main {
   left: 50%;
   transform: translateX(-50%);
   background: #ef4444;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.notice-banner {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2563eb;
   color: white;
   padding: 10px 20px;
   border-radius: 8px;

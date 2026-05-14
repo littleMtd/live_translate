@@ -1,48 +1,9 @@
+use crate::paths::{main_py_path, python_exe};
 use crate::state::AppState;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use tauri::State;
-
-fn app_root() -> PathBuf {
-    let base = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    // Dev mode: .../live_translate/src-tauri/target/debug/<app>.exe
-    // We need the project root: .../live_translate
-    if let Some(project_root) = base.ancestors().nth(3) {
-        let root = project_root.to_path_buf();
-        if root.join("main.py").exists() {
-            return root;
-        }
-    }
-
-    // Packaged mode: binary sits next to app files.
-    if base.join("main.py").exists() {
-        return base;
-    }
-
-    base
-}
-
-fn python_exe() -> PathBuf {
-    let venv = app_root()
-        .join("live-subtitle-env")
-        .join("Scripts")
-        .join("python.exe");
-    if venv.exists() {
-        venv
-    } else {
-        PathBuf::from("python")
-    }
-}
-
-fn main_py_path() -> PathBuf {
-    app_root().join("main.py")
-}
 
 pub(crate) fn is_python_running(state: &AppState) -> bool {
     state.python_process.lock().unwrap().is_some()
@@ -53,8 +14,7 @@ pub(crate) fn do_stop_python(state: &AppState) -> Result<String, String> {
     if let Some(mut proc) = guard.take() {
         proc.kill()
             .map_err(|e| format!("Failed to stop Python: {}", e))?;
-        proc.wait()
-            .map_err(|e| format!("Wait error: {}", e))?;
+        proc.wait().map_err(|e| format!("Wait error: {}", e))?;
         Ok("Python process stopped".to_string())
     } else {
         Err("No Python process running".to_string())

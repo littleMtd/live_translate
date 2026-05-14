@@ -1,3 +1,6 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+  "live_api: tests that call external live APIs and require RUN_LIVE_TESTS=1",
+]

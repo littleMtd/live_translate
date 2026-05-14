@@ -5,16 +5,29 @@ import type { ConfigDto } from '../types/config'
 
 function makeConfig(overrides: Partial<ConfigDto> = {}): ConfigDto {
   return {
-    audio: { sample_rate: 16000, channels: 1, volume_threshold: 0.01,
+    audio: { sample_rate: 16000, channels: 1, chunk_seconds: 3, device_name: 'CABLE Output', volume_threshold: 0.01,
              vad_enabled: true, vad_silence_sec: 0.6, vad_min_speech_sec: 0.4,
-             vad_max_speech_sec: 8.0, queue_maxsize: 10 },
-    stt: { primary_engine: 'groq', language: 'ko', queue_maxsize: 20 },
+             vad_max_speech_sec: 8.0, vad_silero_threshold: 0.5, queue_maxsize: 10 },
+    stt: { primary_engine: 'groq', sensevoice_model: 'iic/SenseVoiceSmall', sensevoice_device: 'cuda',
+           groq_model: 'whisper-large-v3', language: 'ko', groq_prompt: '', batch_size_s: 60,
+           queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
+           max_japanese_chars: 2, max_repeat_ratio: 0.7 },
     splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-    translation: { primary_engine: 'gemini', target_lang: 'zh-TW',
-                   max_tokens: 80, temperature: 0.0, queue_maxsize: 2, slang: {} },
-    subtitle: { font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
-                idle_hide_ms: 30000, alpha: 0.82, queue_maxsize: 10 },
+    translation: { engine_chain: ['claude', 'gemini', 'google_translate'], model: 'claude-sonnet-4-6',
+                   gemini_model: 'gemini-2.5-flash', google_translate_lang: 'zh-TW',
+                   target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
+                   context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
+                   use_profile: true, evolve_enabled: false, evolve_every: 20, slang: {} },
+    subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
+                bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
+                outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
+                padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
+                poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
     database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
+    live_engine: 'nvidia',
+    clip_engine: 'nvidia',
+    ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
+    nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
     ...overrides,
   }
 }
@@ -30,11 +43,16 @@ describe('ConfigPanel', () => {
     expect(wrapper.html()).toContain('22')
   })
 
-  it('shows translation engine select with gemini selected', () => {
+  it('shows restart-required note for runtime settings', () => {
     const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
-    const select = wrapper.find('select[id], select').element as HTMLSelectElement
-    // The first select is the translation engine
-    expect(wrapper.html()).toContain('gemini')
+    expect(wrapper.text()).toContain('Restart the Python pipeline')
+  })
+
+  it('shows translation engine settings', () => {
+    const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
+    const vm = wrapper.vm as any
+    expect(wrapper.html()).toContain('nvidia')
+    expect(vm.engineChainText).toBe('claude, gemini, google_translate')
   })
 
   it('emits save event with current config when Save clicked', async () => {
@@ -71,7 +89,7 @@ describe('ConfigPanel', () => {
     const wrapper = mount(ConfigPanel, { props: { config: null } })
     const vm = wrapper.vm as any
     expect(vm.local.subtitle.font_size).toBe(22)
-    expect(vm.local.translation.primary_engine).toBe('gemini')
+    expect(vm.local.live_engine).toBe('nvidia')
   })
 
   it('updates local state when config prop changes', async () => {

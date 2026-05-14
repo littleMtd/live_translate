@@ -12,6 +12,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -23,6 +24,8 @@ import modules.sentence_splitter as sentence_splitter
 import modules.translator as translator
 from contextlib import contextmanager
 from config import cfg
+
+_LIVE_TESTS_ENABLED = os.getenv("RUN_LIVE_TESTS") == "1"
 
 
 class _NoOpDB:
@@ -225,7 +228,11 @@ class TestPauseEventIntegration(unittest.TestCase):
 # Real API tests  (skipped in CI unless secrets are available)
 # ---------------------------------------------------------------------------
 
-@unittest.skipUnless(os.getenv("ANTHROPIC_API_KEY"), "ANTHROPIC_API_KEY not set")
+@pytest.mark.live_api
+@unittest.skipUnless(
+    _LIVE_TESTS_ENABLED and os.getenv("ANTHROPIC_API_KEY"),
+    "set RUN_LIVE_TESTS=1 and ANTHROPIC_API_KEY to run live Claude tests",
+)
 class TestRealClaude(unittest.TestCase):
     """Live Claude API calls — requires ANTHROPIC_API_KEY."""
 
@@ -268,7 +275,11 @@ class TestRealClaude(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
-@unittest.skipUnless(os.getenv("GROQ_API_KEY"), "GROQ_API_KEY not set")
+@pytest.mark.live_api
+@unittest.skipUnless(
+    _LIVE_TESTS_ENABLED and os.getenv("GROQ_API_KEY"),
+    "set RUN_LIVE_TESTS=1 and GROQ_API_KEY to run live Groq STT tests",
+)
 class TestRealGroqSTT(unittest.TestCase):
     """Live Groq STT call — requires GROQ_API_KEY and numpy."""
 
