@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, deque
 from collections.abc import Callable, MutableMapping
+from dataclasses import dataclass
 
 from config import cfg
 from modules.translation_engines import TranslationEngine
@@ -11,6 +12,12 @@ from utils.metrics import metrics
 
 DBFactory = Callable[[], object]
 HistoryWriter = Callable[[str, str], None]
+
+
+@dataclass(frozen=True)
+class MemoryLookup:
+    result: str | None
+    source: str
 
 
 class TranslationMemory:
@@ -42,25 +49,34 @@ class TranslationMemory:
         prompt_ver: str,
         active_engine: TranslationEngine | None,
     ) -> str | None:
+        return self.lookup_existing_event(text, incomplete, prompt_ver, active_engine).result
+
+    def lookup_existing_event(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None,
+    ) -> MemoryLookup:
         cached = self.cache_lookup(text, incomplete, prompt_ver)
         if cached:
             metrics.increment("translation.cache.memory_hit")
             self._remember_recent(text, cached, incomplete)
-            return cached
+            return MemoryLookup(cached, "memory_hit")
 
         if incomplete or active_engine is None:
             metrics.increment("translation.cache.miss")
-            return None
+            return MemoryLookup(None, "skipped")
 
         db_result = self.db_lookup(text, active_engine, prompt_ver)
         if db_result:
             metrics.increment("translation.cache.db_hit")
             self.cache_store(text, incomplete, db_result, prompt_ver)
             self._remember_recent(text, db_result, incomplete)
-            return db_result
+            return MemoryLookup(db_result, "db_hit")
 
         metrics.increment("translation.cache.miss")
-        return None
+        return MemoryLookup(None, "miss")
 
     def record_direct(self, text: str, result: str, incomplete: bool) -> None:
         self._history_writer(text, result)

@@ -28,23 +28,36 @@ class TranslationPolicy:
 
     def prepare_input(self, text: str) -> str | None:
         text = text.strip()
-        if not text:
+        reason = self.rejection_reason(text)
+        if reason == "empty":
             return None
 
-        if text == self.last_input:
+        if reason == "duplicate":
             log.debug("Duplicate input suppressed: %.40s", text)
             return None
         self.last_input = text
 
-        if len(text) < self._min_translate_chars:
+        if reason == "too_short":
             log.debug("Skipping: too short (%d chars)", len(text))
             return None
 
-        if self.is_stt_garbage(text):
+        if reason == "stt_garbage":
             log.debug("Filtering STT garbage: %.40s", text)
             return None
 
         return text
+
+    def rejection_reason(self, text: str) -> str | None:
+        text = text.strip()
+        if not text:
+            return "empty"
+        if text == self.last_input:
+            return "duplicate"
+        if len(text) < self._min_translate_chars:
+            return "too_short"
+        if self.is_stt_garbage(text):
+            return "stt_garbage"
+        return None
 
     def reset_last_input(self) -> None:
         self.last_input = ""

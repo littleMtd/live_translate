@@ -73,15 +73,23 @@ def _mock_engine(name: str, return_value: str = "你好") -> MagicMock:
 
 def _make_translator() -> Translator:
     """Build a Translator backed by mock engines — no real API clients."""
-    from collections import deque, OrderedDict
+    from modules.translator import _CACHE_MAX_SIZE
+    from modules.translation_policy import TranslationPolicy
+    from modules.translation_memory import TranslationMemory
+    from config import cfg
     t = Translator.__new__(Translator)
     t._evolver = PromptEvolver()
-    t._cache = OrderedDict()
     t._active_idx = 0
     t._probe_counter = 0
     t._last_input = ""
-    t._recent = deque(maxlen=3)
     t._engines = [_mock_engine(name) for name in ("gemini", "claude")]
+    t._policy = TranslationPolicy(slang=cfg.translation.slang, min_translate_chars=2)
+    t._memory = TranslationMemory(
+        recent_window=3,
+        max_cache_size=_CACHE_MAX_SIZE,
+        db_factory=lambda: _NoOpDB(),
+        history_writer=MagicMock(),
+    )
     return t
 
 
@@ -433,6 +441,30 @@ class TestTranslateOptimizations(unittest.TestCase):
         for engine in t._engines:
             engine.translate.assert_not_called()
 
+    def test_translate_event_reports_api_metadata(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "你好"
+
+        outcome = t.translate_event("안녕하세요")
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.cache_status, "miss")
+        self.assertEqual(outcome.engine, "gemini")
+        self.assertEqual(outcome.model, "gemini-test-model")
+        self.assertEqual(outcome.target_text, "你好")
+
+    def test_translate_event_reports_filtered_reason(self):
+        t = _make_translator()
+
+        outcome = t.translate_event("a")
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "too_short")
+        for engine in t._engines:
+            engine.translate.assert_not_called()
+
     def test_cache_hit_on_second_call(self):
         t = _make_translator()
         t._engines[0].translate.return_value = "你好"
@@ -446,17 +478,17 @@ class TestTranslateOptimizations(unittest.TestCase):
         t = _make_translator()
         prompt_ver = t._get_prompt_version_hash()
         for i in range(_CACHE_MAX_SIZE):
-            t._cache[(f"key{i}", False, prompt_ver)] = f"val{i}"
-        t._cache_store("overflow", False, "x", prompt_ver)
-        self.assertLessEqual(len(t._cache), _CACHE_MAX_SIZE)
-        self.assertIn(("overflow", False, prompt_ver), t._cache)
+            t._memory.cache[(f"key{i}", False, prompt_ver)] = f"val{i}"
+        t._memory.cache_store("overflow", False, "x", prompt_ver)
+        self.assertLessEqual(len(t._memory.cache), _CACHE_MAX_SIZE)
+        self.assertIn(("overflow", False, prompt_ver), t._memory.cache)
 
     def test_incomplete_lookup_skips_db(self):
         t = _make_translator()
-        t._db_lookup = MagicMock(return_value="DB result")
+        t._memory.db_lookup = MagicMock(return_value="DB result")
         result = t._lookup_existing_translation("불완전한 문장", True, t._get_prompt_version_hash())
         self.assertIsNone(result)
-        t._db_lookup.assert_not_called()
+        t._memory.db_lookup.assert_not_called()
 
 
 if __name__ == "__main__":

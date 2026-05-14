@@ -73,13 +73,13 @@ class TestSplitterThread(unittest.TestCase):
 
     def test_complete_sentence_flows_through(self):
         result = self._run(["안녕하세요"])
-        self.assertEqual(result["text"], "안녕하세요")
-        self.assertFalse(result["incomplete"])
+        self.assertEqual(result.text, "안녕하세요")
+        self.assertFalse(result.incomplete)
 
     def test_multiple_tokens_are_joined(self):
         result = self._run(["진짜", "대박이에요"])
-        self.assertIn("진짜", result["text"])
-        self.assertIn("대박이에요", result["text"])
+        self.assertIn("진짜", result.text)
+        self.assertIn("대박이에요", result.text)
 
     def test_stop_event_exits_cleanly(self):
         text_q = queue.Queue()
@@ -108,6 +108,27 @@ class TestTranslatorThread(unittest.TestCase):
             t.join(timeout=2)
 
         self.assertEqual(result, "你好")
+
+    def test_translator_thread_emits_runtime_event(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "안녕하세요", "incomplete": False, "stt_engine": "groq"})
+            result = subtitle_q.get(timeout=5)
+            stop.set()
+            t.join(timeout=2)
+
+        self.assertEqual(result, "你好")
+        events.emit.assert_called_once()
+        args, kwargs = events.emit.call_args
+        self.assertEqual(args, ("translation",))
+        self.assertEqual(kwargs["source_text"], "안녕하세요")
+        self.assertEqual(kwargs["target_text"], "你好")
+        self.assertTrue(kwargs["subtitle_emitted"])
+        self.assertEqual(kwargs["stt_engine"], "groq")
 
     def test_stop_event_exits_cleanly(self):
         sentence_q = queue.Queue()

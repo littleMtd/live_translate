@@ -82,8 +82,8 @@ def run_split(tokens: list[str], repeat: int = 1):
     print()
     if results:
         for r in results:
-            flag = " [INCOMPLETE]" if r.get("incomplete") else ""
-            print(f"  → sentence: {r['text']!r}{flag}")
+            flag = " [INCOMPLETE]" if r.incomplete else ""
+            print(f"  → sentence: {r.text!r}{flag}")
     else:
         print("  （未產生任何句子 — 斷句器仍在累積？）")
 
@@ -138,7 +138,7 @@ def run_all(tokens: list[str], repeat: int = 1, no_api: bool = False):
         return
 
     for item in sentences:
-        run_translate(item["text"], incomplete=item.get("incomplete", False), no_api=no_api)
+        run_translate(item.text, incomplete=item.incomplete, no_api=no_api)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

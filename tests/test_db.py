@@ -145,17 +145,25 @@ def _mock_engine(name: str, return_value: str = "你好") -> MagicMock:
     return engine
 
 
-def _make_translator(cache=None):
-    from collections import deque
-    from modules.translator import Translator
+def _make_translator():
+    from modules.translator import Translator, _CACHE_MAX_SIZE
+    from modules.translation_policy import TranslationPolicy
+    from modules.translation_memory import TranslationMemory
+    from modules.db import _get_db
+    from config import cfg
     t = Translator.__new__(Translator)
     t._evolver = PromptEvolver()
-    t._cache = cache if cache is not None else {}
     t._active_idx = 0
     t._probe_counter = 0
     t._last_input = ""
-    t._recent = deque(maxlen=3)
     t._engines = [_mock_engine("gemini"), _mock_engine("claude")]
+    t._policy = TranslationPolicy(slang=cfg.translation.slang, min_translate_chars=2)
+    t._memory = TranslationMemory(
+        recent_window=3,
+        max_cache_size=_CACHE_MAX_SIZE,
+        db_factory=_get_db,
+        history_writer=MagicMock(),
+    )
     return t
 
 

@@ -2,7 +2,7 @@ import unittest
 from collections import OrderedDict, deque
 from unittest.mock import MagicMock
 
-from modules.translation_memory import TranslationMemory
+from modules.translation_memory import MemoryLookup, TranslationMemory
 from utils.metrics import metrics
 
 
@@ -52,6 +52,15 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(list(memory.recent), [("source", "cached")])
         self.assertEqual(metrics.snapshot().counters["translation.cache.memory_hit"], 1)
 
+    def test_lookup_existing_event_reports_source(self):
+        metrics.reset()
+        memory, _, _ = self._memory()
+        memory.cache_store("source", False, "cached", "v1")
+
+        result = memory.lookup_existing_event("source", False, "v1", _engine())
+
+        self.assertEqual(result, MemoryLookup("cached", "memory_hit"))
+
     def test_lookup_existing_skips_db_for_incomplete(self):
         metrics.reset()
         memory, _, fake_db = self._memory()
@@ -61,6 +70,10 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(fake_db.lookup_calls, [])
         self.assertEqual(metrics.snapshot().counters["translation.cache.miss"], 1)
+        self.assertEqual(
+            memory.lookup_existing_event("source", True, "v1", _engine()).source,
+            "skipped",
+        )
 
     def test_lookup_existing_caches_db_hit(self):
         metrics.reset()

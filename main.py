@@ -72,7 +72,7 @@ def _stt_printer(sentence_queue: queue.Queue, stop_event: threading.Event) -> th
                 except queue.Empty:
                     continue
                 ts = datetime.now().strftime("%H:%M:%S")
-                flag = " [incomplete]" if item.get("incomplete") else ""
+                flag = " [incomplete]" if item.incomplete else ""
                 line = f"[{ts}]{flag} {item['text']}"
                 print(line, flush=True)
                 f.write(line + "\n")

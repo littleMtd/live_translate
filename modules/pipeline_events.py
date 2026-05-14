@@ -19,31 +19,12 @@ class SentenceEvent:
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
 
-    def __getitem__(self, key: str):
-        if key == "text":
-            return self.text
-        if key == "incomplete":
-            return self.incomplete
-        if key == "profile_id":
-            return self.profile_id
-        if key == "stt_engine":
-            return self.stt_engine
-        if key == "avg_logprob":
-            return self.avg_logprob
-        if key == "no_speech_prob":
-            return self.no_speech_prob
-        raise KeyError(key)
-
-    def get(self, key: str, default=None):
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
 
 def transcription_text(item: str | TranscriptionEvent) -> str:
     if isinstance(item, TranscriptionEvent):
         return item.text
+    if isinstance(item, dict):
+        return str(item.get("text", ""))
     return str(item)
 
 
@@ -64,13 +45,40 @@ def transcription_to_sentence(
     )
 
 
-def sentence_text(item: dict | SentenceEvent) -> str:
+def sentence_text(item: SentenceEvent | dict | str) -> str:
     if isinstance(item, SentenceEvent):
         return item.text
-    return item["text"]
+    if isinstance(item, dict):
+        return str(item.get("text", ""))
+    return str(item)
 
 
-def sentence_incomplete(item: dict | SentenceEvent) -> bool:
+def sentence_incomplete(item: SentenceEvent | dict | str) -> bool:
     if isinstance(item, SentenceEvent):
         return item.incomplete
-    return item.get("incomplete", False)
+    if isinstance(item, dict):
+        return bool(item.get("incomplete", False))
+    return False
+
+
+def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
+    if isinstance(item, SentenceEvent):
+        return {
+            "profile_id": item.profile_id,
+            "stt_engine": item.stt_engine,
+            "avg_logprob": item.avg_logprob,
+            "no_speech_prob": item.no_speech_prob,
+        }
+    if isinstance(item, dict):
+        return {
+            "profile_id": item.get("profile_id", ""),
+            "stt_engine": item.get("stt_engine", ""),
+            "avg_logprob": item.get("avg_logprob"),
+            "no_speech_prob": item.get("no_speech_prob"),
+        }
+    return {
+        "profile_id": "",
+        "stt_engine": "",
+        "avg_logprob": None,
+        "no_speech_prob": None,
+    }

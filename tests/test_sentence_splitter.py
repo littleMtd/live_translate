@@ -105,19 +105,19 @@ class TestSentenceSplitterThread(unittest.TestCase):
     def test_complete_sentence_sent(self):
         results = self._run(["안녕하세요"], wait=1.0)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["incomplete"], False)
+        self.assertEqual(results[0].incomplete, False)
 
     def test_force_cut_marks_incomplete(self):
         # 語尾是 "고"（incomplete），等待超過 force_cut=0.8s
         results = self._run(["게임 하고"], wait=1.5)
         self.assertGreater(len(results), 0)
-        self.assertTrue(results[0]["incomplete"])
+        self.assertTrue(results[0].incomplete)
 
     def test_buffer_accumulates_multiple_tokens(self):
         results = self._run(["진짜", "대박이에요"], wait=1.0)
         self.assertEqual(len(results), 1)
-        self.assertIn("진짜", results[0]["text"])
-        self.assertIn("대박이에요", results[0]["text"])
+        self.assertIn("진짜", results[0].text)
+        self.assertIn("대박이에요", results[0].text)
 
     def test_empty_queue_no_output(self):
         results = self._run([], wait=0.5)
@@ -134,11 +134,11 @@ class TestSentenceSplitterThread(unittest.TestCase):
         results = self._run([token], wait=1.0)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["text"], token.text)
-        self.assertEqual(results[0]["stt_engine"], "groq")
-        self.assertEqual(results[0]["profile_id"], "isegye_lilpa")
-        self.assertEqual(results[0]["avg_logprob"], -0.2)
-        self.assertEqual(results[0]["no_speech_prob"], 0.1)
+        self.assertEqual(results[0].text, token.text)
+        self.assertEqual(results[0].stt_engine, "groq")
+        self.assertEqual(results[0].profile_id, "isegye_lilpa")
+        self.assertEqual(results[0].avg_logprob, -0.2)
+        self.assertEqual(results[0].no_speech_prob, 0.1)
 
 
 class TestSentenceSplitterPause(unittest.TestCase):
@@ -184,7 +184,7 @@ class TestSentenceSplitterPause(unittest.TestCase):
             results.append(sq.get_nowait())
         # At least the post-resume sentence should arrive
         self.assertGreater(len(results), 0)
-        texts = " ".join(r["text"] for r in results)
+        texts = " ".join(r.text for r in results)
         self.assertIn("감사합니다", texts)
 
 

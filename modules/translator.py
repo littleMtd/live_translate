@@ -2,7 +2,7 @@ import hashlib
 import queue
 import threading
 import time
-from collections import deque, OrderedDict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -11,7 +11,8 @@ from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
-from modules.pipeline_events import sentence_incomplete, sentence_text
+from utils.runtime_events import runtime_events, translation_quality
+from modules.pipeline_events import sentence_incomplete, sentence_metadata, sentence_text
 from modules.prompt_evolver import PromptEvolver  # noqa: E402
 from modules.db import _get_db  # noqa: E402
 
@@ -86,6 +87,37 @@ from modules.translation_policy import TranslationPolicy
 # Translator
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class TranslationOutcome:
+    source_text: str
+    target_text: str | None
+    status: str
+    result_source: str
+    cache_status: str
+    incomplete: bool
+    engine: str = ""
+    model: str = ""
+    prompt_version: str = ""
+    filter_reason: str = ""
+
+    def as_event_fields(self, latency_ms: float, metadata: dict) -> dict:
+        return {
+            "source_text": self.source_text,
+            "target_text": self.target_text,
+            "status": self.status,
+            "result_source": self.result_source,
+            "cache_status": self.cache_status,
+            "incomplete": self.incomplete,
+            "engine": self.engine,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "filter_reason": self.filter_reason,
+            "latency_ms": round(latency_ms, 2),
+            **metadata,
+            **translation_quality(self.source_text, self.target_text),
+        }
+
+
 class Translator:
     def __init__(self):
         self._evolver = PromptEvolver()
@@ -100,8 +132,6 @@ class Translator:
             db_factory=_get_db,
             history_writer=_write_history,
         )
-        self._cache = self._memory.cache
-        self._recent = self._memory.recent
         self._policy = TranslationPolicy(
             slang=cfg.translation.slang,
             min_translate_chars=_MIN_TRANSLATE_CHARS,
@@ -113,29 +143,83 @@ class Translator:
         return TranslationPolicy.is_stt_garbage(text)
 
     def translate(self, text: str, incomplete: bool = False) -> str | None:
+        return self.translate_event(text, incomplete).target_text
+
+    def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+        raw_text = (text or "").strip()
+        filter_reason = self._policy_state().rejection_reason(raw_text)
         text = self._prepare_input(text)
         if text is None:
-            return None
+            return TranslationOutcome(
+                source_text=raw_text,
+                target_text=None,
+                status="filtered",
+                result_source="policy",
+                cache_status="skipped",
+                incomplete=incomplete,
+                filter_reason=filter_reason or "unknown",
+            )
 
         if slang_result := self._translate_slang(text, incomplete):
-            return slang_result
+            return TranslationOutcome(
+                source_text=text,
+                target_text=slang_result,
+                status="success",
+                result_source="slang",
+                cache_status="skipped",
+                incomplete=incomplete,
+            )
 
         # 根据当前模型选择对应的 prompt
         system_prompt = self._build_system_prompt()
         prompt_ver = self._prompt_version(system_prompt)
         self._log_prompt_mode_once()
 
-        if existing := self._lookup_existing_translation(text, incomplete, prompt_ver):
-            return existing
+        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver)
+        if lookup.result:
+            engine = self._active_engine()
+            return TranslationOutcome(
+                source_text=text,
+                target_text=lookup.result,
+                status="success",
+                result_source=lookup.source,
+                cache_status=lookup.source,
+                incomplete=incomplete,
+                engine=engine.engine_name if engine else "",
+                model=engine.model_name if engine else "",
+                prompt_version=prompt_ver,
+            )
 
         result = self._call_with_fallback(text, system_prompt, incomplete, self._memory_state().context())
+        engine = self._active_engine()
         if result:
             self._record_success(text, result, incomplete, prompt_ver)
+            return TranslationOutcome(
+                source_text=text,
+                target_text=result,
+                status="success",
+                result_source="api",
+                cache_status=lookup.source,
+                incomplete=incomplete,
+                engine=engine.engine_name if engine else "",
+                model=engine.model_name if engine else "",
+                prompt_version=prompt_ver,
+            )
         else:
             # API failure — allow next identical input to retry rather than staying suppressed
             self._policy_state().reset_last_input()
             self._last_input = ""
-        return result
+        return TranslationOutcome(
+            source_text=text,
+            target_text=None,
+            status="failed",
+            result_source="none",
+            cache_status=lookup.source,
+            incomplete=incomplete,
+            engine=engine.engine_name if engine else "",
+            model=engine.model_name if engine else "",
+            prompt_version=prompt_ver,
+        )
 
     def _prepare_input(self, text: str) -> str | None:
         prepared = self._policy_state().prepare_input(text)
@@ -143,39 +227,10 @@ class Translator:
         return prepared
 
     def _policy_state(self) -> TranslationPolicy:
-        policy = getattr(self, "_policy", None)
-        if policy is not None:
-            return policy
-
-        policy = TranslationPolicy(
-            slang=cfg.translation.slang,
-            min_translate_chars=_MIN_TRANSLATE_CHARS,
-            last_input=getattr(self, "_last_input", ""),
-        )
-        self._policy = policy
-        self._last_input = policy.last_input
-        return policy
+        return self._policy
 
     def _memory_state(self) -> TranslationMemory:
-        memory = getattr(self, "_memory", None)
-        if memory is not None:
-            return memory
-
-        recent_window = max(getattr(cfg.translation, 'context_window', 0) or 0, 30)
-        cache = getattr(self, "_cache", OrderedDict())
-        recent = getattr(self, "_recent", deque(maxlen=recent_window))
-        memory = TranslationMemory(
-            cache=cache,
-            recent=recent,
-            recent_window=recent_window,
-            max_cache_size=_CACHE_MAX_SIZE,
-            db_factory=_get_db,
-            history_writer=_write_history,
-        )
-        self._memory = memory
-        self._cache = memory.cache
-        self._recent = memory.recent
-        return memory
+        return self._memory
 
     def _translate_slang(self, text: str, incomplete: bool) -> str | None:
         slang_result = self._policy_state().slang_result(text)
@@ -189,15 +244,20 @@ class Translator:
 
     def _lookup_existing_translation(self, text: str, incomplete: bool,
                                      prompt_ver: str) -> str | None:
-        existing = self._memory_state().lookup_existing(
+        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver)
+        return lookup.result
+
+    def _lookup_existing_translation_event(self, text: str, incomplete: bool,
+                                           prompt_ver: str):
+        lookup = self._memory_state().lookup_existing_event(
             text,
             incomplete,
             prompt_ver,
             self._active_engine(),
         )
-        if existing:
+        if lookup.result:
             log.debug("Cache hit: %s", text[:20])
-        return existing
+        return lookup
 
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str) -> None:
@@ -258,18 +318,6 @@ class Translator:
     def _get_prompt_version_hash(self) -> str:
         return self._prompt_version(self._build_system_prompt())
 
-    def _cache_store(self, text: str, incomplete: bool, value: str, prompt_ver: str) -> None:
-        self._memory_state().cache_store(text, incomplete, value, prompt_ver)
-
-    def _cache_lookup(self, text: str, incomplete: bool, prompt_ver: str) -> str | None:
-        return self._memory_state().cache_lookup(text, incomplete, prompt_ver)
-
-    def _db_lookup(self, text: str, engine: TranslationEngine, prompt_ver: str) -> str | None:
-        return self._memory_state().db_lookup(text, engine, prompt_ver)
-
-    def _db_store(self, text: str, result: str, engine: TranslationEngine, prompt_ver: str) -> None:
-        self._memory_state().db_store(text, result, engine, prompt_ver)
-
 
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
 
@@ -288,20 +336,42 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
 
             text = sentence_text(item)
             incomplete = sentence_incomplete(item)
+            metadata = sentence_metadata(item)
             started = time.monotonic()
-            result = translator.translate(text, incomplete)
-            metrics.observe_latency("translation", time.monotonic() - started)
+            outcome = translator.translate_event(text, incomplete)
+            elapsed = time.monotonic() - started
+            metrics.observe_latency("translation", elapsed)
+            event_fields = outcome.as_event_fields(elapsed * 1000, metadata)
+            result = outcome.target_text
             if result:
                 metrics.increment("translation.success")
                 now = time.monotonic()
                 if result == last_result and (now - last_result_time) < _DEDUP_SUBTITLE_SEC:
                     log.debug("Suppressing duplicate subtitle: %s", result[:30])
+                    runtime_events.emit(
+                        "translation",
+                        **event_fields,
+                        subtitle_emitted=False,
+                        subtitle_suppressed_reason="duplicate",
+                    )
                     continue
                 last_result = result
                 last_result_time = now
                 put_latest(subtitle_queue, result, log, "subtitle_queue")
+                runtime_events.emit(
+                    "translation",
+                    **event_fields,
+                    subtitle_emitted=True,
+                    subtitle_suppressed_reason="",
+                )
             else:
                 metrics.increment("translation.empty")
+                runtime_events.emit(
+                    "translation",
+                    **event_fields,
+                    subtitle_emitted=False,
+                    subtitle_suppressed_reason="",
+                )
             metrics.log_summary_if_due()
 
         log.info("Translator stopped")
