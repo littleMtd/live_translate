@@ -1,5 +1,6 @@
+use crate::paths::configured_db_path;
 use rusqlite::Connection;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct CacheStats {
@@ -7,15 +8,6 @@ pub struct CacheStats {
     pub hit_count_sum: u32,
     pub last_used: String,
     pub db_size_mb: f32,
-}
-
-fn db_path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("logs")
-        .join("live_translate.db")
 }
 
 pub(crate) fn query_cache_stats_from_path(path: &Path) -> Result<CacheStats, String> {
@@ -42,7 +34,7 @@ pub(crate) fn query_cache_stats_from_path(path: &Path) -> Result<CacheStats, Str
     let db_size_mb = path
         .metadata()
         .map(|m| m.len() as f32 / 1024.0 / 1024.0)
-        .unwrap_or(0.0); 
+        .unwrap_or(0.0);
 
     Ok(CacheStats {
         total_entries: total,
@@ -65,12 +57,12 @@ pub(crate) fn clear_cache_at_path(path: &Path) -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_cache_stats() -> Result<CacheStats, String> {
-    query_cache_stats_from_path(&db_path())
+    query_cache_stats_from_path(&configured_db_path())
 }
 
 #[tauri::command]
 pub fn clear_cache() -> Result<String, String> {
-    clear_cache_at_path(&db_path())
+    clear_cache_at_path(&configured_db_path())
 }
 
 #[cfg(test)]

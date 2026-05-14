@@ -11,10 +11,16 @@ import threading
 import time
 import unittest
 import unittest.mock
-from modules.translator import (
-    _build_base_prompt, _build_user_message, _write_history,
-    Translator, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
+from modules.translation_engines import (
+    _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
 )
+from modules.translation_prompts import (
+    _BASE_PROMPT,
+    _build_base_prompt,
+    get_translation_profile,
+    translation_profile_ids,
+)
+from modules.translator import _write_history, Translator
 from modules.prompt_evolver import PromptEvolver
 import modules.db as _db_module
 
@@ -86,7 +92,6 @@ def _claude_resp(text: str) -> MagicMock:
 
 
 def _sys_prompt(t: "Translator") -> str:
-    from modules.translator import _BASE_PROMPT
     return t._evolver.build_system_prompt(_BASE_PROMPT)
 
 
@@ -134,6 +139,46 @@ class TestBuildBasePrompt(unittest.TestCase):
             self.assertNotIn("STT Correction - Live Mode", prompt)
         finally:
             object.__setattr__(cfg.translation, "translation_mode", orig)
+
+    def test_get_translation_profile_returns_profile_text(self):
+        self.assertTrue(get_translation_profile("hades_chxxnnx"))
+
+    def test_get_translation_profile_unknown_returns_empty(self):
+        self.assertEqual(get_translation_profile("unknown"), "")
+
+    def test_get_translation_profile_supports_qwen_profiles(self):
+        self.assertTrue(get_translation_profile("hades_chxxnnx", qwen=True))
+
+    def test_translation_profile_ids_match_streamer_registry(self):
+        from modules.streamer_profiles import known_profile_ids
+
+        expected = known_profile_ids() - {""}
+        self.assertEqual(translation_profile_ids(), expected)
+        self.assertEqual(translation_profile_ids(qwen=True), expected)
+
+    def test_translator_uses_translation_profile_helper(self):
+        translator = _make_translator()
+
+        with patch("modules.translator.get_translation_profile", return_value="PROFILE TEXT") as helper:
+            prompt = translator._build_system_prompt()
+
+        self.assertIn("PROFILE TEXT", prompt)
+        helper.assert_called_once()
+
+    def test_translator_skips_profile_helper_when_profiles_disabled(self):
+        from config import cfg
+
+        translator = _make_translator()
+        orig = cfg.translation.use_profile
+        object.__setattr__(cfg.translation, "use_profile", False)
+        try:
+            with patch("modules.translator.get_translation_profile") as helper:
+                prompt = translator._build_system_prompt()
+        finally:
+            object.__setattr__(cfg.translation, "use_profile", orig)
+
+        self.assertNotIn("PROFILE TEXT", prompt)
+        helper.assert_not_called()
 
 
 class TestBuildUserMessage(unittest.TestCase):
@@ -374,6 +419,11 @@ class TestTranslateOptimizations(unittest.TestCase):
         for engine in t._engines:
             engine.translate.assert_not_called()
 
+    def test_prepare_input_strips_and_suppresses_duplicate(self):
+        t = _make_translator()
+        self.assertEqual(t._prepare_input("  안녕하세요  "), "안녕하세요")
+        self.assertIsNone(t._prepare_input("안녕하세요"))
+
     def test_slang_returns_direct_without_api(self):
         from config import cfg
         t = _make_translator()
@@ -400,6 +450,13 @@ class TestTranslateOptimizations(unittest.TestCase):
         t._cache_store("overflow", False, "x", prompt_ver)
         self.assertLessEqual(len(t._cache), _CACHE_MAX_SIZE)
         self.assertIn(("overflow", False, prompt_ver), t._cache)
+
+    def test_incomplete_lookup_skips_db(self):
+        t = _make_translator()
+        t._db_lookup = MagicMock(return_value="DB result")
+        result = t._lookup_existing_translation("불완전한 문장", True, t._get_prompt_version_hash())
+        self.assertIsNone(result)
+        t._db_lookup.assert_not_called()
 
 
 if __name__ == "__main__":

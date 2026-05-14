@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-set "DIR=%~dp0"
-set "PYTHON=%DIR%live-subtitle-env\Scripts\python.exe"
+set "DIR=%~dp0.."
+set "PYTHON=%DIR%\live-subtitle-env\Scripts\python.exe"
 
 if not exist "%PYTHON%" (
     echo [ERROR] Virtual environment not found.

@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-set "DIR=%~dp0"
-set "PYTHON=%DIR%live-subtitle-env\Scripts\python.exe"
+set "DIR=%~dp0.."
+set "PYTHON=%DIR%\live-subtitle-env\Scripts\python.exe"
 
 if not exist "%PYTHON%" (
     echo [ERROR] Virtual environment not found.
@@ -15,7 +15,7 @@ if not exist "%PYTHON%" (
     exit /b 1
 )
 
-if not exist "%DIR%.env" (
+if not exist "%DIR%\.env" (
     echo [WARN] .env not found -- API keys may be missing.
     echo Copy .env.example to .env and fill in your keys.
     echo.

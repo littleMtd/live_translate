@@ -1,6 +1,8 @@
 import logging
 import queue
 
+from utils.metrics import metrics
+
 log = logging.getLogger("queue_utils")
 
 
@@ -32,3 +34,12 @@ def drain_put(q: queue.Queue, item) -> int:
                 "Check for multiple concurrent producers on the same queue."
             )
         return drained
+
+
+def put_latest(q: queue.Queue, item, logger, queue_name: str, unit: str = "items") -> int:
+    """Put latest item and log when stale backlog is dropped."""
+    drained = drain_put(q, item)
+    if drained:
+        metrics.increment(f"queue.{queue_name}.dropped", drained)
+        logger.warning("%s backlog cleared (%d %s), keeping latest", queue_name, drained, unit)
+    return drained

@@ -4,17 +4,33 @@ API keys are intentionally excluded — they stay in .env only.
 The font tuple is flattened into scalar fields for JSON/Rust compatibility.
 Called by main.py on startup so Tauri can read live_translate_config.json.
 """
-import dataclasses
 import json
 from pathlib import Path
+from dataclasses import fields, is_dataclass
+from types import MappingProxyType
+from typing import Any
 
 from config import cfg
 
 _EXPORT_PATH = Path(__file__).parent.parent / "logs" / "live_translate_config.json"
 
 
+def _to_jsonable(value: Any) -> Any:
+    if is_dataclass(value):
+        return {field.name: _to_jsonable(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, MappingProxyType):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    return value
+
+
 def _to_dict() -> dict:
-    d = dataclasses.asdict(cfg)
+    d = _to_jsonable(cfg)
     d.pop("keys", None)
     d.pop("thread_join_timeout", None)
     sub = d.get("subtitle", {})

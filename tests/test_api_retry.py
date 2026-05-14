@@ -62,14 +62,14 @@ class TestClassifyError(unittest.TestCase):
 class TestTranslatorRetry(unittest.TestCase):
 
     def _make_claude(self, side_effect):
-        from modules.translator import ClaudeEngine
+        from modules.translation_engines import ClaudeEngine
         e = ClaudeEngine.__new__(ClaudeEngine)
         e._client = MagicMock()
         e._client.messages.create.side_effect = side_effect
         return e
 
     def _make_gemini(self, side_effect):
-        from modules.translator import GeminiEngine
+        from modules.translation_engines import GeminiEngine
         e = GeminiEngine.__new__(GeminiEngine)
         e._client = MagicMock()
         e._client.models.generate_content.side_effect = side_effect

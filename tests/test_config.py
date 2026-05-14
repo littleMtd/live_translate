@@ -33,10 +33,30 @@ class TestConfig(unittest.TestCase):
         for name in cfg.translation.engine_chain:
             self.assertIn(name, known)
 
+    def test_streamer_profile_ids_match_registry(self):
+        from config import _VALID_STREAMER_PROFILES
+        from modules.streamer_profiles import known_profile_ids
+
+        self.assertEqual(_VALID_STREAMER_PROFILES, known_profile_ids())
+
+    def test_active_streamer_profile_matches_translation_profile(self):
+        self.assertEqual(cfg.active_streamer_profile, cfg.translation.streamer_profile)
+
     def test_translation_slang_is_dict(self):
         from collections.abc import Mapping
         self.assertIsInstance(cfg.translation.slang, Mapping)
         self.assertGreater(len(cfg.translation.slang), 0)
+
+    def test_default_slang_loads_from_data_file(self):
+        from config import _DEFAULT_SLANG_PATH, _load_default_slang
+
+        self.assertTrue(_DEFAULT_SLANG_PATH.exists())
+        loaded = _load_default_slang()
+        self.assertEqual(dict(loaded), dict(cfg.translation.slang))
+
+    def test_default_slang_is_immutable_mapping(self):
+        with self.assertRaises(TypeError):
+            cfg.translation.slang["test"] = "value"  # type: ignore[index]
 
     def test_translation_temperature_range(self):
         self.assertGreaterEqual(cfg.translation.temperature, 0.0)
@@ -58,6 +78,9 @@ class TestConfig(unittest.TestCase):
         self.assertGreater(cfg.stt.queue_maxsize, 0)
         self.assertGreater(cfg.translation.queue_maxsize, 0)
         self.assertGreater(cfg.subtitle.queue_maxsize, 0)
+
+    def test_stt_profile_glossary_flag_is_bool(self):
+        self.assertIsInstance(cfg.stt.use_profile_glossary, bool)
 
     def test_evolve_every_positive(self):
         self.assertGreater(cfg.translation.evolve_every, 0)

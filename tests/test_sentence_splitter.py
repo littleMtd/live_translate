@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from modules.sentence_splitter import _is_complete, start
+from modules.pipeline_events import TranscriptionEvent
 
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
@@ -121,6 +122,23 @@ class TestSentenceSplitterThread(unittest.TestCase):
     def test_empty_queue_no_output(self):
         results = self._run([], wait=0.5)
         self.assertEqual(len(results), 0)
+
+    def test_transcription_event_metadata_is_propagated(self):
+        token = TranscriptionEvent(
+            text="안녕하세요",
+            engine="groq",
+            profile_id="isegye_lilpa",
+            avg_logprob=-0.2,
+            no_speech_prob=0.1,
+        )
+        results = self._run([token], wait=1.0)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["text"], token.text)
+        self.assertEqual(results[0]["stt_engine"], "groq")
+        self.assertEqual(results[0]["profile_id"], "isegye_lilpa")
+        self.assertEqual(results[0]["avg_logprob"], -0.2)
+        self.assertEqual(results[0]["no_speech_prob"], 0.1)
 
 
 class TestSentenceSplitterPause(unittest.TestCase):

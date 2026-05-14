@@ -1,49 +1,43 @@
 import io
 import queue
-import re
 import threading
+import time
 import numpy as np
 import soundfile as sf
 
-
-def _rms(audio: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(audio ** 2)))
-
 from config import cfg
+from utils.audio import rms as _rms
 from utils.logger import get_logger
-from utils.queue_utils import drain_put
+from utils.metrics import metrics
+from utils.pipeline import poll_queue, start_daemon_thread
+from utils.queue_utils import put_latest
+from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
+from modules.pipeline_events import TranscriptionEvent
+from modules.streamer_profiles import build_stt_glossary
+from modules.stt_policy import (
+    build_groq_prompt,
+    is_hallucinated,
+    normalize_prompt_text,
+    should_reject_language,
+    should_reject_segments,
+)
 
 log = get_logger("stt")
 
-# Background sound tags that SenseVoice emits — not speech
-_NOISE_TAGS = {"<|BGM|>", "<|Applause|>", "<|Laughter|>",
-               "<|Cry|>", "<|Sneeze|>", "<|Breath|>", "<|Cough|>"}
-
-# Strip ALL SenseVoice metadata tokens: <|ko|>, <|EMO_UNKNOWN|>, <|Speech|>, etc.
-_TAG_RE = re.compile(r'<\|[^|]*\|>')
+_NOISE_TAGS = SENSEVOICE_NOISE_TAGS
+_TAG_RE = SENSEVOICE_TAG_RE
 
 _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
 _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
+_GROQ_CONTEXT_CHARS = 120
 
 
 def _is_hallucinated(text: str) -> bool:
-    """Return True if the transcription looks like a Whisper hallucination."""
-    chars = [c for c in text if not c.isspace()]
-    if not chars:
-        return True
-    # Japanese hiragana/katakana appearing in Korean-only audio = hallucination
-    japanese = sum(1 for c in chars if "぀" <= c <= "ゟ" or "゠" <= c <= "ヿ")
-    if japanese > cfg.stt.max_japanese_chars:
-        log.debug("STT rejected (Japanese kana=%d): %s", japanese, text[:40])
-        return True
-    # Repetition loop: Whisper sometimes outputs the same phrase many times
-    words = text.split()
-    if len(words) >= 6:
-        half = words[:len(words) // 2]
-        if " ".join(half) in text[len(" ".join(half)):]:
-            log.debug("STT rejected (repetition loop): %s", text[:40])
-            return True
-    return False
+    return is_hallucinated(text, cfg.stt.max_japanese_chars, log)
+
+
+def _normalize_prompt_text(text: str, max_chars: int | None = None) -> str:
+    return normalize_prompt_text(text, max_chars)
 
 
 class STTEngine:
@@ -89,12 +83,16 @@ class STTEngine:
             log.error("Failed to init Groq client: %s", e)
 
     def transcribe(self, audio: np.ndarray) -> str | None:
+        event = self.transcribe_event(audio)
+        return event.text if event else None
+
+    def transcribe_event(self, audio: np.ndarray) -> TranscriptionEvent | None:
         if not self._use_groq:
             result = self._transcribe_sensevoice(audio)
             if result is not None:
                 self._consecutive_none = 0
                 self._last_transcript = result
-                return result
+                return self._event(result, "sensevoice")
             # SenseVoice failed — fall through to Groq
             self._use_groq = True
             self._init_groq()
@@ -110,12 +108,14 @@ class STTEngine:
                         log.info("SenseVoice recovered — switching back from Groq")
                         self._use_groq = False
                         self._consecutive_none = 0
-                        return probe
+                        self._last_transcript = probe
+                        return self._event(probe, "sensevoice")
 
         result = self._transcribe_groq(audio)
         if result is not None:
             self._consecutive_none = 0
             self._last_transcript = result
+            return self._event(result, "groq")
         else:
             self._consecutive_none += 1
             if self._consecutive_none == _CONSECUTIVE_NONE_WARN:
@@ -123,7 +123,15 @@ class STTEngine:
                     "STT returned None %d times in a row — both engines may be down",
                     _CONSECUTIVE_NONE_WARN,
                 )
-        return result
+        return None
+
+    @staticmethod
+    def _event(text: str, engine: str) -> TranscriptionEvent:
+        return TranscriptionEvent(
+            text=text,
+            engine=engine,
+            profile_id=cfg.active_streamer_profile,
+        )
 
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
         try:
@@ -160,13 +168,7 @@ class STTEngine:
             sf.write(buf, audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
             buf.seek(0)
             buf.name = "audio.wav"
-
-            prompt_parts = []
-            if cfg.stt.groq_prompt:
-                prompt_parts.append(cfg.stt.groq_prompt)
-            if self._last_transcript:
-                prompt_parts.append(self._last_transcript[-120:])
-            dynamic_prompt = " ".join(prompt_parts) or None
+            dynamic_prompt = self._build_groq_prompt()
 
             resp = self._groq_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
@@ -179,36 +181,19 @@ class STTEngine:
 
             # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
             detected_lang = getattr(resp, "language", None)
-            if detected_lang:
-                lang_lower = detected_lang.lower()
-                if lang_lower in ("ja", "japanese"):
-                    log.warning("Groq STT rejected (lang=%s): %s",
-                                detected_lang, getattr(resp, "text", "")[:40])
-                    return None
-                if lang_lower not in ("ko", "korean"):
-                    log.warning("Groq STT unexpected lang=%s (passing through): %s",
-                                detected_lang, getattr(resp, "text", "")[:40])
+            if should_reject_language(detected_lang, getattr(resp, "text", "") or "", log):
+                return None
 
             # Confidence filtering via segment metadata
             segments = getattr(resp, "segments", None) or []
-            if segments:
-                avg_no_speech  = sum(s.get("no_speech_prob",   0) for s in segments) / len(segments)
-                avg_logprob    = sum(s.get("avg_logprob",       0) for s in segments) / len(segments)
-                avg_comp_ratio = sum(s.get("compression_ratio", 0) for s in segments) / len(segments)
-                log.debug("Groq segment stats: no_speech=%.2f logprob=%.2f comp=%.2f",
-                          avg_no_speech, avg_logprob, avg_comp_ratio)
-                if avg_no_speech > cfg.stt.no_speech_threshold:
-                    log.warning("Groq STT rejected (no_speech_prob=%.2f): %s",
-                                avg_no_speech, getattr(resp, "text", "")[:40])
-                    return None
-                if avg_logprob < cfg.stt.avg_logprob_threshold:
-                    log.warning("Groq STT rejected (avg_logprob=%.2f): %s",
-                                avg_logprob, getattr(resp, "text", "")[:40])
-                    return None
-                if avg_comp_ratio > 2.4:
-                    log.warning("Groq STT rejected (compression_ratio=%.2f): %s",
-                                avg_comp_ratio, getattr(resp, "text", "")[:40])
-                    return None
+            if should_reject_segments(
+                segments,
+                text=getattr(resp, "text", "") or "",
+                no_speech_threshold=cfg.stt.no_speech_threshold,
+                avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
+                logger=log,
+            ):
+                return None
 
             text = (getattr(resp, "text", "") or "").strip()
             if not text:
@@ -221,6 +206,16 @@ class STTEngine:
             log.error("Groq STT error: %s", e)
             return None
 
+    def _build_groq_prompt(self) -> str | None:
+        return build_groq_prompt(
+            seed_prompt=cfg.stt.groq_prompt,
+            use_profile_glossary=cfg.stt.use_profile_glossary,
+            active_profile=cfg.active_streamer_profile,
+            last_transcript=self._last_transcript,
+            glossary_builder=build_stt_glossary,
+            max_context_chars=_GROQ_CONTEXT_CHARS,
+        )
+
 
 def start(audio_queue: queue.Queue, text_queue: queue.Queue,
           stop_event: threading.Event,
@@ -228,25 +223,23 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
     def run():
         engine = STTEngine()
         while not stop_event.is_set():
-            if pause_event and pause_event.is_set():
-                stop_event.wait(timeout=0.2)
-                continue
-            try:
-                audio = audio_queue.get(timeout=1)
-            except queue.Empty:
+            has_audio, audio = poll_queue(audio_queue, stop_event, pause_event)
+            if not has_audio:
                 continue
 
-            text = engine.transcribe(audio)
-            if text:
-                drained = drain_put(text_queue, text)
-                if drained:
-                    log.warning("text_queue backlog cleared (%d tokens), keeping latest", drained)
+            started = time.monotonic()
+            event = engine.transcribe_event(audio)
+            metrics.observe_latency("stt", time.monotonic() - started)
+            if event:
+                metrics.increment("stt.success")
+                put_latest(text_queue, event, log, "text_queue", "tokens")
+            else:
+                metrics.increment("stt.none")
+            metrics.log_summary_if_due()
 
         log.info("STT stopped")
 
-    t = threading.Thread(target=run, name="STT", daemon=True)
-    t.start()
-    return t
+    return start_daemon_thread("STT", run)
 
 
 if __name__ == "__main__":

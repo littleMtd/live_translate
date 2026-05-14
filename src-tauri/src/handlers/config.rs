@@ -1,36 +1,7 @@
+use crate::paths::config_path;
 use crate::state::{AppState, ConfigDto};
 use std::fs;
-use std::path::PathBuf;
 use tauri::State;
-
-fn app_root() -> PathBuf {
-    let base = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    // Dev mode: .../live_translate/src-tauri/target/debug/<app>.exe
-    // We need the project root: .../live_translate
-    if let Some(project_root) = base.ancestors().nth(3) {
-        let root = project_root.to_path_buf();
-        if root.join("main.py").exists() {
-            return root;
-        }
-    }
-
-    // Packaged mode: binary sits next to app files.
-    if base.join("main.py").exists() || base.join("logs").exists() {
-        return base;
-    }
-
-    base
-}
-
-fn config_path() -> PathBuf {
-    app_root()
-        .join("logs")
-        .join("live_translate_config.json")
-}
 
 pub(crate) fn validate_config(cfg: &ConfigDto) -> Result<(), String> {
     if cfg.subtitle.font_size < 8 || cfg.subtitle.font_size > 48 {
@@ -96,41 +67,87 @@ mod tests {
             audio: AudioConfig {
                 sample_rate: 16000,
                 channels: 1,
+                chunk_seconds: 3,
+                device_name: "CABLE Output".into(),
                 volume_threshold: 0.01,
                 vad_enabled: true,
                 vad_silence_sec: 0.6,
                 vad_min_speech_sec: 0.4,
                 vad_max_speech_sec: 8.0,
+                vad_silero_threshold: 0.5,
                 queue_maxsize: 10,
             },
             stt: SttConfig {
                 primary_engine: "groq".into(),
+                sensevoice_model: "iic/SenseVoiceSmall".into(),
+                sensevoice_device: "cuda".into(),
+                groq_model: "whisper-large-v3".into(),
                 language: "ko".into(),
+                groq_prompt: String::new(),
+                batch_size_s: 60,
                 queue_maxsize: 20,
+                no_speech_threshold: 0.6,
+                avg_logprob_threshold: -1.0,
+                max_japanese_chars: 2,
+                max_repeat_ratio: 0.7,
             },
             splitter: SplitterConfig {
                 min_wait_seconds: 3,
                 force_cut_seconds: 8,
             },
             translation: TranslationConfig {
-                primary_engine: "gemini".into(),
+                engine_chain: vec!["claude".into(), "gemini".into(), "google_translate".into()],
+                model: "claude-sonnet-4-6".into(),
+                gemini_model: "gemini-2.5-flash".into(),
+                google_translate_lang: "zh-TW".into(),
                 target_lang: "zh-TW".into(),
                 max_tokens: 80,
                 temperature: 0.0,
                 queue_maxsize: 2,
+                context_window: 10,
+                translation_mode: "live".into(),
+                streamer_profile: "hades_chxxnnx".into(),
+                use_profile: true,
+                evolve_enabled: false,
+                evolve_every: 20,
                 slang: HashMap::new(),
             },
             subtitle: SubtitleConfig {
+                idle_hide_ms: 30000,
                 font_family: "Arial".into(),
                 font_size: 22,
                 font_style: "bold".into(),
-                idle_hide_ms: 30000,
+                bg: "#010101".into(),
+                ctrl_bg: "#1a1a1a".into(),
+                fg: "#FFFFFF".into(),
+                outline_color: "#000000".into(),
+                outline_width: 2,
                 alpha: 0.82,
+                max_width_chars: 36,
+                wraplength: 700,
+                padx: 16,
+                pady: 8,
+                init_offset_x: 400,
+                init_offset_y: 160,
+                poll_interval_ms: 100,
+                min_display_ms: 1500,
+                ms_per_char: 80,
                 queue_maxsize: 10,
             },
             database: DatabaseConfig {
                 db_path: "logs/live_translate.db".into(),
                 db_cache_max_rows: 50000,
+            },
+            live_engine: "nvidia".into(),
+            clip_engine: "nvidia".into(),
+            ollama: OllamaConfig {
+                base_url: "http://localhost:11434".into(),
+                model: "qwen2.5:3b".into(),
+                timeout: 60,
+            },
+            nvidia: NvidiaConfig {
+                model: "qwen/qwen3.5-122b-a10b".into(),
+                timeout: 60,
             },
         }
     }
@@ -221,7 +238,7 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2 = parse_config(&json).unwrap();
         assert_eq!(cfg.subtitle.font_size, cfg2.subtitle.font_size);
-        assert_eq!(cfg.translation.primary_engine, cfg2.translation.primary_engine);
+        assert_eq!(cfg.translation.engine_chain, cfg2.translation.engine_chain);
         assert_eq!(cfg.stt.language, cfg2.stt.language);
     }
 
@@ -231,6 +248,9 @@ mod tests {
         cfg.translation.slang.insert("ㅋㅋ".into(), "哈哈".into());
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2 = parse_config(&json).unwrap();
-        assert_eq!(cfg2.translation.slang.get("ㅋㅋ"), Some(&"哈哈".to_string()));
+        assert_eq!(
+            cfg2.translation.slang.get("ㅋㅋ"),
+            Some(&"哈哈".to_string())
+        );
     }
 }

@@ -1,8 +1,10 @@
 import os
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from dotenv import load_dotenv
+from modules.streamer_profiles import known_profile_ids
 
 load_dotenv()
 
@@ -43,7 +45,10 @@ class _STT:
     sensevoice_device: str = "cuda"
     groq_model:        str = "whisper-large-v3"
     language:          str = "ko"
-    groq_prompt:            str   = "스타레일, 붕괴 스타레일, 이세계아이돌, 이세돌, 릴파, 아이네, 징버거, 고세구, 주르르, 비비"
+    groq_prompt:            str   = (
+        "Korean livestream speech. Transcribe in Korean Hangul only; do not translate."
+    )
+    use_profile_glossary:   bool  = True
     batch_size_s:           int   = 60
     queue_maxsize:          int   = 20
     # Groq verbose_json confidence filters
@@ -60,90 +65,22 @@ class _Splitter:
     force_cut_seconds: int = 8
 
 
-_DEFAULT_SLANG: MappingProxyType = MappingProxyType({
-    # Laughs / chat shorthand
-    "ㅋㅋ":    "哈哈",
-    "ㅋㅋㅋㅋ": "哈哈哈",
-    "ㅎㅎ":    "呵呵",
-    "ㄱㄱ":    "好嘞",
-    "ㅇㅋ":    "OK",
-
-    # Common exclamations / reactions
-    "대박":    "太狂了",
-    "대애박":  "超級狂",
-    "헐":      "天啊",
-    "진짜":    "真的",
-    "아이구":  "哎呀",
-    "어머":    "天哪",
-    "와우":    "哇喔",
-    "우와":    "哇",
-
-    # Casual confirmation / encouragement
-    "화이팅":  "加油",
-    "파이팅":  "加油",
-    "잘하자":  "好好加油",
-
-    # Slang for surprise / disbelief
-    "헐 대박": "我的天，太誇張了",
-
-    # Game/chat terms often left untranslated but mapped for readability
-    "방송":    "直播",
-    "선물":    "禮物",
-    "구독":    "訂閱",
-    "좋아요":  "按讚",
-
-    # Shortened words / casual forms
-    "ㄷㄷ":    "震驚",
-    "ㅂㅂ":    "掰掰",
-    "ㄴㄴ":    "不要",
-
-    # Emphasis / intensifiers
-    "완전":    "完全",
-    "완전 짱": "超棒",
-
-    # Common memetic phrases
-    "아싸":    "耶（成功）",
-    "대박이네": "太猛了",
-
-    # Placeholder for romanized phrases often used by streamers
-    "annyeong": "你好",
-
-    # Korean streaming platform terms
-    "열혈팬":  "鐵粉",
-    "뱅종":    "下播了",       # slang variant of 방종
-    "팔로우":  "追蹤",
-    "방제":    "直播標題",
-    "시참":    "觀眾參與",      # 시청자 참여 → 시참
-
-    # Colloquial & crude language (per new prompt guidelines)
-    "드럽다":  "爛透了",
-    "드럽게":  "爛到不行",
-    "맨날":    "每天",
-    "막":      "就是",          # when used as verbal habit/filler
-    "뭔가":    "有點",          # 有時可省略
-    "어쩌고":  "（省略）",       # filler without substance
-    "식으로":  "-style",
-    
-    # Game/streaming context terms
-    "VVIP":    "VVIP",         # streamer branding term
-    "기부자":  "贊助者",
-    "후원자":  "支援者",
-    "알바":    "打工",
-    "뱅송":    "直播",         # slang for 방송
-    "억까":    "被針對",
-    "꿀잼":    "超好玩",
-    "방종":    "下播",
-    
-    # More reactions
-    "미쳤다":  "瘋了",
-    "개뻑이야": "爽死了",
-    "쌩쌩":    "嗖嗖",
-
-    # Add more as needed — evolve or extract from DB later
-})
+_DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
 
 
-_VALID_STREAMER_PROFILES = {"", "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"}
+def _load_default_slang(path: Path = _DEFAULT_SLANG_PATH) -> MappingProxyType:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"default slang data must be a non-empty object: {path}")
+    if not all(isinstance(key, str) and isinstance(value, str) for key, value in data.items()):
+        raise ValueError(f"default slang data must map strings to strings: {path}")
+    return MappingProxyType(data)
+
+
+_DEFAULT_SLANG: MappingProxyType = _load_default_slang()
+
+
+_VALID_STREAMER_PROFILES = known_profile_ids()
 _VALID_TRANSLATION_MODES = {"live", "clip"}
 _VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
@@ -194,7 +131,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "stellive_hina"
+    streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20
@@ -258,7 +195,7 @@ class _Ollama:
 class _Nvidia:
     # Model name from build.nvidia.com — click any model → "API" tab for exact name
     model:   str = "qwen/qwen3.5-122b-a10b"
-    timeout: int = 30
+    timeout: int = 60
 
 
 @dataclass(frozen=True)
@@ -277,6 +214,10 @@ class _Config:
     ollama:              _Ollama      = field(default_factory=_Ollama)
     nvidia:              _Nvidia      = field(default_factory=_Nvidia)
     thread_join_timeout: int          = 5
+
+    @property
+    def active_streamer_profile(self) -> str:
+        return self.translation.streamer_profile
 
     def __post_init__(self):
         if self.live_engine not in _VALID_BACKEND_MODES:

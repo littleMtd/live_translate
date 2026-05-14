@@ -1,0 +1,66 @@
+{
+  "common_stt_terms": [
+    "스타레일",
+    "붕괴 스타레일",
+    "CHZZK",
+    "SOOP",
+    "VVIP"
+  ],
+  "profiles": [
+    {
+      "profile_id": "",
+      "label": "General",
+      "stt_terms": [],
+      "aliases": []
+    },
+    {
+      "profile_id": "stellive_hina",
+      "label": "Stellive Hina",
+      "stt_terms": [
+        "스텔라이브",
+        "히나",
+        "아야츠노 유니",
+        "시라유키 히나"
+      ],
+      "aliases": []
+    },
+    {
+      "profile_id": "isegye_lilpa",
+      "label": "Isegye Idol Lilpa",
+      "stt_terms": [
+        "이세계아이돌",
+        "이세돌",
+        "릴파",
+        "아이네",
+        "징버거",
+        "고세구",
+        "주르르",
+        "비챤"
+      ],
+      "aliases": []
+    },
+    {
+      "profile_id": "hades_chxxnnx",
+      "label": "Hades Chxxnnx",
+      "stt_terms": [
+        "하데스",
+        "치즈",
+        "치지직",
+        "발로란트",
+        "Valorant"
+      ],
+      "aliases": []
+    },
+    {
+      "profile_id": "mwmeu",
+      "label": "Mwmeu",
+      "stt_terms": [
+        "므므",
+        "뮤뮤",
+        "마인크래프트",
+        "Minecraft"
+      ],
+      "aliases": []
+    }
+  ]
+}

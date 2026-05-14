@@ -21,6 +21,7 @@ except ImportError:
         sys.modules["numpy"] = MagicMock()
 
 from modules.stt import _NOISE_TAGS, _TAG_RE, STTEngine, _CONSECUTIVE_NONE_WARN, _SENSEVOICE_PROBE_EVERY
+from modules.pipeline_events import TranscriptionEvent
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,27 @@ class TestTranscribeFallback(unittest.TestCase):
 
         self.assertEqual(result, "Groq result")
 
+    def test_transcribe_event_includes_engine_and_profile(self):
+        eng = _make_engine_groq("Groq result")
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "isegye_lilpa"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(self._audio())
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.text, "Groq result")
+        self.assertEqual(event.engine, "groq")
+        self.assertEqual(event.profile_id, "isegye_lilpa")
+
 
 # ---------------------------------------------------------------------------
 # STTEngine.transcribe — consecutive-None warning and SenseVoice recovery
@@ -324,13 +346,18 @@ class TestSttThread(unittest.TestCase):
 
         with patch("modules.stt.STTEngine") as MockEngine:
             instance = MockEngine.return_value
-            instance.transcribe.return_value = "테스트"
+            instance.transcribe_event.return_value = TranscriptionEvent(
+                text="테스트",
+                engine="groq",
+                profile_id="hades_chxxnnx",
+            )
             stt_start(audio_q, text_q, stop)
             audio_q.put(self._audio())
             result = text_q.get(timeout=3)
             stop.set()
 
-        self.assertEqual(result, "테스트")
+        self.assertEqual(result.text, "테스트")
+        self.assertEqual(result.engine, "groq")
 
     def test_none_transcription_not_forwarded(self):
         from modules.stt import start as stt_start
@@ -340,7 +367,7 @@ class TestSttThread(unittest.TestCase):
 
         with patch("modules.stt.STTEngine") as MockEngine:
             instance = MockEngine.return_value
-            instance.transcribe.return_value = None
+            instance.transcribe_event.return_value = None
             stt_start(audio_q, text_q, stop)
             audio_q.put(self._audio())
             time.sleep(0.3)
@@ -358,7 +385,11 @@ class TestSttThread(unittest.TestCase):
 
         with patch("modules.stt.STTEngine") as MockEngine:
             instance = MockEngine.return_value
-            instance.transcribe.return_value = "should not appear"
+            instance.transcribe_event.return_value = TranscriptionEvent(
+                text="should not appear",
+                engine="groq",
+                profile_id="hades_chxxnnx",
+            )
             stt_start(audio_q, text_q, stop, pause_event=pause)
             audio_q.put(self._audio())
             time.sleep(0.4)
@@ -378,6 +409,99 @@ class TestSttThread(unittest.TestCase):
             t.join(timeout=3)
 
         self.assertFalse(t.is_alive())
+
+
+class TestGroqPromptBuilder(unittest.TestCase):
+
+    def test_build_groq_prompt_includes_seed_glossary_and_recent_context(self):
+        eng = _make_engine_groq("ignored")
+        eng._last_transcript = "  previous   line with   extra spaces  "
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+            patch("modules.stt.build_stt_glossary", return_value="profile terms") as glossary:
+            mock_cfg.stt.groq_prompt = "  custom prompt words  "
+            mock_cfg.stt.use_profile_glossary = True
+            mock_cfg.active_streamer_profile = "isegye_lilpa"
+            prompt = eng._build_groq_prompt()
+
+        self.assertEqual(
+            prompt,
+            "custom prompt words\nprofile terms\nRecent Korean transcript context: previous line with extra spaces",
+        )
+        glossary.assert_called_once_with("isegye_lilpa")
+
+    def test_build_groq_prompt_can_skip_profile_glossary(self):
+        eng = _make_engine_groq("ignored")
+        eng._last_transcript = "recent context"
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+             patch("modules.stt.build_stt_glossary") as glossary:
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            prompt = eng._build_groq_prompt()
+
+        self.assertEqual(prompt, "seed prompt\nRecent Korean transcript context: recent context")
+        glossary.assert_not_called()
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+    def test_transcribe_groq_passes_structured_prompt(self):
+        eng = _make_engine_groq("transcribed")
+        eng._last_transcript = "recent context"
+        audio = np.full(16000, 0.1, dtype=np.float32)
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+             patch("modules.stt.build_stt_glossary", return_value="profile terms"):
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = True
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            mock_cfg.active_streamer_profile = "isegye_lilpa"
+            result = eng._transcribe_groq(audio)
+
+        self.assertEqual(result, "transcribed")
+        sent_prompt = eng._groq_client.audio.transcriptions.create.call_args.kwargs["prompt"]
+        self.assertEqual(
+            sent_prompt,
+            "seed prompt\nprofile terms\nRecent Korean transcript context: recent context",
+        )
+
+
+class TestStreamerSttGlossary(unittest.TestCase):
+
+    def test_builds_profile_specific_stt_glossary(self):
+        from modules.streamer_profiles import build_stt_glossary
+
+        glossary = build_stt_glossary("isegye_lilpa")
+
+        self.assertIn("\uc2a4\ud0c0\ub808\uc77c", glossary)
+        self.assertIn("\ub9b4\ud30c", glossary)
+
+    def test_can_build_profile_only_glossary(self):
+        from modules.streamer_profiles import build_stt_glossary
+
+        glossary = build_stt_glossary("isegye_lilpa", include_common=False)
+
+        self.assertNotIn("\uc2a4\ud0c0\ub808\uc77c", glossary)
+        self.assertIn("\ub9b4\ud30c", glossary)
+
+    def test_unknown_profile_uses_common_terms(self):
+        from modules.streamer_profiles import build_stt_glossary
+
+        glossary = build_stt_glossary("unknown")
+
+        self.assertIn("\uc2a4\ud0c0\ub808\uc77c", glossary)
+        self.assertNotIn("\ub9b4\ud30c", glossary)
+
+    def test_known_profile_ids_include_configured_profiles(self):
+        from modules.streamer_profiles import known_profile_ids
+
+        self.assertIn("stellive_hina", known_profile_ids())
+        self.assertIn("hades_chxxnnx", known_profile_ids())
 
 
 if __name__ == "__main__":

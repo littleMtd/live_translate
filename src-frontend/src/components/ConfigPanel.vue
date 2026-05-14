@@ -1,6 +1,9 @@
 <template>
   <div class="config-panel">
     <h2>Settings</h2>
+    <p class="restart-note">
+      Settings are written to disk. Restart the Python pipeline to apply runtime changes.
+    </p>
 
     <div class="section">
       <h3>Subtitle Display</h3>
@@ -26,10 +29,22 @@
     <div class="section">
       <h3>Translation Engine</h3>
       <label>
-        Primary engine:
-        <select v-model="local.translation.primary_engine">
-          <option value="gemini">Gemini 2.5 Flash</option>
-          <option value="claude">Claude Haiku</option>
+        Live backend:
+        <select v-model="local.live_engine">
+          <option value="anthropic">Engine chain</option>
+          <option value="nvidia">NVIDIA NIM</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </label>
+      <label>
+        Fallback chain:
+        <input v-model="engineChainText" type="text" />
+      </label>
+      <label>
+        Mode:
+        <select v-model="local.translation.translation_mode">
+          <option value="live">Live</option>
+          <option value="clip">Clip</option>
         </select>
       </label>
       <label>
@@ -77,29 +92,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ConfigDto } from '../types/config'
 
 const props = defineProps<{ config: ConfigDto | null }>()
 const emit = defineEmits<{ save: [ConfigDto] }>()
 
 const defaultConfig = (): ConfigDto => ({
-  audio: { sample_rate: 16000, channels: 1, volume_threshold: 0.01,
+  audio: { sample_rate: 16000, channels: 1, chunk_seconds: 3, device_name: 'CABLE Output', volume_threshold: 0.01,
            vad_enabled: true, vad_silence_sec: 0.6,
-           vad_min_speech_sec: 0.4, vad_max_speech_sec: 8.0, queue_maxsize: 10 },
-  stt: { primary_engine: 'groq', language: 'ko', queue_maxsize: 20 },
+           vad_min_speech_sec: 0.4, vad_max_speech_sec: 8.0, vad_silero_threshold: 0.5, queue_maxsize: 10 },
+  stt: { primary_engine: 'groq', sensevoice_model: 'iic/SenseVoiceSmall', sensevoice_device: 'cuda',
+         groq_model: 'whisper-large-v3', language: 'ko', groq_prompt: '', batch_size_s: 60,
+         queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
+         max_japanese_chars: 2, max_repeat_ratio: 0.7 },
   splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-  translation: { primary_engine: 'gemini', target_lang: 'zh-TW',
-                 max_tokens: 80, temperature: 0.0, queue_maxsize: 2, slang: {} },
-  subtitle: { font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
-              idle_hide_ms: 30000, alpha: 0.82, queue_maxsize: 10 },
+  translation: { engine_chain: ['claude', 'gemini', 'google_translate'], model: 'claude-sonnet-4-6',
+                 gemini_model: 'gemini-2.5-flash', google_translate_lang: 'zh-TW',
+                 target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
+                 context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
+                 use_profile: true, evolve_enabled: false, evolve_every: 20, slang: {} },
+  subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
+              bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
+              outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
+              padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
+              poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
   database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
+  live_engine: 'nvidia',
+  clip_engine: 'nvidia',
+  ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
+  nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
 })
 
 const clone = (c: ConfigDto | null): ConfigDto =>
   c ? JSON.parse(JSON.stringify(c)) : defaultConfig()
 
 const local = ref<ConfigDto>(clone(props.config))
+
+const engineChainText = computed({
+  get: () => local.value.translation.engine_chain.join(', '),
+  set: (value: string) => {
+    local.value.translation.engine_chain = value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean) as ConfigDto['translation']['engine_chain']
+  },
+})
 
 watch(() => props.config, (c) => { local.value = clone(c) }, { deep: true })
 
@@ -110,7 +148,17 @@ const reset = () => { local.value = clone(props.config) }
 <style scoped>
 .config-panel { max-width: 620px; }
 
-h2 { margin-bottom: 20px; font-size: 20px; }
+h2 { margin-bottom: 8px; font-size: 20px; }
+
+.restart-note {
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  font-size: 13px;
+}
 
 .section {
   margin-bottom: 20px;

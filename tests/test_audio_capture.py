@@ -21,28 +21,38 @@ except ImportError:
 class TestRms(unittest.TestCase):
 
     def test_silence_is_zero(self):
-        from modules.audio_capture import _rms
+        from utils.audio import rms
         audio = np.zeros(1600, dtype=np.float32)
-        self.assertAlmostEqual(_rms(audio), 0.0)
+        self.assertAlmostEqual(rms(audio), 0.0)
+
+    def test_empty_audio_is_zero(self):
+        from utils.audio import rms
+        audio = np.array([], dtype=np.float32)
+        self.assertEqual(rms(audio), 0.0)
 
     def test_full_amplitude_sine(self):
-        from modules.audio_capture import _rms
+        from utils.audio import rms
         t = np.linspace(0, 1, 16000)
         audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
         # RMS of sine = 1/sqrt(2) ≈ 0.707
-        self.assertAlmostEqual(_rms(audio), 1.0 / np.sqrt(2), places=2)
+        self.assertAlmostEqual(rms(audio), 1.0 / np.sqrt(2), places=2)
 
     def test_rms_above_threshold_for_loud_audio(self):
-        from modules.audio_capture import _rms
+        from utils.audio import rms
         from config import cfg
         loud = np.ones(1600, dtype=np.float32) * 0.5
-        self.assertGreater(_rms(loud), cfg.audio.volume_threshold)
+        self.assertGreater(rms(loud), cfg.audio.volume_threshold)
 
     def test_rms_below_threshold_for_silence(self):
-        from modules.audio_capture import _rms
+        from utils.audio import rms
         from config import cfg
         silent = np.zeros(1600, dtype=np.float32)
-        self.assertLess(_rms(silent), cfg.audio.volume_threshold)
+        self.assertLess(rms(silent), cfg.audio.volume_threshold)
+
+    def test_audio_capture_keeps_legacy_rms_alias(self):
+        from modules.audio_capture import _rms
+        audio = np.ones(10, dtype=np.float32)
+        self.assertAlmostEqual(_rms(audio), 1.0)
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
