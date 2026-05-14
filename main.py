@@ -106,8 +106,14 @@ def main():
 
     all_queues = [audio_queue, text_queue, sentence_queue, subtitle_queue]
 
+    try:
+        audio_thread = audio_capture.start(audio_queue, stop_event, pause_event)
+    except Exception as exc:
+        log.error("Audio capture failed to start: %s", exc)
+        sys.exit(1)
+
     threads = [
-        audio_capture.start(audio_queue, stop_event, pause_event),
+        audio_thread,
         stt.start(audio_queue, text_queue, stop_event, pause_event),
         sentence_splitter.start(text_queue, sentence_queue, stop_event, pause_event),
     ]

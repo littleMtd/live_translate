@@ -486,8 +486,11 @@ class TestTranslateOptimizations(unittest.TestCase):
     def test_incomplete_lookup_skips_db(self):
         t = _make_translator()
         t._memory.db_lookup = MagicMock(return_value="DB result")
-        result = t._lookup_existing_translation("불완전한 문장", True, t._get_prompt_version_hash())
-        self.assertIsNone(result)
+        lookup = t._lookup_existing_translation_event(
+            "불완전한 문장", True, t._get_prompt_version_hash()
+        )
+        self.assertIsNone(lookup.result)
+        self.assertEqual(lookup.source, "skipped")
         t._memory.db_lookup.assert_not_called()
 
 

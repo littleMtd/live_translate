@@ -13,8 +13,25 @@ from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events, translation_quality
 from modules.pipeline_events import sentence_incomplete, sentence_metadata, sentence_text
-from modules.prompt_evolver import PromptEvolver  # noqa: E402
-from modules.db import _get_db  # noqa: E402
+from modules.prompt_evolver import PromptEvolver
+from modules.db import _get_db
+from modules.translation_prompts import (
+    _BASE_PROMPT,
+    _QWEN_PROMPT,
+    _is_qwen_model,
+    get_translation_profile,
+)
+from modules.translation_engines import (
+    TranslationEngine,
+    _build_engine_chain,
+)
+from modules.translation_runtime import (
+    FallbackState,
+    active_engine,
+    call_with_fallback,
+)
+from modules.translation_memory import MemoryLookup, TranslationMemory
+from modules.translation_policy import TranslationPolicy
 
 log = get_logger("translator")
 
@@ -55,32 +72,6 @@ def _write_history(ko: str, zh: str) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{ts}] {ko}\n        → {zh}\n")
-
-from modules.translation_prompts import (
-    _BASE_PROMPT,
-    _QWEN_PROMPT,
-    _is_qwen_model,
-    _build_base_prompt,
-    _build_qwen_optimized_prompt,
-    get_translation_profile,
-)
-from modules.translation_engines import (
-    TranslationEngine,
-    GeminiEngine,
-    ClaudeEngine,
-    GoogleTranslateEngine,
-    OllamaEngine,
-    NvidiaEngine,
-    _build_user_message,
-    _build_engine_chain,
-)
-from modules.translation_runtime import (
-    FallbackState,
-    active_engine,
-    call_with_fallback,
-)
-from modules.translation_memory import TranslationMemory
-from modules.translation_policy import TranslationPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +128,6 @@ class Translator:
             min_translate_chars=_MIN_TRANSLATE_CHARS,
         )
         self._last_input: str = ""
-
-    @staticmethod
-    def _is_stt_garbage(text: str) -> bool:
-        return TranslationPolicy.is_stt_garbage(text)
 
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         return self.translate_event(text, incomplete).target_text
@@ -242,13 +229,8 @@ class Translator:
         self._memory_state().record_direct(text, slang_result, incomplete)
         return slang_result
 
-    def _lookup_existing_translation(self, text: str, incomplete: bool,
-                                     prompt_ver: str) -> str | None:
-        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver)
-        return lookup.result
-
     def _lookup_existing_translation_event(self, text: str, incomplete: bool,
-                                           prompt_ver: str):
+                                           prompt_ver: str) -> MemoryLookup:
         lookup = self._memory_state().lookup_existing_event(
             text,
             incomplete,

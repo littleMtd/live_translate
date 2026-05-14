@@ -74,6 +74,51 @@ class TestRecord(unittest.TestCase):
         self.assertEqual(self.evolver._count, 0)
 
 
+class TestDisabledOnMissingKey(unittest.TestCase):
+
+    def test_disabled_when_evolve_enabled_but_no_gemini_key(self):
+        with patch("modules.prompt_evolver.cfg") as mock_cfg:
+            mock_cfg.translation.evolve_enabled = True
+            mock_cfg.translation.evolve_every = 20
+            mock_cfg.keys.gemini = ""
+            with self.assertLogs("prompt_evolver", level="WARNING") as cm:
+                evolver = PromptEvolver()
+
+        self.assertTrue(evolver._disabled)
+        self.assertTrue(any("GEMINI_API_KEY" in line for line in cm.output))
+
+    def test_disabled_evolver_does_not_record(self):
+        with patch("modules.prompt_evolver.cfg") as mock_cfg:
+            mock_cfg.translation.evolve_enabled = True
+            mock_cfg.translation.evolve_every = 20
+            mock_cfg.keys.gemini = ""
+            evolver = PromptEvolver()
+            evolver.record("안녕", "你好")
+
+        self.assertEqual(evolver._count, 0)
+        self.assertEqual(len(evolver._buffer), 0)
+
+    def test_enabled_when_key_present(self):
+        with patch("modules.prompt_evolver.cfg") as mock_cfg:
+            mock_cfg.translation.evolve_enabled = True
+            mock_cfg.translation.evolve_every = 20
+            mock_cfg.keys.gemini = "test-key"
+            evolver = PromptEvolver()
+
+        self.assertFalse(evolver._disabled)
+
+    def test_not_disabled_when_evolve_feature_off(self):
+        with patch("modules.prompt_evolver.cfg") as mock_cfg:
+            mock_cfg.translation.evolve_enabled = False
+            mock_cfg.translation.evolve_every = 20
+            mock_cfg.keys.gemini = ""
+            evolver = PromptEvolver()
+
+        # When the feature is off entirely we don't need to warn — record() is
+        # already a no-op for an unrelated reason.
+        self.assertFalse(evolver._disabled)
+
+
 class TestAnalyze(unittest.TestCase):
 
     def _make_evolver_with_data(self) -> PromptEvolver:

@@ -2,12 +2,16 @@
 PromptEvolver — evolves the translation system prompt in real-time during a stream.
 
 Every `cfg.translation.evolve_every` completed translations, it sends a batch of
-recent (ko → zh) pairs to Claude and asks it to:
+recent (ko → zh) pairs to Gemini and asks it to:
   1. Identify new stream-specific slang / names / game terms
   2. Note any consistent translation errors
 
 The result is merged back into the live system prompt used by Translator.
 Thread-safe: analysis runs in a background thread so it never blocks translation.
+
+If GEMINI_API_KEY is missing the evolver disables itself at construction time —
+record() becomes a no-op so we don't trigger a repeating auth error every
+evolve_every translations.
 """
 import json
 import threading
@@ -39,10 +43,17 @@ class PromptEvolver:
         self._stream_context: str = ""
         self._analyzing = False
         self._gemini_client = None
+        # Disable evolver if the operator turned it on without supplying a key,
+        # otherwise every evolve_every translations would log a fresh auth error.
+        self._disabled = bool(cfg.translation.evolve_enabled) and not cfg.keys.gemini
+        if self._disabled:
+            log.warning(
+                "evolve_enabled=True but GEMINI_API_KEY not set — PromptEvolver disabled",
+            )
 
     def record(self, ko: str, zh: str):
         """Call after every successful translation."""
-        if not cfg.translation.evolve_enabled:
+        if self._disabled or not cfg.translation.evolve_enabled:
             return
         # Set _analyzing=True atomically inside the lock to prevent two threads
         # from both passing the `not self._analyzing` guard before either sets it.

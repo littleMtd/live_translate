@@ -177,6 +177,24 @@ class TestVadState(unittest.TestCase):
             self.assertEqual(vad._silent_samples, 0)
 
 
+class TestStartFailsFast(unittest.TestCase):
+    """`start()` must surface device errors synchronously so main.py can detect them."""
+
+    def test_start_raises_when_device_missing(self):
+        import modules.audio_capture as ac
+
+        q: queue.Queue = queue.Queue()
+        stop = __import__("threading").Event()
+
+        with patch.object(ac.sd, "query_devices",
+                          return_value=[{"name": "Microphone"}, {"name": "Speaker"}]):
+            with self.assertRaises(RuntimeError):
+                ac.start(q, stop)
+
+        # No daemon thread should have been spawned; stop_event remains untouched.
+        self.assertFalse(stop.is_set())
+
+
 class TestFindLoopbackDevice(unittest.TestCase):
 
     def _mock_devices(self, names: list[str]) -> list[dict]:

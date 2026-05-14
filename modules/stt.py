@@ -53,7 +53,8 @@ class STTEngine:
         else:
             self._load_sense_voice()
 
-        if self._sense_voice is None and self._groq_client is None:
+        self.available = self._sense_voice is not None or self._groq_client is not None
+        if not self.available:
             log.error("STT unavailable: both SenseVoice and Groq failed to initialize")
 
     def _load_sense_voice(self):
@@ -222,6 +223,13 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
           pause_event: threading.Event | None = None) -> threading.Thread:
     def run():
         engine = STTEngine()
+        if not engine.available:
+            # Both SenseVoice and Groq failed to load. Don't sit and spin
+            # consuming audio chunks that we can never transcribe — signal
+            # shutdown so main.py can tear down the rest of the pipeline.
+            log.error("STT thread aborting: no engine available")
+            stop_event.set()
+            return
         while not stop_event.is_set():
             has_audio, audio = poll_queue(audio_queue, stop_event, pause_event)
             if not has_audio:

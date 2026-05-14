@@ -410,6 +410,22 @@ class TestSttThread(unittest.TestCase):
 
         self.assertFalse(t.is_alive())
 
+    def test_thread_sets_stop_event_when_engine_unavailable(self):
+        from modules.stt import start as stt_start
+        audio_q: queue.Queue = queue.Queue()
+        text_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch("modules.stt.STTEngine") as MockEngine:
+            instance = MockEngine.return_value
+            instance.available = False
+            t = stt_start(audio_q, text_q, stop)
+            t.join(timeout=3)
+
+        self.assertFalse(t.is_alive(), "STT thread should exit when engine unavailable")
+        self.assertTrue(stop.is_set(), "STT thread should signal shutdown")
+        self.assertTrue(text_q.empty())
+
 
 class TestGroqPromptBuilder(unittest.TestCase):
 

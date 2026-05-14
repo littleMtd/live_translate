@@ -120,7 +120,8 @@ class _VadState:
         chunk = np.concatenate(self._buf)
         self._reset()
         metrics.increment("audio.chunks")
-        if not put_latest(self._q, chunk, log, "audio_queue", "chunks"):
+        drained = put_latest(self._q, chunk, log, "audio_queue", "chunks")
+        if drained == 0:
             log.debug("VAD chunk emitted: %.2fs", len(chunk) / cfg.audio.sample_rate)
 
     def _reset(self) -> None:
@@ -138,56 +139,69 @@ class _VadState:
 
 def start(audio_queue: queue.Queue, stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
+    # Resolve the loopback device synchronously so a missing device fails fast
+    # in the caller's thread instead of silently killing a daemon thread.
+    device = _find_loopback_device()
+
     def run():
-        silero = None
-        if cfg.audio.vad_enabled:
-            silero = _load_silero(cfg.audio.vad_silero_threshold)
+        try:
+            silero = None
+            if cfg.audio.vad_enabled:
+                silero = _load_silero(cfg.audio.vad_silero_threshold)
 
-        vad           = _VadState(audio_queue, silero) if cfg.audio.vad_enabled else None
-        fixed_buf     = np.zeros(0, dtype=np.float32)
-        chunk_samples = cfg.audio.sample_rate * cfg.audio.chunk_seconds
+            vad           = _VadState(audio_queue, silero) if cfg.audio.vad_enabled else None
+            fixed_buf     = np.zeros(0, dtype=np.float32)
+            chunk_samples = cfg.audio.sample_rate * cfg.audio.chunk_seconds
 
-        def callback(indata, frames, time_info, status):
-            nonlocal fixed_buf
-            if status:
-                log.warning("sounddevice status: %s", status)
-            if pause_event and pause_event.is_set():
-                return
-            mono = indata[:, 0] if indata.ndim > 1 else indata.flatten()
+            def callback(indata, frames, time_info, status):
+                nonlocal fixed_buf
+                if status:
+                    log.warning("sounddevice status: %s", status)
+                if pause_event and pause_event.is_set():
+                    return
+                mono = indata[:, 0] if indata.ndim > 1 else indata.flatten()
 
-            if vad:
-                vad.push(mono)
-            else:
-                fixed_buf = np.concatenate([fixed_buf, mono])
-                if len(fixed_buf) > _FIXED_BUF_MAX_SAMPLES:
-                    excess    = len(fixed_buf) - _FIXED_BUF_MAX_SAMPLES
-                    fixed_buf = fixed_buf[excess:]
-                    log.warning("fixed_buf exceeded max (%ds) — oldest %dms discarded",
-                                _FIXED_BUF_MAX_SAMPLES // cfg.audio.sample_rate,
-                                round(excess / cfg.audio.sample_rate * 1000))
-                while len(fixed_buf) >= chunk_samples:
-                    chunk      = fixed_buf[:chunk_samples]
-                    fixed_buf  = fixed_buf[chunk_samples:]
-                    if _rms(chunk) < cfg.audio.volume_threshold:
-                        log.debug("Silence detected, skipping chunk")
-                        continue
-                    metrics.increment("audio.chunks")
-                    put_latest(audio_queue, chunk.copy(), log, "audio_queue", "chunks")
+                if vad:
+                    vad.push(mono)
+                else:
+                    fixed_buf = np.concatenate([fixed_buf, mono])
+                    if len(fixed_buf) > _FIXED_BUF_MAX_SAMPLES:
+                        excess    = len(fixed_buf) - _FIXED_BUF_MAX_SAMPLES
+                        fixed_buf = fixed_buf[excess:]
+                        log.warning("fixed_buf exceeded max (%ds) — oldest %dms discarded",
+                                    _FIXED_BUF_MAX_SAMPLES // cfg.audio.sample_rate,
+                                    round(excess / cfg.audio.sample_rate * 1000))
+                    while len(fixed_buf) >= chunk_samples:
+                        chunk      = fixed_buf[:chunk_samples]
+                        fixed_buf  = fixed_buf[chunk_samples:]
+                        if _rms(chunk) < cfg.audio.volume_threshold:
+                            log.debug("Silence detected, skipping chunk")
+                            continue
+                        metrics.increment("audio.chunks")
+                        put_latest(audio_queue, chunk.copy(), log, "audio_queue", "chunks")
 
-        mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
-        log.info("Starting WASAPI loopback capture — mode=%s samplerate=%d",
-                 mode, cfg.audio.sample_rate)
+            mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
+            log.info("Starting WASAPI loopback capture — mode=%s samplerate=%d",
+                     mode, cfg.audio.sample_rate)
 
-        with sd.InputStream(
-            samplerate=cfg.audio.sample_rate,
-            channels=cfg.audio.channels,
-            dtype="float32",
-            blocksize=cfg.audio.sample_rate // 10,   # 100 ms frames
-            callback=callback,
-            device=_find_loopback_device(),
-        ):
-            while not stop_event.is_set():
-                stop_event.wait(timeout=0.5)
+            with sd.InputStream(
+                samplerate=cfg.audio.sample_rate,
+                channels=cfg.audio.channels,
+                dtype="float32",
+                blocksize=cfg.audio.sample_rate // 10,   # 100 ms frames
+                callback=callback,
+                device=device,
+            ):
+                while not stop_event.is_set():
+                    stop_event.wait(timeout=0.5)
+        except Exception as exc:
+            # An exception inside the daemon would otherwise terminate it
+            # silently while the rest of the pipeline keeps polling an empty
+            # queue forever. Surface it via stop_event so main.py can detect
+            # the failure and shut down cleanly.
+            log.error("Audio capture aborted: %s", exc, exc_info=True)
+            stop_event.set()
+            return
 
         log.info("Audio capture stopped")
 
