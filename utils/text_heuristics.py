@@ -85,6 +85,35 @@ STT_FRAGMENTED_MARKERS = (
     "약간",
 )
 
+# Task #8 — STT template hallucination guard.
+# These are YouTube / 自媒體 boilerplate that Groq/Whisper fabricate on
+# low-confidence audio. They are NOT translator hallucinations.
+#
+# HARD: caption/ad disclaimers a live streamer would essentially never say
+# out loud. Substring presence alone is enough to treat as garbage.
+STT_TEMPLATE_HARD_PHRASES = (
+    "자막 제공",
+    "한글자막 제공",  # redundant with "자막 제공" but listed for clarity
+    "광고를 포함하고 있습니다",
+    "카카오톡 플러스친구",
+    "kakaotalk 플러스친구",
+    "홈페이지에서 확인하실 수 있습니다",
+)
+
+# CONDITIONAL: canonical outro CTAs. A streamer CAN genuinely say short
+# thanks ("구독 감사합니다"), so these full phrases only count as garbage
+# when they DOMINATE the utterance or repeat — see
+# TranslationPolicy.is_stt_template_garbage for the exact rule.
+STT_TEMPLATE_CONDITIONAL_PHRASES = (
+    "시청해주셔서 감사합니다",
+    "구독과 좋아요는 저에게 큰 힘이 됩니다",
+    "구독과 좋아요는 저에게 아주 큰 힘이 됩니다",
+)
+
+# Significant chars = drop whitespace / punctuation / ellipsis so length
+# ratios are not skewed by trailing "." / "!" / "...".
+STT_INSIGNIFICANT_RE = re.compile(r"[\s.,!?~…·、。！？]+")
+
 KOREAN_CHAR_RE = re.compile(r"[가-힣]")
 ENGLISH_WORD_RE = re.compile(r"[a-zA-Z]{3,}")
 DIGIT_RE = re.compile(r"\d+")

@@ -527,5 +527,44 @@ class TestMaxTranslateCharsGuard(unittest.TestCase):
         self.assertEqual(outcome.filter_reason, "")
 
 
+class TestSttTemplateGarbageGuard(unittest.TestCase):
+    """#8 — STT template hallucinations must be rejected before any engine,
+    memory lookup or DB write."""
+
+    _TEMPLATE = "시청해주셔서 감사합니다."
+
+    def test_stt_template_garbage_skips_engine_call(self):
+        t = _make_translator()
+
+        outcome = t.translate_event(self._TEMPLATE, incomplete=False)
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "stt_template_garbage")
+        self.assertIsNone(outcome.target_text)
+        for e in t._engines:
+            e.translate.assert_not_called()
+
+    def test_stt_template_garbage_not_written_to_memory_or_db(self):
+        t = _make_translator()
+        t._record_success = MagicMock()
+
+        t.translate_event(self._TEMPLATE, incomplete=False)
+
+        t._record_success.assert_not_called()
+
+    def test_stt_template_garbage_outcome_exposes_filter_reason(self):
+        # runtime_events writes whatever `filter_reason` the outcome carries
+        # via as_event_fields (same path as the `too_long` precedent) —
+        # verify it is observable in the emitted event payload.
+        t = _make_translator()
+
+        outcome = t.translate_event(self._TEMPLATE, incomplete=False)
+        event = outcome.as_event_fields(0.0, {})
+
+        self.assertEqual(event["status"], "filtered")
+        self.assertEqual(event["filter_reason"], "stt_template_garbage")
+
+
 if __name__ == "__main__":
     unittest.main()
