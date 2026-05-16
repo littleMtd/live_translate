@@ -40,6 +40,48 @@ class TestTranslationPolicy(unittest.TestCase):
     def test_is_stt_garbage_allows_short_text(self):
         self.assertFalse(TranslationPolicy.is_stt_garbage("안녕하세요"))
 
+    def test_is_stt_garbage_allows_weak_commercial_words_in_normal_speech(self):
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "아무튼, 어머머머머머. 그래서 이분께... 이 노래 추천드립니다. 그렇고 그런 사이."
+            )
+        )
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "신나는 아침이구먼. 여러분들 뭔가 이거 듣고 다들 구매하신 초식 다"
+            )
+        )
+
+    def test_is_stt_garbage_still_rejects_strong_commercial_words(self):
+        self.assertTrue(
+            TranslationPolicy.is_stt_garbage("사이트 들어가보세요 구매 클릭 방문")
+        )
+        self.assertTrue(
+            TranslationPolicy.is_stt_garbage("자막 제공 및 광고를 포함하고 있습니다.")
+        )
+
+    def test_is_stt_garbage_allows_single_short_english_acronym(self):
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "제가 며칠 전에 KFC에 들렀는데 우연찮게 제 첫 길보드가 나오는 게 아니겠습니까?"
+            )
+        )
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "어제 LCK 미드자이라도 나왔었음. 결과가 안 좋았지만 모친이라는 다른 말."
+            )
+        )
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "아 지금 타이밍 좋긴 한데 돌아가 볼게 아니아니아니 힐링 RPG 중입니다."
+            )
+        )
+
+    def test_is_stt_garbage_still_rejects_many_short_english_fragments(self):
+        self.assertTrue(
+            TranslationPolicy.is_stt_garbage("ABC DEF GHI 같은 이상한 한국어 조각")
+        )
+
     # ---- max_translate_chars (#6) ----
 
     def test_rejection_reason_returns_too_long_for_oversized_input(self):

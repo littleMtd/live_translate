@@ -65,6 +65,9 @@ SENTENCE_INCOMPLETE_ENDINGS = tuple(
     )
 )
 
+# Historical full keyword list kept for compatibility/imports. The translation
+# policy uses STT_GARBAGE_STRONG_KEYWORDS for single-keyword rejection so weak
+# terms like "추천" / "구매" do not suppress normal speech by themselves.
 STT_GARBAGE_KEYWORDS = (
     "사이트",
     "들어가보세요",
@@ -72,6 +75,15 @@ STT_GARBAGE_KEYWORDS = (
     "추천",
     "광고",
     "구매",
+    "클릭",
+    "방문",
+)
+
+STT_GARBAGE_STRONG_KEYWORDS = (
+    "사이트",
+    "들어가보세요",
+    "약사님께",
+    "광고",
     "클릭",
     "방문",
 )

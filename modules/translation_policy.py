@@ -8,7 +8,7 @@ from utils.text_heuristics import (
     ENGLISH_WORD_RE,
     KOREAN_CHAR_RE,
     STT_FRAGMENTED_MARKERS,
-    STT_GARBAGE_KEYWORDS,
+    STT_GARBAGE_STRONG_KEYWORDS,
     STT_INSIGNIFICANT_RE,
     STT_TEMPLATE_CONDITIONAL_PHRASES,
     STT_TEMPLATE_HARD_PHRASES,
@@ -108,7 +108,11 @@ class TranslationPolicy:
             )
             return True
 
-        if any(keyword in text for keyword in STT_GARBAGE_KEYWORDS) and '?' not in text and '!' not in text:
+        if (
+            any(keyword in text for keyword in STT_GARBAGE_STRONG_KEYWORDS)
+            and '?' not in text
+            and '!' not in text
+        ):
             log.debug("STT garbage detected: commercial keywords in '%s'", text[:50])
             return True
 
@@ -117,7 +121,7 @@ class TranslationPolicy:
 
         if has_korean and has_english:
             english_words = ENGLISH_WORD_RE.findall(text)
-            if all(len(word) < 4 for word in english_words):
+            if len(english_words) >= 3 and all(len(word) < 4 for word in english_words):
                 log.debug("STT garbage detected: random english mixed with korean in '%s'", text[:50])
                 return True
 
