@@ -148,3 +148,91 @@ def test_latency_percentiles_p50_p95_p99(tmp_path):
     assert latency["p99"] == 100  # int(100*0.99)=99 → ordered[99] = 100
     # avg / max preserved alongside new keys
     assert "avg" in latency and "max" in latency
+
+
+def test_run_summaries_group_by_run_id_with_labels(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    labels_path = tmp_path / "run_labels.json"
+    labels_path.write_text(
+        json.dumps(
+            {
+                "run-a": {
+                    "label": "commute_radio_control",
+                    "note": "same streamer, low-confusion control",
+                },
+                "run-b": "singing_stress",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-a", created_at="2026-05-14T00:00:00+00:00", latency_ms=10),
+            _translation_event(run_id="run-a", created_at="2026-05-14T00:00:03+00:00", status="filtered", filter_reason="stt_garbage", latency_ms=0, target_text=""),
+            _translation_event(run_id="run-b", created_at="2026-05-14T00:01:00+00:00", latency_ms=30),
+        ],
+    )
+
+    report = analyze_runtime_events(path, labels_path=labels_path)
+
+    runs = {run["run_id"]: run for run in report["runs"]}
+    assert set(runs) == {"run-a", "run-b"}
+    assert runs["run-a"]["label"] == "commute_radio_control"
+    assert runs["run-a"]["note"] == "same streamer, low-confusion control"
+    assert runs["run-a"]["translation_events"] == 2
+    assert runs["run-a"]["duration_sec"] == 3
+    assert runs["run-a"]["status_breakdown"] == {
+        "total": 2,
+        "success": 1,
+        "filtered": 1,
+        "failed": 0,
+        "other": 0,
+    }
+    assert runs["run-b"]["label"] == "singing_stress"
+
+
+def test_run_summaries_include_success_latency_and_template_hits(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-template",
+                status="success",
+                latency_ms=100,
+                source_text="시청해주셔서 감사합니다.",
+                target_text="感謝收看。",
+            ),
+            _translation_event(
+                run_id="run-template",
+                status="filtered",
+                filter_reason="stt_template_garbage",
+                latency_ms=0,
+                source_text="구독과 좋아요는 저에게 큰 힘이 됩니다.",
+                target_text="",
+            ),
+            _translation_event(
+                run_id="run-template",
+                status="success",
+                latency_ms=300,
+                source_text="안녕하세요",
+                target_text="你好",
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path, top_n=5)
+    run = report["runs"][0]
+
+    assert run["success_latency_ms"]["count"] == 2
+    assert run["success_latency_ms"]["avg"] == 200
+    assert run["template_hits"]["total"] == 2
+    assert {"value": "success", "count": 1} in run["template_hits"]["by_status"]
+    assert {"value": "filtered", "count": 1} in run["template_hits"]["by_status"]
+    assert run["template_hits"]["by_filter_reason"] == [
+        {"value": "stt_template_garbage", "count": 1}
+    ]
+    assert len(run["template_success_samples"]) == 1
+    assert run["template_success_samples"][0]["source_text"] == "시청해주셔서 감사합니다."
