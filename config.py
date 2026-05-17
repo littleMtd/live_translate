@@ -104,7 +104,9 @@ class _Translation:
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    engine_chain:   tuple        = ("claude", "gemini", "google_translate")
+    # Empty by default: live_engine="nvidia" should stay NVIDIA-only and must
+    # not spend paid fallback APIs unless explicitly configured.
+    engine_chain:   tuple        = ()
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -136,7 +138,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "hades_chxxnnx"
+    streamer_profile: str        = "stellive_hina"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20

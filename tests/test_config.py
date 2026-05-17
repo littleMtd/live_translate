@@ -27,11 +27,11 @@ class TestConfig(unittest.TestCase):
                            cfg.splitter.min_wait_seconds)
 
     def test_translation_engine_chain_valid(self):
-        known = {"gemini", "claude", "google_translate", "deepseek", "deepl"}
+        from config import _VALID_ENGINE_NAMES
+
         self.assertIsInstance(cfg.translation.engine_chain, tuple)
-        self.assertGreater(len(cfg.translation.engine_chain), 0)
         for name in cfg.translation.engine_chain:
-            self.assertIn(name, known)
+            self.assertIn(name, _VALID_ENGINE_NAMES)
 
     def test_streamer_profile_ids_match_registry(self):
         from config import _VALID_STREAMER_PROFILES
