@@ -82,6 +82,9 @@ class TestConfig(unittest.TestCase):
     def test_stt_profile_glossary_flag_is_bool(self):
         self.assertIsInstance(cfg.stt.use_profile_glossary, bool)
 
+    def test_nvidia_live_model_uses_benchmarked_fast_qwen(self):
+        self.assertEqual(cfg.nvidia.model, "qwen/qwen3-next-80b-a3b-instruct")
+
     def test_evolve_every_positive(self):
         self.assertGreater(cfg.translation.evolve_every, 0)
 

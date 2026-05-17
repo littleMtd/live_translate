@@ -201,7 +201,7 @@ class _Ollama:
 @dataclass(frozen=True)
 class _Nvidia:
     # Model name from build.nvidia.com — click any model → "API" tab for exact name
-    model:   str = "qwen/qwen3.5-122b-a10b"
+    model:   str = "qwen/qwen3-next-80b-a3b-instruct"
     timeout: int = 60
 
 
