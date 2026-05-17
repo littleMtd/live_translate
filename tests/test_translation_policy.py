@@ -207,3 +207,69 @@ class TestTranslationPolicy(unittest.TestCase):
             self.assertEqual(
                 policy.rejection_reason(sample), "stt_garbage", msg=sample
             )
+
+
+class TestSttTemplateFragmentSanitizer(unittest.TestCase):
+    def test_strip_leading_conditional_template(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "시청해주셔서 감사합니다. 엄청나게 그렇잖아."
+            ),
+            "엄청나게 그렇잖아.",
+        )
+
+    def test_strip_trailing_conditional_template(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "글씨는 영어시스템을 사용하여 사용하였습니다. 시청해주셔서 감사합니다."
+            ),
+            "글씨는 영어시스템을 사용하여 사용하였습니다.",
+        )
+
+    def test_strip_leading_subscribe_template(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "구독과 좋아요는 저에게 아주 큰 힘이 됩니다. 댓글로 남겨주세요!"
+            ),
+            "댓글로 남겨주세요!",
+        )
+
+    def test_strip_repeated_leading_template(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "시청해주셔서 감사합니다. 시청해주셔서 감사합니다. 진짜내용."
+            ),
+            "진짜내용.",
+        )
+
+    def test_strip_internal_template_not_removed(self):
+        text = "우리 채널에 시청해주셔서 감사합니다! 고맙습니다!"
+
+        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), text)
+
+    def test_strip_to_empty_returns_none(self):
+        self.assertIsNone(
+            TranslationPolicy.strip_stt_template_fragments("시청해주셔서 감사합니다.")
+        )
+
+    def test_strip_leaves_no_hangul_returns_none(self):
+        self.assertIsNone(
+            TranslationPolicy.strip_stt_template_fragments("시청해주셔서 감사합니다. ok!")
+        )
+
+    def test_pure_template_still_rejected_by_guard_before_sanitizer(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertEqual(
+            policy.rejection_reason("시청해주셔서 감사합니다."),
+            "stt_template_garbage",
+        )
+
+    def test_sanitized_last_input_prevents_duplicate(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertEqual(
+            policy.prepare_input("시청해주셔서 감사합니다. 진짜 내용입니다."),
+            "진짜 내용입니다.",
+        )
+        self.assertIsNone(policy.prepare_input("진짜 내용입니다."))

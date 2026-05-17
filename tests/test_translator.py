@@ -566,5 +566,49 @@ class TestSttTemplateGarbageGuard(unittest.TestCase):
         self.assertEqual(event["filter_reason"], "stt_template_garbage")
 
 
+class TestSttTemplateFragmentSanitizer(unittest.TestCase):
+    """#9 — boundary template fragments are stripped before translation."""
+
+    _RAW = "시청해주셔서 감사합니다. 엄청나게 그렇잖아."
+    _SANITIZED = "엄청나게 그렇잖아."
+
+    def test_sanitizer_engine_receives_sanitized_text(self):
+        t = _make_translator()
+
+        t.translate_event(self._RAW, incomplete=False)
+
+        self.assertEqual(t._engines[0].translate.call_args.args[0], self._SANITIZED)
+        t._engines[1].translate.assert_not_called()
+
+    def test_sanitizer_db_stores_sanitized_key(self):
+        t = _make_translator()
+        t._record_success = MagicMock()
+
+        t.translate_event(self._RAW, incomplete=False)
+
+        t._record_success.assert_called_once()
+        self.assertEqual(t._record_success.call_args.args[0], self._SANITIZED)
+
+    def test_sanitizer_outcome_source_text_is_original(self):
+        t = _make_translator()
+
+        outcome = t.translate_event(self._RAW, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, self._RAW)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], self._SANITIZED)
+
+    def test_sanitized_to_empty_has_expected_filter_reason(self):
+        t = _make_translator()
+
+        outcome = t.translate_event("시청해주셔서 감사합니다. abcde!", incomplete=False)
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "stt_sanitized_empty")
+        for e in t._engines:
+            e.translate.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

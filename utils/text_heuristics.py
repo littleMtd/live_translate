@@ -122,6 +122,11 @@ STT_TEMPLATE_CONDITIONAL_PHRASES = (
     "구독과 좋아요는 저에게 아주 큰 힘이 됩니다",
 )
 
+# Task #9 — boundary sanitizer. Keep this separate from the conditional guard
+# list so stripping can diverge from rejection rules later if runtime data
+# shows different false-positive behavior.
+STT_TEMPLATE_STRIP_PHRASES = STT_TEMPLATE_CONDITIONAL_PHRASES
+
 # Significant chars = drop whitespace / punctuation / ellipsis so length
 # ratios are not skewed by trailing "." / "!" / "...".
 STT_INSIGNIFICANT_RE = re.compile(r"[\s.,!?~…·、。！？]+")

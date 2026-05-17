@@ -12,6 +12,7 @@ from utils.text_heuristics import (
     STT_INSIGNIFICANT_RE,
     STT_TEMPLATE_CONDITIONAL_PHRASES,
     STT_TEMPLATE_HARD_PHRASES,
+    STT_TEMPLATE_STRIP_PHRASES,
 )
 
 log = get_logger("translation_policy")
@@ -30,9 +31,11 @@ class TranslationPolicy:
         self._min_translate_chars = min_translate_chars
         self._max_translate_chars = max_translate_chars
         self.last_input = last_input
+        self._last_sanitize_rejection = ""
 
     def prepare_input(self, text: str) -> str | None:
         text = text.strip()
+        self._last_sanitize_rejection = ""
         reason = self.rejection_reason(text)
         if reason == "empty":
             return None
@@ -65,7 +68,17 @@ class TranslationPolicy:
             log.debug("Filtering STT garbage: %.40s", text)
             return None
 
-        return text
+        sanitized = self.strip_stt_template_fragments(text)
+        if sanitized is None:
+            self._last_sanitize_rejection = "stt_sanitized_empty"
+            log.debug("Filtering STT template after stripping left no usable text: %.40s", text)
+            return None
+
+        if sanitized != text:
+            log.debug("Sanitized STT template fragment: %.40s -> %.40s", text, sanitized)
+            self.last_input = sanitized
+
+        return sanitized
 
     def rejection_reason(self, text: str) -> str | None:
         text = text.strip()
@@ -202,3 +215,51 @@ class TranslationPolicy:
             return True
 
         return False
+
+    @staticmethod
+    def strip_stt_template_fragments(text: str) -> str | None:
+        normalized = " ".join(text.split())
+        if not normalized:
+            return None
+
+        def _trim_leading_boundary(value: str) -> str:
+            return value.lstrip(" \t\r\n.!?~…。．！？，、")
+
+        def _trim_trailing_boundary(value: str) -> str:
+            return value.rstrip(" \t\r\n.!?~…。．！？，、")
+
+        stripped = normalized
+        changed = False
+
+        while True:
+            next_value = stripped
+            for phrase in STT_TEMPLATE_STRIP_PHRASES:
+                if next_value.startswith(phrase):
+                    next_value = _trim_leading_boundary(next_value[len(phrase):])
+                    break
+            if next_value == stripped:
+                break
+            stripped = next_value
+            changed = True
+
+        while True:
+            trimmed = _trim_trailing_boundary(stripped)
+            next_value = stripped
+            for phrase in STT_TEMPLATE_STRIP_PHRASES:
+                if trimmed.endswith(phrase):
+                    next_value = trimmed[: -len(phrase)].rstrip()
+                    break
+            if next_value == stripped:
+                break
+            stripped = next_value
+            changed = True
+
+        if not changed:
+            return normalized
+
+        stripped = stripped.strip()
+        significant = STT_INSIGNIFICANT_RE.sub("", stripped)
+        if len(significant) < 2 or not KOREAN_CHAR_RE.search(stripped):
+            return None
+
+        return stripped

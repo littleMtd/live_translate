@@ -135,7 +135,8 @@ class Translator:
 
     def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
         raw_text = (text or "").strip()
-        filter_reason = self._policy_state().rejection_reason(raw_text)
+        policy = self._policy_state()
+        filter_reason = policy.rejection_reason(raw_text)
         text = self._prepare_input(text)
         if text is None:
             return TranslationOutcome(
@@ -145,12 +146,12 @@ class Translator:
                 result_source="policy",
                 cache_status="skipped",
                 incomplete=incomplete,
-                filter_reason=filter_reason or "unknown",
+                filter_reason=filter_reason or policy._last_sanitize_rejection or "unknown",
             )
 
         if slang_result := self._translate_slang(text, incomplete):
             return TranslationOutcome(
-                source_text=text,
+                source_text=raw_text,
                 target_text=slang_result,
                 status="success",
                 result_source="slang",
@@ -167,7 +168,7 @@ class Translator:
         if lookup.result:
             engine = self._active_engine()
             return TranslationOutcome(
-                source_text=text,
+                source_text=raw_text,
                 target_text=lookup.result,
                 status="success",
                 result_source=lookup.source,
@@ -183,7 +184,7 @@ class Translator:
         if result:
             self._record_success(text, result, incomplete, prompt_ver)
             return TranslationOutcome(
-                source_text=text,
+                source_text=raw_text,
                 target_text=result,
                 status="success",
                 result_source="api",
@@ -198,7 +199,7 @@ class Translator:
             self._policy_state().reset_last_input()
             self._last_input = ""
         return TranslationOutcome(
-            source_text=text,
+            source_text=raw_text,
             target_text=None,
             status="failed",
             result_source="none",
