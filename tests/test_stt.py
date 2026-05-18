@@ -85,6 +85,7 @@ def _make_engine_sv() -> STTEngine:
     eng._use_groq = False
     eng._consecutive_none = 0
     eng._sv_fallback_counter = 0
+    eng._groq_rate_limited_until = 0.0
     eng._last_transcript = ""
     return eng
 
@@ -166,6 +167,7 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(response_text)
     eng._consecutive_none = 0
     eng._sv_fallback_counter = 0
+    eng._groq_rate_limited_until = 0.0
     eng._last_transcript = ""
     return eng
 
@@ -220,6 +222,20 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_args.kwargs["status"], "failed")
         self.assertEqual(emit.call_args.kwargs["reason"], "rate_limited")
         self.assertTrue(emit.call_args.kwargs["request_sent"])
+        self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
+
+    def test_rate_limit_cooldown_skips_without_request(self):
+        eng = _make_engine_groq()
+        eng._groq_rate_limited_until = time.monotonic() + 60
+
+        with patch("modules.stt.runtime_events.emit") as emit:
+            self.assertIsNone(eng._transcribe_groq(self._audio()))
+
+        eng._groq_client.audio.transcriptions.create.assert_not_called()
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.kwargs["status"], "skipped")
+        self.assertEqual(emit.call_args.kwargs["reason"], "rate_limit_cooldown")
+        self.assertFalse(emit.call_args.kwargs["request_sent"])
 
     def test_below_volume_emits_skipped_without_request(self):
         eng = _make_engine_groq()

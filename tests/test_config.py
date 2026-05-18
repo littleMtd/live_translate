@@ -93,6 +93,7 @@ class TestConfig(unittest.TestCase):
     def test_groq_stt_fails_fast_for_live_subtitles(self):
         self.assertEqual(cfg.stt.groq_max_retries, 0)
         self.assertLessEqual(cfg.stt.groq_timeout, 10)
+        self.assertGreaterEqual(cfg.stt.groq_rate_limit_cooldown_sec, 30)
 
     def test_nvidia_live_model_uses_benchmarked_fast_qwen(self):
         self.assertEqual(cfg.nvidia.model, "qwen/qwen3-next-80b-a3b-instruct")

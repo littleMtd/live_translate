@@ -75,6 +75,7 @@ class STTEngine:
         self._use_groq = (cfg.stt.primary_engine == "groq")
         self._consecutive_none = 0
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
+        self._groq_rate_limited_until = 0.0
         self._last_transcript: str = ""
         if self._use_groq:
             self._init_groq()
@@ -206,6 +207,17 @@ class STTEngine:
                 request_sent=False,
             )
             return None
+        if started < self._groq_rate_limited_until:
+            remaining = round(self._groq_rate_limited_until - started, 2)
+            log.debug("Groq STT skipped during rate-limit cooldown (%.2fs left)", remaining)
+            self._emit_stt_runtime_event(
+                audio=audio,
+                started=started,
+                status="skipped",
+                reason="rate_limit_cooldown",
+                request_sent=False,
+            )
+            return None
         if _rms(audio) < cfg.audio.volume_threshold:
             log.debug("Groq STT skipped: audio below volume threshold")
             self._emit_stt_runtime_event(
@@ -307,6 +319,10 @@ class STTEngine:
             if _is_groq_rate_limit_error(e):
                 log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
                 reason = "rate_limited"
+                self._groq_rate_limited_until = time.monotonic() + max(
+                    0.0,
+                    cfg.stt.groq_rate_limit_cooldown_sec,
+                )
             else:
                 log.error("Groq STT error: %s", e)
                 reason = "error"
