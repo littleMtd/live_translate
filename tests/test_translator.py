@@ -475,7 +475,7 @@ class TestTranslateOptimizations(unittest.TestCase):
         t._engines[0].translate.return_value = "（無法理解的STT亂碼，無明確語義）"
         t._record_success = MagicMock()
 
-        outcome = t.translate_event("도도리코 소라에 타받세 도개가 사라지게 된 날")
+        outcome = t.translate_event("오늘 방송 진짜 재미있었어요")
 
         self.assertEqual(outcome.status, "filtered")
         self.assertEqual(outcome.result_source, "post_policy")
@@ -486,14 +486,15 @@ class TestTranslateOptimizations(unittest.TestCase):
     def test_cached_meta_garbage_output_is_filtered(self):
         t = _make_translator()
         prompt_ver = t._get_prompt_version_hash()
+        source = "오늘 방송 진짜 재미있었어요"
         t._memory.cache_store(
-            "도도리코 소라에 타받세 도개가 사라지게 된 날",
+            source,
             False,
             "（無法理解的STT亂碼，無明確語義）",
             prompt_ver,
         )
 
-        outcome = t.translate_event("도도리코 소라에 타받세 도개가 사라지게 된 날")
+        outcome = t.translate_event(source)
 
         self.assertEqual(outcome.status, "filtered")
         self.assertEqual(outcome.result_source, "post_policy")
@@ -675,6 +676,31 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다."
         )
         sanitized = "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고"
+
+        outcome = t.translate_event(raw, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, raw)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+
+
+class TestSttLowValueFragmentGuard(unittest.TestCase):
+    def test_low_value_fragment_skips_engine_call(self):
+        t = _make_translator()
+
+        outcome = t.translate_event("도도리코 소라에 타받세 도개가 사라지게 된 날", incomplete=False)
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "stt_low_value_fragment")
+        self.assertIsNone(outcome.target_text)
+        for e in t._engines:
+            e.translate.assert_not_called()
+
+    def test_low_value_tail_engine_receives_sanitized_text(self):
+        t = _make_translator()
+        raw = "그걸 직접 만들 수 있다고? 너무 기대돼 망간부 바카스탕 골라요"
+        sanitized = "그걸 직접 만들 수 있다고? 너무 기대돼"
 
         outcome = t.translate_event(raw, incomplete=False)
 

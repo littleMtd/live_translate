@@ -312,3 +312,43 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             policy.prepare_input("시청해주셔서 감사합니다. 시청해주셔서 감사합니다. 팻으로 넣어드려요? 몬스터!"),
             "팻으로 넣어드려요? 몬스터!",
         )
+
+
+class TestSttLowValueFragmentGuard(unittest.TestCase):
+    def test_pure_low_value_fragment_is_rejected_without_last_input_update(self):
+        policy = TranslationPolicy(slang={})
+        text = "도도리코 소라에 타받세 도개가 사라지게 된 날"
+
+        self.assertEqual(policy.rejection_reason(text), "stt_low_value_fragment")
+        self.assertIsNone(policy.prepare_input(text))
+        self.assertEqual(policy.last_input, "")
+
+    def test_low_value_song_tail_is_stripped_when_prefix_is_useful(self):
+        policy = TranslationPolicy(slang={})
+        text = "그걸 직접 만들 수 있다고? 너무 기대돼 망간부 바카스탕 골라요"
+
+        self.assertEqual(
+            policy.prepare_input(text),
+            "그걸 직접 만들 수 있다고? 너무 기대돼",
+        )
+
+    def test_low_value_status_tail_is_stripped_when_prefix_is_useful(self):
+        policy = TranslationPolicy(slang={})
+        text = "잘 돼가시나요? 잘 돼가시나요 여러분? 저 오지키 움직이는 오지키 망간부 띵띵이가 움직인다"
+
+        self.assertEqual(
+            policy.prepare_input(text),
+            "잘 돼가시나요? 잘 돼가시나요 여러분? 저",
+        )
+
+    def test_normal_song_request_is_not_rejected(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertIsNone(
+            policy.rejection_reason("락 락 락 한 번 락 락 락 좋긴 해. 락 하나 넣는 거 좋긴 해. 뭐 있을까?")
+        )
+
+    def test_single_unknown_title_like_fragment_is_not_rejected(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertIsNone(policy.rejection_reason("매직 카펠라이드? 이렇게 멋진 파란 나를"))

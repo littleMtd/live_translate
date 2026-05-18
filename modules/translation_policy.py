@@ -11,6 +11,8 @@ from utils.text_heuristics import (
     STT_FRAGMENTED_MARKERS,
     STT_GARBAGE_STRONG_KEYWORDS,
     STT_INSIGNIFICANT_RE,
+    STT_LOW_VALUE_CONTEXT_MARKERS,
+    STT_LOW_VALUE_FRAGMENT_MARKERS,
     STT_TEMPLATE_CONDITIONAL_PHRASES,
     STT_TEMPLATE_HARD_PHRASES,
     STT_TEMPLATE_STRIP_PHRASES,
@@ -66,6 +68,16 @@ class TranslationPolicy:
         if reason == "stt_template_garbage":
             log.debug("Filtering STT template hallucination: %.40s", text)
             return None
+
+        if reason == "stt_low_value_fragment":
+            sanitized = self.strip_stt_low_value_fragments(text)
+            if sanitized and sanitized != text and self.rejection_reason(sanitized) is None:
+                log.debug("Rescued low-value STT fragment tail: %.40s -> %.40s", text, sanitized)
+                self.last_input = sanitized
+                return sanitized
+            log.debug("Filtering low-value STT fragment: %.40s", text)
+            return None
+
         self.last_input = text
 
         if reason == "too_short":
@@ -102,6 +114,8 @@ class TranslationPolicy:
             return "stt_garbage"
         if self.is_stt_template_garbage(text):
             return "stt_template_garbage"
+        if self.is_stt_low_value_fragment(text):
+            return "stt_low_value_fragment"
         return None
 
     def reset_last_input(self) -> None:
@@ -225,6 +239,10 @@ class TranslationPolicy:
         return False
 
     @staticmethod
+    def is_stt_low_value_fragment(text: str) -> bool:
+        return TranslationPolicy.strip_stt_low_value_fragments(text) != " ".join(text.split())
+
+    @staticmethod
     def strip_stt_template_fragments(text: str) -> str | None:
         normalized = " ".join(text.split())
         if not normalized:
@@ -278,6 +296,33 @@ class TranslationPolicy:
             return None
 
         return stripped
+
+    @staticmethod
+    def strip_stt_low_value_fragments(text: str) -> str | None:
+        normalized = " ".join(text.split())
+        if not normalized:
+            return None
+
+        marker_indexes = [
+            index
+            for marker in STT_LOW_VALUE_FRAGMENT_MARKERS
+            if (index := normalized.find(marker)) >= 0
+        ]
+        if not marker_indexes:
+            return normalized
+
+        distinct_marker_count = len(marker_indexes)
+        has_context = any(marker in normalized for marker in STT_LOW_VALUE_CONTEXT_MARKERS)
+        starts_with_marker = min(marker_indexes) <= 1
+        if distinct_marker_count < 2 and not (starts_with_marker or has_context):
+            return normalized
+
+        start = min(marker_indexes)
+        prefix = normalized[:start].rstrip(" \t\r\n.!?~…。．！？，、")
+        significant = STT_INSIGNIFICANT_RE.sub("", prefix)
+        if len(significant) >= 6 and KOREAN_CHAR_RE.search(prefix):
+            return prefix
+        return None
 
     @staticmethod
     def _strip_trailing_hard_template_suffix(text: str) -> str | None:

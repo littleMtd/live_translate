@@ -137,6 +137,7 @@ def test_by_filter_reason_aggregation(tmp_path):
             _translation_event(status="filtered", filter_reason="too_long",   target_text=""),
             _translation_event(status="filtered", filter_reason="too_short",  target_text=""),
             _translation_event(status="filtered", filter_reason="duplicate",  target_text=""),
+            _translation_event(status="filtered", filter_reason="stt_low_value_fragment", target_text=""),
             _translation_event(status="success"),  # no filter_reason → excluded from this aggregation
         ],
     )
@@ -144,7 +145,12 @@ def test_by_filter_reason_aggregation(tmp_path):
     report = analyze_runtime_events(path)
 
     reasons = {item["value"]: item["count"] for item in report["by_filter_reason"]}
-    assert reasons == {"too_long": 2, "too_short": 1, "duplicate": 1}
+    assert reasons == {
+        "too_long": 2,
+        "too_short": 1,
+        "duplicate": 1,
+        "stt_low_value_fragment": 1,
+    }
 
 
 def test_status_breakdown_separates_denominators(tmp_path):
