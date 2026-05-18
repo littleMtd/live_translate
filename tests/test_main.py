@@ -22,6 +22,29 @@ for _mod in ("sounddevice", "soundfile", "funasr", "groq", "anthropic"):
 from modules.pipeline_events import SentenceEvent
 
 
+def test_validate_config_accepts_nvidia_backend_without_engine_chain(monkeypatch):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "fake-key")
+
+    main_module._validate_config(stt_only=False)
+
+
+def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "")
+
+    try:
+        main_module._validate_config(stt_only=False)
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
+
+
 def _wait_until(predicate, timeout: float, interval: float = 0.02) -> bool:
     """Poll `predicate` until it returns truthy or the deadline elapses.
 

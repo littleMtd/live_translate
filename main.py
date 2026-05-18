@@ -36,12 +36,27 @@ _KEY_FOR_ENGINE = {
     "google_translate": lambda: cfg.keys.google_translate,
     "deepseek":         lambda: cfg.keys.deepseek,
     "deepl":            lambda: cfg.keys.deepl,
+    "nvidia":           lambda: cfg.keys.nvidia,
+    "ollama":           lambda: True,
 }
+
+
+def _selected_translation_backend() -> str:
+    if cfg.translation.translation_mode == "clip":
+        return cfg.clip_engine
+    return cfg.live_engine
 
 
 def _validate_config(stt_only: bool):
     if stt_only:
         return
+    backend = _selected_translation_backend()
+    if backend != "anthropic":
+        if not _KEY_FOR_ENGINE.get(backend, lambda: True)():
+            log.error("Startup error: no API key set for translation backend %r", backend)
+            sys.exit(1)
+        return
+
     available = [name for name in cfg.translation.engine_chain
                  if _KEY_FOR_ENGINE.get(name, lambda: True)()]
     if not available:
