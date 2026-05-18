@@ -119,6 +119,29 @@ STT_LOW_VALUE_CONTEXT_MARKERS = (
     "티어스",
 )
 
+STT_SONG_FRAGMENT_MARKERS = (
+    "랄라",
+    "라라",
+    "따라라",
+    "따단",
+    "띵시렁",
+    "쓰읍",
+    "아아",
+    "아아아",
+    "우와아",
+)
+
+STT_SONG_CONTEXT_MARKERS = (
+    "노래",
+    "부르고",
+    "불러",
+    "1절",
+    "2절",
+    "락",
+    "가사",
+    "제목",
+)
+
 # Task #8 — STT template hallucination guard.
 # These are YouTube / 自媒體 boilerplate that Groq/Whisper fabricate on
 # low-confidence audio. They are NOT translator hallucinations.

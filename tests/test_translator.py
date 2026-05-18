@@ -721,5 +721,22 @@ class TestSttLowValueFragmentGuard(unittest.TestCase):
         self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
 
 
+class TestSttSongFragmentGuard(unittest.TestCase):
+    def test_song_fragment_skips_engine_call(self):
+        t = _make_translator()
+
+        outcome = t.translate_event(
+            "쓰읍... 락이라면서 띵시렁띵시렁 흐흐흐 나는 아름다운 남의 날개를",
+            incomplete=False,
+        )
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "stt_song_fragment")
+        self.assertIsNone(outcome.target_text)
+        for e in t._engines:
+            e.translate.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

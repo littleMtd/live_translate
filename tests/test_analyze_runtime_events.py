@@ -138,6 +138,7 @@ def test_by_filter_reason_aggregation(tmp_path):
             _translation_event(status="filtered", filter_reason="too_short",  target_text=""),
             _translation_event(status="filtered", filter_reason="duplicate",  target_text=""),
             _translation_event(status="filtered", filter_reason="stt_low_value_fragment", target_text=""),
+            _translation_event(status="filtered", filter_reason="stt_song_fragment", target_text=""),
             _translation_event(status="success"),  # no filter_reason → excluded from this aggregation
         ],
     )
@@ -150,6 +151,7 @@ def test_by_filter_reason_aggregation(tmp_path):
         "too_short": 1,
         "duplicate": 1,
         "stt_low_value_fragment": 1,
+        "stt_song_fragment": 1,
     }
 
 

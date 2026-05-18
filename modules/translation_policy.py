@@ -13,12 +13,21 @@ from utils.text_heuristics import (
     STT_INSIGNIFICANT_RE,
     STT_LOW_VALUE_CONTEXT_MARKERS,
     STT_LOW_VALUE_FRAGMENT_MARKERS,
+    STT_SONG_CONTEXT_MARKERS,
+    STT_SONG_FRAGMENT_MARKERS,
     STT_TEMPLATE_CONDITIONAL_PHRASES,
     STT_TEMPLATE_HARD_PHRASES,
     STT_TEMPLATE_STRIP_PHRASES,
 )
 
 log = get_logger("translation_policy")
+
+
+def _word_counts(words: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for word in words:
+        counts[word] = counts.get(word, 0) + 1
+    return counts
 
 
 class TranslationPolicy:
@@ -69,6 +78,10 @@ class TranslationPolicy:
             log.debug("Filtering STT template hallucination: %.40s", text)
             return None
 
+        if reason == "stt_song_fragment":
+            log.debug("Filtering STT song/lyrics fragment: %.40s", text)
+            return None
+
         if reason == "stt_low_value_fragment":
             sanitized = self.strip_stt_low_value_fragments(text)
             if sanitized and sanitized != text and self.rejection_reason(sanitized) is None:
@@ -114,6 +127,8 @@ class TranslationPolicy:
             return "stt_garbage"
         if self.is_stt_template_garbage(text):
             return "stt_template_garbage"
+        if self.is_stt_song_fragment(text):
+            return "stt_song_fragment"
         if self.is_stt_low_value_fragment(text):
             return "stt_low_value_fragment"
         return None
@@ -130,9 +145,7 @@ class TranslationPolicy:
         if len(words) < 3:
             return False
 
-        word_count = {}
-        for word in words:
-            word_count[word] = word_count.get(word, 0) + 1
+        word_count = _word_counts(words)
 
         repeat_ratio = max(word_count.values()) / len(words) if words else 0
         if repeat_ratio > 0.6:
@@ -233,6 +246,39 @@ class TranslationPolicy:
                 remaining_significant_chars,
                 template_ratio,
                 normalized,
+            )
+            return True
+
+        return False
+
+    @staticmethod
+    def is_stt_song_fragment(text: str) -> bool:
+        normalized = " ".join(text.split())
+        if not normalized:
+            return False
+
+        words = normalized.split()
+        if len(words) < 4:
+            return False
+
+        marker_hits = sum(normalized.count(marker) for marker in STT_SONG_FRAGMENT_MARKERS)
+        has_song_context = any(marker in normalized for marker in STT_SONG_CONTEXT_MARKERS)
+        repeated_short_words = sum(
+            count
+            for word, count in _word_counts(words).items()
+            if count >= 2 and len(STT_INSIGNIFICANT_RE.sub("", word)) <= 3
+        )
+        punctuation_count = sum(normalized.count(mark) for mark in ("~", "…", "..."))
+
+        if marker_hits >= 2 and (has_song_context or repeated_short_words >= 3):
+            log.debug("STT song fragment detected: markers=%d text='%s'", marker_hits, normalized[:50])
+            return True
+
+        if has_song_context and repeated_short_words >= 5 and punctuation_count >= 1:
+            log.debug(
+                "STT song fragment detected: repeated_short=%d text='%s'",
+                repeated_short_words,
+                normalized[:50],
             )
             return True
 

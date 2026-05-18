@@ -352,3 +352,31 @@ class TestSttLowValueFragmentGuard(unittest.TestCase):
         policy = TranslationPolicy(slang={})
 
         self.assertIsNone(policy.rejection_reason("매직 카펠라이드? 이렇게 멋진 파란 나를"))
+
+
+class TestSttSongFragmentGuard(unittest.TestCase):
+    def test_song_like_repeated_vocables_are_rejected(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertEqual(
+            policy.rejection_reason("아아... 마음이... 21, 25? 라라 라라 노래 제목이 조금 이상한데?"),
+            "stt_song_fragment",
+        )
+
+    def test_lyrics_fragment_with_song_context_is_rejected(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertEqual(
+            policy.rejection_reason("쓰읍... 락이라면서 띵시렁띵시렁 흐흐흐 나는 아름다운 남의 날개를"),
+            "stt_song_fragment",
+        )
+
+    def test_clear_singing_comment_is_not_rejected(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertIsNone(policy.rejection_reason("오늘 노래 진짜 잘 불렀어요"))
+
+    def test_normal_excited_repetition_is_not_song_fragment(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertIsNone(policy.rejection_reason("아 진짜 진짜 너무 재밌었어요 여러분"))
