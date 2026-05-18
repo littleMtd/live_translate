@@ -85,6 +85,48 @@ def _translation_event(**overrides):
     return base
 
 
+def _stt_event(**overrides):
+    base = {
+        "event_type": "stt",
+        "run_id": "run-x",
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "engine": "groq",
+        "model": "whisper-large-v3",
+        "status": "success",
+        "reason": "",
+        "request_sent": True,
+        "audio_seconds": 4.0,
+        "latency_ms": 250,
+        "text_len": 12,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-a"),
+            _stt_event(run_id="run-a", status="success", request_sent=True, audio_seconds=4, latency_ms=250),
+            _stt_event(run_id="run-a", status="failed", reason="rate_limited", request_sent=True, audio_seconds=5, latency_ms=20),
+            _stt_event(run_id="run-a", status="skipped", reason="below_volume_threshold", request_sent=False, audio_seconds=3, latency_ms=1),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+
+    assert report["stt_events"] == 3
+    assert report["stt_summary"]["total"] == 3
+    assert report["stt_summary"]["requests_sent"] == 2
+    assert report["stt_summary"]["audio_seconds_total"] == 12
+    assert report["stt_summary"]["audio_seconds_sent"] == 9
+    assert {"value": "rate_limited", "count": 1} in report["stt_summary"]["by_reason"]
+    assert {"value": "below_volume_threshold", "count": 1} in report["stt_summary"]["by_reason"]
+    assert report["runs"][0]["stt"]["requests_sent"] == 2
+
+
 def test_empty_target_summary_groups_by_source_and_reason(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(

@@ -178,8 +178,14 @@ class TestTranscribeGroq(unittest.TestCase):
 
     def test_returns_transcribed_text(self):
         eng = _make_engine_groq("안녕하세요")
-        result = eng._transcribe_groq(self._audio())
+        with patch("modules.stt.runtime_events.emit") as emit:
+            result = eng._transcribe_groq(self._audio())
         self.assertEqual(result, "안녕하세요")
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.args[0], "stt")
+        self.assertEqual(emit.call_args.kwargs["status"], "success")
+        self.assertTrue(emit.call_args.kwargs["request_sent"])
+        self.assertEqual(emit.call_args.kwargs["text_len"], 5)
 
     def test_returns_none_for_empty_response(self):
         eng = _make_engine_groq("")
@@ -205,9 +211,27 @@ class TestTranscribeGroq(unittest.TestCase):
         eng._groq_client.audio.transcriptions.create.side_effect = RateLimitError()
 
         with self.assertLogs("stt", level="WARNING") as cm:
-            self.assertIsNone(eng._transcribe_groq(self._audio()))
+            with patch("modules.stt.runtime_events.emit") as emit:
+                self.assertIsNone(eng._transcribe_groq(self._audio()))
 
         self.assertTrue(any("rate limited" in line for line in cm.output))
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.args[0], "stt")
+        self.assertEqual(emit.call_args.kwargs["status"], "failed")
+        self.assertEqual(emit.call_args.kwargs["reason"], "rate_limited")
+        self.assertTrue(emit.call_args.kwargs["request_sent"])
+
+    def test_below_volume_emits_skipped_without_request(self):
+        eng = _make_engine_groq()
+
+        with patch("modules.stt.runtime_events.emit") as emit:
+            self.assertIsNone(eng._transcribe_groq(np.zeros(16000, dtype=np.float32)))
+
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.kwargs["status"], "skipped")
+        self.assertEqual(emit.call_args.kwargs["reason"], "below_volume_threshold")
+        self.assertFalse(emit.call_args.kwargs["request_sent"])
+        eng._groq_client.audio.transcriptions.create.assert_not_called()
 
     def test_returns_none_when_groq_client_is_none(self):
         eng = _make_engine_groq()

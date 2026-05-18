@@ -37,6 +37,7 @@ def analyze_runtime_events(
 
     events = list(_read_events(event_path))
     translation_events = [event for event in events if event.get("event_type") == "translation"]
+    stt_events = [event for event in events if event.get("event_type") == "stt"]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -54,6 +55,7 @@ def analyze_runtime_events(
         "available": True,
         "total_events": len(events),
         "translation_events": len(translation_events),
+        "stt_events": len(stt_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
         "status_breakdown": _status_breakdown(translation_events),
@@ -69,8 +71,9 @@ def analyze_runtime_events(
             {"flag": flag, "count": count}
             for flag, count in quality_flags.most_common()
         ],
+        "stt_summary": _stt_summary(stt_events),
         "latency_ms": _latency_summary(latencies),
-        "runs": _run_summaries(translation_events, labels, top_n),
+        "runs": _run_summaries(translation_events, stt_events, labels, top_n),
         "latest": _latest_samples(translation_events, top_n),
         "flagged_samples": _flagged_samples(translation_events, top_n),
         "empty_targets": _empty_target_summary(translation_events, top_n),
@@ -126,12 +129,16 @@ def load_run_labels(path: Path | None = None) -> dict[str, dict[str, str]]:
 
 def _run_summaries(
     events: list[dict[str, Any]],
+    stt_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
     top_n: int,
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         grouped.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
+    grouped_stt: dict[str, list[dict[str, Any]]] = {}
+    for event in stt_events:
+        grouped_stt.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
 
     summaries = []
     for run_id, run_events in grouped.items():
@@ -170,6 +177,7 @@ def _run_summaries(
                         if (latency := _float_or_none(event.get("latency_ms"))) is not None
                     ]
                 ),
+                "stt": _stt_summary(grouped_stt.get(run_id, [])),
                 "success_latency_ms": _latency_summary(
                     [
                         latency
@@ -302,6 +310,32 @@ def _empty_target_summary(events: list[dict[str, Any]], top_n: int) -> dict[str,
     }
 
 
+def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    request_events = [event for event in events if bool(event.get("request_sent"))]
+    return {
+        "total": len(events),
+        "requests_sent": len(request_events),
+        "audio_seconds_total": round(
+            sum(_float_or_none(event.get("audio_seconds")) or 0 for event in events),
+            3,
+        ),
+        "audio_seconds_sent": round(
+            sum(_float_or_none(event.get("audio_seconds")) or 0 for event in request_events),
+            3,
+        ),
+        "by_status": _count_by(events, "status"),
+        "by_reason": _count_by([event for event in events if event.get("reason")], "reason"),
+        "by_engine": _count_by(events, "engine"),
+        "latency_ms": _latency_summary(
+            [
+                latency
+                for event in events
+                if (latency := _float_or_none(event.get("latency_ms"))) is not None
+            ]
+        ),
+    }
+
+
 def _sample(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "created_at": event.get("created_at"),
@@ -327,11 +361,22 @@ def _print_report(report: dict[str, Any]) -> None:
         return
 
     print(f"Runtime events: {report['event_path']}")
-    print(f"Events: {report['total_events']} | Translations: {report['translation_events']}")
+    print(
+        f"Events: {report['total_events']} | "
+        f"Translations: {report['translation_events']} | "
+        f"STT: {report['stt_events']}"
+    )
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(f"Status breakdown: {report['status_breakdown']}")
     print(f"Latency ms: {report['latency_ms']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
+    print(
+        "STT summary: "
+        f"requests={report['stt_summary']['requests_sent']} | "
+        f"audio_sent={report['stt_summary']['audio_seconds_sent']}s | "
+        f"status={report['stt_summary']['by_status']} | "
+        f"reasons={report['stt_summary']['by_reason']}"
+    )
     if report.get("runs"):
         print("\nRuns:")
         for run in report["runs"]:
@@ -341,6 +386,7 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"{run['translation_events']} events, "
                 f"{run['duration_sec']}s, "
                 f"status={run['status_breakdown']}, "
+                f"stt={run['stt']['by_status']}, "
                 f"success_latency={run['success_latency_ms']}, "
                 f"template_hits={run['template_hits']['total']}"
             )

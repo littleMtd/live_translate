@@ -11,6 +11,7 @@ from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
+from utils.runtime_events import runtime_events
 from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
 from modules.pipeline_events import TranscriptionEvent
 from modules.streamer_profiles import build_stt_glossary
@@ -18,6 +19,7 @@ from modules.stt_policy import (
     build_groq_prompt,
     is_hallucinated,
     normalize_prompt_text,
+    segment_stats,
     should_reject_language,
     should_reject_segments,
 )
@@ -47,6 +49,23 @@ def _is_hallucinated(text: str) -> bool:
 
 def _normalize_prompt_text(text: str, max_chars: int | None = None) -> str:
     return normalize_prompt_text(text, max_chars)
+
+
+def _audio_seconds(audio: np.ndarray) -> float:
+    return round(len(audio) / max(1, cfg.audio.sample_rate), 3)
+
+
+def _segment_rejection_reason(segments: list[dict]) -> tuple[str, float | None, float | None]:
+    stats = segment_stats(segments)
+    if stats is None:
+        return "segments", None, None
+    if stats.no_speech > cfg.stt.no_speech_threshold:
+        return "no_speech_prob", stats.logprob, stats.no_speech
+    if stats.logprob < cfg.stt.avg_logprob_threshold:
+        return "avg_logprob", stats.logprob, stats.no_speech
+    if stats.compression_ratio > 2.4:
+        return "compression_ratio", stats.logprob, stats.no_speech
+    return "segments", stats.logprob, stats.no_speech
 
 
 class STTEngine:
@@ -177,11 +196,27 @@ class STTEngine:
             return None
 
     def _transcribe_groq(self, audio: np.ndarray) -> str | None:
+        started = time.monotonic()
         if self._groq_client is None:
+            self._emit_stt_runtime_event(
+                audio=audio,
+                started=started,
+                status="skipped",
+                reason="no_client",
+                request_sent=False,
+            )
             return None
         if _rms(audio) < cfg.audio.volume_threshold:
             log.debug("Groq STT skipped: audio below volume threshold")
+            self._emit_stt_runtime_event(
+                audio=audio,
+                started=started,
+                status="skipped",
+                reason="below_volume_threshold",
+                request_sent=False,
+            )
             return None
+        request_sent = False
         try:
             buf = io.BytesIO()
             sf.write(buf, audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
@@ -189,6 +224,7 @@ class STTEngine:
             buf.name = "audio.wav"
             dynamic_prompt = self._build_groq_prompt()
 
+            request_sent = True
             resp = self._groq_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
                 file=buf,
@@ -200,32 +236,87 @@ class STTEngine:
 
             # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
             detected_lang = getattr(resp, "language", None)
-            if should_reject_language(detected_lang, getattr(resp, "text", "") or "", log):
+            text = (getattr(resp, "text", "") or "").strip()
+            if should_reject_language(detected_lang, text, log):
+                self._emit_stt_runtime_event(
+                    audio=audio,
+                    started=started,
+                    status="filtered",
+                    reason="language",
+                    request_sent=request_sent,
+                    text=text,
+                )
                 return None
 
             # Confidence filtering via segment metadata
             segments = getattr(resp, "segments", None) or []
             if should_reject_segments(
                 segments,
-                text=getattr(resp, "text", "") or "",
+                text=text,
                 no_speech_threshold=cfg.stt.no_speech_threshold,
                 avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
                 logger=log,
             ):
+                reason, avg_logprob, no_speech_prob = _segment_rejection_reason(segments)
+                self._emit_stt_runtime_event(
+                    audio=audio,
+                    started=started,
+                    status="filtered",
+                    reason=reason,
+                    request_sent=request_sent,
+                    text=text,
+                    avg_logprob=avg_logprob,
+                    no_speech_prob=no_speech_prob,
+                )
                 return None
 
-            text = (getattr(resp, "text", "") or "").strip()
             if not text:
+                self._emit_stt_runtime_event(
+                    audio=audio,
+                    started=started,
+                    status="filtered",
+                    reason="empty",
+                    request_sent=request_sent,
+                    text=text,
+                )
                 return None
             if _is_hallucinated(text):
+                self._emit_stt_runtime_event(
+                    audio=audio,
+                    started=started,
+                    status="filtered",
+                    reason="hallucinated",
+                    request_sent=request_sent,
+                    text=text,
+                )
                 return None
             log.debug("Groq: %s", text)
+            stats = segment_stats(segments)
+            self._emit_stt_runtime_event(
+                audio=audio,
+                started=started,
+                status="success",
+                reason="",
+                request_sent=request_sent,
+                text=text,
+                avg_logprob=stats.logprob if stats else None,
+                no_speech_prob=stats.no_speech if stats else None,
+            )
             return text
         except Exception as e:
             if _is_groq_rate_limit_error(e):
                 log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
+                reason = "rate_limited"
             else:
                 log.error("Groq STT error: %s", e)
+                reason = "error"
+            self._emit_stt_runtime_event(
+                audio=audio,
+                started=started,
+                status="failed",
+                reason=reason,
+                request_sent=request_sent,
+            )
             return None
 
     def _build_groq_prompt(self) -> str | None:
@@ -236,6 +327,33 @@ class STTEngine:
             last_transcript=self._last_transcript,
             glossary_builder=build_stt_glossary,
             max_context_chars=_GROQ_CONTEXT_CHARS,
+        )
+
+    @staticmethod
+    def _emit_stt_runtime_event(
+        *,
+        audio: np.ndarray,
+        started: float,
+        status: str,
+        reason: str,
+        request_sent: bool,
+        text: str = "",
+        avg_logprob: float | None = None,
+        no_speech_prob: float | None = None,
+    ) -> None:
+        runtime_events.emit(
+            "stt",
+            engine="groq",
+            model=cfg.stt.groq_model,
+            status=status,
+            reason=reason,
+            request_sent=request_sent,
+            audio_seconds=_audio_seconds(audio),
+            latency_ms=round((time.monotonic() - started) * 1000, 2),
+            text_len=len(text or ""),
+            profile_id=cfg.active_streamer_profile,
+            avg_logprob=avg_logprob,
+            no_speech_prob=no_speech_prob,
         )
 
 
