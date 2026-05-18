@@ -73,6 +73,7 @@ def analyze_runtime_events(
         "runs": _run_summaries(translation_events, labels, top_n),
         "latest": _latest_samples(translation_events, top_n),
         "flagged_samples": _flagged_samples(translation_events, top_n),
+        "empty_targets": _empty_target_summary(translation_events, top_n),
     }
 
 
@@ -283,6 +284,24 @@ def _flagged_samples(events: list[dict[str, Any]], top_n: int) -> list[dict[str,
     return [_sample(event) for event in events if event.get("quality_flags")][:top_n]
 
 
+def _empty_target_summary(events: list[dict[str, Any]], top_n: int) -> dict[str, Any]:
+    empty_events = [
+        event
+        for event in events
+        if str(event.get("target_text") or "").strip() == ""
+    ]
+    return {
+        "total": len(empty_events),
+        "by_status": _count_by(empty_events, "status"),
+        "by_result_source": _count_by(empty_events, "result_source"),
+        "by_filter_reason": _count_by(
+            [event for event in empty_events if event.get("filter_reason")],
+            "filter_reason",
+        ),
+        "samples": [_sample(event) for event in empty_events[:top_n]],
+    }
+
+
 def _sample(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "created_at": event.get("created_at"),
@@ -290,6 +309,7 @@ def _sample(event: dict[str, Any]) -> dict[str, Any]:
         "result_source": event.get("result_source"),
         "cache_status": event.get("cache_status"),
         "engine": event.get("engine"),
+        "filter_reason": event.get("filter_reason"),
         "latency_ms": event.get("latency_ms"),
         "quality_flags": event.get("quality_flags", []),
         "source_text": _short(event.get("source_text") or ""),
@@ -311,6 +331,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(f"Status breakdown: {report['status_breakdown']}")
     print(f"Latency ms: {report['latency_ms']}")
+    print(f"Empty targets: {report['empty_targets']['total']}")
     if report.get("runs"):
         print("\nRuns:")
         for run in report["runs"]:

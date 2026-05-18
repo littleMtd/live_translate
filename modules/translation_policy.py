@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from utils.logger import get_logger
@@ -50,6 +51,13 @@ class TranslationPolicy:
         if reason == "too_long":
             log.debug("Skipping: too long (%d chars)", len(text))
             return None
+
+        if reason in {"stt_garbage", "stt_template_garbage"}:
+            sanitized = self.strip_stt_template_fragments(text)
+            if sanitized and sanitized != text and self.rejection_reason(sanitized) is None:
+                log.debug("Rescued STT template-tailed input: %.40s -> %.40s", text, sanitized)
+                self.last_input = sanitized
+                return sanitized
 
         # `stt_template_garbage` runs before `last_input` is updated for the same
         # reason as `too_long`: a fabricated outro/caption template must not poison
@@ -231,6 +239,13 @@ class TranslationPolicy:
         stripped = normalized
         changed = False
 
+        hard_stripped = TranslationPolicy._strip_trailing_hard_template_suffix(stripped)
+        if hard_stripped != stripped:
+            if hard_stripped is None:
+                return None
+            stripped = hard_stripped
+            changed = True
+
         while True:
             next_value = stripped
             for phrase in STT_TEMPLATE_STRIP_PHRASES:
@@ -263,3 +278,38 @@ class TranslationPolicy:
             return None
 
         return stripped
+
+    @staticmethod
+    def _strip_trailing_hard_template_suffix(text: str) -> str | None:
+        hard_phrases = ("한글 자막 제공", *STT_TEMPLATE_HARD_PHRASES)
+        hard_indexes = [
+            index
+            for phrase in hard_phrases
+            if (index := text.find(phrase)) >= 0
+        ]
+        if not hard_indexes:
+            return text
+
+        start = min(hard_indexes)
+        prefix = text[:start].rstrip(" \t\r\n.!?~…。．！？，、")
+        suffix = text[start:]
+        residue = suffix
+        for phrase in hard_phrases:
+            residue = residue.replace(phrase, " ")
+        residue = re.sub(r"[\s.,!?~…。．！？，、]+", "", residue)
+        residue = residue.replace("및", "")
+        residue = residue.replace("은", "")
+        residue = residue.replace("는", "")
+        residue = residue.replace("의", "")
+        residue = residue.replace("를", "")
+        residue = residue.replace("을", "")
+        residue = residue.replace("이", "")
+        residue = residue.replace("가", "")
+        residue = residue.replace("로", "")
+        residue = residue.replace("에서", "")
+
+        if residue:
+            return text
+        if not prefix:
+            return None
+        return prefix

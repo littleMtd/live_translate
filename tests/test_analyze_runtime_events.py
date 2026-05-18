@@ -85,6 +85,48 @@ def _translation_event(**overrides):
     return base
 
 
+def test_empty_target_summary_groups_by_source_and_reason(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                status="filtered",
+                result_source="policy",
+                filter_reason="stt_template_garbage",
+                target_text="",
+            ),
+            _translation_event(
+                status="success",
+                result_source="api",
+                filter_reason="",
+                target_text="   ",
+            ),
+            _translation_event(
+                status="success",
+                result_source="api",
+                target_text="正常翻譯",
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path, top_n=1)
+
+    assert report["empty_targets"]["total"] == 2
+    assert report["empty_targets"]["by_status"] == [
+        {"value": "filtered", "count": 1},
+        {"value": "success", "count": 1},
+    ]
+    assert report["empty_targets"]["by_result_source"] == [
+        {"value": "policy", "count": 1},
+        {"value": "api", "count": 1},
+    ]
+    assert report["empty_targets"]["by_filter_reason"] == [
+        {"value": "stt_template_garbage", "count": 1}
+    ]
+    assert report["empty_targets"]["samples"][0]["filter_reason"] == "stt_template_garbage"
+
+
 def test_by_filter_reason_aggregation(tmp_path):
     """A2: filter_reason distribution surfaces too_long / too_short / etc."""
     path = tmp_path / "runtime_events_20260514.jsonl"

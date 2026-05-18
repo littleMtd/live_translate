@@ -273,3 +273,42 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             "진짜 내용입니다.",
         )
         self.assertIsNone(policy.prepare_input("진짜 내용입니다."))
+
+    def test_strip_trailing_hard_template_keeps_real_prefix(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고. "
+                "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다. "
+                "자막 제공 및 광고를 포함하고 있습니다."
+            ),
+            "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고",
+        )
+
+    def test_prepare_input_rescues_hard_template_tail_before_stt_garbage(self):
+        policy = TranslationPolicy(slang={})
+
+        sanitized = policy.prepare_input(
+            "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고. "
+            "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다."
+        )
+
+        self.assertEqual(
+            sanitized,
+            "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고",
+        )
+        self.assertEqual(policy.last_input, sanitized)
+
+    def test_hard_template_with_real_tail_is_not_stripped(self):
+        policy = TranslationPolicy(slang={})
+        text = "자막 제공 및 광고를 포함하고 있습니다. 좋아 좋아"
+
+        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), text)
+        self.assertIsNone(policy.prepare_input(text))
+
+    def test_repeated_conditional_template_with_real_tail_is_sanitized(self):
+        policy = TranslationPolicy(slang={})
+
+        self.assertEqual(
+            policy.prepare_input("시청해주셔서 감사합니다. 시청해주셔서 감사합니다. 팻으로 넣어드려요? 몬스터!"),
+            "팻으로 넣어드려요? 몬스터!",
+        )

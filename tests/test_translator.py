@@ -609,6 +609,20 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
         for e in t._engines:
             e.translate.assert_not_called()
 
+    def test_hard_template_tail_engine_receives_sanitized_text(self):
+        t = _make_translator()
+        raw = (
+            "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고. "
+            "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다."
+        )
+        sanitized = "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고"
+
+        outcome = t.translate_event(raw, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, raw)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+
 
 if __name__ == "__main__":
     unittest.main()
