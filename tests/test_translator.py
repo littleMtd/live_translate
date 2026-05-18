@@ -523,7 +523,19 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_meta_garbage_detector_matches_explanatory_output(self):
         self.assertTrue(_looks_like_meta_garbage_output("（無法理解的STT亂碼，無明確語義）"))
+        self.assertTrue(_looks_like_meta_garbage_output("（無意義詞，省略）"))
         self.assertFalse(_looks_like_meta_garbage_output("這句我無法理解你的心情。"))
+
+    def test_single_word_explanatory_output_is_filtered(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "（無意義詞，省略）"
+
+        outcome = t.translate_event("글랜스")
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "post_policy")
+        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        self.assertIsNone(outcome.target_text)
 
     def test_cache_hit_on_second_call(self):
         t = _make_translator()

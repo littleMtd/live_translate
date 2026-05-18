@@ -55,6 +55,11 @@ _META_GARBAGE_MARKERS = (
     "STT 垃圾",
     "亂碼",
     "乱码",
+    "無意義詞",
+    "无意义词",
+    "無意義",
+    "无意义",
+    "省略",
 )
 
 _SOURCE_AWARE_TARGET_REPLACEMENTS = (
