@@ -20,7 +20,12 @@ from modules.translation_prompts import (
     get_translation_profile,
     translation_profile_ids,
 )
-from modules.translator import _write_history, Translator
+from modules.translator import (
+    _apply_source_aware_corrections,
+    _looks_like_meta_garbage_output,
+    _write_history,
+    Translator,
+)
 from modules.prompt_evolver import PromptEvolver
 import modules.db as _db_module
 
@@ -464,6 +469,60 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(outcome.filter_reason, "too_short")
         for engine in t._engines:
             engine.translate.assert_not_called()
+
+    def test_meta_garbage_engine_output_is_filtered(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "（無法理解的STT亂碼，無明確語義）"
+        t._record_success = MagicMock()
+
+        outcome = t.translate_event("도도리코 소라에 타받세 도개가 사라지게 된 날")
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "post_policy")
+        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        self.assertIsNone(outcome.target_text)
+        t._record_success.assert_not_called()
+
+    def test_cached_meta_garbage_output_is_filtered(self):
+        t = _make_translator()
+        prompt_ver = t._get_prompt_version_hash()
+        t._memory.cache_store(
+            "도도리코 소라에 타받세 도개가 사라지게 된 날",
+            False,
+            "（無法理解的STT亂碼，無明確語義）",
+            prompt_ver,
+        )
+
+        outcome = t.translate_event("도도리코 소라에 타받세 도개가 사라지게 된 날")
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "post_policy")
+        self.assertEqual(outcome.cache_status, "memory_hit")
+        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        for engine in t._engines:
+            engine.translate.assert_not_called()
+
+    def test_source_aware_corrections_fix_runtime_term_misfires(self):
+        source = (
+            "마가뜨는 게 정확히 말하는 거. 붕 뜨는 시간. 개복치같은 스타일. "
+            "하데스. 끼윤이랑 예난이. 철구형. 갓 신내림 받은 무당이 더 신발 좋은 거 아시죠? 거의 만신이십니다."
+        )
+        result = (
+            "瑪加特才是精確說的。飄起來的時間。鯛魚燒風格。哈迪斯。"
+            "끼윤和藝蘭。鐵球哥。剛受神降的巫女不是更懂鞋嗎？幾乎都滿了，滿了。"
+        )
+
+        corrected = _apply_source_aware_corrections(source, result)
+
+        self.assertEqual(
+            corrected,
+            "冷場才是精確說的。空掉的時間。玻璃心風格。HADES。"
+            "Kkiyun和Yenan。Chulgu哥。剛受神降的巫女不是神力更強嗎？幾乎是大神巫。",
+        )
+
+    def test_meta_garbage_detector_matches_explanatory_output(self):
+        self.assertTrue(_looks_like_meta_garbage_output("（無法理解的STT亂碼，無明確語義）"))
+        self.assertFalse(_looks_like_meta_garbage_output("這句我無法理解你的心情。"))
 
     def test_cache_hit_on_second_call(self):
         t = _make_translator()

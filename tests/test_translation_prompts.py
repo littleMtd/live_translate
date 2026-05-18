@@ -40,6 +40,7 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
 
     assert "[UNK:" not in prompt
     assert "空字串" not in prompt
+    assert "無法理解" not in prompt
 
 
 def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):

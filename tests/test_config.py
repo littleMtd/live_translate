@@ -54,6 +54,14 @@ class TestConfig(unittest.TestCase):
         loaded = _load_default_slang()
         self.assertEqual(dict(loaded), dict(cfg.translation.slang))
 
+    def test_default_slang_contains_runtime_quality_terms(self):
+        self.assertEqual(cfg.translation.slang["마가 뜨다"], "冷場")
+        self.assertEqual(cfg.translation.slang["붕 뜨는 시간"], "空掉的時間")
+        self.assertEqual(cfg.translation.slang["개복치"], "玻璃心")
+        self.assertEqual(cfg.translation.slang["하덱스"], "HADES")
+        self.assertEqual(cfg.translation.slang["예난"], "Yenan")
+        self.assertEqual(cfg.translation.slang["철구"], "Chulgu")
+
     def test_default_slang_is_immutable_mapping(self):
         with self.assertRaises(TypeError):
             cfg.translation.slang["test"] = "value"  # type: ignore[index]

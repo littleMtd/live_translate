@@ -45,6 +45,70 @@ _FALLBACK_PROBE_EVERY = 50  # after this many fallback calls, probe engines[0] o
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
 
 
+_META_GARBAGE_MARKERS = (
+    "無法理解",
+    "无法理解",
+    "無明確語義",
+    "无明确语义",
+    "STT亂碼",
+    "STT乱碼",
+    "STT 垃圾",
+    "亂碼",
+    "乱码",
+)
+
+_SOURCE_AWARE_TARGET_REPLACEMENTS = (
+    (("하데스", "하덱스"), (("哈迪斯", "HADES"), ("哈德克斯", "HADES"))),
+    (("마가 뜨", "마가뜨"), (("瑪加特", "冷場"), ("馬嘎", "冷場"), ("魔嘎", "冷場"))),
+    (("붕 뜨",), (("飄起來的時間", "空掉的時間"), ("浮起來的時間", "空掉的時間"))),
+    (("개복치",), (("鯛魚燒", "玻璃心"), ("翻車魚風格", "玻璃心風格"))),
+    (("끼윤",), (("끼윤", "Kkiyun"),)),
+    (("예난",), (("예난", "Yenan"), ("藝蘭", "Yenan"))),
+    (("키마",), (("基馬", "Kima"),)),
+    (("히나",), (("希娜", "Hina"),)),
+    (("봉준",), (("奉俊", "Bongjun"), ("奉主", "Bongjun"))),
+    (("철구",), (("哲求", "Chulgu"), ("鐵球", "Chulgu"))),
+    (("성태",), (("成泰", "Sungtae"), ("狀態哥", "Sungtae哥"))),
+    (("신빨",), (("更懂鞋", "神力更強"), ("鞋比較好", "神力比較強"))),
+    (
+        ("만신",),
+        (
+            ("幾乎都滿了，滿了", "幾乎是大神巫"),
+            ("都滿了，滿了", "簡直是大神巫"),
+            ("滿了，滿了", "大神巫，大神巫"),
+        ),
+    ),
+)
+
+
+def _looks_like_meta_garbage_output(result: str) -> bool:
+    normalized = result.strip()
+    if not normalized:
+        return False
+    if "STT" in normalized.upper() and any(marker in normalized for marker in _META_GARBAGE_MARKERS):
+        return True
+    if normalized.startswith(("(", "（", "[", "【")) and any(
+        marker in normalized for marker in _META_GARBAGE_MARKERS
+    ):
+        return True
+    return False
+
+
+def _apply_source_aware_corrections(source: str, result: str) -> str:
+    corrected = result
+    for source_terms, replacements in _SOURCE_AWARE_TARGET_REPLACEMENTS:
+        if not any(term in source for term in source_terms):
+            continue
+        for wrong, right in replacements:
+            corrected = corrected.replace(wrong, right)
+
+    if "무당" in source and "신발" in source:
+        corrected = corrected.replace("更懂鞋", "神力更強")
+        corrected = corrected.replace("更懂鞋子", "神力更強")
+
+    return corrected
+
+
 def _looks_untranslated(result: str, source: str) -> bool:
     if result == source:
         return True
@@ -165,11 +229,25 @@ class Translator:
         self._log_prompt_mode_once()
 
         lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver)
+        engine = self._active_engine()
         if lookup.result:
-            engine = self._active_engine()
+            target_text = _apply_source_aware_corrections(text, lookup.result)
+            if _looks_like_meta_garbage_output(target_text):
+                return TranslationOutcome(
+                    source_text=raw_text,
+                    target_text=None,
+                    status="filtered",
+                    result_source="post_policy",
+                    cache_status=lookup.source,
+                    incomplete=incomplete,
+                    filter_reason="meta_garbage_output",
+                    engine=engine.engine_name if engine else "",
+                    model=engine.model_name if engine else "",
+                    prompt_version=prompt_ver,
+                )
             return TranslationOutcome(
                 source_text=raw_text,
-                target_text=lookup.result,
+                target_text=target_text,
                 status="success",
                 result_source=lookup.source,
                 cache_status=lookup.source,
@@ -182,6 +260,21 @@ class Translator:
         result = self._call_with_fallback(text, system_prompt, incomplete, self._memory_state().context())
         engine = self._active_engine()
         if result:
+            result = _apply_source_aware_corrections(text, result)
+            if _looks_like_meta_garbage_output(result):
+                log.debug("Filtering meta garbage translation output: %.40s -> %.40s", text, result)
+                return TranslationOutcome(
+                    source_text=raw_text,
+                    target_text=None,
+                    status="filtered",
+                    result_source="post_policy",
+                    cache_status=lookup.source,
+                    incomplete=incomplete,
+                    engine=engine.engine_name if engine else "",
+                    model=engine.model_name if engine else "",
+                    prompt_version=prompt_ver,
+                    filter_reason="meta_garbage_output",
+                )
             self._record_success(text, result, incomplete, prompt_ver)
             return TranslationOutcome(
                 source_text=raw_text,
