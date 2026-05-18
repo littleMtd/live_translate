@@ -13,6 +13,7 @@ import unittest
 import unittest.mock
 from modules.translation_engines import (
     _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
+    NvidiaEngine,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -319,6 +320,79 @@ class TestGoogleTranslateEngine(unittest.TestCase):
         # Direct-translation engine — system_prompt / incomplete do not affect output
         self.assertEqual(self._call("你好", text="안녕하세요"), "你好")
         self.assertEqual(self._call("你好", text="안녕하세요"), "你好")
+
+
+# ---------------------------------------------------------------------------
+# NvidiaEngine unit tests
+# ---------------------------------------------------------------------------
+
+class TestNvidiaEngine(unittest.TestCase):
+
+    def _engine(self) -> NvidiaEngine:
+        e = NvidiaEngine.__new__(NvidiaEngine)
+        e._api_key = "fake-key"
+        e._model = "qwen/qwen3-next-80b-a3b-instruct"
+        e._timeout = 10
+        e._is_qwen3 = True
+        e._strip_think = True
+        return e
+
+    def _response(self, content: str):
+        import json
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }).encode()
+        return mock_resp
+
+    def test_retries_once_after_empty_response(self):
+        e = self._engine()
+        side_effect = [self._response(""), self._response("你好")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertEqual(result, "你好")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_retries_once_after_network_error(self):
+        import urllib.error
+
+        e = self._engine()
+        side_effect = [urllib.error.URLError("timed out"), self._response("你好")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertEqual(result, "你好")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_does_not_retry_rate_limit(self):
+        import urllib.error
+
+        e = self._engine()
+        error = urllib.error.HTTPError(
+            url="https://integrate.api.nvidia.com/v1/chat/completions",
+            code=429,
+            msg="rate limit",
+            hdrs=None,
+            fp=None,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

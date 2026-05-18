@@ -1,5 +1,6 @@
 import json
 import math
+from datetime import timedelta, timezone
 
 from utils.runtime_events import RuntimeEventWriter, _is_cjk, translation_quality
 
@@ -9,6 +10,7 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
         log_dir=tmp_path,
         run_id="test-run",
         clock=lambda: "2026-05-14T00:00:00+00:00",
+        filename_timezone=timezone.utc,
     )
 
     writer.emit("translation", source_text="안녕하세요", target_text="你好")
@@ -29,12 +31,27 @@ def test_runtime_event_writer_filename_follows_injected_clock(tmp_path):
         log_dir=tmp_path,
         run_id="test-run",
         clock=lambda: "2030-01-02T03:04:05+00:00",
+        filename_timezone=timezone.utc,
     )
 
     writer.emit("translation", source_text="x")
 
     files = sorted(p.name for p in tmp_path.glob("runtime_events_*.jsonl"))
     assert files == ["runtime_events_20300102.jsonl"]
+
+
+def test_runtime_event_writer_filename_can_use_local_date(tmp_path):
+    writer = RuntimeEventWriter(
+        log_dir=tmp_path,
+        run_id="test-run",
+        clock=lambda: "2026-05-18T16:33:55+00:00",
+        filename_timezone=timezone(timedelta(hours=8)),
+    )
+
+    writer.emit("translation", source_text="x")
+
+    files = sorted(p.name for p in tmp_path.glob("runtime_events_*.jsonl"))
+    assert files == ["runtime_events_20260519.jsonl"]
 
 
 def test_runtime_event_writer_normalizes_nonjson_values(tmp_path):
@@ -46,6 +63,7 @@ def test_runtime_event_writer_normalizes_nonjson_values(tmp_path):
         log_dir=tmp_path,
         run_id="run",
         clock=lambda: "2026-05-14T00:00:00+00:00",
+        filename_timezone=timezone.utc,
     )
 
     writer.emit(
@@ -75,6 +93,7 @@ def test_runtime_event_writer_handles_numpy_scalar(tmp_path):
         log_dir=tmp_path,
         run_id="run",
         clock=lambda: "2026-05-14T00:00:00+00:00",
+        filename_timezone=timezone.utc,
     )
 
     writer.emit("translation", avg_logprob=np.float64(-0.25))

@@ -4,7 +4,7 @@ import json
 import math
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -28,18 +28,23 @@ def _default_run_id() -> str:
     return f"{timestamp}-{os.getpid()}"
 
 
-def _date_from_clock(clock_value: str) -> str:
+def _date_from_clock(clock_value: str, filename_timezone: tzinfo | None = None) -> str:
     """Best-effort YYYYMMDD extraction from a clock() return value.
 
-    Accepts ISO-8601 strings (`2026-05-14T...`) and falls back to today's UTC
-    date if the value is unparseable. Keeps tests with injected clocks in
-    control of which JSONL file events are written to.
+    Accepts ISO-8601 strings (`2026-05-14T...`) and converts aware datetimes to
+    the local timezone by default. This keeps runtime_events_YYYYMMDD aligned
+    with translations_YYYYMMDD.txt, which is written with local time.
     """
-    if isinstance(clock_value, str) and len(clock_value) >= 10:
-        head = clock_value[:10]
-        if head[4] == "-" and head[7] == "-":
-            return head.replace("-", "")
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    if isinstance(clock_value, str):
+        try:
+            parsed = datetime.fromisoformat(clock_value.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(filename_timezone)
+            return parsed.strftime("%Y%m%d")
+        except ValueError:
+            pass
+    now = datetime.now(filename_timezone) if filename_timezone is not None else datetime.now()
+    return now.strftime("%Y%m%d")
 
 
 def _normalize_value(value: Any) -> Any:
@@ -76,16 +81,18 @@ class RuntimeEventWriter:
         log_dir: Path = _DEFAULT_LOG_DIR,
         run_id: str | None = None,
         clock=_utc_now_iso,
+        filename_timezone: tzinfo | None = None,
     ):
         self._log_dir = Path(log_dir)
         self.run_id = run_id or _default_run_id()
         self._clock = clock
+        self._filename_timezone = filename_timezone
         self._lock = threading.Lock()
         self._warned = False
 
     @property
     def path(self) -> Path:
-        day = _date_from_clock(self._clock())
+        day = _date_from_clock(self._clock(), self._filename_timezone)
         return self._log_dir / f"runtime_events_{day}.jsonl"
 
     def emit(self, event_type: str, **fields: Any) -> None:

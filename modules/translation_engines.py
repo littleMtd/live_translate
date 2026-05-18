@@ -8,6 +8,8 @@ from utils.logger import get_logger
 log = get_logger("translation_engines")
 
 _GEMINI_HTTP_TIMEOUT_MS = 12000
+_NVIDIA_MAX_ATTEMPTS = 2
+_NVIDIA_RETRY_DELAY_SEC = 0.5
 
 
 def _build_user_message(text: str, incomplete: bool) -> str:
@@ -427,50 +429,66 @@ class NvidiaEngine(TranslationEngine):
             body["chat_template_kwargs"] = {"enable_thinking": False}
         payload = _json.dumps(body).encode()
 
-        req = urllib.request.Request(
-            self._BASE_URL,
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._api_key}",
-            },
-        )
-        try:
-            _t0 = time.monotonic()
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                data = _json.loads(r.read())
-            log.info("Nvidia translate: %.0fms", (time.monotonic() - _t0) * 1000)
-            usage = data.get("usage", {})
-            log.info("Nvidia tokens | prompt=%s output=%s",
-                     usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
-            msg = data["choices"][0]["message"]
-            content = (msg.get("content") or "").strip()
-            if self._strip_think:
-                import re as _re
-                content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
-            log.debug("Nvidia: %.30s → %s", text, content)
-            return content or None
-        except urllib.error.HTTPError as e:
-            body = ""
+        for attempt in range(_NVIDIA_MAX_ATTEMPTS):
+            req = urllib.request.Request(
+                self._BASE_URL,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._api_key}",
+                },
+            )
             try:
-                body = e.read().decode()
-            except Exception:
-                pass
-            if e.code == 401:
-                log.error("Nvidia auth error — NVIDIA_API_KEY 無效或已過期")
-            elif e.code == 404:
-                log.error("Nvidia 模型 %r 不存在 — 請確認 build.nvidia.com 上的模型名稱", self._model)
-            elif e.code == 429:
-                log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
-            else:
-                log.error("Nvidia HTTP %d: %s", e.code, body or e)
-            return None
-        except urllib.error.URLError as e:
-            log.error("Nvidia network error: %s", e)
-            return None
-        except Exception as e:
-            log.error("Nvidia error: %s", e)
-            return None
+                _t0 = time.monotonic()
+                with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                    data = _json.loads(r.read())
+                log.info("Nvidia translate: %.0fms", (time.monotonic() - _t0) * 1000)
+                usage = data.get("usage", {})
+                log.info("Nvidia tokens | prompt=%s output=%s",
+                         usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+                msg = data["choices"][0]["message"]
+                content = (msg.get("content") or "").strip()
+                if self._strip_think:
+                    import re as _re
+                    content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
+                log.debug("Nvidia: %.30s → %s", text, content)
+                if content:
+                    return content
+                if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    log.warning("Nvidia returned empty response; retrying once")
+                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    continue
+                return None
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode()
+                except Exception:
+                    pass
+                if e.code == 401:
+                    log.error("Nvidia auth error — NVIDIA_API_KEY 無效或已過期")
+                elif e.code == 404:
+                    log.error("Nvidia 模型 %r 不存在 — 請確認 build.nvidia.com 上的模型名稱", self._model)
+                elif e.code == 429:
+                    log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
+                else:
+                    log.error("Nvidia HTTP %d: %s", e.code, body or e)
+                return None
+            except urllib.error.URLError as e:
+                if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    log.warning("Nvidia network error; retrying once: %s", e)
+                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    continue
+                log.error("Nvidia network error: %s", e)
+                return None
+            except Exception as e:
+                if classify_error(e) == "network" and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    log.warning("Nvidia transient error; retrying once: %s", e)
+                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    continue
+                log.error("Nvidia error: %s", e)
+                return None
+        return None
 
 
 def _make_engine(name: str) -> "TranslationEngine | None":
