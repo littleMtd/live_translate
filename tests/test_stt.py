@@ -20,7 +20,13 @@ except ImportError:
     if "numpy" not in sys.modules:
         sys.modules["numpy"] = MagicMock()
 
-from modules.stt import _NOISE_TAGS, _TAG_RE, STTEngine, _CONSECUTIVE_NONE_WARN, _SENSEVOICE_PROBE_EVERY
+from modules.stt import (
+    _CONSECUTIVE_NONE_WARN,
+    _NOISE_TAGS,
+    _SENSEVOICE_PROBE_EVERY,
+    _TAG_RE,
+    STTEngine,
+)
 from modules.pipeline_events import TranscriptionEvent
 
 
@@ -188,10 +194,43 @@ class TestTranscribeGroq(unittest.TestCase):
         eng._groq_client.audio.transcriptions.create.side_effect = Exception("rate limit")
         self.assertIsNone(eng._transcribe_groq(self._audio()))
 
+    def test_rate_limit_exception_warns_and_returns_none(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+            def __str__(self):
+                return "Error code: 429 - rate_limit_exceeded"
+
+        eng = _make_engine_groq()
+        eng._groq_client.audio.transcriptions.create.side_effect = RateLimitError()
+
+        with self.assertLogs("stt", level="WARNING") as cm:
+            self.assertIsNone(eng._transcribe_groq(self._audio()))
+
+        self.assertTrue(any("rate limited" in line for line in cm.output))
+
     def test_returns_none_when_groq_client_is_none(self):
         eng = _make_engine_groq()
         eng._groq_client = None
         self.assertIsNone(eng._transcribe_groq(self._audio()))
+
+    def test_init_groq_uses_fail_fast_client_options(self):
+        eng = STTEngine.__new__(STTEngine)
+        eng._groq_client = None
+
+        with patch("modules.stt.cfg") as mock_cfg, patch("groq.Groq") as groq_ctor:
+            mock_cfg.keys.groq = "test-key"
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.groq_timeout = 10.0
+            mock_cfg.stt.groq_max_retries = 0
+
+            eng._init_groq()
+
+        groq_ctor.assert_called_once_with(
+            api_key="test-key",
+            max_retries=0,
+            timeout=10.0,
+        )
 
 
 # ---------------------------------------------------------------------------

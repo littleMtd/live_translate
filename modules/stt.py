@@ -32,6 +32,15 @@ _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe Sense
 _GROQ_CONTEXT_CHARS = 120
 
 
+def _is_groq_rate_limit_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    body = getattr(exc, "body", None)
+    message = f"{exc} {body}".lower()
+    return "rate_limit_exceeded" in message
+
+
 def _is_hallucinated(text: str) -> bool:
     return is_hallucinated(text, cfg.stt.max_japanese_chars, log)
 
@@ -78,8 +87,17 @@ class STTEngine:
             return
         try:
             from groq import Groq
-            self._groq_client = Groq(api_key=cfg.keys.groq)
-            log.info("Groq whisper-large-v3 ready as STT fallback")
+            self._groq_client = Groq(
+                api_key=cfg.keys.groq,
+                max_retries=cfg.stt.groq_max_retries,
+                timeout=cfg.stt.groq_timeout,
+            )
+            log.info(
+                "Groq %s ready as STT fallback (timeout=%ss, max_retries=%s)",
+                cfg.stt.groq_model,
+                cfg.stt.groq_timeout,
+                cfg.stt.groq_max_retries,
+            )
         except Exception as e:
             log.error("Failed to init Groq client: %s", e)
 
@@ -204,7 +222,10 @@ class STTEngine:
             log.debug("Groq: %s", text)
             return text
         except Exception as e:
-            log.error("Groq STT error: %s", e)
+            if _is_groq_rate_limit_error(e):
+                log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
+            else:
+                log.error("Groq STT error: %s", e)
             return None
 
     def _build_groq_prompt(self) -> str | None:
