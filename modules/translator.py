@@ -2,6 +2,7 @@ import hashlib
 import queue
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +42,9 @@ _LOG_DIR.mkdir(exist_ok=True)
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
 _CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
 _FALLBACK_PROBE_EVERY = 50  # after this many fallback calls, probe engines[0] once
+_TRANSLATION_WORKERS = 2
+_MAX_PENDING_TRANSLATIONS = 4
+_TRANSLATION_LOOP_POLL_SEC = 0.05
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
 
@@ -176,6 +180,14 @@ class TranslationOutcome:
             **metadata,
             **translation_quality(self.source_text, self.target_text),
         }
+
+
+@dataclass(frozen=True)
+class _CompletedTranslation:
+    seq: int
+    outcome: TranslationOutcome
+    elapsed: float
+    metadata: dict
 
 
 class Translator:
@@ -408,22 +420,58 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
     def run():
-        translator = Translator()
+        worker_state = threading.local()
+        executor = ThreadPoolExecutor(
+            max_workers=_TRANSLATION_WORKERS,
+            thread_name_prefix="TranslationWorker",
+        )
+        pending: dict[int, Future[_CompletedTranslation]] = {}
+        completed: dict[int, _CompletedTranslation] = {}
+        next_seq = 0
+        next_emit_seq = 0
         last_result = ""
         last_result_time = 0.0
-        while not stop_event.is_set():
-            has_item, item = poll_queue(sentence_queue, stop_event, pause_event)
-            if not has_item:
-                continue
 
+        def translate_item(seq: int, item) -> _CompletedTranslation:
             text = sentence_text(item)
             incomplete = sentence_incomplete(item)
             metadata = sentence_metadata(item)
             started = time.monotonic()
-            outcome = translator.translate_event(text, incomplete)
+            worker_translator = getattr(worker_state, "translator", None)
+            if worker_translator is None:
+                worker_translator = Translator()
+                worker_state.translator = worker_translator
+            try:
+                outcome = worker_translator.translate_event(text, incomplete)
+            except Exception:
+                log.exception("Translation worker failed for: %.40s", text)
+                outcome = TranslationOutcome(
+                    source_text=(text or "").strip(),
+                    target_text=None,
+                    status="failed",
+                    result_source="none",
+                    cache_status="skipped",
+                    incomplete=incomplete,
+                )
             elapsed = time.monotonic() - started
+            return _CompletedTranslation(seq, outcome, elapsed, metadata)
+
+        def collect_finished() -> None:
+            for seq, future in list(pending.items()):
+                if not future.done():
+                    continue
+                pending.pop(seq)
+                try:
+                    completed[seq] = future.result()
+                except Exception:
+                    log.exception("Translation future failed")
+
+        def emit_completed(item: _CompletedTranslation) -> None:
+            nonlocal last_result, last_result_time
+            outcome = item.outcome
+            elapsed = item.elapsed
             metrics.observe_latency("translation", elapsed)
-            event_fields = outcome.as_event_fields(elapsed * 1000, metadata)
+            event_fields = outcome.as_event_fields(elapsed * 1000, item.metadata)
             result = outcome.target_text
             if result:
                 metrics.increment("translation.success")
@@ -436,7 +484,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         subtitle_emitted=False,
                         subtitle_suppressed_reason="duplicate",
                     )
-                    continue
+                    return
                 last_result = result
                 last_result_time = now
                 put_latest(subtitle_queue, result, log, "subtitle_queue")
@@ -456,7 +504,29 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 )
             metrics.log_summary_if_due()
 
-        log.info("Translator stopped")
+        try:
+            while not stop_event.is_set():
+                collect_finished()
+                while next_emit_seq in completed:
+                    emit_completed(completed.pop(next_emit_seq))
+                    next_emit_seq += 1
+
+                if len(pending) >= _MAX_PENDING_TRANSLATIONS:
+                    stop_event.wait(_TRANSLATION_LOOP_POLL_SEC)
+                    continue
+
+                has_item, item = poll_queue(
+                    sentence_queue,
+                    stop_event,
+                    pause_event,
+                    timeout=_TRANSLATION_LOOP_POLL_SEC,
+                )
+                if has_item:
+                    pending[next_seq] = executor.submit(translate_item, next_seq, item)
+                    next_seq += 1
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+            log.info("Translator stopped")
 
     return start_daemon_thread("Translator", run)
 

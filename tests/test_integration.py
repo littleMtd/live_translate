@@ -22,6 +22,7 @@ if "sounddevice" not in sys.modules:
 
 import modules.sentence_splitter as sentence_splitter
 import modules.translator as translator
+from modules.translator import TranslationOutcome
 from contextlib import contextmanager
 from config import cfg
 
@@ -129,6 +130,49 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["target_text"], "你好")
         self.assertTrue(kwargs["subtitle_emitted"])
         self.assertEqual(kwargs["stt_engine"], "groq")
+
+    def test_translator_workers_translate_ahead_but_emit_in_order(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        slow_started = threading.Event()
+        release_slow = threading.Event()
+        fast_finished = threading.Event()
+
+        class _FakeTranslator:
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                if text == "slow":
+                    slow_started.set()
+                    release_slow.wait(timeout=3)
+                if text == "fast":
+                    fast_finished.set()
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"zh-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                )
+
+        with patch("modules.translator.Translator", _FakeTranslator), \
+                patch("modules.translator.runtime_events"):
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "slow", "incomplete": False})
+            sentence_q.put({"text": "fast", "incomplete": False})
+
+            self.assertTrue(slow_started.wait(timeout=2))
+            self.assertTrue(fast_finished.wait(timeout=2))
+            self.assertTrue(subtitle_q.empty(), "fast result must not emit before slow result")
+
+            release_slow.set()
+            first = subtitle_q.get(timeout=3)
+            second = subtitle_q.get(timeout=3)
+            stop.set()
+            t.join(timeout=2)
+
+        self.assertEqual(first, "zh-slow")
+        self.assertEqual(second, "zh-fast")
 
     def test_stop_event_exits_cleanly(self):
         sentence_q = queue.Queue()
