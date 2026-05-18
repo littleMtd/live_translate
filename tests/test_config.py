@@ -85,6 +85,9 @@ class TestConfig(unittest.TestCase):
     def test_nvidia_live_model_uses_benchmarked_fast_qwen(self):
         self.assertEqual(cfg.nvidia.model, "qwen/qwen3-next-80b-a3b-instruct")
 
+    def test_nvidia_timeout_fails_fast_for_live_subtitles(self):
+        self.assertLessEqual(cfg.nvidia.timeout, 10)
+
     def test_evolve_every_positive(self):
         self.assertGreater(cfg.translation.evolve_every, 0)
 
