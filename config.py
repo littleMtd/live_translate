@@ -51,6 +51,7 @@ class _STT:
     groq_timeout:           float = 10.0
     groq_max_retries:       int   = 0
     groq_rate_limit_cooldown_sec: float = 60.0
+    groq_daily_request_limit: int = 2000
     use_profile_glossary:   bool  = True
     batch_size_s:           int   = 60
     queue_maxsize:          int   = 20

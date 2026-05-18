@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from config import cfg
 from utils.text_heuristics import STT_TEMPLATE_CONDITIONAL_PHRASES, STT_TEMPLATE_HARD_PHRASES
 
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
@@ -312,9 +313,11 @@ def _empty_target_summary(events: list[dict[str, Any]], top_n: int) -> dict[str,
 
 def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     request_events = [event for event in events if bool(event.get("request_sent"))]
+    requests_sent = len(request_events)
     return {
         "total": len(events),
-        "requests_sent": len(request_events),
+        "requests_sent": requests_sent,
+        "request_budget": _request_budget(requests_sent),
         "audio_seconds_total": round(
             sum(_float_or_none(event.get("audio_seconds")) or 0 for event in events),
             3,
@@ -333,6 +336,18 @@ def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if (latency := _float_or_none(event.get("latency_ms"))) is not None
             ]
         ),
+    }
+
+
+def _request_budget(requests_sent: int) -> dict[str, float | int]:
+    limit = max(0, int(getattr(cfg.stt, "groq_daily_request_limit", 0) or 0))
+    remaining = max(0, limit - requests_sent) if limit else 0
+    used_ratio = round(requests_sent / limit, 3) if limit else 0.0
+    return {
+        "limit": limit,
+        "used": requests_sent,
+        "remaining": remaining,
+        "used_ratio": used_ratio,
     }
 
 
@@ -373,6 +388,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(
         "STT summary: "
         f"requests={report['stt_summary']['requests_sent']} | "
+        f"budget={report['stt_summary']['request_budget']} | "
         f"audio_sent={report['stt_summary']['audio_seconds_sent']}s | "
         f"status={report['stt_summary']['by_status']} | "
         f"reasons={report['stt_summary']['by_reason']}"

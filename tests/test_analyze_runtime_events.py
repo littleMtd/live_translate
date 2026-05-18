@@ -120,6 +120,9 @@ def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
     assert report["stt_events"] == 3
     assert report["stt_summary"]["total"] == 3
     assert report["stt_summary"]["requests_sent"] == 2
+    assert report["stt_summary"]["request_budget"]["limit"] >= 2000
+    assert report["stt_summary"]["request_budget"]["used"] == 2
+    assert report["stt_summary"]["request_budget"]["remaining"] >= 1998
     assert report["stt_summary"]["audio_seconds_total"] == 12
     assert report["stt_summary"]["audio_seconds_sent"] == 9
     assert {"value": "rate_limited", "count": 1} in report["stt_summary"]["by_reason"]
