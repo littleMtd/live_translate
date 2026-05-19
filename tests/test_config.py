@@ -62,6 +62,29 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.translation.slang["예난"], "Yenan")
         self.assertEqual(cfg.translation.slang["철구"], "Chulgu")
 
+    def test_default_slang_contains_global_glossary_terms(self):
+        self.assertEqual(cfg.translation.slang["마크"], "Minecraft")
+        self.assertEqual(cfg.translation.slang["섭주"], "服主")
+        self.assertEqual(cfg.translation.slang["섭쥬"], "服主")
+        self.assertEqual(cfg.translation.slang["썹주"], "服主")
+        self.assertEqual(cfg.translation.slang["SUBJU"], "服主")
+        self.assertEqual(cfg.translation.slang["섭쥬방"], "服主房")
+
+    def test_default_slang_removes_conflicting_bare_person_names(self):
+        for key in ("키마", "봉준", "성태", "히나"):
+            self.assertNotIn(key, cfg.translation.slang)
+
+        self.assertEqual(cfg.translation.slang["시라유키 히나"], "Shirayuki Hina")
+        self.assertEqual(cfg.translation.slang["아야츠노 유니"], "Ayatsuno Yuni")
+
+    def test_default_slang_glossary_values_are_direct_outputs(self):
+        explanatory_fragments = ("遊戲", "人名", "마인크래프트", "Server Owner")
+        for key in ("마크", "섭주", "섭쥬", "썹주", "SUBJU", "섭쥬방"):
+            value = cfg.translation.slang[key]
+            self.assertNotEqual(value.strip(), "")
+            for fragment in explanatory_fragments:
+                self.assertNotIn(fragment, value)
+
     def test_default_slang_is_immutable_mapping(self):
         with self.assertRaises(TypeError):
             cfg.translation.slang["test"] = "value"  # type: ignore[index]

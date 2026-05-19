@@ -1,5 +1,6 @@
 import unittest
 
+from config import cfg
 from modules.translation_policy import TranslationPolicy
 
 
@@ -33,6 +34,14 @@ class TestTranslationPolicy(unittest.TestCase):
 
         self.assertEqual(policy.slang_result("ㄱㄱ"), "走吧")
         self.assertIsNone(policy.slang_result("없음"))
+
+    def test_slang_result_uses_exact_match_for_global_glossary(self):
+        policy = TranslationPolicy(slang=cfg.translation.slang)
+
+        self.assertEqual(policy.slang_result("마크"), "Minecraft")
+        self.assertEqual(policy.slang_result("섭주"), "服主")
+        self.assertEqual(policy.slang_result("섭쥬방"), "服主房")
+        self.assertIsNone(policy.slang_result("마크 서버"))
 
     def test_is_stt_garbage_detects_repetition(self):
         self.assertTrue(TranslationPolicy.is_stt_garbage("하하 하하 하하 정상"))

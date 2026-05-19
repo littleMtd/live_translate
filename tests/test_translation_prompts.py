@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "598997a8df154bd76aa6aecc15e5d4a93ff12aa3985744bd0da859e8e206d2de"
+_TRANSLATION_PROFILE_DATA_HASH = "d0a7502ca98e352fc85718ddfd4b17b9601e41f5139a9643f92dff7d011cdb42"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -41,6 +41,40 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
     assert "[UNK:" not in prompt
     assert "空字串" not in prompt
     assert "無法理解" not in prompt
+
+
+def test_hades_translation_profiles_contain_glossary_mappings():
+    required_terms = (
+        "Chxxnnx",
+        "Sompunch",
+        "Yeon Chorok",
+        "Singgyul",
+        "Kyma",
+        "Kim Bongjun",
+        "KimSungtae",
+        "Minecraft",
+        "服主",
+        "服主房",
+    )
+
+    for qwen in (False, True):
+        profile = get_translation_profile("hades_chxxnnx", qwen=qwen)
+        for term in required_terms:
+            assert term in profile
+
+
+def test_isegye_translation_profiles_contain_official_romanization():
+    for qwen in (False, True):
+        profile = get_translation_profile("isegye_lilpa", qwen=qwen)
+        assert "Gosegu" in profile
+        assert "Jururu" in profile
+        assert "Lilpa" in profile
+
+
+def test_stellive_translation_profiles_contain_official_romanization():
+    for qwen in (False, True):
+        profile = get_translation_profile("stellive_hina", qwen=qwen)
+        assert "Shirayuki Hina" in profile
 
 
 def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):

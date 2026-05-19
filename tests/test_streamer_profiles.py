@@ -85,3 +85,18 @@ def test_build_stt_glossary_deduplicates_loaded_terms(tmp_path):
 
     assert unique_terms == ["shared", "common", "specific"]
     assert "Prefer exact spellings" in build_stt_glossary("stellive_hina")
+
+
+def test_hades_stt_glossary_contains_profile_glossary_terms():
+    glossary = build_stt_glossary("hades_chxxnnx")
+
+    for term in ("챈나", "키마", "마크", "섭주"):
+        assert term in glossary
+
+
+def test_stt_glossary_keeps_hades_terms_profile_bound():
+    general_glossary = build_stt_glossary("")
+    isegye_glossary = build_stt_glossary("isegye_lilpa")
+
+    assert "챈나" not in general_glossary
+    assert "챈나" not in isegye_glossary
