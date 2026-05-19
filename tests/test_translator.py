@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 import unittest.mock
+import modules.translator as translator_module
 from modules.translation_engines import (
     _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
     NvidiaEngine, get_last_engine_diagnostics,
@@ -25,6 +26,7 @@ from modules.translator import (
     _apply_source_aware_corrections,
     _looks_like_meta_garbage_output,
     _write_history,
+    TranslationOutcome,
     Translator,
 )
 from modules.prompt_evolver import PromptEvolver
@@ -447,6 +449,89 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
         )
+
+
+class TestRuntimeRetryAttribution(unittest.TestCase):
+    def _emit_outcome_with_stale_nvidia_diagnostics(self, outcome: TranslationOutcome) -> dict:
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        class _FakeTranslator:
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                return outcome
+
+        stale_diagnostics = {
+            "engine": "nvidia",
+            "retry_count": 1,
+            "retry_reason": "timeout",
+        }
+        with patch.object(translator_module, "Translator", _FakeTranslator), \
+                patch.object(translator_module, "get_last_engine_diagnostics", return_value=stale_diagnostics), \
+                patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": outcome.source_text, "incomplete": outcome.incomplete})
+            if outcome.target_text:
+                self.assertEqual(subtitle_q.get(timeout=3), outcome.target_text)
+            deadline = time.monotonic() + 3
+            while not events.emit.called and time.monotonic() < deadline:
+                stop.wait(0.005)
+            stop.set()
+            thread.join(timeout=2)
+
+        events.emit.assert_called_once()
+        return events.emit.call_args.kwargs
+
+    def test_memory_hit_ignores_stale_nvidia_retry_diagnostics(self):
+        event = self._emit_outcome_with_stale_nvidia_diagnostics(
+            TranslationOutcome(
+                source_text="안녕하세요",
+                target_text="你好",
+                status="success",
+                result_source="memory_hit",
+                cache_status="memory_hit",
+                incomplete=False,
+                engine="nvidia",
+                model="nvidia-test",
+            )
+        )
+
+        self.assertEqual(event["retry_count"], 0)
+        self.assertEqual(event["retry_reason"], "")
+
+    def test_slang_hit_ignores_stale_nvidia_retry_diagnostics(self):
+        event = self._emit_outcome_with_stale_nvidia_diagnostics(
+            TranslationOutcome(
+                source_text="ㅋㅋㅋ",
+                target_text="哈哈哈",
+                status="success",
+                result_source="slang",
+                cache_status="skipped",
+                incomplete=False,
+                engine="nvidia",
+                model="nvidia-test",
+            )
+        )
+
+        self.assertEqual(event["retry_count"], 0)
+        self.assertEqual(event["retry_reason"], "")
+
+    def test_api_result_keeps_nvidia_retry_diagnostics(self):
+        event = self._emit_outcome_with_stale_nvidia_diagnostics(
+            TranslationOutcome(
+                source_text="안녕하세요",
+                target_text="你好",
+                status="success",
+                result_source="api",
+                cache_status="miss",
+                incomplete=False,
+                engine="nvidia",
+                model="nvidia-test",
+            )
+        )
+
+        self.assertEqual(event["retry_count"], 1)
+        self.assertEqual(event["retry_reason"], "timeout")
 
 
 # ---------------------------------------------------------------------------

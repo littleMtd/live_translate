@@ -503,7 +503,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             diagnostics = get_last_engine_diagnostics()
             retry_count = 0
             retry_reason = ""
-            if outcome.engine == "nvidia" and diagnostics.get("engine") == "nvidia":
+            if (
+                outcome.result_source == "api"
+                and outcome.engine == "nvidia"
+                and diagnostics.get("engine") == "nvidia"
+            ):
                 retry_count = int(diagnostics.get("retry_count") or 0)
                 retry_reason = str(diagnostics.get("retry_reason") or "")
             return _CompletedTranslation(
