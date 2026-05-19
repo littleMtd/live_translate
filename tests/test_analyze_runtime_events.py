@@ -245,6 +245,49 @@ def test_latency_percentiles_p50_p95_p99(tmp_path):
     assert "avg" in latency and "max" in latency
 
 
+def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                engine_latency_ms=100,
+                queue_wait_ms=0,
+                output_delay_ms=120,
+                predecessor_stall_ms=20,
+                retry_count=1,
+                retry_reason="timeout",
+                starts_with_dependency_marker=True,
+                dependency_marker="그래서",
+            ),
+            _translation_event(
+                engine_latency_ms=200,
+                queue_wait_ms=50,
+                output_delay_ms=260,
+                predecessor_stall_ms=10,
+                retry_count=0,
+                retry_reason="",
+                starts_with_dependency_marker=False,
+                dependency_marker="",
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+
+    assert report["queue_latency_ms"]["engine_latency_ms"]["count"] == 2
+    assert report["queue_latency_ms"]["queue_wait_ms"]["max"] == 50
+    assert report["queue_latency_ms"]["output_delay_ms"]["p95"] == 260
+    assert report["queue_latency_ms"]["predecessor_stall_ms"]["p50"] == 20
+    assert report["retry_summary"]["retry_events"] == 1
+    assert report["retry_summary"]["retry_rate"] == 0.5
+    assert report["retry_summary"]["by_retry_reason"] == [{"value": "timeout", "count": 1}]
+    assert report["dependency_markers"]["marker_events"] == 1
+    assert report["dependency_markers"]["marker_ratio"] == 0.5
+    assert report["dependency_markers"]["by_marker"] == [{"value": "그래서", "count": 1}]
+    assert any("poll-gap" in note for note in report["analyzer_output_notes"])
+
+
 def test_run_summaries_group_by_run_id_with_labels(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     labels_path = tmp_path / "run_labels.json"
@@ -286,6 +329,53 @@ def test_run_summaries_group_by_run_id_with_labels(tmp_path):
         "other": 0,
     }
     assert runs["run-b"]["label"] == "singing_stress"
+
+
+def test_run_summaries_include_queue_observability_breakdown(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-a",
+                engine_latency_ms=10,
+                queue_wait_ms=0,
+                output_delay_ms=12,
+                predecessor_stall_ms=2,
+                retry_count=1,
+                retry_reason="network",
+                starts_with_dependency_marker=True,
+                dependency_marker="근데",
+            ),
+            _translation_event(
+                run_id="run-a",
+                engine_latency_ms=30,
+                queue_wait_ms=20,
+                output_delay_ms=70,
+                predecessor_stall_ms=40,
+                retry_count=0,
+                starts_with_dependency_marker=False,
+            ),
+            _translation_event(
+                run_id="run-b",
+                engine_latency_ms=100,
+                queue_wait_ms=5,
+                output_delay_ms=110,
+                predecessor_stall_ms=5,
+                retry_count=0,
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+    runs = {run["run_id"]: run for run in report["runs"]}
+
+    assert runs["run-a"]["queue_latency_ms"]["engine_latency_ms"]["p95"] == 30
+    assert runs["run-a"]["queue_latency_ms"]["predecessor_stall_ms"]["p99"] == 40
+    assert runs["run-a"]["retry_summary"]["retry_rate"] == 0.5
+    assert runs["run-a"]["dependency_markers"]["marker_ratio"] == 0.5
+    assert runs["run-b"]["queue_latency_ms"]["queue_wait_ms"]["p95"] == 5
+    assert runs["run-b"]["retry_summary"]["retry_rate"] == 0.0
 
 
 def test_run_summaries_include_success_latency_and_template_hits(tmp_path):

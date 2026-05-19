@@ -130,6 +130,15 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["target_text"], "你好")
         self.assertTrue(kwargs["subtitle_emitted"])
         self.assertEqual(kwargs["stt_engine"], "groq")
+        self.assertEqual(kwargs["sequence_id"], 0)
+        self.assertIn("engine_latency_ms", kwargs)
+        self.assertIn("queue_wait_ms", kwargs)
+        self.assertIn("output_delay_ms", kwargs)
+        self.assertIn("predecessor_stall_ms", kwargs)
+        self.assertGreaterEqual(kwargs["output_delay_ms"], kwargs["engine_latency_ms"])
+        self.assertEqual(kwargs["retry_count"], 0)
+        self.assertEqual(kwargs["retry_reason"], "")
+        self.assertFalse(kwargs["starts_with_dependency_marker"])
 
     def test_translator_workers_translate_ahead_but_emit_in_order(self):
         sentence_q = queue.Queue()
@@ -156,7 +165,7 @@ class TestTranslatorThread(unittest.TestCase):
                 )
 
         with patch("modules.translator.Translator", _FakeTranslator), \
-                patch("modules.translator.runtime_events"):
+                patch("modules.translator.runtime_events") as events:
             t = translator.start(sentence_q, subtitle_q, stop)
             sentence_q.put({"text": "slow", "incomplete": False})
             sentence_q.put({"text": "fast", "incomplete": False})
@@ -173,6 +182,94 @@ class TestTranslatorThread(unittest.TestCase):
 
         self.assertEqual(first, "zh-slow")
         self.assertEqual(second, "zh-fast")
+        emitted = [call.kwargs for call in events.emit.call_args_list]
+        self.assertEqual([event["sequence_id"] for event in emitted], [0, 1])
+        self.assertEqual([event["source_text"] for event in emitted], ["slow", "fast"])
+        self.assertGreater(emitted[1]["predecessor_stall_ms"], 0)
+        for event in emitted:
+            self.assertGreaterEqual(event["output_delay_ms"], event["engine_latency_ms"])
+
+    def test_translator_runtime_observability_marks_dependency_prefix(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        class _FakeTranslator:
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"zh-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                )
+
+        with patch("modules.translator.Translator", _FakeTranslator), \
+                patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "그래서 뭐 했어요?", "incomplete": False})
+            sentence_q.put({"text": "그게임 좋아요?", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "zh-그래서 뭐 했어요?")
+            self.assertEqual(subtitle_q.get(timeout=5), "zh-그게임 좋아요?")
+            stop.set()
+            t.join(timeout=2)
+
+        emitted = [call.kwargs for call in events.emit.call_args_list]
+        self.assertEqual(emitted[0]["dependency_marker"], "그래서")
+        self.assertTrue(emitted[0]["starts_with_dependency_marker"])
+        self.assertEqual(emitted[1]["dependency_marker"], "")
+        self.assertFalse(emitted[1]["starts_with_dependency_marker"])
+
+    def test_translator_runtime_observability_reports_queue_wait(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        first_started = threading.Event()
+        second_started = threading.Event()
+        release_workers = threading.Event()
+
+        class _FakeTranslator:
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                if text == "first":
+                    first_started.set()
+                    release_workers.wait(timeout=3)
+                elif text == "second":
+                    second_started.set()
+                    release_workers.wait(timeout=3)
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"zh-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                )
+
+        with patch("modules.translator.Translator", _FakeTranslator), \
+                patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "first", "incomplete": False})
+            sentence_q.put({"text": "second", "incomplete": False})
+            sentence_q.put({"text": "third", "incomplete": False})
+            self.assertTrue(first_started.wait(timeout=2))
+            self.assertTrue(second_started.wait(timeout=2))
+            deadline = time.monotonic() + 2
+            while not sentence_q.empty() and time.monotonic() < deadline:
+                stop.wait(0.005)
+            self.assertTrue(sentence_q.empty())
+            release_workers.set()
+            self.assertEqual(subtitle_q.get(timeout=3), "zh-first")
+            self.assertEqual(subtitle_q.get(timeout=3), "zh-second")
+            self.assertEqual(subtitle_q.get(timeout=3), "zh-third")
+            stop.set()
+            t.join(timeout=2)
+
+        emitted = [call.kwargs for call in events.emit.call_args_list]
+        self.assertEqual([event["sequence_id"] for event in emitted], [0, 1, 2])
+        for event in emitted:
+            self.assertIn("queue_wait_ms", event)
+            self.assertGreaterEqual(event["queue_wait_ms"], 0)
 
     def test_stop_event_exits_cleanly(self):
         sentence_q = queue.Queue()

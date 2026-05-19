@@ -18,6 +18,17 @@ from config import cfg
 from utils.text_heuristics import STT_TEMPLATE_CONDITIONAL_PHRASES, STT_TEMPLATE_HARD_PHRASES
 
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
+QUEUE_LATENCY_FIELDS = (
+    "engine_latency_ms",
+    "queue_wait_ms",
+    "output_delay_ms",
+    "predecessor_stall_ms",
+)
+ANALYZER_OUTPUT_NOTES = [
+    "predecessor_stall_ms includes up to _TRANSLATION_LOOP_POLL_SEC of translator poll-gap noise.",
+    "duplicate-suppressed translations still include ordering delay; output_delay_ms is pipeline delay, not user-visible subtitle delay.",
+    "per-worker Translator instances keep separate recent/context/cache state; cache_status and engine_latency comparisons have that known confound.",
+]
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -74,6 +85,10 @@ def analyze_runtime_events(
         ],
         "stt_summary": _stt_summary(stt_events),
         "latency_ms": _latency_summary(latencies),
+        "queue_latency_ms": _queue_latency_summary(translation_events),
+        "retry_summary": _retry_summary(translation_events),
+        "dependency_markers": _dependency_marker_summary(translation_events),
+        "analyzer_output_notes": ANALYZER_OUTPUT_NOTES,
         "runs": _run_summaries(translation_events, stt_events, labels, top_n),
         "latest": _latest_samples(translation_events, top_n),
         "flagged_samples": _flagged_samples(translation_events, top_n),
@@ -187,6 +202,9 @@ def _run_summaries(
                         and (latency := _float_or_none(event.get("latency_ms"))) is not None
                     ]
                 ),
+                "queue_latency_ms": _queue_latency_summary(run_events),
+                "retry_summary": _retry_summary(run_events),
+                "dependency_markers": _dependency_marker_summary(run_events),
                 "template_hits": {
                     "total": len(template_events),
                     "by_status": _count_by(template_events, "status"),
@@ -257,6 +275,54 @@ def _latency_summary(latencies: list[float]) -> dict[str, float | int]:
         "p50": round(percentile(0.50), 2),
         "p95": round(percentile(0.95), 2),
         "p99": round(percentile(0.99), 2),
+    }
+
+
+def _queue_latency_summary(events: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    return {
+        field: _latency_summary(
+            [
+                value
+                for event in events
+                if (value := _float_or_none(event.get(field))) is not None
+            ]
+        )
+        for field in QUEUE_LATENCY_FIELDS
+    }
+
+
+def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    retry_events = [
+        event
+        for event in events
+        if (_float_or_none(event.get("retry_count")) or 0) > 0
+    ]
+    retry_counts = [
+        int(_float_or_none(event.get("retry_count")) or 0)
+        for event in events
+    ]
+    return {
+        "total_events": len(events),
+        "retry_events": len(retry_events),
+        "retry_rate": round(len(retry_events) / len(events), 3) if events else 0.0,
+        "max_retry_count": max(retry_counts) if retry_counts else 0,
+        "by_retry_reason": _count_by(
+            [event for event in events if event.get("retry_reason")],
+            "retry_reason",
+        ),
+    }
+
+
+def _dependency_marker_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    marker_events = [event for event in events if bool(event.get("starts_with_dependency_marker"))]
+    return {
+        "total_events": len(events),
+        "marker_events": len(marker_events),
+        "marker_ratio": round(len(marker_events) / len(events), 3) if events else 0.0,
+        "by_marker": _count_by(
+            [event for event in marker_events if event.get("dependency_marker")],
+            "dependency_marker",
+        ),
     }
 
 
@@ -384,6 +450,9 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(f"Status breakdown: {report['status_breakdown']}")
     print(f"Latency ms: {report['latency_ms']}")
+    print(f"Queue latency ms: {report['queue_latency_ms']}")
+    print(f"Retry summary: {report['retry_summary']}")
+    print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
     print(
         "STT summary: "
@@ -404,8 +473,15 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"status={run['status_breakdown']}, "
                 f"stt={run['stt']['by_status']}, "
                 f"success_latency={run['success_latency_ms']}, "
+                f"queue_latency={run['queue_latency_ms']}, "
+                f"retry_rate={run['retry_summary']['retry_rate']}, "
+                f"dependency_marker_ratio={run['dependency_markers']['marker_ratio']}, "
                 f"template_hits={run['template_hits']['total']}"
             )
+    if report.get("analyzer_output_notes"):
+        print("\nAnalyzer output notes:")
+        for note in report["analyzer_output_notes"]:
+            print(f"- {note}")
     for title, key in (
         ("By status", "by_status"),
         ("By result source", "by_result_source"),

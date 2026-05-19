@@ -1,5 +1,8 @@
+import socket
+import threading
 import time
 from abc import ABC, abstractmethod
+from urllib.error import URLError
 
 from config import cfg
 from utils.api_retry import classify_error
@@ -10,6 +13,40 @@ log = get_logger("translation_engines")
 _GEMINI_HTTP_TIMEOUT_MS = 12000
 _NVIDIA_MAX_ATTEMPTS = 2
 _NVIDIA_RETRY_DELAY_SEC = 0.5
+_ENGINE_DIAGNOSTICS = threading.local()
+
+
+def _set_last_engine_diagnostics(engine: str = "", retry_count: int = 0, retry_reason: str = "") -> None:
+    _ENGINE_DIAGNOSTICS.value = {
+        "engine": engine,
+        "retry_count": retry_count,
+        "retry_reason": retry_reason,
+    }
+
+
+def get_last_engine_diagnostics() -> dict[str, int | str]:
+    """Return retry diagnostics for the last engine call in this thread."""
+    value = getattr(_ENGINE_DIAGNOSTICS, "value", None)
+    if not isinstance(value, dict):
+        return {"engine": "", "retry_count": 0, "retry_reason": ""}
+    return {
+        "engine": str(value.get("engine") or ""),
+        "retry_count": int(value.get("retry_count") or 0),
+        "retry_reason": str(value.get("retry_reason") or ""),
+    }
+
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    if isinstance(exc, URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return True
+        reason_text = str(reason or exc).lower()
+        return "timed out" in reason_text or "timeout" in reason_text
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
 
 
 def _build_user_message(text: str, incomplete: bool) -> str:
@@ -407,6 +444,7 @@ class NvidiaEngine(TranslationEngine):
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
+        _set_last_engine_diagnostics("nvidia", 0, "")
         if not self._api_key:
             return None
         import urllib.request
@@ -455,6 +493,7 @@ class NvidiaEngine(TranslationEngine):
                 if content:
                     return content
                 if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    _set_last_engine_diagnostics("nvidia", attempt + 1, "empty_response")
                     log.warning("Nvidia returned empty response; retrying once")
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
                     continue
@@ -476,13 +515,17 @@ class NvidiaEngine(TranslationEngine):
                 return None
             except urllib.error.URLError as e:
                 if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    reason = "timeout" if _is_timeout_exception(e) else "network"
+                    _set_last_engine_diagnostics("nvidia", attempt + 1, reason)
                     log.warning("Nvidia network error; retrying once: %s", e)
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
                     continue
                 log.error("Nvidia network error: %s", e)
                 return None
             except Exception as e:
-                if classify_error(e) == "network" and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                reason = "timeout" if _is_timeout_exception(e) else classify_error(e)
+                if reason in ("timeout", "network") and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                    _set_last_engine_diagnostics("nvidia", attempt + 1, reason)
                     log.warning("Nvidia transient error; retrying once: %s", e)
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
                     continue

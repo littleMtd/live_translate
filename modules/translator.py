@@ -1,5 +1,6 @@
 import hashlib
 import queue
+import re
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -25,6 +26,7 @@ from modules.translation_prompts import (
 from modules.translation_engines import (
     TranslationEngine,
     _build_engine_chain,
+    get_last_engine_diagnostics,
 )
 from modules.translation_runtime import (
     FallbackState,
@@ -47,6 +49,21 @@ _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
+_DEPENDENCY_MARKERS = (
+    "그러니까",
+    "그런데",
+    "그러면",
+    "그러네",
+    "그렇지",
+    "그래서",
+    "근데",
+    "아니",
+    "맞아",
+    "그게",
+    "그럼",
+    "그리고",
+)
+_DEPENDENCY_MARKER_BOUNDARY_RE = re.compile(r"^[\s\.,!?~…。？！,，、:;；]|$")
 
 
 _META_GARBAGE_MARKERS = (
@@ -116,6 +133,19 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         corrected = corrected.replace("更懂鞋子", "神力更強")
 
     return corrected
+
+
+def _dependency_marker(text: str) -> str:
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    for marker in _DEPENDENCY_MARKERS:
+        if not stripped.startswith(marker):
+            continue
+        suffix = stripped[len(marker):]
+        if _DEPENDENCY_MARKER_BOUNDARY_RE.match(suffix):
+            return marker
+    return ""
 
 
 def _looks_untranslated(result: str, source: str) -> bool:
@@ -188,6 +218,12 @@ class _CompletedTranslation:
     outcome: TranslationOutcome
     elapsed: float
     metadata: dict
+    submitted_at: float
+    started_at: float
+    completed_at: float
+    worker_id: str
+    retry_count: int
+    retry_reason: str
 
 
 class Translator:
@@ -432,11 +468,20 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
         last_result = ""
         last_result_time = 0.0
 
-        def translate_item(seq: int, item) -> _CompletedTranslation:
+        def translate_item(seq: int, item, submitted_at: float) -> _CompletedTranslation:
             text = sentence_text(item)
             incomplete = sentence_incomplete(item)
-            metadata = sentence_metadata(item)
+            metadata = sentence_metadata(item).copy()
+            marker = _dependency_marker(text)
+            metadata.update(
+                {
+                    "sequence_id": seq,
+                    "starts_with_dependency_marker": bool(marker),
+                    "dependency_marker": marker,
+                }
+            )
             started = time.monotonic()
+            worker_id = threading.current_thread().name
             worker_translator = getattr(worker_state, "translator", None)
             if worker_translator is None:
                 worker_translator = Translator()
@@ -453,8 +498,26 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     cache_status="skipped",
                     incomplete=incomplete,
                 )
-            elapsed = time.monotonic() - started
-            return _CompletedTranslation(seq, outcome, elapsed, metadata)
+            completed_at = time.monotonic()
+            elapsed = completed_at - started
+            diagnostics = get_last_engine_diagnostics()
+            retry_count = 0
+            retry_reason = ""
+            if outcome.engine == "nvidia" and diagnostics.get("engine") == "nvidia":
+                retry_count = int(diagnostics.get("retry_count") or 0)
+                retry_reason = str(diagnostics.get("retry_reason") or "")
+            return _CompletedTranslation(
+                seq,
+                outcome,
+                elapsed,
+                metadata,
+                submitted_at,
+                started,
+                completed_at,
+                worker_id,
+                retry_count,
+                retry_reason,
+            )
 
         def collect_finished() -> None:
             for seq, future in list(pending.items()):
@@ -470,8 +533,21 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             nonlocal last_result, last_result_time
             outcome = item.outcome
             elapsed = item.elapsed
+            emitted_at = time.monotonic()
+            event_metadata = item.metadata.copy()
+            event_metadata.update(
+                {
+                    "engine_latency_ms": round(elapsed * 1000, 2),
+                    "queue_wait_ms": round(max(0.0, item.started_at - item.submitted_at) * 1000, 2),
+                    "output_delay_ms": round(max(0.0, emitted_at - item.submitted_at) * 1000, 2),
+                    "predecessor_stall_ms": round(max(0.0, emitted_at - item.completed_at) * 1000, 2),
+                    "translation_worker_id": item.worker_id,
+                    "retry_count": item.retry_count,
+                    "retry_reason": item.retry_reason,
+                }
+            )
             metrics.observe_latency("translation", elapsed)
-            event_fields = outcome.as_event_fields(elapsed * 1000, item.metadata)
+            event_fields = outcome.as_event_fields(elapsed * 1000, event_metadata)
             result = outcome.target_text
             if result:
                 metrics.increment("translation.success")
@@ -522,7 +598,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     timeout=_TRANSLATION_LOOP_POLL_SEC,
                 )
                 if has_item:
-                    pending[next_seq] = executor.submit(translate_item, next_seq, item)
+                    submitted_at = time.monotonic()
+                    pending[next_seq] = executor.submit(translate_item, next_seq, item, submitted_at)
                     next_seq += 1
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

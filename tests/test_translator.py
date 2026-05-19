@@ -13,7 +13,7 @@ import unittest
 import unittest.mock
 from modules.translation_engines import (
     _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
-    NvidiaEngine,
+    NvidiaEngine, get_last_engine_diagnostics,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -359,8 +359,12 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertEqual(result, "你好")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 1, "retry_reason": "empty_response"},
+        )
 
-    def test_retries_once_after_network_error(self):
+    def test_retries_once_after_timeout_error(self):
         import urllib.error
 
         e = self._engine()
@@ -373,6 +377,28 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertEqual(result, "你好")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 1, "retry_reason": "timeout"},
+        )
+
+    def test_retries_once_after_non_timeout_network_error(self):
+        import urllib.error
+
+        e = self._engine()
+        side_effect = [urllib.error.URLError("connection reset"), self._response("你好")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertEqual(result, "你好")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 1, "retry_reason": "network"},
+        )
 
     def test_does_not_retry_rate_limit(self):
         import urllib.error
@@ -393,6 +419,34 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(urlopen.call_count, 1)
         sleep.assert_not_called()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
+        )
+
+    def test_does_not_retry_http_server_error(self):
+        import urllib.error
+
+        e = self._engine()
+        error = urllib.error.HTTPError(
+            url="https://integrate.api.nvidia.com/v1/chat/completions",
+            code=500,
+            msg="server error",
+            hdrs=None,
+            fp=None,
+        )
+
+        with patch("urllib.request.urlopen", side_effect=error) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
+        )
 
 
 # ---------------------------------------------------------------------------
