@@ -206,9 +206,11 @@ class _Ollama:
 class _Nvidia:
     # Model name from build.nvidia.com — click any model → "API" tab for exact name
     model:   str = "qwen/qwen3-next-80b-a3b-instruct"
-    # Live subtitles should fail fast: after ~10s the translation is no longer
-    # useful and keeping the translator thread blocked causes visible stalls.
+    # Clip/offline timeout; live mode uses live_timeout below when set.
     timeout: int = 10
+    # Live subtitles should fail fast: after ~5s the translation is likely in
+    # the NIM timeout tail, and retrying sooner reduces visible stalls.
+    live_timeout: int = 5
 
 
 @dataclass(frozen=True)

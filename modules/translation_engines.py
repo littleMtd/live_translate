@@ -420,7 +420,11 @@ class NvidiaEngine(TranslationEngine):
     def __init__(self):
         self._api_key = cfg.keys.nvidia
         self._model = cfg.nvidia.model
-        self._timeout = cfg.nvidia.timeout
+        self._timeout = (
+            cfg.nvidia.live_timeout
+            if cfg.translation.translation_mode == "live" and cfg.nvidia.live_timeout
+            else cfg.nvidia.timeout
+        )
         _m = self._model.lower()
         self._is_qwen3    = "qwen3" in _m or "qwen-3" in _m
         self._strip_think = self._is_qwen3 or any(x in _m for x in ("deepseek-v4", "deepseek-r1", "deepseek-v3"))

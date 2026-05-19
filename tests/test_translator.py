@@ -350,6 +350,74 @@ class TestNvidiaEngine(unittest.TestCase):
         }).encode()
         return mock_resp
 
+    def test_default_live_timeout_is_five_seconds(self):
+        from config import cfg
+
+        self.assertEqual(cfg.nvidia.live_timeout, 5)
+
+    def test_live_mode_uses_live_timeout(self):
+        from config import cfg
+
+        orig_mode = cfg.translation.translation_mode
+        orig_key = cfg.keys.nvidia
+        orig_timeout = cfg.nvidia.timeout
+        orig_live_timeout = cfg.nvidia.live_timeout
+        object.__setattr__(cfg.translation, "translation_mode", "live")
+        object.__setattr__(cfg.keys, "nvidia", "fake-key")
+        object.__setattr__(cfg.nvidia, "timeout", 10)
+        object.__setattr__(cfg.nvidia, "live_timeout", 5)
+        try:
+            engine = NvidiaEngine()
+        finally:
+            object.__setattr__(cfg.translation, "translation_mode", orig_mode)
+            object.__setattr__(cfg.keys, "nvidia", orig_key)
+            object.__setattr__(cfg.nvidia, "timeout", orig_timeout)
+            object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
+
+        self.assertEqual(engine._timeout, 5)
+
+    def test_live_mode_falls_back_to_regular_timeout_when_live_timeout_falsy(self):
+        from config import cfg
+
+        orig_mode = cfg.translation.translation_mode
+        orig_key = cfg.keys.nvidia
+        orig_timeout = cfg.nvidia.timeout
+        orig_live_timeout = cfg.nvidia.live_timeout
+        object.__setattr__(cfg.translation, "translation_mode", "live")
+        object.__setattr__(cfg.keys, "nvidia", "fake-key")
+        object.__setattr__(cfg.nvidia, "timeout", 10)
+        object.__setattr__(cfg.nvidia, "live_timeout", 0)
+        try:
+            engine = NvidiaEngine()
+        finally:
+            object.__setattr__(cfg.translation, "translation_mode", orig_mode)
+            object.__setattr__(cfg.keys, "nvidia", orig_key)
+            object.__setattr__(cfg.nvidia, "timeout", orig_timeout)
+            object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
+
+        self.assertEqual(engine._timeout, 10)
+
+    def test_clip_mode_uses_regular_timeout(self):
+        from config import cfg
+
+        orig_mode = cfg.translation.translation_mode
+        orig_key = cfg.keys.nvidia
+        orig_timeout = cfg.nvidia.timeout
+        orig_live_timeout = cfg.nvidia.live_timeout
+        object.__setattr__(cfg.translation, "translation_mode", "clip")
+        object.__setattr__(cfg.keys, "nvidia", "fake-key")
+        object.__setattr__(cfg.nvidia, "timeout", 10)
+        object.__setattr__(cfg.nvidia, "live_timeout", 5)
+        try:
+            engine = NvidiaEngine()
+        finally:
+            object.__setattr__(cfg.translation, "translation_mode", orig_mode)
+            object.__setattr__(cfg.keys, "nvidia", orig_key)
+            object.__setattr__(cfg.nvidia, "timeout", orig_timeout)
+            object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
+
+        self.assertEqual(engine._timeout, 10)
+
     def test_retries_once_after_empty_response(self):
         e = self._engine()
         side_effect = [self._response(""), self._response("你好")]
