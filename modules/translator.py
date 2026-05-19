@@ -90,11 +90,8 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
     (("개복치",), (("鯛魚燒", "玻璃心"), ("翻車魚風格", "玻璃心風格"))),
     (("끼윤",), (("끼윤", "Kkiyun"),)),
     (("예난",), (("예난", "Yenan"), ("藝蘭", "Yenan"))),
-    (("키마",), (("基馬", "Kima"),)),
     (("히나",), (("希娜", "Hina"),)),
-    (("봉준",), (("奉俊", "Bongjun"), ("奉主", "Bongjun"))),
     (("철구",), (("哲求", "Chulgu"), ("鐵球", "Chulgu"))),
-    (("성태",), (("成泰", "Sungtae"), ("狀態哥", "Sungtae哥"))),
     (("신빨",), (("更懂鞋", "神力更強"), ("鞋比較好", "神力比較強"))),
     (
         ("만신",),
@@ -103,6 +100,85 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
             ("都滿了，滿了", "簡直是大神巫"),
             ("滿了，滿了", "大神巫，大神巫"),
         ),
+    ),
+)
+
+_SHARED_NAME_SCOPE = "__shared__"
+_HADES_PROFILE_ID = "hades_chxxnnx"
+_KOREAN_NAME_SUFFIXES = frozenset(
+    (
+        "이에요",
+        "입니다",
+        "에게",
+        "한테",
+        "이랑",
+        "하고",
+        "예요",
+        "이다",
+        "누나",
+        "언니",
+        "오빠",
+        "님",
+        "씨",
+        "형",
+        "가",
+        "이",
+        "은",
+        "는",
+        "을",
+        "를",
+        "의",
+        "도",
+        "만",
+        "에",
+        "께",
+        "랑",
+        "과",
+        "와",
+        "야",
+        "아",
+    )
+)
+
+
+@dataclass(frozen=True)
+class _NameRenderingRule:
+    scope: str
+    source_aliases: tuple[str, ...]
+    wrong_forms: tuple[str, ...]
+    canonical: str
+
+
+_NAME_RENDERING_RULES = (
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("챈나",),
+        ("-chan", "-Chan", "－chan", "－Chan", "–chan", "–Chan", "—chan", "—Chan"),
+        "Chxxnnx",
+    ),
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("김봉준", "봉준"),
+        ("Bongjun", "奉俊", "奉主"),
+        "Kim Bongjun",
+    ),
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("성태",),
+        ("Sungtae老師", "Sungtae哥", "Sungtae", "成泰", "狀態哥"),
+        "KimSungtae",
+    ),
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("키마",),
+        ("Kima", "基馬"),
+        "Kyma",
+    ),
+    _NameRenderingRule(
+        _SHARED_NAME_SCOPE,
+        ("고세구",),
+        ("高世久",),
+        "Gosegu",
     ),
 )
 
@@ -120,6 +196,67 @@ def _looks_like_meta_garbage_output(result: str) -> bool:
     return False
 
 
+def _is_hangul_syllable(char: str) -> bool:
+    return "\uac00" <= char <= "\ud7a3"
+
+
+def _is_name_suffix_boundary(char: str) -> bool:
+    return char.isspace() or not char.isalnum()
+
+
+def _source_alias_matches_at(source: str, alias: str, start: int) -> bool:
+    if start > 0 and _is_hangul_syllable(source[start - 1]):
+        return False
+
+    end = start + len(alias)
+    if end >= len(source):
+        return True
+
+    next_char = source[end]
+    if not _is_hangul_syllable(next_char):
+        return True
+
+    suffix_end = end
+    while suffix_end < len(source) and _is_hangul_syllable(source[suffix_end]):
+        suffix_end += 1
+
+    suffix = source[end:suffix_end]
+    if suffix not in _KOREAN_NAME_SUFFIXES:
+        return False
+
+    return suffix_end >= len(source) or _is_name_suffix_boundary(source[suffix_end])
+
+
+def _source_has_name_alias(source: str, aliases: tuple[str, ...]) -> bool:
+    for alias in aliases:
+        if not alias:
+            continue
+        start = source.find(alias)
+        while start >= 0:
+            if _source_alias_matches_at(source, alias, start):
+                return True
+            start = source.find(alias, start + 1)
+    return False
+
+
+def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
+    if rule.scope == _SHARED_NAME_SCOPE:
+        return True
+    return bool(cfg.translation.use_profile) and cfg.active_streamer_profile == rule.scope
+
+
+def _replace_wrong_name_forms(result: str, rule: _NameRenderingRule) -> str:
+    if rule.canonical in result:
+        return result
+
+    wrong_forms = tuple(sorted(rule.wrong_forms, key=len, reverse=True))
+    if not wrong_forms:
+        return result
+
+    pattern = re.compile("|".join(re.escape(wrong) for wrong in wrong_forms))
+    return pattern.sub(rule.canonical, result)
+
+
 def _apply_source_aware_corrections(source: str, result: str) -> str:
     corrected = result
     for source_terms, replacements in _SOURCE_AWARE_TARGET_REPLACEMENTS:
@@ -127,6 +264,13 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
             continue
         for wrong, right in replacements:
             corrected = corrected.replace(wrong, right)
+
+    for rule in _NAME_RENDERING_RULES:
+        if not _name_rendering_rule_enabled(rule):
+            continue
+        if not _source_has_name_alias(source, rule.source_aliases):
+            continue
+        corrected = _replace_wrong_name_forms(corrected, rule)
 
     if "무당" in source and "신발" in source:
         corrected = corrected.replace("更懂鞋", "神力更強")

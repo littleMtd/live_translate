@@ -1,5 +1,6 @@
 import sys
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 for _mod in ("anthropic", "google", "google.genai"):
     if _mod not in sys.modules:
@@ -109,6 +110,21 @@ def _claude_resp(text: str) -> MagicMock:
 
 def _sys_prompt(t: "Translator") -> str:
     return t._evolver.build_system_prompt(_BASE_PROMPT)
+
+
+@contextmanager
+def _active_translation_profile(profile_id: str, use_profile: bool = True):
+    from config import cfg
+
+    original_profile = cfg.translation.streamer_profile
+    original_use_profile = cfg.translation.use_profile
+    object.__setattr__(cfg.translation, "streamer_profile", profile_id)
+    object.__setattr__(cfg.translation, "use_profile", use_profile)
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg.translation, "streamer_profile", original_profile)
+        object.__setattr__(cfg.translation, "use_profile", original_use_profile)
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +838,114 @@ class TestTranslateOptimizations(unittest.TestCase):
             "冷場才是精確說的。空掉的時間。玻璃心風格。HADES。"
             "Kkiyun和Yenan。Chulgu哥。剛受神降的巫女不是神力更強嗎？幾乎是大神巫。",
         )
+
+    def test_streamer_name_rendering_boundary_positive_cases(self):
+        cases = (
+            ("챈나가 멤버 섭외", "快叫醒-chan", "快叫醒Chxxnnx"),
+            ("챈나님 오늘 와요", "謝謝-chan", "謝謝Chxxnnx"),
+            ("성태는 지금 와요", "Sungtae哥來了", "KimSungtae來了"),
+            ("성태형 불러요", "Sungtae老師來了", "KimSungtae來了"),
+            ("봉준이 왔어요", "Bongjun來了", "Kim Bongjun來了"),
+            ("봉준님 불러요", "奉主來了", "Kim Bongjun來了"),
+            ("김봉준이 말했어요", "奉俊說了", "Kim Bongjun說了"),
+            ("키마는 대기 중", "Kima待機中", "Kyma待機中"),
+            ("고세구가 왔어요", "高世久來了", "Gosegu來了"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), expected)
+
+    def test_streamer_name_rendering_boundary_negative_cases(self):
+        cases = (
+            ("김챈나가 왔어요", "快叫醒-chan"),
+            ("성태권도 이야기", "Sungtae哥"),
+            ("가성태님이 왔어요", "Sungtae老師"),
+            ("박봉준이 왔어요", "Bongjun"),
+            ("챈나님abc", "-chan"),
+            ("오늘 정상적인 한국어 문장입니다", "Bongjun Sungtae 高世久"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), target)
+
+    def test_streamer_name_rendering_is_source_gated(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "-chan"), "-chan")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "Bongjun"), "Bongjun")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "高世久"), "高世久")
+
+    def test_streamer_name_rendering_is_profile_gated(self):
+        for profile_id in ("", "stellive_hina", "isegye_lilpa"):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(
+                        _apply_source_aware_corrections("챈나가 왔어요", "-chan"),
+                        "-chan",
+                    )
+                    self.assertEqual(
+                        _apply_source_aware_corrections("봉준이 왔어요", "Bongjun"),
+                        "Bongjun",
+                    )
+
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "Sungtae"), "Sungtae")
+
+        with _active_translation_profile("stellive_hina", use_profile=False):
+            self.assertEqual(_apply_source_aware_corrections("고세구가 왔어요", "高世久"), "Gosegu")
+
+    def test_bare_hina_existing_entry_is_unchanged(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_apply_source_aware_corrections("히나", "希娜"), "Hina")
+
+    def test_streamer_name_rendering_is_idempotent(self):
+        cases = (
+            ("챈나가 왔어요", "-chan", "Chxxnnx"),
+            ("봉준이 왔어요", "Bongjun", "Kim Bongjun"),
+            ("성태는 왔어요", "Sungtae哥", "KimSungtae"),
+            ("키마는 왔어요", "Kima", "Kyma"),
+            ("고세구가 왔어요", "高世久", "Gosegu"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(twice, once)
+
+            self.assertEqual(_apply_source_aware_corrections("봉준이 왔어요", "Kim Bongjun"), "Kim Bongjun")
+            self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "KimSungtae"), "KimSungtae")
+
+    def test_streamer_name_rendering_cache_round_trip_does_not_double_apply(self):
+        t = _make_translator()
+        source = "봉준이 왔어요"
+        with _active_translation_profile("hades_chxxnnx"):
+            t._engines[0].translate.return_value = "Bongjun"
+
+            first = t.translate_event(source)
+            t._policy_state().reset_last_input()
+            second = t.translate_event(source)
+
+        self.assertEqual(first.result_source, "api")
+        self.assertEqual(first.target_text, "Kim Bongjun")
+        self.assertEqual(second.result_source, "memory_hit")
+        self.assertEqual(second.target_text, "Kim Bongjun")
+        self.assertEqual(t._engines[0].translate.call_count, 1)
+
+    def test_profile_prompt_version_changes_between_profiles(self):
+        t = _make_translator()
+
+        with _active_translation_profile("hades_chxxnnx"):
+            hades_prompt_version = t._get_prompt_version_hash()
+        with _active_translation_profile("stellive_hina"):
+            stellive_prompt_version = t._get_prompt_version_hash()
+
+        self.assertNotEqual(hades_prompt_version, stellive_prompt_version)
 
     def test_meta_garbage_detector_matches_explanatory_output(self):
         self.assertTrue(_looks_like_meta_garbage_output("（無法理解的STT亂碼，無明確語義）"))
