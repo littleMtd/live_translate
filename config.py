@@ -208,9 +208,9 @@ class _Nvidia:
     model:   str = "qwen/qwen3-next-80b-a3b-instruct"
     # Clip/offline timeout; live mode uses live_timeout below when set.
     timeout: int = 10
-    # Live subtitles should fail fast: after ~5s the translation is likely in
+    # Live subtitles should fail fast: after ~7s the translation is likely in
     # the NIM timeout tail, and retrying sooner reduces visible stalls.
-    live_timeout: int = 5
+    live_timeout: int = 7
 
 
 @dataclass(frozen=True)

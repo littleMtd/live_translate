@@ -350,10 +350,10 @@ class TestNvidiaEngine(unittest.TestCase):
         }).encode()
         return mock_resp
 
-    def test_default_live_timeout_is_five_seconds(self):
+    def test_default_live_timeout_is_seven_seconds(self):
         from config import cfg
 
-        self.assertEqual(cfg.nvidia.live_timeout, 5)
+        self.assertEqual(cfg.nvidia.live_timeout, 7)
 
     def test_live_mode_uses_live_timeout(self):
         from config import cfg
@@ -365,7 +365,7 @@ class TestNvidiaEngine(unittest.TestCase):
         object.__setattr__(cfg.translation, "translation_mode", "live")
         object.__setattr__(cfg.keys, "nvidia", "fake-key")
         object.__setattr__(cfg.nvidia, "timeout", 10)
-        object.__setattr__(cfg.nvidia, "live_timeout", 5)
+        object.__setattr__(cfg.nvidia, "live_timeout", 7)
         try:
             engine = NvidiaEngine()
         finally:
@@ -374,7 +374,7 @@ class TestNvidiaEngine(unittest.TestCase):
             object.__setattr__(cfg.nvidia, "timeout", orig_timeout)
             object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
 
-        self.assertEqual(engine._timeout, 5)
+        self.assertEqual(engine._timeout, 7)
 
     def test_live_mode_falls_back_to_regular_timeout_when_live_timeout_falsy(self):
         from config import cfg
