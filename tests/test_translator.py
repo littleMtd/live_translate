@@ -971,12 +971,125 @@ class TestTranslateOptimizations(unittest.TestCase):
                     self.assertEqual(once, expected)
                     self.assertEqual(twice, once)
 
-    def test_streamer_name_rendering_mixed_canonical_self_form_remains_task16_scope(self):
+    def test_streamer_name_rendering_fixes_mixed_canonical_and_wrong_forms(self):
+        cases = (
+            (
+                "챈나가 왔어요",
+                "-chan ... Chxxnnx ... -chan",
+                "Chxxnnx ... Chxxnnx ... Chxxnnx",
+                ("-chan", "-Chan", "챈나"),
+            ),
+            (
+                "봉준이 왔어요",
+                "Bongjun ... Kim Bongjun",
+                "Kim Bongjun ... Kim Bongjun",
+                ("Kim Kim Bongjun", "Kim BongjunKim Bongjun"),
+            ),
+            (
+                "성태는 왔어요",
+                "Sungtae哥 ... KimSungtae",
+                "KimSungtae ... KimSungtae",
+                ("KimKimSungtae", "KimSungtaeKimSungtae"),
+            ),
+            (
+                "챈나가 왔어요",
+                "챈나 ... Chxxnnx ... 챈나",
+                "Chxxnnx ... Chxxnnx ... Chxxnnx",
+                ("챈나", "ChxxnnxChxxnnx"),
+            ),
+        )
+
         with _active_translation_profile("hades_chxxnnx"):
-            # Task #16 owns canonical+wrong coexist; the early-return guard is intentionally unchanged.
+            for source, target, expected, forbidden_fragments in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(twice, once)
+                    for fragment in forbidden_fragments:
+                        self.assertNotIn(fragment, once)
+
+    def test_streamer_name_rendering_already_canonical_only_is_stable(self):
+        cases = (
+            ("챈나가 왔어요", "Chxxnnx"),
+            ("봉준이 왔어요", "Kim Bongjun"),
+            ("성태는 왔어요", "KimSungtae"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, target)
+                    self.assertEqual(twice, once)
+
+    def test_streamer_name_rendering_repeated_correction_has_no_artifacts(self):
+        cases = (
+            (
+                "챈나가 왔어요",
+                "Chxxnnx好可愛",
+                "Chxxnnx好可愛",
+                ("ChxxnnxChxxnnx",),
+            ),
+            (
+                "봉준이 왔어요",
+                "Kim Bongjun是個人",
+                "Kim Bongjun是個人",
+                ("Kim Kim Bongjun", "Kim BongjunKim Bongjun"),
+            ),
+            (
+                "봉준이 왔어요",
+                "Bongjun + Kim Bongjun + Bongjun",
+                "Kim Bongjun + Kim Bongjun + Kim Bongjun",
+                ("Kim Kim Bongjun", "Kim BongjunKim Bongjun"),
+            ),
+            (
+                "성태는 왔어요",
+                "KimSungtae是老師",
+                "KimSungtae是老師",
+                ("KimKimSungtae", "KimSungtaeKimSungtae"),
+            ),
+            (
+                "성태는 왔어요",
+                "Sungtae哥 + KimSungtae",
+                "KimSungtae + KimSungtae",
+                ("KimKimSungtae", "KimSungtaeKimSungtae"),
+            ),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target, expected, forbidden_fragments in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(twice, once)
+                    for fragment in forbidden_fragments:
+                        self.assertNotIn(fragment, once)
+
+    def test_streamer_name_rendering_mixed_forms_remain_source_and_profile_gated(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            target = "-chan ... Chxxnnx ... -chan"
             self.assertEqual(
-                _apply_source_aware_corrections("챈나가 왔어요", "챈나...Chxxnnx...챈나"),
-                "챈나...Chxxnnx...챈나",
+                _apply_source_aware_corrections("오늘 방송 재미있다", target),
+                target,
+            )
+
+        for profile_id in ("", "stellive_hina", "isegye_lilpa"):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    target = "Bongjun ... Kim Bongjun"
+                    self.assertEqual(
+                        _apply_source_aware_corrections("봉준이 왔어요", target),
+                        target,
+                    )
+
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            target = "Sungtae哥 ... KimSungtae"
+            self.assertEqual(
+                _apply_source_aware_corrections("성태는 왔어요", target),
+                target,
             )
 
     def test_streamer_name_rendering_cache_round_trip_does_not_double_apply(self):

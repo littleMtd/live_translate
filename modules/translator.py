@@ -246,14 +246,11 @@ def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
 
 
 def _replace_wrong_name_forms(result: str, rule: _NameRenderingRule) -> str:
-    if rule.canonical in result:
+    if not rule.wrong_forms:
         return result
 
-    wrong_forms = tuple(sorted(rule.wrong_forms, key=len, reverse=True))
-    if not wrong_forms:
-        return result
-
-    pattern = re.compile("|".join(re.escape(wrong) for wrong in wrong_forms))
+    alternatives = sorted({rule.canonical, *rule.wrong_forms}, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(alternative) for alternative in alternatives))
     return pattern.sub(rule.canonical, result)
 
 
