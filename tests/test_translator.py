@@ -857,6 +857,20 @@ class TestTranslateOptimizations(unittest.TestCase):
                 with self.subTest(source=source, target=target):
                     self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
+    def test_streamer_name_rendering_hangul_self_forms(self):
+        cases = (
+            ("챈나가 멤버 섭외", "챈나好可愛", "Chxxnnx好可愛"),
+            ("봉준이 왔어요", "봉준來了", "Kim Bongjun來了"),
+            ("김봉준이 말했어요", "김봉준說了", "Kim Bongjun說了"),
+            ("성태는 지금 와요", "성태來了", "KimSungtae來了"),
+            ("키마는 대기 중", "키마待機中", "Kyma待機中"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), expected)
+
     def test_streamer_name_rendering_boundary_negative_cases(self):
         cases = (
             ("김챈나가 왔어요", "快叫醒-chan"),
@@ -877,8 +891,21 @@ class TestTranslateOptimizations(unittest.TestCase):
             self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "-chan"), "-chan")
             self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "Bongjun"), "Bongjun")
             self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "高世久"), "高世久")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "챈나好可愛"), "챈나好可愛")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "봉준來了"), "봉준來了")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "김봉준說了"), "김봉준說了")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "성태來了"), "성태來了")
+            self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "키마待機中"), "키마待機中")
 
     def test_streamer_name_rendering_is_profile_gated(self):
+        hades_self_form_cases = (
+            ("챈나가 왔어요", "챈나"),
+            ("봉준이 왔어요", "봉준"),
+            ("김봉준이 말했어요", "김봉준"),
+            ("성태는 왔어요", "성태"),
+            ("키마는 왔어요", "키마"),
+        )
+
         for profile_id in ("", "stellive_hina", "isegye_lilpa"):
             with self.subTest(profile_id=profile_id):
                 with _active_translation_profile(profile_id):
@@ -890,9 +917,13 @@ class TestTranslateOptimizations(unittest.TestCase):
                         _apply_source_aware_corrections("봉준이 왔어요", "Bongjun"),
                         "Bongjun",
                     )
+                    for source, target in hades_self_form_cases:
+                        self.assertEqual(_apply_source_aware_corrections(source, target), target)
 
         with _active_translation_profile("hades_chxxnnx", use_profile=False):
             self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "Sungtae"), "Sungtae")
+            for source, target in hades_self_form_cases:
+                self.assertEqual(_apply_source_aware_corrections(source, target), target)
 
         with _active_translation_profile("stellive_hina", use_profile=False):
             self.assertEqual(_apply_source_aware_corrections("고세구가 왔어요", "高世久"), "Gosegu")
@@ -920,6 +951,33 @@ class TestTranslateOptimizations(unittest.TestCase):
 
             self.assertEqual(_apply_source_aware_corrections("봉준이 왔어요", "Kim Bongjun"), "Kim Bongjun")
             self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "KimSungtae"), "KimSungtae")
+            self.assertEqual(_apply_source_aware_corrections("챈나가 왔어요", "Chxxnnx好可愛"), "Chxxnnx好可愛")
+            self.assertEqual(_apply_source_aware_corrections("키마는 왔어요", "Kyma待機中"), "Kyma待機中")
+
+    def test_streamer_name_rendering_self_forms_are_idempotent(self):
+        cases = (
+            ("챈나가 왔어요", "챈나好可愛", "Chxxnnx好可愛"),
+            ("봉준이 왔어요", "봉준來了", "Kim Bongjun來了"),
+            ("김봉준이 말했어요", "김봉준說了", "Kim Bongjun說了"),
+            ("성태는 왔어요", "성태來了", "KimSungtae來了"),
+            ("키마는 왔어요", "키마待機中", "Kyma待機中"),
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(twice, once)
+
+    def test_streamer_name_rendering_mixed_canonical_self_form_remains_task16_scope(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            # Task #16 owns canonical+wrong coexist; the early-return guard is intentionally unchanged.
+            self.assertEqual(
+                _apply_source_aware_corrections("챈나가 왔어요", "챈나...Chxxnnx...챈나"),
+                "챈나...Chxxnnx...챈나",
+            )
 
     def test_streamer_name_rendering_cache_round_trip_does_not_double_apply(self):
         t = _make_translator()

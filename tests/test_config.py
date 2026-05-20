@@ -71,7 +71,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.translation.slang["섭쥬방"], "服主房")
 
     def test_default_slang_removes_conflicting_bare_person_names(self):
-        for key in ("챈나", "키마", "봉준", "성태", "히나"):
+        for key in ("챈나", "키마", "봉준", "김봉준", "성태", "히나"):
             self.assertNotIn(key, cfg.translation.slang)
 
         self.assertEqual(cfg.translation.slang["시라유키 히나"], "Shirayuki Hina")

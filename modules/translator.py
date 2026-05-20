@@ -153,25 +153,25 @@ _NAME_RENDERING_RULES = (
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("챈나",),
-        ("-chan", "-Chan", "－chan", "－Chan", "–chan", "–Chan", "—chan", "—Chan"),
+        ("챈나", "-chan", "-Chan", "－chan", "－Chan", "–chan", "–Chan", "—chan", "—Chan"),
         "Chxxnnx",
     ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("김봉준", "봉준"),
-        ("Bongjun", "奉俊", "奉主"),
+        ("김봉준", "봉준", "Bongjun", "奉俊", "奉主"),
         "Kim Bongjun",
     ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("성태",),
-        ("Sungtae老師", "Sungtae哥", "Sungtae", "成泰", "狀態哥"),
+        ("성태", "Sungtae老師", "Sungtae哥", "Sungtae", "成泰", "狀態哥"),
         "KimSungtae",
     ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("키마",),
-        ("Kima", "基馬"),
+        ("키마", "Kima", "基馬"),
         "Kyma",
     ),
     _NameRenderingRule(
