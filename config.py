@@ -13,6 +13,7 @@ load_dotenv()
 class _Keys:
     anthropic:        str = os.environ.get("ANTHROPIC_API_KEY", "")
     groq:             str = os.environ.get("GROQ_API_KEY", "")
+    groq_fallback:    str = os.environ.get("GROQ_API_KEY_fall_back", "")
     gemini:           str = os.environ.get("GEMINI_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepl:            str = os.environ.get("DEEPL_API_KEY", "")
@@ -142,7 +143,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "stellive_hina"
+    streamer_profile: str        = "mwmeu"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20

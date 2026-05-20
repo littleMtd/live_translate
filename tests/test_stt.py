@@ -82,10 +82,12 @@ def _make_engine_sv() -> STTEngine:
     eng = STTEngine.__new__(STTEngine)
     eng._sense_voice = MagicMock()
     eng._groq_client = None
+    eng._groq_fallback_client = None
     eng._use_groq = False
     eng._consecutive_none = 0
     eng._sv_fallback_counter = 0
     eng._groq_rate_limited_until = 0.0
+    eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
     return eng
 
@@ -165,9 +167,11 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._use_groq = True
     eng._groq_client = MagicMock()
     eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(response_text)
+    eng._groq_fallback_client = None
     eng._consecutive_none = 0
     eng._sv_fallback_counter = 0
     eng._groq_rate_limited_until = 0.0
+    eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
     return eng
 

@@ -72,17 +72,24 @@ class STTEngine:
     def __init__(self):
         self._sense_voice = None
         self._groq_client = None
+        self._groq_fallback_client = None
         self._use_groq = (cfg.stt.primary_engine == "groq")
         self._consecutive_none = 0
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
         self._groq_rate_limited_until = 0.0
+        self._groq_fallback_rate_limited_until = 0.0
         self._last_transcript: str = ""
         if self._use_groq:
             self._init_groq()
+            self._init_groq_fallback()
         else:
             self._load_sense_voice()
 
-        self.available = self._sense_voice is not None or self._groq_client is not None
+        self.available = (
+            self._sense_voice is not None
+            or self._groq_client is not None
+            or self._groq_fallback_client is not None
+        )
         if not self.available:
             log.error("STT unavailable: both SenseVoice and Groq failed to initialize")
 
@@ -120,6 +127,20 @@ class STTEngine:
             )
         except Exception as e:
             log.error("Failed to init Groq client: %s", e)
+
+    def _init_groq_fallback(self):
+        if not cfg.keys.groq_fallback:
+            return
+        try:
+            from groq import Groq
+            self._groq_fallback_client = Groq(
+                api_key=cfg.keys.groq_fallback,
+                max_retries=cfg.stt.groq_max_retries,
+                timeout=cfg.stt.groq_timeout,
+            )
+            log.info("Groq fallback key ready (will activate when primary is rate-limited)")
+        except Exception as e:
+            log.error("Failed to init Groq fallback client: %s", e)
 
     def transcribe(self, audio: np.ndarray) -> str | None:
         event = self.transcribe_event(audio)
@@ -198,23 +219,36 @@ class STTEngine:
 
     def _transcribe_groq(self, audio: np.ndarray) -> str | None:
         started = time.monotonic()
-        if self._groq_client is None:
+        primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
+        fallback_ready = (
+            self._groq_fallback_client is not None
+            and started >= self._groq_fallback_rate_limited_until
+        )
+        if primary_ready:
+            active_client = self._groq_client
+            using_fallback = False
+        elif fallback_ready:
+            active_client = self._groq_fallback_client
+            using_fallback = True
+            log.debug("Primary Groq key rate-limited; using fallback key")
+        else:
+            if self._groq_client is None and self._groq_fallback_client is None:
+                reason = "no_client"
+            else:
+                reason = "rate_limit_cooldown"
+                remaining = round(
+                    min(
+                        self._groq_rate_limited_until if self._groq_client else 0,
+                        self._groq_fallback_rate_limited_until if self._groq_fallback_client else 0,
+                    ) - started,
+                    2,
+                )
+                log.debug("Both Groq keys rate-limited (%.2fs left on shorter cooldown)", remaining)
             self._emit_stt_runtime_event(
                 audio=audio,
                 started=started,
                 status="skipped",
-                reason="no_client",
-                request_sent=False,
-            )
-            return None
-        if started < self._groq_rate_limited_until:
-            remaining = round(self._groq_rate_limited_until - started, 2)
-            log.debug("Groq STT skipped during rate-limit cooldown (%.2fs left)", remaining)
-            self._emit_stt_runtime_event(
-                audio=audio,
-                started=started,
-                status="skipped",
-                reason="rate_limit_cooldown",
+                reason=reason,
                 request_sent=False,
             )
             return None
@@ -237,7 +271,7 @@ class STTEngine:
             dynamic_prompt = self._build_groq_prompt()
 
             request_sent = True
-            resp = self._groq_client.audio.transcriptions.create(
+            resp = active_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
                 file=buf,
                 language=cfg.stt.language,
@@ -319,10 +353,11 @@ class STTEngine:
             if _is_groq_rate_limit_error(e):
                 log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
                 reason = "rate_limited"
-                self._groq_rate_limited_until = time.monotonic() + max(
-                    0.0,
-                    cfg.stt.groq_rate_limit_cooldown_sec,
-                )
+                cooldown_end = time.monotonic() + max(0.0, cfg.stt.groq_rate_limit_cooldown_sec)
+                if using_fallback:
+                    self._groq_fallback_rate_limited_until = cooldown_end
+                else:
+                    self._groq_rate_limited_until = cooldown_end
             else:
                 log.error("Groq STT error: %s", e)
                 reason = "error"
