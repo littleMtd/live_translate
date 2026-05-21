@@ -26,6 +26,7 @@ from modules.translation_prompts import (
 from modules.translator import (
     _apply_source_aware_corrections,
     _looks_like_meta_garbage_output,
+    _normalize_source_before_matching,
     _write_history,
     TranslationOutcome,
     Translator,
@@ -1333,6 +1334,98 @@ class TestSttSongFragmentGuard(unittest.TestCase):
         self.assertIsNone(outcome.target_text)
         for e in t._engines:
             e.translate.assert_not_called()
+
+
+class TestSourceNormBeforeMatching(unittest.TestCase):
+    def test_hades_profile_normalizes_mixed_script(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_normalize_source_before_matching("服주 화이팅"), "섭주 화이팅")
+            self.assertEqual(_normalize_source_before_matching("서버 服주입니다"), "서버 섭주입니다")
+            self.assertEqual(_normalize_source_before_matching("服주"), "섭주")
+
+    def test_hades_use_profile_false_no_change(self):
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            self.assertEqual(_normalize_source_before_matching("服주 화이팅"), "服주 화이팅")
+
+    def test_other_profiles_no_change(self):
+        for profile_id in ("stellive_hina", "isegye_lilpa", ""):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(
+                        _normalize_source_before_matching("服주 화이팅"), "服주 화이팅"
+                    )
+
+    def test_seop_jeong_unchanged_in_all_profiles(self):
+        for profile_id in ("hades_chxxnnx", "stellive_hina", "isegye_lilpa", ""):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(
+                        _normalize_source_before_matching("섭정 있는 거야?"),
+                        "섭정 있는 거야?",
+                    )
+
+    def test_existing_slang_variants_pass_through(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_normalize_source_before_matching("섭쥬 화이팅"), "섭쥬 화이팅")
+            self.assertEqual(_normalize_source_before_matching("썹주 화이팅"), "썹주 화이팅")
+            self.assertEqual(_normalize_source_before_matching("SUBJU"), "SUBJU")
+            self.assertEqual(_normalize_source_before_matching("服主"), "服主")
+
+    def test_normalization_is_idempotent(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            once = _normalize_source_before_matching("服주 화이팅")
+            twice = _normalize_source_before_matching(once)
+            self.assertEqual(once, "섭주 화이팅")
+            self.assertEqual(twice, once)
+
+
+class TestSourceNormIntegration(unittest.TestCase):
+    def test_standalone_hanja_hangul_hits_slang(self):
+        """translate_event("服주") under HADES → slang hit, engine not called, raw source preserved."""
+        with _active_translation_profile("hades_chxxnnx"):
+            t = _make_translator()
+            outcome = t.translate_event("服주")
+            self.assertEqual(outcome.status, "success")
+            self.assertEqual(outcome.result_source, "slang")
+            self.assertEqual(outcome.target_text, "服主")
+            self.assertEqual(outcome.source_text, "服주")
+            for e in t._engines:
+                e.translate.assert_not_called()
+
+    def test_mid_sentence_engine_receives_normalized_text(self):
+        """translate_event mid-sentence → engine called with 섭주, source_text stays raw."""
+        with _active_translation_profile("hades_chxxnnx"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = "伺服器 服主 加油"
+            outcome = t.translate_event("서버 服주 화이팅")
+            self.assertEqual(outcome.source_text, "서버 服주 화이팅")
+            t._engines[0].translate.assert_called_once()
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "서버 섭주 화이팅")
+
+    def test_wrong_profile_engine_receives_raw_text(self):
+        """Wrong profile → no normalization → engine sees raw 服주."""
+        with _active_translation_profile("stellive_hina"):
+            t = _make_translator()
+            t.translate_event("服주 화이팅")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertIn("服주", call_text)
+
+    def test_use_profile_false_engine_receives_raw_text(self):
+        """use_profile=False → no normalization → engine sees raw 服주."""
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            t = _make_translator()
+            t.translate_event("服주 화이팅")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertIn("服주", call_text)
+
+    def test_seop_jeong_engine_receives_unchanged_source(self):
+        """섭정 under HADES → engine receives unchanged Korean source."""
+        with _active_translation_profile("hades_chxxnnx"):
+            t = _make_translator()
+            t.translate_event("섭정 있는 거야?")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "섭정 있는 거야?")
 
 
 if __name__ == "__main__":

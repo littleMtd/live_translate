@@ -105,6 +105,14 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
 
 _SHARED_NAME_SCOPE = "__shared__"
 _HADES_PROFILE_ID = "hades_chxxnnx"
+
+_SOURCE_NORM_SHARED: dict[str, str] = {}
+_SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
+    _HADES_PROFILE_ID: {
+        "服주": "섭주",
+    },
+}
+
 _KOREAN_NAME_SUFFIXES = frozenset(
     (
         "이에요",
@@ -252,6 +260,22 @@ def _replace_wrong_name_forms(result: str, rule: _NameRenderingRule) -> str:
     alternatives = sorted({rule.canonical, *rule.wrong_forms}, key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(alternative) for alternative in alternatives))
     return pattern.sub(rule.canonical, result)
+
+
+def _normalize_source_before_matching(text: str) -> str:
+    """Replace known unambiguous STT noise forms with their canonical source alias.
+
+    Runs before slang lookup, cache lookup, LLM call, and source-aware corrections.
+    Operates on prepared text only; raw_text stored in TranslationOutcome is untouched.
+    Profile-gated: normalization only applies when the matching profile is active.
+    """
+    norm: dict[str, str] = dict(_SOURCE_NORM_SHARED)
+    profile_id = cfg.active_streamer_profile
+    if profile_id and bool(cfg.translation.use_profile):
+        norm.update(_SOURCE_NORM_BY_PROFILE.get(profile_id, {}))
+    for noisy, canonical in norm.items():
+        text = text.replace(noisy, canonical)
+    return text
 
 
 def _apply_source_aware_corrections(source: str, result: str) -> str:
@@ -406,6 +430,8 @@ class Translator:
                 incomplete=incomplete,
                 filter_reason=filter_reason or policy._last_sanitize_rejection or "unknown",
             )
+
+        text = _normalize_source_before_matching(text)
 
         if slang_result := self._translate_slang(text, incomplete):
             return TranslationOutcome(
