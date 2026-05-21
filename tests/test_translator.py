@@ -1378,6 +1378,35 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
             self.assertEqual(once, "섭주 화이팅")
             self.assertEqual(twice, once)
 
+    def test_hades_채나_family_normalized(self):
+        cases = [
+            ("채나", "챈나"),
+            ("채나야", "챈나야"),
+            ("채나님", "챈나님"),
+            ("채나로", "챈나로"),
+            ("채나롱", "챈나롱"),
+            ("채나룬", "챈나룬"),
+            ("천사채나", "천사챈나"),
+        ]
+        with _active_translation_profile("hades_chxxnnx"):
+            for raw, expected in cases:
+                with self.subTest(raw=raw):
+                    self.assertEqual(_normalize_source_before_matching(raw), expected)
+
+    def test_채나_compound_no_double_replace(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_normalize_source_before_matching("천사채나"), "천사챈나")
+
+    def test_채나_norm_is_profile_gated(self):
+        for profile_id in ("stellive_hina", "isegye_lilpa", ""):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(_normalize_source_before_matching("채나"), "채나")
+
+    def test_채나_norm_is_use_profile_gated(self):
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            self.assertEqual(_normalize_source_before_matching("채나"), "채나")
+
 
 class TestSourceNormIntegration(unittest.TestCase):
     def test_standalone_hanja_hangul_hits_slang(self):

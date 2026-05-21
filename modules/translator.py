@@ -110,6 +110,14 @@ _SOURCE_NORM_SHARED: dict[str, str] = {}
 _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
     _HADES_PROFILE_ID: {
         "服주": "섭주",
+        # 채나-family → 챈나-family (longer forms first to avoid bare-substring overlap)
+        "천사채나": "천사챈나",
+        "채나룬": "챈나룬",
+        "채나롱": "챈나롱",
+        "채나로": "챈나로",
+        "채나님": "챈나님",
+        "채나야": "챈나야",
+        "채나": "챈나",
     },
 }
 
