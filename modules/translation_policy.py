@@ -298,10 +298,6 @@ class TranslationPolicy:
             log.debug("STT song fragment detected: markers=%d text='%s'", marker_hits, normalized[:50])
             return True
 
-        if marker_hits >= 3 and repeated_short_words >= 3:
-            log.debug("STT song fragment detected: markers=%d text='%s'", marker_hits, normalized[:50])
-            return True
-
         if has_song_context and repeated_short_words >= 5 and punctuation_count >= 1:
             log.debug(
                 "STT song fragment detected: repeated_short=%d text='%s'",

@@ -420,3 +420,14 @@ class TestSttSongFragmentGuard(unittest.TestCase):
         )
 
         self.assertIsNone(policy.rejection_reason(text))
+
+    def test_screamed_game_request_is_not_song_fragment(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "\ud53c\ub0b4\ub098\uc694! \ud53c \ud55c\ubc88\ub9cc "
+            "\uc7ac\uc6cc\uc918! \uc544\uc544\uc544\uc544\uc544\uc544\uc544\uc544\uc544! "
+            "\uc544 \ub410\ub2e4 \ub410\ub2e4. \uc544 \ubb50\uc57c \uac15\ud654, "
+            "\uc544 \ud06c\ub9ac\ud37c\ub124\uc774\ud130!"
+        )
+
+        self.assertIsNone(policy.rejection_reason(text))
