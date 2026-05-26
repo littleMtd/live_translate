@@ -11,6 +11,7 @@ from utils.text_heuristics import (
     STT_FRAGMENTED_MARKERS,
     STT_GARBAGE_STRONG_KEYWORDS,
     STT_INSIGNIFICANT_RE,
+    STT_ALLOWED_SHORT_ENGLISH_WORDS,
     STT_LOW_VALUE_CONTEXT_MARKERS,
     STT_LOW_VALUE_FRAGMENT_MARKERS,
     STT_SONG_CONTEXT_MARKERS,
@@ -32,6 +33,15 @@ def _word_counts(words: list[str]) -> dict[str, int]:
 
 def _has_strong_garbage_keyword(text: str) -> bool:
     for keyword in STT_GARBAGE_STRONG_KEYWORDS:
+        if keyword == "클릭":
+            for match in re.finditer(re.escape(keyword), text):
+                before = text[match.start() - 1] if match.start() > 0 else ""
+                after = text[match.end()] if match.end() < len(text) else ""
+                if KOREAN_CHAR_RE.match(before) or KOREAN_CHAR_RE.match(after):
+                    continue
+                return True
+            continue
+
         if keyword != "광고":
             if keyword in text:
                 return True
@@ -178,7 +188,11 @@ class TranslationPolicy:
         has_english = bool(ENGLISH_WORD_RE.search(text))
 
         if has_korean and has_english:
-            english_words = ENGLISH_WORD_RE.findall(text)
+            english_words = [
+                word
+                for word in ENGLISH_WORD_RE.findall(text)
+                if word.upper() not in STT_ALLOWED_SHORT_ENGLISH_WORDS
+            ]
             if len(english_words) >= 3 and all(len(word) < 4 for word in english_words):
                 log.debug("STT garbage detected: random english mixed with korean in '%s'", text[:50])
                 return True

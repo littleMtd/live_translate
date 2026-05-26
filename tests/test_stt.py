@@ -152,12 +152,12 @@ class TestTranscribeSenseVoice(unittest.TestCase):
 # STTEngine._transcribe_groq  (mocked client, numpy required)
 # ---------------------------------------------------------------------------
 
-def _make_groq_resp(text: str, language: str = "ko") -> MagicMock:
+def _make_groq_resp(text: str, language: str = "ko", segments: list[dict] | None = None) -> MagicMock:
     """Build a mock verbose_json Groq response object."""
     resp = MagicMock()
     resp.text = text
     resp.language = language
-    resp.segments = []
+    resp.segments = segments or []
     return resp
 
 
@@ -328,6 +328,33 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual(event.text, "Groq result")
         self.assertEqual(event.engine, "groq")
         self.assertEqual(event.profile_id, "isegye_lilpa")
+
+    def test_transcribe_event_includes_groq_confidence_metadata(self):
+        eng = _make_engine_groq("Groq result")
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "Groq result",
+            segments=[
+                {"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"avg_logprob": -0.4, "no_speech_prob": 0.3, "compression_ratio": 1.0},
+            ],
+        )
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(self._audio())
+
+        self.assertIsNotNone(event)
+        self.assertAlmostEqual(event.avg_logprob, -0.3)
+        self.assertAlmostEqual(event.no_speech_prob, 0.2)
 
 
 # ---------------------------------------------------------------------------

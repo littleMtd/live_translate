@@ -85,12 +85,15 @@ class _VadState:
         self._silence_gate     = int(cfg.audio.vad_silence_sec    * sr)
         self._min_speech       = int(cfg.audio.vad_min_speech_sec * sr)
         self._max_speech       = int(cfg.audio.vad_max_speech_sec * sr)
+        hard_max_sec = getattr(cfg.audio, "vad_hard_max_speech_sec", cfg.audio.vad_max_speech_sec)
+        self._hard_max_speech  = int(max(cfg.audio.vad_max_speech_sec, hard_max_sec) * sr)
         self._volume_threshold = cfg.audio.volume_threshold
 
         mode = "Silero" if silero is not None else "RMS"
-        log.info("_VadState init — mode=%s silence=%.1fs min_speech=%.1fs max=%.1fs",
+        log.info("_VadState init — mode=%s silence=%.1fs min_speech=%.1fs max=%.1fs hard_max=%.1fs",
                  mode, cfg.audio.vad_silence_sec,
-                 cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec)
+                 cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec,
+                 hard_max_sec)
 
     def push(self, frame: np.ndarray) -> None:
         self._buf.append(frame.copy())
@@ -108,11 +111,13 @@ class _VadState:
             self._silent_samples += len(frame)
 
         silence_hit = self._silent_samples >= self._silence_gate
-        max_hit     = self._total_samples  >= self._max_speech
+        soft_max_hit = self._total_samples >= self._max_speech
+        hard_max_hit = self._total_samples >= self._hard_max_speech
+        max_hit = hard_max_hit or (soft_max_hit and self._silent_samples > 0)
 
         if (silence_hit or max_hit) and self._speech_samples >= self._min_speech:
             self._emit()
-        elif max_hit:
+        elif hard_max_hit:
             # Mostly silence at max length — discard
             self._reset()
 

@@ -73,6 +73,7 @@ class TestVadState(unittest.TestCase):
         m.audio.vad_silence_sec = self._SILENCE_SEC
         m.audio.vad_min_speech_sec = self._MIN_SEC
         m.audio.vad_max_speech_sec = self._MAX_SEC
+        m.audio.vad_hard_max_speech_sec = self._MAX_SEC
         return m
 
     def _loud(self, n=10):
@@ -119,6 +120,21 @@ class TestVadState(unittest.TestCase):
             for _ in range(5):
                 vad.push(self._loud(10))
         self.assertFalse(q.empty(), "Expected force-emit at max_speech")
+
+    def test_soft_max_waits_for_pause_before_hard_max(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        cfg.audio.vad_hard_max_speech_sec = 0.8
+        with patch("modules.audio_capture.cfg", cfg):
+            vad = _VadState(q)
+            # Reach soft max with continuous speech. This should not cut yet.
+            for _ in range(5):
+                vad.push(self._loud(10))
+            self.assertTrue(q.empty())
+            # A short pause after soft max is enough to emit coherently.
+            vad.push(self._quiet(5))
+        self.assertFalse(q.empty(), "Expected soft-max chunk to emit on next pause")
 
     def test_reset_at_max_speech_without_speech(self):
         from modules.audio_capture import _VadState

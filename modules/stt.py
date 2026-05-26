@@ -79,6 +79,8 @@ class STTEngine:
         self._groq_rate_limited_until = 0.0
         self._groq_fallback_rate_limited_until = 0.0
         self._last_transcript: str = ""
+        self._last_avg_logprob: float | None = None
+        self._last_no_speech_prob: float | None = None
         if self._use_groq:
             self._init_groq()
             self._init_groq_fallback()
@@ -185,15 +187,18 @@ class STTEngine:
                 )
         return None
 
-    @staticmethod
-    def _event(text: str, engine: str) -> TranscriptionEvent:
+    def _event(self, text: str, engine: str) -> TranscriptionEvent:
         return TranscriptionEvent(
             text=text,
             engine=engine,
             profile_id=cfg.active_streamer_profile,
+            avg_logprob=self._last_avg_logprob,
+            no_speech_prob=self._last_no_speech_prob,
         )
 
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
+        self._last_avg_logprob = None
+        self._last_no_speech_prob = None
         try:
             res = self._sense_voice.generate(
                 input=audio,
@@ -219,6 +224,8 @@ class STTEngine:
 
     def _transcribe_groq(self, audio: np.ndarray) -> str | None:
         started = time.monotonic()
+        self._last_avg_logprob = None
+        self._last_no_speech_prob = None
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
             self._groq_fallback_client is not None
@@ -253,6 +260,8 @@ class STTEngine:
             )
             return None
         if _rms(audio) < cfg.audio.volume_threshold:
+            self._last_avg_logprob = None
+            self._last_no_speech_prob = None
             log.debug("Groq STT skipped: audio below volume threshold")
             self._emit_stt_runtime_event(
                 audio=audio,
@@ -284,6 +293,8 @@ class STTEngine:
             detected_lang = getattr(resp, "language", None)
             text = (getattr(resp, "text", "") or "").strip()
             if should_reject_language(detected_lang, text, log):
+                self._last_avg_logprob = None
+                self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -304,6 +315,8 @@ class STTEngine:
                 logger=log,
             ):
                 reason, avg_logprob, no_speech_prob = _segment_rejection_reason(segments)
+                self._last_avg_logprob = None
+                self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -317,6 +330,8 @@ class STTEngine:
                 return None
 
             if not text:
+                self._last_avg_logprob = None
+                self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -327,6 +342,8 @@ class STTEngine:
                 )
                 return None
             if _is_hallucinated(text):
+                self._last_avg_logprob = None
+                self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -338,6 +355,8 @@ class STTEngine:
                 return None
             log.debug("Groq: %s", text)
             stats = segment_stats(segments)
+            self._last_avg_logprob = stats.logprob if stats else None
+            self._last_no_speech_prob = stats.no_speech if stats else None
             self._emit_stt_runtime_event(
                 audio=audio,
                 started=started,
@@ -350,6 +369,8 @@ class STTEngine:
             )
             return text
         except Exception as e:
+            self._last_avg_logprob = None
+            self._last_no_speech_prob = None
             if _is_groq_rate_limit_error(e):
                 log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
                 reason = "rate_limited"

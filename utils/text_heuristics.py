@@ -178,4 +178,16 @@ STT_INSIGNIFICANT_RE = re.compile(r"[\s.,!?~…·、。！？]+")
 
 KOREAN_CHAR_RE = re.compile(r"[가-힣]")
 ENGLISH_WORD_RE = re.compile(r"[a-zA-Z]{3,}")
+STT_ALLOWED_SHORT_ENGLISH_WORDS = frozenset(
+    {
+        "API",
+        "FPS",
+        "PVP",
+        "PVE",
+        "RPG",
+        "NPC",
+        "TNT",
+        "VOD",
+    }
+)
 DIGIT_RE = re.compile(r"\d+")

@@ -31,9 +31,13 @@ class _Audio:
     queue_maxsize:    int   = 10
     # VAD settings
     vad_enabled:           bool  = True
-    vad_silence_sec:       float = 0.9   # silence duration that triggers a cut
+    vad_silence_sec:       float = 0.75  # silence duration that triggers a cut
     vad_min_speech_sec:    float = 0.8   # discard chunks shorter than this
-    vad_max_speech_sec:    float = 6.0   # force cut even without silence
+    # Prefer natural pause boundaries for STT coherence. `vad_max_speech_sec`
+    # is a soft ceiling; if speech is still active, wait until either a short
+    # pause appears or `vad_hard_max_speech_sec` is reached.
+    vad_max_speech_sec:    float = 10.0
+    vad_hard_max_speech_sec: float = 14.0
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
     vad_silero_threshold:  float = 0.5   # speech probability threshold (0–1)
@@ -47,7 +51,8 @@ class _STT:
     groq_model:        str = "whisper-large-v3"
     language:          str = "ko"
     groq_prompt:            str   = (
-        "Korean livestream speech. Transcribe in Korean Hangul only; do not translate."
+        "Korean gaming livestream speech. Transcribe spoken Korean in Hangul only; "
+        "do not translate, summarize, or add captions/outro/ad boilerplate."
     )
     groq_timeout:           float = 10.0
     groq_max_retries:       int   = 0
@@ -75,7 +80,7 @@ class _STT:
 @dataclass(frozen=True)
 class _Splitter:
     min_wait_seconds:  int = 3
-    force_cut_seconds: int = 6
+    force_cut_seconds: int = 10
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
@@ -160,7 +165,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
-    streamer_profile: str        = "mwmeu"
+    streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     evolve_enabled: bool         = False
     evolve_every:   int          = 20

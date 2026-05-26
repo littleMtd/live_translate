@@ -76,6 +76,20 @@ class TestTranslationPolicy(unittest.TestCase):
             TranslationPolicy.is_stt_garbage("자막 제공 및 광고를 포함하고 있습니다.")
         )
 
+    def test_is_stt_garbage_allows_korean_game_click_terms(self):
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "에메랄드 블럭을 우클릭하면 기지가 활성화되면서 상점이 생깁니다."
+            )
+        )
+
+    def test_is_stt_garbage_allows_common_game_acronyms(self):
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "마인크래프트 RPG 서버입니다. PVP랑 PVE 요소도 조금 있어요."
+            )
+        )
+
     def test_is_stt_garbage_allows_single_short_english_acronym(self):
         self.assertFalse(
             TranslationPolicy.is_stt_garbage(
