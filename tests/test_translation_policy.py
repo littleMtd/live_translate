@@ -410,3 +410,13 @@ class TestSttSongFragmentGuard(unittest.TestCase):
         policy = TranslationPolicy(slang={})
 
         self.assertIsNone(policy.rejection_reason("아 진짜 진짜 너무 재밌었어요 여러분"))
+
+    def test_repeated_game_exclamation_is_not_song_fragment(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "\uc544 \ub290\ub824. \uc544 \ub290\ub824. "
+            "\uc544\ub2c8 \ub108\ubb34 \ub9ce\uc544 \ub108\ubb34 \ub9ce\uc544. "
+            "\ubcd1 \ubb34\uc2dc\ud558\uc9c0 \uc7e4\ub124? \uc544\uc544! \uc544\uc544!"
+        )
+
+        self.assertIsNone(policy.rejection_reason(text))

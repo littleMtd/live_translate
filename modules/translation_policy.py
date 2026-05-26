@@ -294,7 +294,11 @@ class TranslationPolicy:
         )
         punctuation_count = sum(normalized.count(mark) for mark in ("~", "…", "..."))
 
-        if marker_hits >= 2 and (has_song_context or repeated_short_words >= 3):
+        if marker_hits >= 2 and has_song_context:
+            log.debug("STT song fragment detected: markers=%d text='%s'", marker_hits, normalized[:50])
+            return True
+
+        if marker_hits >= 3 and repeated_short_words >= 3:
             log.debug("STT song fragment detected: markers=%d text='%s'", marker_hits, normalized[:50])
             return True
 
