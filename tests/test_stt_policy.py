@@ -70,6 +70,53 @@ class TestSttPolicy(unittest.TestCase):
             "seed prompt\nprofile glossary\nRecent Korean transcript context: recent transcript",
         )
 
+    def test_build_groq_prompt_respects_max_prompt_chars(self):
+        prompt = build_groq_prompt(
+            seed_prompt="seed prompt",
+            use_profile_glossary=True,
+            active_profile="profile",
+            last_transcript="recent context " * 20,
+            glossary_builder=lambda profile: "term " * 100,
+            max_context_chars=120,
+            max_prompt_chars=80,
+        )
+
+        self.assertIsNotNone(prompt)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 80)
+        self.assertTrue(prompt.startswith("seed prompt"))
+
+    def test_build_groq_prompt_respects_max_prompt_chars_for_korean_text(self):
+        prompt = build_groq_prompt(
+            seed_prompt="한국어 방송",
+            use_profile_glossary=True,
+            active_profile="profile",
+            last_transcript="최근 문맥 " * 20,
+            glossary_builder=lambda profile: "용어 " * 100,
+            max_context_chars=120,
+            max_prompt_chars=80,
+        )
+
+        self.assertIsNotNone(prompt)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 80)
+
+    def test_build_groq_prompt_keeps_hades_profile_under_groq_limit(self):
+        from config import cfg
+        from modules.streamer_profiles import build_stt_glossary
+
+        prompt = build_groq_prompt(
+            seed_prompt=cfg.stt.groq_prompt,
+            use_profile_glossary=True,
+            active_profile="hades_chxxnnx",
+            last_transcript="최근 문맥 " * 50,
+            glossary_builder=build_stt_glossary,
+            max_context_chars=120,
+            max_prompt_chars=896,
+        )
+
+        self.assertIsNotNone(prompt)
+        self.assertLessEqual(len(prompt.encode("utf-8")), 896)
+        self.assertIn("Korean gaming livestream speech", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

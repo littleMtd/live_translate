@@ -32,6 +32,7 @@ _TAG_RE = SENSEVOICE_TAG_RE
 _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
 _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
 _GROQ_CONTEXT_CHARS = 120
+_GROQ_PROMPT_MAX_CHARS = 896
 
 
 def _is_groq_rate_limit_error(exc: Exception) -> bool:
@@ -399,6 +400,7 @@ class STTEngine:
             last_transcript=self._last_transcript,
             glossary_builder=build_stt_glossary,
             max_context_chars=_GROQ_CONTEXT_CHARS,
+            max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
 
     @staticmethod

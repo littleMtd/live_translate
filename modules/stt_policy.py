@@ -7,6 +7,8 @@ from utils.logger import get_logger
 
 log = get_logger("stt_policy")
 
+_RECENT_CONTEXT_PREFIX = "Recent Korean transcript context: "
+
 
 @dataclass(frozen=True)
 class SegmentStats:
@@ -20,6 +22,18 @@ def normalize_prompt_text(text: str, max_chars: int | None = None) -> str:
     if max_chars is not None and len(text) > max_chars:
         text = text[-max_chars:]
     return text
+
+
+def _encoded_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _truncate_encoded(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if _encoded_len(text) <= max_chars:
+        return text
+    return text.encode("utf-8")[:max_chars].decode("utf-8", errors="ignore").rstrip()
 
 
 def is_hallucinated(text: str, max_japanese_chars: int, logger=log) -> bool:
@@ -108,6 +122,7 @@ def build_groq_prompt(
     last_transcript: str,
     glossary_builder: Callable[[str], str],
     max_context_chars: int,
+    max_prompt_chars: int | None = None,
 ) -> str | None:
     prompt_parts: list[str] = []
 
@@ -115,13 +130,34 @@ def build_groq_prompt(
     if normalized_seed:
         prompt_parts.append(normalized_seed)
 
+    def remaining_chars() -> int | None:
+        if max_prompt_chars is None:
+            return None
+        used = _encoded_len("\n".join(prompt_parts))
+        separator = 1 if prompt_parts else 0
+        return max_prompt_chars - used - separator
+
+    def append_with_budget(text: str) -> None:
+        text = normalize_prompt_text(text)
+        if not text:
+            return
+        budget = remaining_chars()
+        if budget is not None:
+            if budget <= 0:
+                return
+            if _encoded_len(text) > budget:
+                text = _truncate_encoded(text, budget).rstrip(" ,.;")
+        if text:
+            prompt_parts.append(text)
+
     if use_profile_glossary:
-        glossary_prompt = normalize_prompt_text(glossary_builder(active_profile))
-        if glossary_prompt:
-            prompt_parts.append(glossary_prompt)
+        append_with_budget(glossary_builder(active_profile))
 
     recent_context = normalize_prompt_text(last_transcript, max_context_chars)
     if recent_context:
-        prompt_parts.append(f"Recent Korean transcript context: {recent_context}")
+        append_with_budget(f"{_RECENT_CONTEXT_PREFIX}{recent_context}")
 
-    return "\n".join(prompt_parts) or None
+    prompt = "\n".join(prompt_parts)
+    if max_prompt_chars is not None and _encoded_len(prompt) > max_prompt_chars:
+        prompt = _truncate_encoded(prompt, max_prompt_chars)
+    return prompt or None
