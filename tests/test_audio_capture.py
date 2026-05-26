@@ -54,6 +54,38 @@ class TestRms(unittest.TestCase):
         audio = np.ones(10, dtype=np.float32)
         self.assertAlmostEqual(_rms(audio), 1.0)
 
+    def test_downmix_to_mono_averages_stereo_channels(self):
+        from modules.audio_capture import _downmix_to_mono
+        stereo = np.array(
+            [
+                [1.0, -1.0],
+                [0.5, 0.25],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+
+        mono = _downmix_to_mono(stereo)
+
+        self.assertEqual(mono.dtype, np.float32)
+        np.testing.assert_allclose(mono, np.array([0.0, 0.375, 0.5], dtype=np.float32))
+
+    def test_downmix_to_mono_keeps_single_channel_audio(self):
+        from modules.audio_capture import _downmix_to_mono
+        one_channel = np.array([[0.25], [0.5]], dtype=np.float32)
+
+        mono = _downmix_to_mono(one_channel)
+
+        np.testing.assert_allclose(mono, np.array([0.25, 0.5], dtype=np.float32))
+
+    def test_downmix_to_mono_flattens_1d_audio(self):
+        from modules.audio_capture import _downmix_to_mono
+        audio = np.array([0.1, 0.2], dtype=np.float32)
+
+        mono = _downmix_to_mono(audio)
+
+        np.testing.assert_allclose(mono, audio)
+
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
 class TestVadState(unittest.TestCase):

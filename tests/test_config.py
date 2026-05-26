@@ -18,6 +18,7 @@ class TestConfig(unittest.TestCase):
     def test_audio_defaults(self):
         self.assertEqual(cfg.audio.sample_rate, 16000)
         self.assertEqual(cfg.audio.channels, 1)
+        self.assertGreaterEqual(cfg.audio.capture_channels, cfg.audio.channels)
         self.assertGreater(cfg.audio.chunk_seconds, 0)
         self.assertGreater(cfg.audio.volume_threshold, 0)
 

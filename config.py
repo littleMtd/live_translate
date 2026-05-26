@@ -24,7 +24,8 @@ class _Keys:
 @dataclass(frozen=True)
 class _Audio:
     sample_rate:      int   = 16000
-    channels:         int   = 1
+    channels:         int   = 1        # mono after downmix, as sent to VAD/STT
+    capture_channels: int   = 2        # capture stereo when available, then downmix
     chunk_seconds:    int   = 3        # used only when vad_enabled=False
     volume_threshold: float = 0.01     # RMS threshold — speech vs silence
     device_name:      str   = "CABLE Output"

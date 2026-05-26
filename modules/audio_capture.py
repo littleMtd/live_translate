@@ -15,6 +15,15 @@ log = get_logger("audio_capture")
 _FIXED_BUF_MAX_SAMPLES = 8 * cfg.audio.sample_rate   # 8 seconds
 
 
+def _downmix_to_mono(indata: np.ndarray) -> np.ndarray:
+    """Return float32 mono audio, averaging all captured channels."""
+    if indata.ndim <= 1:
+        return indata.flatten().astype(np.float32, copy=False)
+    if indata.shape[1] == 1:
+        return indata[:, 0].astype(np.float32, copy=False)
+    return np.mean(indata, axis=1, dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Silero VAD
 # ---------------------------------------------------------------------------
@@ -181,7 +190,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                     log.warning("sounddevice status: %s", status)
                 if pause_event and pause_event.is_set():
                     return
-                mono = indata[:, 0] if indata.ndim > 1 else indata.flatten()
+                mono = _downmix_to_mono(indata)
 
                 if vad:
                     vad.push(mono)
@@ -203,12 +212,17 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                         put_latest(audio_queue, chunk.copy(), log, "audio_queue", "chunks")
 
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
-            log.info("Starting WASAPI loopback capture — mode=%s samplerate=%d",
-                     mode, cfg.audio.sample_rate)
+            capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+            log.info(
+                "Starting WASAPI loopback capture — mode=%s samplerate=%d capture_channels=%d",
+                mode,
+                cfg.audio.sample_rate,
+                capture_channels,
+            )
 
             with sd.InputStream(
                 samplerate=cfg.audio.sample_rate,
-                channels=cfg.audio.channels,
+                channels=capture_channels,
                 dtype="float32",
                 blocksize=cfg.audio.sample_rate // 10,   # 100 ms frames
                 callback=callback,
