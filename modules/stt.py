@@ -17,6 +17,7 @@ from modules.pipeline_events import TranscriptionEvent
 from modules.streamer_profiles import build_stt_glossary
 from modules.stt_policy import (
     build_groq_prompt,
+    dedupe_transcript_overlap,
     is_hallucinated,
     normalize_prompt_text,
     segment_stats,
@@ -153,6 +154,9 @@ class STTEngine:
         if not self._use_groq:
             result = self._transcribe_sensevoice(audio)
             if result is not None:
+                result = dedupe_transcript_overlap(self._last_transcript, result)
+                if not result:
+                    return None
                 self._consecutive_none = 0
                 self._last_transcript = result
                 return self._event(result, "sensevoice")
@@ -168,6 +172,9 @@ class STTEngine:
                     self._sv_fallback_counter = 0
                     probe = self._transcribe_sensevoice(audio)
                     if probe is not None:
+                        probe = dedupe_transcript_overlap(self._last_transcript, probe)
+                        if not probe:
+                            return None
                         log.info("SenseVoice recovered — switching back from Groq")
                         self._use_groq = False
                         self._consecutive_none = 0
@@ -176,6 +183,9 @@ class STTEngine:
 
         result = self._transcribe_groq(audio)
         if result is not None:
+            result = dedupe_transcript_overlap(self._last_transcript, result)
+            if not result:
+                return None
             self._consecutive_none = 0
             self._last_transcript = result
             return self._event(result, "groq")

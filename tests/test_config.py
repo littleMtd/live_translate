@@ -146,6 +146,10 @@ class TestVadConfig(unittest.TestCase):
     def test_vad_hard_max_not_less_than_soft_max(self):
         self.assertGreaterEqual(cfg.audio.vad_hard_max_speech_sec, cfg.audio.vad_max_speech_sec)
 
+    def test_vad_overlap_is_shorter_than_soft_max(self):
+        self.assertGreaterEqual(cfg.audio.vad_overlap_sec, 0)
+        self.assertLess(cfg.audio.vad_overlap_sec, cfg.audio.vad_max_speech_sec)
+
     def test_vad_silence_less_than_max(self):
         # A silence gate larger than max_speech would mean we never cut on silence
         self.assertLess(cfg.audio.vad_silence_sec, cfg.audio.vad_max_speech_sec)

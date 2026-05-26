@@ -356,6 +356,26 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertAlmostEqual(event.avg_logprob, -0.3)
         self.assertAlmostEqual(event.no_speech_prob, 0.2)
 
+    def test_transcribe_event_dedupes_overlap_against_previous_text(self):
+        eng = _make_engine_groq("여기 기지를 우리가 이제 막아야 돼요")
+        eng._last_transcript = "선택하면은 여기 기지를 우리가"
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(self._audio())
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.text, "이제 막아야 돼요")
+
 
 # ---------------------------------------------------------------------------
 # STTEngine.transcribe — consecutive-None warning and SenseVoice recovery

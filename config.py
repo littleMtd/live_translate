@@ -33,11 +33,12 @@ class _Audio:
     vad_enabled:           bool  = True
     vad_silence_sec:       float = 0.75  # silence duration that triggers a cut
     vad_min_speech_sec:    float = 0.8   # discard chunks shorter than this
-    # Prefer natural pause boundaries for STT coherence. `vad_max_speech_sec`
-    # is a soft ceiling; if speech is still active, wait until either a short
-    # pause appears or `vad_hard_max_speech_sec` is reached.
-    vad_max_speech_sec:    float = 10.0
-    vad_hard_max_speech_sec: float = 14.0
+    # Prefer natural pause boundaries for STT coherence. Runtime logs showed
+    # 4-7s chunks keep healthy confidence while reducing first-word delay.
+    # Audio overlap protects the boundary that a shorter soft ceiling creates.
+    vad_max_speech_sec:    float = 6.5
+    vad_hard_max_speech_sec: float = 9.0
+    vad_overlap_sec:       float = 1.0
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
     vad_silero_threshold:  float = 0.5   # speech probability threshold (0–1)
@@ -80,7 +81,7 @@ class _STT:
 @dataclass(frozen=True)
 class _Splitter:
     min_wait_seconds:  int = 3
-    force_cut_seconds: int = 10
+    force_cut_seconds: int = 8
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"

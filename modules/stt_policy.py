@@ -36,6 +36,37 @@ def _truncate_encoded(text: str, max_chars: int) -> str:
     return text.encode("utf-8")[:max_chars].decode("utf-8", errors="ignore").rstrip()
 
 
+def dedupe_transcript_overlap(
+    previous: str,
+    current: str,
+    *,
+    max_overlap_tokens: int = 12,
+    min_overlap_tokens: int = 2,
+    min_overlap_chars: int = 5,
+) -> str:
+    """Remove duplicated leading text caused by overlapped audio chunks."""
+    previous = " ".join((previous or "").split())
+    current = " ".join((current or "").split())
+    if not previous or not current:
+        return current
+
+    prev_words = previous.split()
+    cur_words = current.split()
+    max_tokens = min(max_overlap_tokens, len(prev_words), len(cur_words))
+    for count in range(max_tokens, min_overlap_tokens - 1, -1):
+        if prev_words[-count:] == cur_words[:count]:
+            overlap_text = " ".join(cur_words[:count])
+            if len(overlap_text.replace(" ", "")) >= min_overlap_chars:
+                return " ".join(cur_words[count:]).strip()
+
+    max_chars = min(80, len(previous), len(current))
+    for count in range(max_chars, min_overlap_chars - 1, -1):
+        if previous[-count:] == current[:count]:
+            return current[count:].lstrip()
+
+    return current
+
+
 def is_hallucinated(text: str, max_japanese_chars: int, logger=log) -> bool:
     chars = [char for char in text if not char.isspace()]
     if not chars:

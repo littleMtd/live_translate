@@ -3,6 +3,7 @@ import unittest
 
 from modules.stt_policy import (
     build_groq_prompt,
+    dedupe_transcript_overlap,
     is_hallucinated,
     normalize_prompt_text,
     segment_stats,
@@ -116,6 +117,26 @@ class TestSttPolicy(unittest.TestCase):
         self.assertIsNotNone(prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 896)
         self.assertIn("Korean gaming livestream speech", prompt)
+
+    def test_dedupe_transcript_overlap_removes_repeated_word_prefix(self):
+        self.assertEqual(
+            dedupe_transcript_overlap(
+                "여기를 선택하면은 여기 기지를 우리가",
+                "여기 기지를 우리가 이제 다같이 디펜스 해야 돼요",
+            ),
+            "이제 다같이 디펜스 해야 돼요",
+        )
+
+    def test_dedupe_transcript_overlap_removes_repeated_char_prefix(self):
+        self.assertEqual(
+            dedupe_transcript_overlap("안녕하세요반갑습니다", "반갑습니다오늘은"),
+            "오늘은",
+        )
+
+    def test_dedupe_transcript_overlap_keeps_unrelated_text(self):
+        current = "직업은 들어가서 하는 건가요"
+
+        self.assertEqual(dedupe_transcript_overlap("벽을 세워야 돼요", current), current)
 
 
 if __name__ == "__main__":

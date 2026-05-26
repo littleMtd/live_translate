@@ -74,6 +74,7 @@ class TestVadState(unittest.TestCase):
         m.audio.vad_min_speech_sec = self._MIN_SEC
         m.audio.vad_max_speech_sec = self._MAX_SEC
         m.audio.vad_hard_max_speech_sec = self._MAX_SEC
+        m.audio.vad_overlap_sec = 0.0
         return m
 
     def _loud(self, n=10):
@@ -135,6 +136,44 @@ class TestVadState(unittest.TestCase):
             # A short pause after soft max is enough to emit coherently.
             vad.push(self._quiet(5))
         self.assertFalse(q.empty(), "Expected soft-max chunk to emit on next pause")
+
+    def test_soft_max_overlap_prefixes_next_emitted_chunk(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        cfg.audio.vad_hard_max_speech_sec = 0.8
+        cfg.audio.vad_overlap_sec = 0.1  # 10 samples
+        with patch("modules.audio_capture.cfg", cfg):
+            vad = _VadState(q)
+            for _ in range(5):
+                vad.push(self._loud(10))
+            vad.push(self._quiet(5))  # soft-max emit, keeps 10-sample overlap
+            first = q.get_nowait()
+
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))  # natural emit, prefixed with previous overlap
+            second = q.get_nowait()
+
+        self.assertEqual(len(first), 55)
+        self.assertEqual(len(second), 30)
+
+    def test_natural_silence_cut_does_not_create_overlap(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        cfg.audio.vad_overlap_sec = 0.1
+        with patch("modules.audio_capture.cfg", cfg):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+            first = q.get_nowait()
+
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+            second = q.get_nowait()
+
+        self.assertEqual(len(first), 20)
+        self.assertEqual(len(second), 20)
 
     def test_reset_at_max_speech_without_speech(self):
         from modules.audio_capture import _VadState

@@ -80,6 +80,7 @@ class _VadState:
         self._total_samples  = 0
         self._speech_samples = 0
         self._silent_samples = 0
+        self._pending_overlap = np.zeros(0, dtype=np.float32)
 
         sr = cfg.audio.sample_rate
         self._silence_gate     = int(cfg.audio.vad_silence_sec    * sr)
@@ -87,13 +88,15 @@ class _VadState:
         self._max_speech       = int(cfg.audio.vad_max_speech_sec * sr)
         hard_max_sec = getattr(cfg.audio, "vad_hard_max_speech_sec", cfg.audio.vad_max_speech_sec)
         self._hard_max_speech  = int(max(cfg.audio.vad_max_speech_sec, hard_max_sec) * sr)
+        self._overlap_samples  = int(max(0.0, getattr(cfg.audio, "vad_overlap_sec", 0.0)) * sr)
         self._volume_threshold = cfg.audio.volume_threshold
 
         mode = "Silero" if silero is not None else "RMS"
-        log.info("_VadState init — mode=%s silence=%.1fs min_speech=%.1fs max=%.1fs hard_max=%.1fs",
-                 mode, cfg.audio.vad_silence_sec,
-                 cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec,
-                 hard_max_sec)
+        log.info(
+            "_VadState init — mode=%s silence=%.1fs min_speech=%.1fs max=%.1fs hard_max=%.1fs overlap=%.1fs",
+            mode, cfg.audio.vad_silence_sec,
+            cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec,
+            hard_max_sec, self._overlap_samples / sr)
 
     def push(self, frame: np.ndarray) -> None:
         self._buf.append(frame.copy())
@@ -116,24 +119,38 @@ class _VadState:
         max_hit = hard_max_hit or (soft_max_hit and self._silent_samples > 0)
 
         if (silence_hit or max_hit) and self._speech_samples >= self._min_speech:
-            self._emit()
+            self._emit(overlap_next=max_hit and not silence_hit)
         elif hard_max_hit:
             # Mostly silence at max length — discard
-            self._reset()
+            self._reset(clear_overlap=True)
 
-    def _emit(self) -> None:
-        chunk = np.concatenate(self._buf)
+    def _emit(self, *, overlap_next: bool = False) -> None:
+        raw_chunk = np.concatenate(self._buf)
+        if self._pending_overlap.size:
+            chunk = np.concatenate([self._pending_overlap, raw_chunk])
+        else:
+            chunk = raw_chunk
         self._reset()
+        if overlap_next and self._overlap_samples > 0 and len(raw_chunk) > self._overlap_samples:
+            self._pending_overlap = raw_chunk[-self._overlap_samples:].copy()
+        else:
+            self._pending_overlap = np.zeros(0, dtype=np.float32)
         metrics.increment("audio.chunks")
         drained = put_latest(self._q, chunk, log, "audio_queue", "chunks")
         if drained == 0:
-            log.debug("VAD chunk emitted: %.2fs", len(chunk) / cfg.audio.sample_rate)
+            log.debug(
+                "VAD chunk emitted: %.2fs (overlap_next=%s)",
+                len(chunk) / cfg.audio.sample_rate,
+                overlap_next,
+            )
 
-    def _reset(self) -> None:
+    def _reset(self, *, clear_overlap: bool = False) -> None:
         self._buf            = []
         self._total_samples  = 0
         self._speech_samples = 0
         self._silent_samples = 0
+        if clear_overlap:
+            self._pending_overlap = np.zeros(0, dtype=np.float32)
         if self._silero is not None:
             self._silero.reset()
 
