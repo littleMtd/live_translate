@@ -9,6 +9,7 @@ import queue
 import signal
 import sys
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -100,13 +101,33 @@ def _shutdown_threads(
     return stuck
 
 
-def _stt_printer(sentence_queue: queue.Queue, stop_event: threading.Event) -> threading.Thread:
+def _apply_listen_mode_config() -> None:
+    listen_stt = replace(
+        cfg.stt,
+        groq_prompt=cfg.stt.listen_groq_prompt,
+        no_speech_threshold=cfg.stt.listen_no_speech_threshold,
+        avg_logprob_threshold=cfg.stt.listen_avg_logprob_threshold,
+    )
+    object.__setattr__(cfg, "stt", listen_stt)
+    log.info(
+        "Listen mode enabled (avg_logprob_threshold=%s, no_speech_threshold=%s)",
+        cfg.stt.avg_logprob_threshold,
+        cfg.stt.no_speech_threshold,
+    )
+
+
+def _stt_printer(
+    sentence_queue: queue.Queue,
+    stop_event: threading.Event,
+    mode_label: str = "STT-only",
+    log_prefix: str = "stt",
+) -> threading.Thread:
     """Reads sentences and prints them to console + log file. No API calls."""
     _LOG_DIR.mkdir(exist_ok=True)
-    log_path = _LOG_DIR / f"stt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    log_path = _LOG_DIR / f"{log_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
     def run():
-        print(f"\n  [STT-only mode] sentences → {log_path}\n", flush=True)
+        print(f"\n  [{mode_label} mode] sentences → {log_path}\n", flush=True)
         with open(log_path, "w", encoding="utf-8") as f:
             while not stop_event.is_set():
                 try:
@@ -128,11 +149,17 @@ def _stt_printer(sentence_queue: queue.Queue, stop_event: threading.Event) -> th
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stt-only", action="store_true",
-                        help="run STT + splitter only, no translation API calls")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--stt-only", action="store_true",
+                      help="run STT + splitter only, no translation API calls")
+    mode.add_argument("--listen", action="store_true",
+                      help="listen mode for Korean lyrics/music: STT-only with relaxed filters")
     args = parser.parse_args()
 
-    _validate_config(args.stt_only)
+    stt_only = args.stt_only or args.listen
+    _validate_config(stt_only)
+    if args.listen:
+        _apply_listen_mode_config()
 
     try:
         from utils.config_export import write as _write_config_json
@@ -144,7 +171,7 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    log.info("Starting pipeline… (stt-only=%s)", args.stt_only)
+    log.info("Starting pipeline… (stt-only=%s, listen=%s)", stt_only, args.listen)
 
     all_queues = [audio_queue, text_queue, sentence_queue, subtitle_queue]
 
@@ -160,9 +187,13 @@ def main():
         sentence_splitter.start(text_queue, sentence_queue, stop_event, pause_event),
     ]
 
-    if args.stt_only:
-        threads.append(_stt_printer(sentence_queue, stop_event))
-        log.info("STT-only mode — press Ctrl+C to stop")
+    if stt_only:
+        if args.listen:
+            threads.append(_stt_printer(sentence_queue, stop_event, "listen", "listen"))
+            log.info("Listen mode — press Ctrl+C to stop")
+        else:
+            threads.append(_stt_printer(sentence_queue, stop_event))
+            log.info("STT-only mode — press Ctrl+C to stop")
         stop_event.wait()
     else:
         threads.append(translator.start(sentence_queue, subtitle_queue, stop_event, pause_event))

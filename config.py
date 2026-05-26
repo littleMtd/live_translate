@@ -33,7 +33,7 @@ class _Audio:
     vad_enabled:           bool  = True
     vad_silence_sec:       float = 0.9   # silence duration that triggers a cut
     vad_min_speech_sec:    float = 0.8   # discard chunks shorter than this
-    vad_max_speech_sec:    float = 8.0   # force cut even without silence
+    vad_max_speech_sec:    float = 6.0   # force cut even without silence
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
     vad_silero_threshold:  float = 0.5   # speech probability threshold (0–1)
@@ -59,6 +59,14 @@ class _STT:
     # Groq verbose_json confidence filters
     no_speech_threshold:    float = 0.6    # reject if avg no_speech_prob exceeds this
     avg_logprob_threshold:  float = -1.0   # reject if avg_logprob below this
+    # Listen mode keeps STT-only output usable for songs/music, where Whisper
+    # confidence is usually lower than normal speech.
+    listen_no_speech_threshold:    float = 0.8
+    listen_avg_logprob_threshold:  float = -2.0
+    listen_groq_prompt:            str   = (
+        "Korean song lyrics or speech. Transcribe in Korean Hangul only; "
+        "keep lyric lines exactly; do not translate."
+    )
     # Post-transcription sanity checks
     max_japanese_chars:     int   = 2      # reject if Japanese kana chars exceed this
     max_repeat_ratio:       float = 0.7    # reject if a repeated phrase fills > this fraction
@@ -67,7 +75,7 @@ class _STT:
 @dataclass(frozen=True)
 class _Splitter:
     min_wait_seconds:  int = 3
-    force_cut_seconds: int = 8
+    force_cut_seconds: int = 6
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
@@ -87,7 +95,7 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 _VALID_STREAMER_PROFILES = known_profile_ids()
 _VALID_TRANSLATION_MODES = {"live", "clip"}
-_VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia"}
+_VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia", "groq"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
 
 
@@ -109,9 +117,8 @@ class _Translation:
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    # Empty by default: live_engine="nvidia" should stay NVIDIA-only and must
-    # not spend paid fallback APIs unless explicitly configured.
-    engine_chain:   tuple        = ()
+    # Fallback chain when live_engine="nvidia" times out.
+    engine_chain:   tuple        = ("groq",)
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -120,6 +127,16 @@ class _Translation:
     model:                    str = "claude-sonnet-4-6"
     # Gemini
     gemini_model:             str = "gemini-2.5-flash"
+    # Groq fallback (uses GROQ_API_KEY_fall_back)
+    groq_translation_model:   str = "qwen/qwen3-32b"
+    groq_translation_timeout: int = 12
+    # Keep Groq fallback below on-demand TPM limits. NVIDIA remains the quality path.
+    groq_translation_compact_prompt: bool = True
+    groq_translation_max_tokens: int = 512
+    groq_translation_retry_max_tokens: int = 256
+    groq_translation_context_window: int = 2
+    groq_translation_history_source_chars: int = 160
+    groq_translation_history_target_chars: int = 220
     # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
     google_translate_lang:    str = "zh-TW"
     # DeepSeek  (uncomment when DeepSeekEngine is implemented)

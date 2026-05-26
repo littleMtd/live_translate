@@ -26,6 +26,7 @@ from modules.translation_prompts import (
 from modules.translation_engines import (
     TranslationEngine,
     _build_engine_chain,
+    get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
 )
 from modules.translation_runtime import (
@@ -43,10 +44,22 @@ _LOG_DIR.mkdir(exist_ok=True)
 
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
 _CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
-_FALLBACK_PROBE_EVERY = 50  # after this many fallback calls, probe engines[0] once
+_FALLBACK_PROBE_EVERY = 10   # after this many fallback calls, probe engines[0] once
+_FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
+_API_EVENT_DEFAULTS = {
+    "api_attempt_count": 0,
+    "api_timeout_count": 0,
+    "api_total_wall_ms": None,
+    "api_final_attempt_ms": None,
+    "retry_sleep_ms": 0.0,
+    "timeout_config_ms": None,
+    "api_error_type": None,
+    "api_error_message_class": None,
+}
+_CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
 _DEPENDENCY_MARKERS = (
@@ -101,10 +114,19 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
             ("滿了，滿了", "大神巫，大神巫"),
         ),
     ),
+    (
+        ("다이저고 데스", "다이저 오브 데스", "다이죠부 데스", "다이조부 데스"),
+        (
+            ("死亡之舞", "大丈夫です"),
+            ("Daisuki desu", "大丈夫です"),
+            ("大好きです", "大丈夫です"),
+        ),
+    ),
 )
 
 _SHARED_NAME_SCOPE = "__shared__"
 _HADES_PROFILE_ID = "hades_chxxnnx"
+_MWMEU_PROFILE_ID = "mwmeu"
 
 _SOURCE_NORM_SHARED: dict[str, str] = {}
 _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
@@ -118,6 +140,42 @@ _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
         "채나님": "챈나님",
         "채나야": "챈나야",
         "채나": "챈나",
+    },
+    _MWMEU_PROFILE_ID: {
+        "이변이": "이비",
+        "이츠 언니": "리츠 언니",
+        "이츠가": "리츠가",
+        "이츠랑": "리츠랑",
+        "이츠는": "리츠는",
+        "릿츠": "리츠",
+        "소아 언니": "수아 언니",
+        "소아가": "수아가",
+        "초운이": "초은이",
+        "초운": "초은",
+        "조은이": "초은이",
+        "조은아": "초은아",
+        "조은": "초은",
+        "초원이랑": "초은이랑",
+        "초원이": "초은이",
+        "엔즈": "웬즈",
+        "왠즈": "웬즈",
+        "왠지들": "웬즈들",
+        "지안 언니": "지한 언니",
+        "지안언니": "지한언니",
+        "지안이": "지한이",
+        "시에가파크": "치이카와파크",
+        "치카와파크": "치이카와파크",
+        "치에이카와": "치이카와",
+        "치에카와": "치이카와",
+        "시이카와": "치이카와",
+        "시가와": "치이카와",
+        "지휘카와": "치이카와",
+        "치유카": "치이카와",
+        "치이칸": "치이카와",
+        "치카와": "치이카와",
+        "하치와래": "하치와레",
+        "하츠와 아래": "하치와레",
+        "하츠와": "하치와레",
     },
 }
 
@@ -153,6 +211,8 @@ _KOREAN_NAME_SUFFIXES = frozenset(
         "와",
         "야",
         "아",
+        "들",
+        "보다",
     )
 )
 
@@ -195,6 +255,66 @@ _NAME_RENDERING_RULES = (
         ("고세구",),
         ("高世久",),
         "Gosegu",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("지한", "지한이"),
+        ("지한", "지안", "志安", "智漢", "志漢"),
+        "지한",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("이비",),
+        ("이비", "이변이", "伊比", "伊變"),
+        "이비",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("수아",),
+        ("수아", "소아", "水亞", "數亞", "素亞"),
+        "수아",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("리츠",),
+        ("리츠", "이츠", "릿츠", "利茨", "米茨"),
+        "리츠",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("초은", "초은이"),
+        ("초은", "초운", "조은", "초원", "初恩", "初雲"),
+        "초은",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("웬즈", "웬즈들", "WENs"),
+        ("웬즈", "왠즈", "왠지", "엔즈", "wenz", "Wenz", "WENZ", "溫斯"),
+        "WENs",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("치이카와", "치이카와파크"),
+        ("치이카와", "치이카와파크", "치카와", "千川", "奇卡瓦", "奇伊卡", "芝伊卡", "千代田", "市川", "Pekawa"),
+        "Chiikawa",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("하치와레",),
+        ("하치와레", "하치와래", "哈奇瓦雷", "哈奇瓦", "哈茨", "黑豆"),
+        "Hachiware",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("모몽가",),
+        ("모몽가", "摩蒙加", "蒙蒙加", "毛毛蟲"),
+        "Momonga",
+    ),
+    _NameRenderingRule(
+        _MWMEU_PROFILE_ID,
+        ("우사기",),
+        ("우사기", "烏薩奇", "兔子"),
+        "Usagi",
     ),
 )
 
@@ -281,7 +401,7 @@ def _normalize_source_before_matching(text: str) -> str:
     profile_id = cfg.active_streamer_profile
     if profile_id and bool(cfg.translation.use_profile):
         norm.update(_SOURCE_NORM_BY_PROFILE.get(profile_id, {}))
-    for noisy, canonical in norm.items():
+    for noisy, canonical in sorted(norm.items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(noisy, canonical)
     return text
 
@@ -385,6 +505,36 @@ class TranslationOutcome:
         }
 
 
+def _outcome_used_api(outcome: TranslationOutcome) -> bool:
+    if outcome.result_source == "api":
+        return True
+    if outcome.status == "failed" and outcome.result_source == "none":
+        return True
+    if outcome.result_source == "post_policy" and outcome.cache_status not in _CACHE_HIT_STATUSES:
+        return True
+    return False
+
+
+def _api_event_fields(
+    outcome: TranslationOutcome,
+    diagnostics: dict[str, int | float | str | None],
+) -> dict:
+    fields = dict(_API_EVENT_DEFAULTS)
+    engine = str(diagnostics.get("engine") or "")
+    if not engine or engine != outcome.engine or not _outcome_used_api(outcome):
+        return fields
+    if int(diagnostics.get("api_attempt_count") or 0) <= 0:
+        return fields
+    for key in fields:
+        fields[key] = diagnostics.get(key, fields[key])
+    return fields
+
+
+def _retry_diagnostics_apply(outcome: TranslationOutcome, diagnostics: dict[str, int | str]) -> bool:
+    engine = str(diagnostics.get("engine") or "")
+    return bool(engine and engine == outcome.engine and _outcome_used_api(outcome))
+
+
 @dataclass(frozen=True)
 class _CompletedTranslation:
     seq: int
@@ -397,6 +547,7 @@ class _CompletedTranslation:
     worker_id: str
     retry_count: int
     retry_reason: str
+    api_event_fields: dict
 
 
 class Translator:
@@ -405,6 +556,7 @@ class Translator:
         self._engines: list[TranslationEngine] = _build_engine_chain()
         self._active_idx = 0
         self._probe_counter = 0
+        self._consecutive_primary_failures = 0
         # 保留最近的翻译历史以提供上下文；至少保留 30 条以增强上下文感知
         recent_window = max(getattr(cfg.translation, 'context_window', 0) or 0, 30)
         self._memory = TranslationMemory(
@@ -604,7 +756,7 @@ class Translator:
 
     def _call_with_fallback(self, text: str, system_prompt: str, incomplete: bool,
                             history: list[tuple[str, str]] | None = None) -> str | None:
-        state = FallbackState(self._active_idx, self._probe_counter)
+        state = FallbackState(self._active_idx, self._probe_counter, self._consecutive_primary_failures)
         result = call_with_fallback(
             self._engines,
             state,
@@ -613,11 +765,13 @@ class Translator:
             incomplete,
             history,
             _FALLBACK_PROBE_EVERY,
+            _FALLBACK_THRESHOLD,
             _looks_untranslated,
             log,
         )
         self._active_idx = state.active_idx
         self._probe_counter = state.probe_counter
+        self._consecutive_primary_failures = state.consecutive_primary_failures
         return result
 
     def _get_prompt_version_hash(self) -> str:
@@ -676,15 +830,13 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             completed_at = time.monotonic()
             elapsed = completed_at - started
             diagnostics = get_last_engine_diagnostics()
+            api_diagnostics = get_last_engine_api_diagnostics()
             retry_count = 0
             retry_reason = ""
-            if (
-                outcome.result_source == "api"
-                and outcome.engine == "nvidia"
-                and diagnostics.get("engine") == "nvidia"
-            ):
+            if _retry_diagnostics_apply(outcome, diagnostics):
                 retry_count = int(diagnostics.get("retry_count") or 0)
                 retry_reason = str(diagnostics.get("retry_reason") or "")
+            api_event_fields = _api_event_fields(outcome, api_diagnostics)
             return _CompletedTranslation(
                 seq,
                 outcome,
@@ -696,6 +848,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 worker_id,
                 retry_count,
                 retry_reason,
+                api_event_fields,
             )
 
         def collect_finished() -> None:
@@ -723,6 +876,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     "translation_worker_id": item.worker_id,
                     "retry_count": item.retry_count,
                     "retry_reason": item.retry_reason,
+                    **item.api_event_fields,
                 }
             )
             metrics.observe_latency("translation", elapsed)

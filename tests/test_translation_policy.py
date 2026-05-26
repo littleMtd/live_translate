@@ -61,6 +61,13 @@ class TestTranslationPolicy(unittest.TestCase):
             )
         )
 
+    def test_is_stt_garbage_allows_adjective_ad_use_in_real_speech(self):
+        self.assertFalse(
+            TranslationPolicy.is_stt_garbage(
+                "부채 있잖아요. 주류 회사 광고용으로. 그런 부채였는데 기념품으로 둘이 가져가더라고요."
+            )
+        )
+
     def test_is_stt_garbage_still_rejects_strong_commercial_words(self):
         self.assertTrue(
             TranslationPolicy.is_stt_garbage("사이트 들어가보세요 구매 클릭 방문")

@@ -30,6 +30,20 @@ def _word_counts(words: list[str]) -> dict[str, int]:
     return counts
 
 
+def _has_strong_garbage_keyword(text: str) -> bool:
+    for keyword in STT_GARBAGE_STRONG_KEYWORDS:
+        if keyword != "광고":
+            if keyword in text:
+                return True
+            continue
+
+        for match in re.finditer(re.escape(keyword), text):
+            if text[match.end():].startswith("용"):
+                continue
+            return True
+    return False
+
+
 class TranslationPolicy:
     def __init__(
         self,
@@ -156,11 +170,7 @@ class TranslationPolicy:
             )
             return True
 
-        if (
-            any(keyword in text for keyword in STT_GARBAGE_STRONG_KEYWORDS)
-            and '?' not in text
-            and '!' not in text
-        ):
+        if _has_strong_garbage_keyword(text) and '?' not in text and '!' not in text:
             log.debug("STT garbage detected: commercial keywords in '%s'", text[:50])
             return True
 

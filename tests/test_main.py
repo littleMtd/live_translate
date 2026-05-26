@@ -8,6 +8,7 @@ OPTIMIZATION_ACTION_PLAN.md §6) — the STT-only printer loop accessed
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import queue
 import sys
 import threading
@@ -43,6 +44,31 @@ def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
         assert exc.code == 1
     else:
         raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
+
+
+def test_apply_listen_mode_config_relaxes_stt_filters():
+    import main as main_module
+
+    original_stt = main_module.cfg.stt
+    test_stt = replace(
+        original_stt,
+        groq_prompt="speech prompt",
+        no_speech_threshold=0.6,
+        avg_logprob_threshold=-1.0,
+        listen_groq_prompt="lyrics prompt",
+        listen_no_speech_threshold=0.8,
+        listen_avg_logprob_threshold=-2.0,
+    )
+    object.__setattr__(main_module.cfg, "stt", test_stt)
+
+    try:
+        main_module._apply_listen_mode_config()
+
+        assert main_module.cfg.stt.groq_prompt == "lyrics prompt"
+        assert main_module.cfg.stt.no_speech_threshold == 0.8
+        assert main_module.cfg.stt.avg_logprob_threshold == -2.0
+    finally:
+        object.__setattr__(main_module.cfg, "stt", original_stt)
 
 
 def _wait_until(predicate, timeout: float, interval: float = 0.02) -> bool:

@@ -15,6 +15,7 @@ UntranslatedCheck = Callable[[str, str], bool]
 class FallbackState:
     active_idx: int = 0
     probe_counter: int = 0
+    consecutive_primary_failures: int = 0
 
 
 def active_engine(
@@ -64,6 +65,7 @@ def call_with_fallback(
     incomplete: bool,
     history: list[tuple[str, str]] | None,
     probe_every: int,
+    failure_threshold: int,
     looks_untranslated: UntranslatedCheck,
     log,
 ) -> str | None:
@@ -71,6 +73,7 @@ def call_with_fallback(
         metrics.increment("translation.fallback.no_engines")
         return None
 
+    # ── Probe: if hard-switched to fallback, periodically try primary ─────────
     if state.active_idx > 0:
         state.probe_counter += 1
         if state.probe_counter >= probe_every:
@@ -81,6 +84,7 @@ def call_with_fallback(
                 metrics.increment("translation.fallback.primary_recovered")
                 log.info("Primary engine %s recovered; switching back", engines[0].engine_name)
                 state.active_idx = 0
+                state.consecutive_primary_failures = 0
                 return probe
             if probe:
                 metrics.increment("translation.bad_output")
@@ -89,21 +93,50 @@ def call_with_fallback(
                 engines[state.active_idx].engine_name,
             )
 
-    for index in range(state.active_idx, len(engines)):
+    # ── Try primary (current hard-active) engine ──────────────────────────────
+    primary_idx = state.active_idx
+    metrics.increment("translation.fallback.attempt")
+    primary = engines[primary_idx]
+    result = primary.translate(text, system_prompt, incomplete, history)
+
+    if result and not looks_untranslated(result, text):
+        state.consecutive_primary_failures = 0
+        return result
+
+    if result:
+        metrics.increment("translation.bad_output")
+
+    state.consecutive_primary_failures += 1
+    hard_switch = state.consecutive_primary_failures >= failure_threshold
+
+    # ── Try fallback engines ──────────────────────────────────────────────────
+    for index in range(primary_idx + 1, len(engines)):
         metrics.increment("translation.fallback.attempt")
-        result = engines[index].translate(text, system_prompt, incomplete, history)
-        if result and not looks_untranslated(result, text):
-            if index > state.active_idx:
+        fb_result = engines[index].translate(text, system_prompt, incomplete, history)
+        if fb_result and not looks_untranslated(fb_result, text):
+            if hard_switch:
+                # N consecutive failures — commit to this engine until probe recovers primary
                 metrics.increment("translation.fallback.success")
                 log.warning(
-                    "Engine %s failed; switching to %s",
-                    engines[state.active_idx].engine_name,
+                    "Engine %s failed %d consecutive times; switching to %s",
+                    primary.engine_name,
+                    state.consecutive_primary_failures,
                     engines[index].engine_name,
                 )
                 state.active_idx = index
+                state.consecutive_primary_failures = 0
                 state.probe_counter = 0
-            return result
-        if result:
+            else:
+                # Soft fallback: use this engine for this sentence only, retry primary next call
+                log.info(
+                    "Engine %s failed (failure %d/%d); using %s for this sentence",
+                    primary.engine_name,
+                    state.consecutive_primary_failures,
+                    failure_threshold - 1,
+                    engines[index].engine_name,
+                )
+            return fb_result
+        if fb_result:
             metrics.increment("translation.bad_output")
 
     log.error("All engines failed for: %.40s", text)

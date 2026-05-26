@@ -15,7 +15,8 @@ import unittest.mock
 import modules.translator as translator_module
 from modules.translation_engines import (
     _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
-    NvidiaEngine, get_last_engine_diagnostics,
+    GroqTranslationEngine, NvidiaEngine, get_last_engine_api_diagnostics,
+    get_last_engine_diagnostics,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -91,6 +92,7 @@ def _make_translator() -> Translator:
     t._evolver = PromptEvolver()
     t._active_idx = 0
     t._probe_counter = 0
+    t._consecutive_primary_failures = 0
     t._last_input = ""
     t._engines = [_mock_engine(name) for name in ("gemini", "claude")]
     t._policy = TranslationPolicy(slang=cfg.translation.slang, min_translate_chars=2)
@@ -342,6 +344,148 @@ class TestGoogleTranslateEngine(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# GroqTranslationEngine unit tests
+# ---------------------------------------------------------------------------
+
+class TestGroqTranslationEngine(unittest.TestCase):
+
+    def _engine(self) -> GroqTranslationEngine:
+        e = GroqTranslationEngine.__new__(GroqTranslationEngine)
+        e._api_key = "fake-key"
+        e._model = "qwen/qwen3-32b"
+        e._timeout = 12
+        e._max_tokens = 512
+        e._retry_max_tokens = 256
+        e._strip_think = True
+        return e
+
+    def _response(self, content: str):
+        import json
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }).encode()
+        return mock_resp
+
+    def test_request_includes_headers_required_by_groq_edge(self):
+        e = self._engine()
+
+        with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+            result = e.translate("hello", "system", False)
+
+        self.assertEqual(result, "ok")
+        req = urlopen.call_args.args[0]
+        headers = {k.lower(): v for k, v in req.header_items()}
+        self.assertEqual(headers["accept"], "application/json")
+        self.assertEqual(headers["user-agent"], "live_translate/1.0")
+        self.assertEqual(headers["authorization"], "Bearer fake-key")
+
+    def test_uses_compact_prompt_by_default(self):
+        import json
+
+        e = self._engine()
+        long_prompt = "full quality prompt " * 500
+
+        with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+            result = e.translate("hello", long_prompt, False)
+
+        self.assertEqual(result, "ok")
+        req = urlopen.call_args.args[0]
+        payload = json.loads(req.data.decode())
+        system_message = payload["messages"][0]["content"]
+        self.assertIn("Korean to Traditional Chinese live subtitle translator", system_message)
+        self.assertNotIn("full quality prompt", system_message)
+
+    def test_strips_closed_and_unclosed_think_blocks(self):
+        e = self._engine()
+
+        with patch("urllib.request.urlopen", return_value=self._response("<think>notes</think>你好")):
+            self.assertEqual(e.translate("hello", "system", False), "你好")
+
+        with patch("urllib.request.urlopen", return_value=self._response("<think>unfinished notes")):
+            self.assertIsNone(e.translate("hello", "system", False))
+
+    def test_limits_history_and_tokens_for_groq_fallback(self):
+        import json
+        from config import cfg
+
+        e = self._engine()
+        history = [
+            (f"source-{i}-" + "x" * 240, f"target-{i}-" + "y" * 300)
+            for i in range(4)
+        ]
+        original_window = cfg.translation.groq_translation_context_window
+
+        try:
+            object.__setattr__(cfg.translation, "groq_translation_context_window", 2)
+            with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+                result = e.translate("hello", "system", False, history)
+        finally:
+            object.__setattr__(
+                cfg.translation,
+                "groq_translation_context_window",
+                original_window,
+            )
+
+        self.assertEqual(result, "ok")
+        req = urlopen.call_args.args[0]
+        payload = json.loads(req.data.decode())
+        messages = payload["messages"]
+
+        self.assertEqual(payload["max_tokens"], 512)
+        self.assertEqual(len(messages), 6)
+        self.assertNotIn("source-1-", str(messages))
+        self.assertIn("source-2-", messages[1]["content"])
+        self.assertIn("source-3-", messages[3]["content"])
+        self.assertTrue(messages[-1]["content"].startswith("/no_think\ninput:"))
+        self.assertLessEqual(len(messages[1]["content"]), len("input: ") + 163)
+        self.assertLessEqual(len(messages[2]["content"]), 223)
+
+    def test_retries_413_token_limit_without_history(self):
+        import io
+        import json
+        import urllib.error
+        from config import cfg
+
+        e = self._engine()
+        history = [("source", "target")]
+        original_window = cfg.translation.groq_translation_context_window
+        error = urllib.error.HTTPError(
+            url="https://api.groq.com/openai/v1/chat/completions",
+            code=413,
+            msg="request too large",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"TPM token limit","code":"rate_limit_exceeded"}}'),
+        )
+
+        try:
+            object.__setattr__(cfg.translation, "groq_translation_context_window", 1)
+            with patch("urllib.request.urlopen", side_effect=[error, self._response("ok")]) as urlopen:
+                result = e.translate("hello", "system", False, history)
+        finally:
+            object.__setattr__(
+                cfg.translation,
+                "groq_translation_context_window",
+                original_window,
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(urlopen.call_count, 2)
+
+        first_req = urlopen.call_args_list[0].args[0]
+        retry_req = urlopen.call_args_list[1].args[0]
+        first_payload = json.loads(first_req.data.decode())
+        retry_payload = json.loads(retry_req.data.decode())
+
+        self.assertEqual(len(first_payload["messages"]), 4)
+        self.assertEqual(len(retry_payload["messages"]), 2)
+        self.assertEqual(retry_payload["max_tokens"], 256)
+
+
+# ---------------------------------------------------------------------------
 # NvidiaEngine unit tests
 # ---------------------------------------------------------------------------
 
@@ -471,6 +615,15 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 1, "retry_reason": "empty_response"},
         )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 2)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 0)
+        self.assertIsNotNone(api_diagnostics["api_total_wall_ms"])
+        self.assertIsNotNone(api_diagnostics["api_final_attempt_ms"])
+        self.assertGreaterEqual(api_diagnostics["retry_sleep_ms"], 0)
+        self.assertEqual(api_diagnostics["timeout_config_ms"], 10000)
+        self.assertIsNone(api_diagnostics["api_error_type"])
+        self.assertIsNone(api_diagnostics["api_error_message_class"])
 
     def test_retries_once_after_timeout_error(self):
         import urllib.error
@@ -489,6 +642,39 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 1, "retry_reason": "timeout"},
         )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 2)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 1)
+        self.assertIsNotNone(api_diagnostics["api_total_wall_ms"])
+        self.assertIsNotNone(api_diagnostics["api_final_attempt_ms"])
+        self.assertGreaterEqual(api_diagnostics["retry_sleep_ms"], 0)
+        self.assertEqual(api_diagnostics["timeout_config_ms"], 10000)
+        self.assertIsNone(api_diagnostics["api_error_type"])
+        self.assertIsNone(api_diagnostics["api_error_message_class"])
+
+    def test_records_final_timeout_error_diagnostics(self):
+        import urllib.error
+
+        e = self._engine()
+        side_effect = [urllib.error.URLError("timed out"), urllib.error.URLError("timed out")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("hello", "system", False)
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 1, "retry_reason": "timeout"},
+        )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 2)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 2)
+        self.assertEqual(api_diagnostics["api_error_type"], "timeout")
+        self.assertEqual(api_diagnostics["api_error_message_class"], "read_timeout")
+        self.assertEqual(api_diagnostics["timeout_config_ms"], 10000)
 
     def test_retries_once_after_non_timeout_network_error(self):
         import urllib.error
@@ -531,6 +717,11 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
         )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 1)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 0)
+        self.assertEqual(api_diagnostics["api_error_type"], "api_error")
+        self.assertEqual(api_diagnostics["api_error_message_class"], "http_4xx")
 
     def test_does_not_retry_http_server_error(self):
         import urllib.error
@@ -555,10 +746,19 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
         )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 1)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 0)
+        self.assertEqual(api_diagnostics["api_error_type"], "api_error")
+        self.assertEqual(api_diagnostics["api_error_message_class"], "http_5xx")
 
 
 class TestRuntimeRetryAttribution(unittest.TestCase):
-    def _emit_outcome_with_stale_nvidia_diagnostics(self, outcome: TranslationOutcome) -> dict:
+    def _emit_outcome_with_stale_nvidia_diagnostics(
+        self,
+        outcome: TranslationOutcome,
+        api_diagnostics: dict | None = None,
+    ) -> dict:
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
         stop = threading.Event()
@@ -572,8 +772,13 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
             "retry_count": 1,
             "retry_reason": "timeout",
         }
+        api_diagnostics = api_diagnostics or {
+            "engine": "nvidia",
+            "api_attempt_count": 0,
+        }
         with patch.object(translator_module, "Translator", _FakeTranslator), \
                 patch.object(translator_module, "get_last_engine_diagnostics", return_value=stale_diagnostics), \
+                patch.object(translator_module, "get_last_engine_api_diagnostics", return_value=api_diagnostics), \
                 patch.object(translator_module, "runtime_events") as events:
             thread = translator_module.start(sentence_q, subtitle_q, stop)
             sentence_q.put({"text": outcome.source_text, "incomplete": outcome.incomplete})
@@ -638,6 +843,40 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
 
         self.assertEqual(event["retry_count"], 1)
         self.assertEqual(event["retry_reason"], "timeout")
+
+    def test_api_result_emits_nvidia_api_diagnostics(self):
+        event = self._emit_outcome_with_stale_nvidia_diagnostics(
+            TranslationOutcome(
+                source_text="hello",
+                target_text="translated",
+                status="success",
+                result_source="api",
+                cache_status="miss",
+                incomplete=False,
+                engine="nvidia",
+                model="nvidia-test",
+            ),
+            api_diagnostics={
+                "engine": "nvidia",
+                "api_attempt_count": 2,
+                "api_timeout_count": 1,
+                "api_total_wall_ms": 20500.0,
+                "api_final_attempt_ms": 9950.0,
+                "retry_sleep_ms": 500.0,
+                "timeout_config_ms": 10000.0,
+                "api_error_type": None,
+                "api_error_message_class": None,
+            },
+        )
+
+        self.assertEqual(event["api_attempt_count"], 2)
+        self.assertEqual(event["api_timeout_count"], 1)
+        self.assertEqual(event["api_total_wall_ms"], 20500.0)
+        self.assertEqual(event["api_final_attempt_ms"], 9950.0)
+        self.assertEqual(event["retry_sleep_ms"], 500.0)
+        self.assertEqual(event["timeout_config_ms"], 10000.0)
+        self.assertIsNone(event["api_error_type"])
+        self.assertIsNone(event["api_error_message_class"])
 
 
 # ---------------------------------------------------------------------------
@@ -723,14 +962,38 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(result, "fallback result")
         self.assertEqual(t._active_idx, 1, "Should stay on fallback if probe fails")
 
-    def test_primary_fails_cascades_to_fallback(self):
+    def test_single_failure_uses_fallback_without_switching(self):
         t = _make_translator()
-        t._engines[0].translate.return_value = None  # engine returns None on failure
+        t._engines[0].translate.return_value = None
         t._engines[1].translate.return_value = "哈囉"
 
         result = t.translate("안녕하세요")
         self.assertEqual(result, "哈囉")
-        self.assertEqual(t._active_idx, 1, "active_idx should advance after cascade")
+        self.assertEqual(t._active_idx, 0, "single failure should not hard-switch primary")
+        self.assertEqual(t._consecutive_primary_failures, 1)
+
+    def test_hard_switch_after_threshold_failures(self):
+        from modules.translator import _FALLBACK_THRESHOLD
+        t = _make_translator()
+        t._engines[0].translate.return_value = None
+        t._engines[1].translate.return_value = "哈囉"
+
+        # Use distinct inputs — duplicate-suppression policy would block identical consecutive calls
+        for i in range(_FALLBACK_THRESHOLD):
+            t.translate(f"안녕하세요 {i}")
+
+        self.assertEqual(t._active_idx, 1, "should hard-switch after threshold consecutive failures")
+        self.assertEqual(t._consecutive_primary_failures, 0, "counter resets after hard switch")
+
+    def test_success_resets_failure_counter(self):
+        t = _make_translator()
+        t._consecutive_primary_failures = 2
+        t._engines[0].translate.return_value = "你好"
+
+        result = t.translate("안녕하세요")
+        self.assertEqual(result, "你好")
+        self.assertEqual(t._consecutive_primary_failures, 0, "success should reset failure counter")
+        self.assertEqual(t._active_idx, 0, "primary should remain active")
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +1102,49 @@ class TestTranslateOptimizations(unittest.TestCase):
             "冷場才是精確說的。空掉的時間。玻璃心風格。HADES。"
             "Kkiyun和Yenan。Chulgu哥。剛受神降的巫女不是神力更強嗎？幾乎是大神巫。",
         )
+
+    def test_mwmeu_name_rendering_fixes_runtime_variants(self):
+        cases = (
+            ("이비가 찾은 거예요", "伊比姐姐找到了", "이비姐姐找到了"),
+            ("수아가 답변했어요", "數亞姐姐回答了", "수아姐姐回答了"),
+            ("리츠랑 초은이가 앉았어요", "利茨和初雲坐下了", "리츠和초은坐下了"),
+            ("지한 언니가 말했어요", "志安姐姐說了", "지한姐姐說了"),
+            ("웬즈들이 가까이서 봤어요", "wenz們近距離看到了", "WENs們近距離看到了"),
+        )
+
+        with _active_translation_profile("mwmeu"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), expected)
+
+    def test_mwmeu_chiikawa_rendering_fixes_runtime_variants(self):
+        source = "치이카와랑 하치와레랑 모몽가가 나왔어요"
+        target = "千川和哈奇瓦還有毛毛蟲都出來了"
+
+        with _active_translation_profile("mwmeu"):
+            self.assertEqual(
+                _apply_source_aware_corrections(source, target),
+                "Chiikawa和Hachiware還有Momonga都出來了",
+            )
+
+    def test_mwmeu_japanese_phrase_near_miss_is_corrected(self):
+        source = "다이저고 데스. 아리가또 고자이마스. 이러는 거야."
+        target = "一進去就直接說：「Daisuki desu！Arigatou gozaimasu！」"
+
+        with _active_translation_profile("mwmeu"):
+            self.assertEqual(
+                _apply_source_aware_corrections(source, target),
+                "一進去就直接說：「大丈夫です！Arigatou gozaimasu！」",
+            )
+
+    def test_mwmeu_name_rendering_is_profile_gated(self):
+        source = "리츠랑 초은이가 앉았어요"
+        target = "利茨和初雲坐下了"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            self.assertEqual(_apply_source_aware_corrections(source, target), target)
+        with _active_translation_profile("mwmeu", use_profile=False):
+            self.assertEqual(_apply_source_aware_corrections(source, target), target)
 
     def test_streamer_name_rendering_boundary_positive_cases(self):
         cases = (
@@ -1407,6 +1713,35 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
         with _active_translation_profile("hades_chxxnnx", use_profile=False):
             self.assertEqual(_normalize_source_before_matching("채나"), "채나")
 
+    def test_mwmeu_profile_normalizes_runtime_name_and_fandom_variants(self):
+        raw = "이변이한테 초운이 집에 가야 되고 조은아 엔즈들이 기다려. 이츠가 소아가 지안 언니랑 왔어."
+
+        with _active_translation_profile("mwmeu"):
+            self.assertEqual(
+                _normalize_source_before_matching(raw),
+                "이비한테 초은이 집에 가야 되고 초은아 웬즈들이 기다려. 리츠가 수아가 지한 언니랑 왔어.",
+            )
+
+    def test_mwmeu_profile_normalizes_chiikawa_runtime_variants(self):
+        raw = "시에가파크 갔다가 시가와 굿즈랑 하치와래랑 모몽가를 봤어."
+
+        with _active_translation_profile("mwmeu"):
+            self.assertEqual(
+                _normalize_source_before_matching(raw),
+                "치이카와파크 갔다가 치이카와 굿즈랑 하치와레랑 모몽가를 봤어.",
+            )
+
+    def test_mwmeu_norm_is_profile_and_use_profile_gated(self):
+        raw = "이변이한테 초운이랑 시에가파크 얘기했어"
+
+        for profile_id in ("hades_chxxnnx", "stellive_hina", "isegye_lilpa", ""):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(_normalize_source_before_matching(raw), raw)
+
+        with _active_translation_profile("mwmeu", use_profile=False):
+            self.assertEqual(_normalize_source_before_matching(raw), raw)
+
 
 class TestSourceNormIntegration(unittest.TestCase):
     def test_standalone_hanja_hangul_hits_slang(self):
@@ -1455,6 +1790,18 @@ class TestSourceNormIntegration(unittest.TestCase):
             t.translate_event("섭정 있는 거야?")
             call_text = t._engines[0].translate.call_args[0][0]
             self.assertEqual(call_text, "섭정 있는 거야?")
+
+    def test_mwmeu_runtime_variants_engine_receives_normalized_text(self):
+        with _active_translation_profile("mwmeu"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = "初雲和千川"
+
+            outcome = t.translate_event("초운이 시에가파크 갔어")
+
+            self.assertEqual(outcome.source_text, "초운이 시에가파크 갔어")
+            self.assertEqual(outcome.target_text, "초은和Chiikawa")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "초은이 치이카와파크 갔어")
 
 
 if __name__ == "__main__":

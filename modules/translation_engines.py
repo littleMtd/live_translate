@@ -13,14 +13,66 @@ log = get_logger("translation_engines")
 _GEMINI_HTTP_TIMEOUT_MS = 12000
 _NVIDIA_MAX_ATTEMPTS = 2
 _NVIDIA_RETRY_DELAY_SEC = 0.5
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
+_GROQ_USER_AGENT = "live_translate/1.0"
+_GROQ_COMPACT_SYSTEM_PROMPT = (
+    "You are a Korean to Traditional Chinese live subtitle translator. "
+    "Translate only the provided Korean input into natural zh-TW. "
+    "Output only the translation, with no labels or explanations. "
+    "If the input is empty, noise, or unreadable, output an empty string. "
+    "Keep uncertain names and brands as names; do not invent facts."
+)
 _ENGINE_DIAGNOSTICS = threading.local()
 
 
-def _set_last_engine_diagnostics(engine: str = "", retry_count: int = 0, retry_reason: str = "") -> None:
+def _int_diagnostic(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_diagnostic(value, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return default
+
+
+def _timeout_config_ms(timeout) -> float | None:
+    try:
+        return _float_diagnostic(float(timeout) * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def _elapsed_ms(start: float | None, end: float | None = None) -> float | None:
+    if start is None:
+        return None
+    end = time.monotonic() if end is None else end
+    return _float_diagnostic((end - start) * 1000)
+
+
+def _set_last_engine_diagnostics(
+    engine: str = "",
+    retry_count: int = 0,
+    retry_reason: str = "",
+    **api_fields,
+) -> None:
     _ENGINE_DIAGNOSTICS.value = {
         "engine": engine,
         "retry_count": retry_count,
         "retry_reason": retry_reason,
+        "api_attempt_count": _int_diagnostic(api_fields.get("api_attempt_count")),
+        "api_timeout_count": _int_diagnostic(api_fields.get("api_timeout_count")),
+        "api_total_wall_ms": _float_diagnostic(api_fields.get("api_total_wall_ms")),
+        "api_final_attempt_ms": _float_diagnostic(api_fields.get("api_final_attempt_ms")),
+        "retry_sleep_ms": _float_diagnostic(api_fields.get("retry_sleep_ms"), 0.0),
+        "timeout_config_ms": _float_diagnostic(api_fields.get("timeout_config_ms")),
+        "api_error_type": api_fields.get("api_error_type"),
+        "api_error_message_class": api_fields.get("api_error_message_class"),
     }
 
 
@@ -33,6 +85,26 @@ def get_last_engine_diagnostics() -> dict[str, int | str]:
         "engine": str(value.get("engine") or ""),
         "retry_count": int(value.get("retry_count") or 0),
         "retry_reason": str(value.get("retry_reason") or ""),
+    }
+
+
+def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
+    """Return retry/API timing diagnostics for the last engine call in this thread."""
+    value = getattr(_ENGINE_DIAGNOSTICS, "value", None)
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "engine": str(value.get("engine") or ""),
+        "retry_count": _int_diagnostic(value.get("retry_count")),
+        "retry_reason": str(value.get("retry_reason") or ""),
+        "api_attempt_count": _int_diagnostic(value.get("api_attempt_count")),
+        "api_timeout_count": _int_diagnostic(value.get("api_timeout_count")),
+        "api_total_wall_ms": _float_diagnostic(value.get("api_total_wall_ms")),
+        "api_final_attempt_ms": _float_diagnostic(value.get("api_final_attempt_ms")),
+        "retry_sleep_ms": _float_diagnostic(value.get("retry_sleep_ms"), 0.0),
+        "timeout_config_ms": _float_diagnostic(value.get("timeout_config_ms")),
+        "api_error_type": value.get("api_error_type"),
+        "api_error_message_class": value.get("api_error_message_class"),
     }
 
 
@@ -49,10 +121,130 @@ def _is_timeout_exception(exc: BaseException) -> bool:
     return "timed out" in text or "timeout" in text
 
 
+def _http_status_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "code", None)
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
+def _timeout_message_class(exc: BaseException) -> str:
+    reason = getattr(exc, "reason", "")
+    text = f"{type(exc).__name__} {reason} {exc}".lower()
+    if "connect" in text:
+        return "connect_timeout"
+    return "read_timeout"
+
+
+def _http_message_class(status_code: int) -> str:
+    if 400 <= status_code < 500:
+        return "http_4xx"
+    if 500 <= status_code < 600:
+        return "http_5xx"
+    return "unknown"
+
+
+def _classify_api_error(exc: BaseException) -> tuple[str, str]:
+    if _is_timeout_exception(exc):
+        return "timeout", _timeout_message_class(exc)
+
+    status_code = _http_status_code(exc)
+    if status_code is not None:
+        return "api_error", _http_message_class(status_code)
+
+    if isinstance(exc, URLError):
+        return "connection_error", "connection_error"
+
+    name = type(exc).__name__
+    if name == "JSONDecodeError":
+        return "parse_error", "json_parse_error"
+    if isinstance(exc, (KeyError, IndexError)):
+        return "parse_error", "unknown"
+
+    kind = classify_error(exc)
+    if kind == "network":
+        return "connection_error", "connection_error"
+    if kind in ("auth", "rate_limit"):
+        return "api_error", "unknown"
+    return "unknown", "unknown"
+
+
+def _strip_think_tags(content: str) -> str:
+    import re as _re
+
+    stripped = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
+    stripped = _re.sub(r"<think>.*$", "", stripped, flags=_re.DOTALL).strip()
+    return stripped
+
+
 def _build_user_message(text: str, incomplete: bool) -> str:
     if incomplete:
         return f"input (incomplete sentence, translate as best as possible): {text}"
     return f"input: {text}"
+
+
+def _build_groq_user_message(text: str, incomplete: bool) -> str:
+    return "/no_think\n" + _build_user_message(text, incomplete)
+
+
+def _clamp_int(value, default: int, minimum: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _truncate_for_groq(value: str, max_chars: int) -> str:
+    text = (value or "").strip()
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    limit = _clamp_int(getattr(cfg.translation, "groq_translation_context_window", 2), 2)
+    if limit <= 0:
+        return []
+
+    source_chars = _clamp_int(
+        getattr(cfg.translation, "groq_translation_history_source_chars", 160),
+        160,
+    )
+    target_chars = _clamp_int(
+        getattr(cfg.translation, "groq_translation_history_target_chars", 220),
+        220,
+    )
+
+    limited: list[tuple[str, str]] = []
+    for source, target in (history or [])[-limit:]:
+        source_text = _truncate_for_groq(source, source_chars)
+        target_text = _truncate_for_groq(target, target_chars)
+        if source_text and target_text:
+            limited.append((source_text, target_text))
+    return limited
+
+
+def _groq_system_prompt(system_prompt: str) -> str:
+    if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
+        return system_prompt
+    profile_id = getattr(cfg, "active_streamer_profile", "")
+    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
+        return f"{_GROQ_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+    return _GROQ_COMPACT_SYSTEM_PROMPT
+
+
+def _is_groq_token_limit_error(status_code: int, body: str) -> bool:
+    if status_code != 413:
+        return False
+    text = (body or "").lower()
+    return (
+        "token" in text
+        or "tpm" in text
+        or "rate_limit_exceeded" in text
+        or "request too large" in text
+    )
 
 
 def _usage_value(usage, *names: str):
@@ -448,7 +640,34 @@ class NvidiaEngine(TranslationEngine):
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
-        _set_last_engine_diagnostics("nvidia", 0, "")
+        timeout_config_ms = _timeout_config_ms(self._timeout)
+        api_attempt_count = 0
+        api_timeout_count = 0
+        api_total_start: float | None = None
+        api_final_attempt_ms: float | None = None
+        retry_sleep_ms = 0.0
+        retry_count = 0
+        retry_reason = ""
+
+        def record_diagnostics(
+            api_error_type: str | None = None,
+            api_error_message_class: str | None = None,
+        ) -> None:
+            _set_last_engine_diagnostics(
+                "nvidia",
+                retry_count,
+                retry_reason,
+                api_attempt_count=api_attempt_count,
+                api_timeout_count=api_timeout_count,
+                api_total_wall_ms=_elapsed_ms(api_total_start),
+                api_final_attempt_ms=api_final_attempt_ms,
+                retry_sleep_ms=retry_sleep_ms,
+                timeout_config_ms=timeout_config_ms,
+                api_error_type=api_error_type,
+                api_error_message_class=api_error_message_class,
+            )
+
+        record_diagnostics()
         if not self._api_key:
             return None
         import urllib.request
@@ -482,27 +701,38 @@ class NvidiaEngine(TranslationEngine):
             )
             try:
                 _t0 = time.monotonic()
+                if api_total_start is None:
+                    api_total_start = _t0
+                api_attempt_count += 1
                 with urllib.request.urlopen(req, timeout=self._timeout) as r:
                     data = _json.loads(r.read())
-                log.info("Nvidia translate: %.0fms", (time.monotonic() - _t0) * 1000)
+                _api_response_loaded = time.monotonic()
+                log.info("Nvidia translate: %.0fms", (_api_response_loaded - _t0) * 1000)
                 usage = data.get("usage", {})
                 log.info("Nvidia tokens | prompt=%s output=%s",
                          usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
                 msg = data["choices"][0]["message"]
                 content = (msg.get("content") or "").strip()
                 if self._strip_think:
-                    import re as _re
-                    content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
+                    content = _strip_think_tags(content)
+                api_final_attempt_ms = _elapsed_ms(_t0)
                 log.debug("Nvidia: %.30s → %s", text, content)
                 if content:
+                    record_diagnostics()
                     return content
                 if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
-                    _set_last_engine_diagnostics("nvidia", attempt + 1, "empty_response")
+                    retry_count = attempt + 1
+                    retry_reason = "empty_response"
+                    record_diagnostics("api_error", "empty_response")
                     log.warning("Nvidia returned empty response; retrying once")
+                    _sleep_t0 = time.monotonic()
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
                     continue
+                record_diagnostics("api_error", "empty_response")
                 return None
             except urllib.error.HTTPError as e:
+                api_final_attempt_ms = _elapsed_ms(_t0)
                 body = ""
                 try:
                     body = e.read().decode()
@@ -516,26 +746,193 @@ class NvidiaEngine(TranslationEngine):
                     log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
                 else:
                     log.error("Nvidia HTTP %d: %s", e.code, body or e)
+                error_type, message_class = _classify_api_error(e)
+                record_diagnostics(error_type, message_class)
                 return None
             except urllib.error.URLError as e:
+                api_final_attempt_ms = _elapsed_ms(_t0)
+                if _is_timeout_exception(e):
+                    api_timeout_count += 1
                 if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
                     reason = "timeout" if _is_timeout_exception(e) else "network"
-                    _set_last_engine_diagnostics("nvidia", attempt + 1, reason)
+                    retry_count = attempt + 1
+                    retry_reason = reason
+                    error_type, message_class = _classify_api_error(e)
+                    record_diagnostics(error_type, message_class)
                     log.warning("Nvidia network error; retrying once: %s", e)
+                    _sleep_t0 = time.monotonic()
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
                     continue
                 log.error("Nvidia network error: %s", e)
+                error_type, message_class = _classify_api_error(e)
+                record_diagnostics(error_type, message_class)
                 return None
             except Exception as e:
+                api_final_attempt_ms = _elapsed_ms(_t0)
+                if _is_timeout_exception(e):
+                    api_timeout_count += 1
                 reason = "timeout" if _is_timeout_exception(e) else classify_error(e)
                 if reason in ("timeout", "network") and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
-                    _set_last_engine_diagnostics("nvidia", attempt + 1, reason)
+                    retry_count = attempt + 1
+                    retry_reason = reason
+                    error_type, message_class = _classify_api_error(e)
+                    record_diagnostics(error_type, message_class)
                     log.warning("Nvidia transient error; retrying once: %s", e)
+                    _sleep_t0 = time.monotonic()
                     time.sleep(_NVIDIA_RETRY_DELAY_SEC)
+                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
                     continue
                 log.error("Nvidia error: %s", e)
+                error_type, message_class = _classify_api_error(e)
+                record_diagnostics(error_type, message_class)
                 return None
         return None
+
+
+class GroqTranslationEngine(TranslationEngine):
+    """Groq hosted models via OpenAI-compatible endpoint. Used as nvidia fallback."""
+
+    def __init__(self):
+        self._api_key = cfg.keys.groq_fallback
+        self._model = cfg.translation.groq_translation_model
+        self._timeout = cfg.translation.groq_translation_timeout
+        self._max_tokens = min(
+            cfg.translation.max_tokens,
+            _clamp_int(getattr(cfg.translation, "groq_translation_max_tokens", 128), 128, 1),
+        )
+        self._retry_max_tokens = min(
+            self._max_tokens,
+            _clamp_int(getattr(cfg.translation, "groq_translation_retry_max_tokens", 96), 96, 1),
+        )
+        _m = self._model.lower()
+        self._strip_think = "qwen3" in _m or "qwen-3" in _m
+        if not self._api_key:
+            log.error("GROQ_API_KEY_fall_back not set — GroqTranslationEngine unavailable")
+        else:
+            log.info("GroqTranslationEngine ready (model=%s)", self._model)
+
+    @property
+    def engine_name(self) -> str:
+        return "groq"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def available(self) -> bool:
+        return bool(self._api_key)
+
+    def translate(self, text: str, system_prompt: str, incomplete: bool,
+                  history: list[tuple[str, str]] | None = None) -> str | None:
+        if not self._api_key:
+            return None
+        import urllib.request
+        import urllib.error
+        import json as _json
+
+        system_prompt = _groq_system_prompt(system_prompt)
+        history = _limited_groq_history(history)
+        messages = [{"role": "system", "content": system_prompt}]
+        for ko, zh in (history or []):
+            messages.append({"role": "user", "content": f"input: {ko}"})
+            messages.append({"role": "assistant", "content": zh})
+        messages.append({"role": "user", "content": _build_groq_user_message(text, incomplete)})
+
+        payload = _json.dumps({
+            "model": self._model,
+            "messages": messages,
+            "temperature": cfg.translation.temperature,
+            "max_tokens": self._max_tokens,
+        }).encode()
+
+        req = urllib.request.Request(
+            _GROQ_BASE_URL,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": _GROQ_USER_AGENT,
+                "Authorization": f"Bearer {self._api_key}",
+            },
+        )
+        try:
+            _t0 = time.monotonic()
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = _json.loads(r.read())
+            log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
+            usage = data.get("usage", {})
+            log.info("Groq tokens | prompt=%s output=%s",
+                     usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+            content = (data["choices"][0]["message"].get("content") or "").strip()
+            if self._strip_think:
+                content = _strip_think_tags(content)
+            log.debug("Groq: %.30s → %s", text, content)
+            return content or None
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode()
+            except Exception:
+                pass
+            if _is_groq_token_limit_error(e.code, body) and history:
+                log.warning("Groq request exceeded token budget; retrying once without history")
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": _build_groq_user_message(text, incomplete)},
+                ]
+                payload = _json.dumps({
+                    "model": self._model,
+                    "messages": messages,
+                    "temperature": cfg.translation.temperature,
+                    "max_tokens": self._retry_max_tokens,
+                }).encode()
+                req = urllib.request.Request(
+                    _GROQ_BASE_URL,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": _GROQ_USER_AGENT,
+                        "Authorization": f"Bearer {self._api_key}",
+                    },
+                )
+                try:
+                    _t0 = time.monotonic()
+                    with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                        data = _json.loads(r.read())
+                    log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
+                    usage = data.get("usage", {})
+                    log.info("Groq tokens | prompt=%s output=%s",
+                             usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+                    content = (data["choices"][0]["message"].get("content") or "").strip()
+                    if self._strip_think:
+                        content = _strip_think_tags(content)
+                    log.debug("Groq: %.30s → %s", text, content)
+                    return content or None
+                except urllib.error.HTTPError as retry_error:
+                    body = ""
+                    try:
+                        body = retry_error.read().decode()
+                    except Exception:
+                        pass
+                    log.error("Groq HTTP %d: %s", retry_error.code, body or retry_error)
+                    return None
+            if e.code == 401:
+                log.error("Groq auth error — GROQ_API_KEY_fall_back 無效或已過期")
+            elif e.code == 429:
+                log.warning("Groq rate-limit (429)")
+            else:
+                log.error("Groq HTTP %d: %s", e.code, body or e)
+            return None
+        except Exception as e:
+            kind = classify_error(e)
+            if _is_timeout_exception(e) or kind == "network":
+                log.warning("Groq network/timeout error: %s", e)
+            else:
+                log.error("Groq error: %s", e)
+            return None
 
 
 def _make_engine(name: str) -> "TranslationEngine | None":
@@ -553,6 +950,9 @@ def _make_engine(name: str) -> "TranslationEngine | None":
         return OllamaEngine()
     if name == "nvidia":
         e = NvidiaEngine()
+        return e if e.available else None
+    if name == "groq":
+        e = GroqTranslationEngine()
         return e if e.available else None
     log.warning("Unknown engine %r in engine_chain — skipping", name)
     return None
