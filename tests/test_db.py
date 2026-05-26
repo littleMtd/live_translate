@@ -155,6 +155,7 @@ def _make_translator():
     t._evolver = PromptEvolver()
     t._active_idx = 0
     t._probe_counter = 0
+    t._consecutive_primary_failures = 0
     t._last_input = ""
     t._engines = [_mock_engine("gemini"), _mock_engine("claude")]
     t._policy = TranslationPolicy(slang=cfg.translation.slang, min_translate_chars=2)

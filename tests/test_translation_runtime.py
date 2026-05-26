@@ -58,6 +58,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             False,
             [],
             50,
+            1,
             lambda result, source: False,
             logging.getLogger("test"),
         )
@@ -82,6 +83,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             False,
             [],
             50,
+            3,
             lambda result, source: False,
             logging.getLogger("test"),
         )
