@@ -23,6 +23,8 @@ _GROQ_COMPACT_SYSTEM_PROMPT = (
     "Keep uncertain names and brands as names; do not invent facts."
 )
 _ENGINE_DIAGNOSTICS = threading.local()
+_NVIDIA_INFLIGHT_LOCK = threading.Lock()
+_NVIDIA_INFLIGHT_COUNT = 0
 
 
 def _int_diagnostic(value, default: int = 0) -> int:
@@ -30,6 +32,15 @@ def _int_diagnostic(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _optional_int_diagnostic(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _float_diagnostic(value, default: float | None = None) -> float | None:
@@ -55,6 +66,20 @@ def _elapsed_ms(start: float | None, end: float | None = None) -> float | None:
     return _float_diagnostic((end - start) * 1000)
 
 
+def _nvidia_inflight_started() -> int:
+    global _NVIDIA_INFLIGHT_COUNT
+    with _NVIDIA_INFLIGHT_LOCK:
+        inflight_at_start = _NVIDIA_INFLIGHT_COUNT
+        _NVIDIA_INFLIGHT_COUNT += 1
+        return inflight_at_start
+
+
+def _nvidia_inflight_finished() -> None:
+    global _NVIDIA_INFLIGHT_COUNT
+    with _NVIDIA_INFLIGHT_LOCK:
+        _NVIDIA_INFLIGHT_COUNT = max(0, _NVIDIA_INFLIGHT_COUNT - 1)
+
+
 def _set_last_engine_diagnostics(
     engine: str = "",
     retry_count: int = 0,
@@ -69,8 +94,22 @@ def _set_last_engine_diagnostics(
         "api_timeout_count": _int_diagnostic(api_fields.get("api_timeout_count")),
         "api_total_wall_ms": _float_diagnostic(api_fields.get("api_total_wall_ms")),
         "api_final_attempt_ms": _float_diagnostic(api_fields.get("api_final_attempt_ms")),
+        "api_first_attempt_ms": _float_diagnostic(api_fields.get("api_first_attempt_ms")),
+        "api_retry_attempt_ms": _float_diagnostic(api_fields.get("api_retry_attempt_ms")),
         "retry_sleep_ms": _float_diagnostic(api_fields.get("retry_sleep_ms"), 0.0),
         "timeout_config_ms": _float_diagnostic(api_fields.get("timeout_config_ms")),
+        "api_attempt_timeout_ms": _float_diagnostic(api_fields.get("api_attempt_timeout_ms")),
+        "api_attempt_index": _int_diagnostic(api_fields.get("api_attempt_index")),
+        "api_inflight_count_at_start": _optional_int_diagnostic(
+            api_fields.get("api_inflight_count_at_start")
+        ),
+        "source_text_char_count": _optional_int_diagnostic(api_fields.get("source_text_char_count")),
+        "prompt_char_count": _optional_int_diagnostic(api_fields.get("prompt_char_count")),
+        "request_body_char_count": _optional_int_diagnostic(
+            api_fields.get("request_body_char_count")
+        ),
+        "message_count": _optional_int_diagnostic(api_fields.get("message_count")),
+        "context_item_count": _optional_int_diagnostic(api_fields.get("context_item_count")),
         "api_error_type": api_fields.get("api_error_type"),
         "api_error_message_class": api_fields.get("api_error_message_class"),
     }
@@ -101,8 +140,20 @@ def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
         "api_timeout_count": _int_diagnostic(value.get("api_timeout_count")),
         "api_total_wall_ms": _float_diagnostic(value.get("api_total_wall_ms")),
         "api_final_attempt_ms": _float_diagnostic(value.get("api_final_attempt_ms")),
+        "api_first_attempt_ms": _float_diagnostic(value.get("api_first_attempt_ms")),
+        "api_retry_attempt_ms": _float_diagnostic(value.get("api_retry_attempt_ms")),
         "retry_sleep_ms": _float_diagnostic(value.get("retry_sleep_ms"), 0.0),
         "timeout_config_ms": _float_diagnostic(value.get("timeout_config_ms")),
+        "api_attempt_timeout_ms": _float_diagnostic(value.get("api_attempt_timeout_ms")),
+        "api_attempt_index": _int_diagnostic(value.get("api_attempt_index")),
+        "api_inflight_count_at_start": _optional_int_diagnostic(
+            value.get("api_inflight_count_at_start")
+        ),
+        "source_text_char_count": _optional_int_diagnostic(value.get("source_text_char_count")),
+        "prompt_char_count": _optional_int_diagnostic(value.get("prompt_char_count")),
+        "request_body_char_count": _optional_int_diagnostic(value.get("request_body_char_count")),
+        "message_count": _optional_int_diagnostic(value.get("message_count")),
+        "context_item_count": _optional_int_diagnostic(value.get("context_item_count")),
         "api_error_type": value.get("api_error_type"),
         "api_error_message_class": value.get("api_error_message_class"),
     }
@@ -645,9 +696,19 @@ class NvidiaEngine(TranslationEngine):
         api_timeout_count = 0
         api_total_start: float | None = None
         api_final_attempt_ms: float | None = None
+        api_first_attempt_ms: float | None = None
+        api_retry_attempt_ms: float | None = None
+        api_attempt_index = 0
+        api_inflight_count_at_start: int | None = None
+        api_attempt_timeout_ms = timeout_config_ms
         retry_sleep_ms = 0.0
         retry_count = 0
         retry_reason = ""
+        source_text_char_count = len(text or "")
+        prompt_char_count = len(system_prompt or "")
+        context_item_count = len(history or [])
+        request_body_char_count: int | None = None
+        message_count: int | None = None
 
         def record_diagnostics(
             api_error_type: str | None = None,
@@ -661,11 +722,32 @@ class NvidiaEngine(TranslationEngine):
                 api_timeout_count=api_timeout_count,
                 api_total_wall_ms=_elapsed_ms(api_total_start),
                 api_final_attempt_ms=api_final_attempt_ms,
+                api_first_attempt_ms=api_first_attempt_ms,
+                api_retry_attempt_ms=api_retry_attempt_ms,
                 retry_sleep_ms=retry_sleep_ms,
                 timeout_config_ms=timeout_config_ms,
+                api_attempt_timeout_ms=api_attempt_timeout_ms,
+                api_attempt_index=api_attempt_index,
+                api_inflight_count_at_start=api_inflight_count_at_start,
+                source_text_char_count=source_text_char_count,
+                prompt_char_count=prompt_char_count,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+                context_item_count=context_item_count,
                 api_error_type=api_error_type,
                 api_error_message_class=api_error_message_class,
             )
+
+        def record_attempt_duration(attempt_index: int, attempt_started_at: float) -> None:
+            nonlocal api_attempt_index, api_final_attempt_ms
+            nonlocal api_first_attempt_ms, api_retry_attempt_ms
+            elapsed_ms = _elapsed_ms(attempt_started_at)
+            api_attempt_index = attempt_index
+            api_final_attempt_ms = elapsed_ms
+            if attempt_index == 1:
+                api_first_attempt_ms = elapsed_ms
+            elif attempt_index == 2:
+                api_retry_attempt_ms = elapsed_ms
 
         record_diagnostics()
         if not self._api_key:
@@ -688,9 +770,13 @@ class NvidiaEngine(TranslationEngine):
         }
         if self._is_qwen3:
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        payload = _json.dumps(body).encode()
+        message_count = len(messages)
+        payload_text = _json.dumps(body)
+        request_body_char_count = len(payload_text)
+        payload = payload_text.encode()
 
         for attempt in range(_NVIDIA_MAX_ATTEMPTS):
+            current_attempt_index = attempt + 1
             req = urllib.request.Request(
                 self._BASE_URL,
                 data=payload,
@@ -704,8 +790,14 @@ class NvidiaEngine(TranslationEngine):
                 if api_total_start is None:
                     api_total_start = _t0
                 api_attempt_count += 1
-                with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                    data = _json.loads(r.read())
+                inflight_at_start = _nvidia_inflight_started()
+                if api_inflight_count_at_start is None:
+                    api_inflight_count_at_start = inflight_at_start
+                try:
+                    with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                        data = _json.loads(r.read())
+                finally:
+                    _nvidia_inflight_finished()
                 _api_response_loaded = time.monotonic()
                 log.info("Nvidia translate: %.0fms", (_api_response_loaded - _t0) * 1000)
                 usage = data.get("usage", {})
@@ -715,7 +807,7 @@ class NvidiaEngine(TranslationEngine):
                 content = (msg.get("content") or "").strip()
                 if self._strip_think:
                     content = _strip_think_tags(content)
-                api_final_attempt_ms = _elapsed_ms(_t0)
+                record_attempt_duration(current_attempt_index, _t0)
                 log.debug("Nvidia: %.30s → %s", text, content)
                 if content:
                     record_diagnostics()
@@ -732,7 +824,7 @@ class NvidiaEngine(TranslationEngine):
                 record_diagnostics("api_error", "empty_response")
                 return None
             except urllib.error.HTTPError as e:
-                api_final_attempt_ms = _elapsed_ms(_t0)
+                record_attempt_duration(current_attempt_index, _t0)
                 body = ""
                 try:
                     body = e.read().decode()
@@ -750,7 +842,7 @@ class NvidiaEngine(TranslationEngine):
                 record_diagnostics(error_type, message_class)
                 return None
             except urllib.error.URLError as e:
-                api_final_attempt_ms = _elapsed_ms(_t0)
+                record_attempt_duration(current_attempt_index, _t0)
                 if _is_timeout_exception(e):
                     api_timeout_count += 1
                 if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
@@ -769,7 +861,7 @@ class NvidiaEngine(TranslationEngine):
                 record_diagnostics(error_type, message_class)
                 return None
             except Exception as e:
-                api_final_attempt_ms = _elapsed_ms(_t0)
+                record_attempt_duration(current_attempt_index, _t0)
                 if _is_timeout_exception(e):
                     api_timeout_count += 1
                 reason = "timeout" if _is_timeout_exception(e) else classify_error(e)

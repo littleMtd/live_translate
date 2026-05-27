@@ -647,8 +647,18 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertEqual(api_diagnostics["api_timeout_count"], 1)
         self.assertIsNotNone(api_diagnostics["api_total_wall_ms"])
         self.assertIsNotNone(api_diagnostics["api_final_attempt_ms"])
+        self.assertIsNotNone(api_diagnostics["api_first_attempt_ms"])
+        self.assertIsNotNone(api_diagnostics["api_retry_attempt_ms"])
         self.assertGreaterEqual(api_diagnostics["retry_sleep_ms"], 0)
         self.assertEqual(api_diagnostics["timeout_config_ms"], 10000)
+        self.assertEqual(api_diagnostics["api_attempt_timeout_ms"], 10000)
+        self.assertEqual(api_diagnostics["api_attempt_index"], 2)
+        self.assertEqual(api_diagnostics["api_inflight_count_at_start"], 0)
+        self.assertIsNotNone(api_diagnostics["source_text_char_count"])
+        self.assertEqual(api_diagnostics["prompt_char_count"], len("system"))
+        self.assertGreater(api_diagnostics["request_body_char_count"], 0)
+        self.assertEqual(api_diagnostics["message_count"], 2)
+        self.assertEqual(api_diagnostics["context_item_count"], 0)
         self.assertIsNone(api_diagnostics["api_error_type"])
         self.assertIsNone(api_diagnostics["api_error_message_class"])
 
@@ -672,6 +682,9 @@ class TestNvidiaEngine(unittest.TestCase):
         api_diagnostics = get_last_engine_api_diagnostics()
         self.assertEqual(api_diagnostics["api_attempt_count"], 2)
         self.assertEqual(api_diagnostics["api_timeout_count"], 2)
+        self.assertEqual(api_diagnostics["api_attempt_index"], 2)
+        self.assertIsNotNone(api_diagnostics["api_first_attempt_ms"])
+        self.assertIsNotNone(api_diagnostics["api_retry_attempt_ms"])
         self.assertEqual(api_diagnostics["api_error_type"], "timeout")
         self.assertEqual(api_diagnostics["api_error_message_class"], "read_timeout")
         self.assertEqual(api_diagnostics["timeout_config_ms"], 10000)
@@ -862,8 +875,18 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
                 "api_timeout_count": 1,
                 "api_total_wall_ms": 20500.0,
                 "api_final_attempt_ms": 9950.0,
+                "api_first_attempt_ms": 10000.0,
+                "api_retry_attempt_ms": 9950.0,
                 "retry_sleep_ms": 500.0,
                 "timeout_config_ms": 10000.0,
+                "api_attempt_timeout_ms": 10000.0,
+                "api_attempt_index": 2,
+                "api_inflight_count_at_start": 1,
+                "source_text_char_count": 5,
+                "prompt_char_count": 42,
+                "request_body_char_count": 1234,
+                "message_count": 4,
+                "context_item_count": 1,
                 "api_error_type": None,
                 "api_error_message_class": None,
             },
@@ -873,8 +896,18 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(event["api_timeout_count"], 1)
         self.assertEqual(event["api_total_wall_ms"], 20500.0)
         self.assertEqual(event["api_final_attempt_ms"], 9950.0)
+        self.assertEqual(event["api_first_attempt_ms"], 10000.0)
+        self.assertEqual(event["api_retry_attempt_ms"], 9950.0)
         self.assertEqual(event["retry_sleep_ms"], 500.0)
         self.assertEqual(event["timeout_config_ms"], 10000.0)
+        self.assertEqual(event["api_attempt_timeout_ms"], 10000.0)
+        self.assertEqual(event["api_attempt_index"], 2)
+        self.assertEqual(event["api_inflight_count_at_start"], 1)
+        self.assertEqual(event["source_text_char_count"], 5)
+        self.assertEqual(event["prompt_char_count"], 42)
+        self.assertEqual(event["request_body_char_count"], 1234)
+        self.assertEqual(event["message_count"], 4)
+        self.assertEqual(event["context_item_count"], 1)
         self.assertIsNone(event["api_error_type"])
         self.assertIsNone(event["api_error_message_class"])
 

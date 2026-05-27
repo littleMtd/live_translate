@@ -24,6 +24,21 @@ QUEUE_LATENCY_FIELDS = (
     "output_delay_ms",
     "predecessor_stall_ms",
 )
+API_DIAGNOSTIC_FIELDS = (
+    "api_total_wall_ms",
+    "api_final_attempt_ms",
+    "api_first_attempt_ms",
+    "api_retry_attempt_ms",
+    "retry_sleep_ms",
+    "api_attempt_timeout_ms",
+    "api_attempt_index",
+    "api_inflight_count_at_start",
+    "source_text_char_count",
+    "prompt_char_count",
+    "request_body_char_count",
+    "message_count",
+    "context_item_count",
+)
 ANALYZER_OUTPUT_NOTES = [
     "predecessor_stall_ms includes up to _TRANSLATION_LOOP_POLL_SEC of translator poll-gap noise.",
     "duplicate-suppressed translations still include ordering delay; output_delay_ms is pipeline delay, not user-visible subtitle delay.",
@@ -90,6 +105,7 @@ def analyze_runtime_events(
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
+        "api_diagnostics": _api_diagnostics_summary(translation_events),
         "dependency_markers": _dependency_marker_summary(translation_events),
         "analyzer_output_notes": ANALYZER_OUTPUT_NOTES,
         "runs": _run_summaries(translation_events, stt_events, audio_events, labels, top_n),
@@ -212,6 +228,7 @@ def _run_summaries(
                 ),
                 "queue_latency_ms": _queue_latency_summary(run_events),
                 "retry_summary": _retry_summary(run_events),
+                "api_diagnostics": _api_diagnostics_summary(run_events),
                 "dependency_markers": _dependency_marker_summary(run_events),
                 "template_hits": {
                     "total": len(template_events),
@@ -318,6 +335,66 @@ def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             [event for event in events if event.get("retry_reason")],
             "retry_reason",
         ),
+    }
+
+
+def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    api_events = [
+        event
+        for event in events
+        if (_float_or_none(event.get("api_attempt_count")) or 0) > 0
+    ]
+    timeout_events = [
+        event
+        for event in api_events
+        if (_float_or_none(event.get("api_timeout_count")) or 0) > 0
+    ]
+    retry_events = [
+        event
+        for event in api_events
+        if (_float_or_none(event.get("api_attempt_count")) or 0) > 1
+        or (_float_or_none(event.get("retry_sleep_ms")) or 0) > 0
+    ]
+    long_api_events = [
+        event
+        for event in api_events
+        if (_float_or_none(event.get("api_total_wall_ms")) or 0) >= 10_000
+    ]
+    return {
+        "total_events": len(events),
+        "api_events": len(api_events),
+        "timeout_events": len(timeout_events),
+        "timeout_rate": round(len(timeout_events) / len(api_events), 3) if api_events else 0.0,
+        "retry_events": len(retry_events),
+        "retry_rate": round(len(retry_events) / len(api_events), 3) if api_events else 0.0,
+        "long_api_ge_10s": len(long_api_events),
+        "long_api_ge_10s_timeout_events": len(
+            [
+                event
+                for event in long_api_events
+                if (_float_or_none(event.get("api_timeout_count")) or 0) > 0
+            ]
+        ),
+        "by_attempt_count": _count_by(api_events, "api_attempt_count"),
+        "by_timeout_count": _count_by(api_events, "api_timeout_count"),
+        "by_error_type": _count_by(
+            [event for event in api_events if event.get("api_error_type")],
+            "api_error_type",
+        ),
+        "by_error_message_class": _count_by(
+            [event for event in api_events if event.get("api_error_message_class")],
+            "api_error_message_class",
+        ),
+        "fields": {
+            field: _latency_summary(
+                [
+                    value
+                    for event in api_events
+                    if (value := _float_or_none(event.get(field))) is not None
+                ]
+            )
+            for field in API_DIAGNOSTIC_FIELDS
+        },
     }
 
 
@@ -490,6 +567,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Latency ms: {report['latency_ms']}")
     print(f"Queue latency ms: {report['queue_latency_ms']}")
     print(f"Retry summary: {report['retry_summary']}")
+    print(f"API diagnostics: {report['api_diagnostics']}")
     print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
     print(
@@ -521,6 +599,7 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"success_latency={run['success_latency_ms']}, "
                 f"queue_latency={run['queue_latency_ms']}, "
                 f"retry_rate={run['retry_summary']['retry_rate']}, "
+                f"api_timeout_rate={run['api_diagnostics']['timeout_rate']}, "
                 f"dependency_marker_ratio={run['dependency_markers']['marker_ratio']}, "
                 f"template_hits={run['template_hits']['total']}"
             )

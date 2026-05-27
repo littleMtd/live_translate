@@ -295,6 +295,21 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 predecessor_stall_ms=20,
                 retry_count=1,
                 retry_reason="timeout",
+                api_attempt_count=2,
+                api_timeout_count=1,
+                api_total_wall_ms=12000,
+                api_final_attempt_ms=1500,
+                api_first_attempt_ms=10000,
+                api_retry_attempt_ms=1500,
+                retry_sleep_ms=500,
+                api_attempt_timeout_ms=10000,
+                api_attempt_index=2,
+                api_inflight_count_at_start=1,
+                source_text_char_count=20,
+                prompt_char_count=2000,
+                request_body_char_count=2600,
+                message_count=4,
+                context_item_count=1,
                 starts_with_dependency_marker=True,
                 dependency_marker="그래서",
             ),
@@ -305,6 +320,21 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 predecessor_stall_ms=10,
                 retry_count=0,
                 retry_reason="",
+                api_attempt_count=1,
+                api_timeout_count=0,
+                api_total_wall_ms=180,
+                api_final_attempt_ms=180,
+                api_first_attempt_ms=180,
+                api_retry_attempt_ms=None,
+                retry_sleep_ms=0,
+                api_attempt_timeout_ms=10000,
+                api_attempt_index=1,
+                api_inflight_count_at_start=0,
+                source_text_char_count=10,
+                prompt_char_count=1000,
+                request_body_char_count=1400,
+                message_count=2,
+                context_item_count=0,
                 starts_with_dependency_marker=False,
                 dependency_marker="",
             ),
@@ -320,6 +350,16 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
     assert report["retry_summary"]["retry_events"] == 1
     assert report["retry_summary"]["retry_rate"] == 0.5
     assert report["retry_summary"]["by_retry_reason"] == [{"value": "timeout", "count": 1}]
+    assert report["api_diagnostics"]["api_events"] == 2
+    assert report["api_diagnostics"]["timeout_events"] == 1
+    assert report["api_diagnostics"]["timeout_rate"] == 0.5
+    assert report["api_diagnostics"]["long_api_ge_10s"] == 1
+    assert report["api_diagnostics"]["long_api_ge_10s_timeout_events"] == 1
+    assert report["api_diagnostics"]["fields"]["api_total_wall_ms"]["max"] == 12000
+    assert report["api_diagnostics"]["fields"]["api_attempt_timeout_ms"]["p50"] == 10000
+    assert report["api_diagnostics"]["fields"]["api_attempt_index"]["max"] == 2
+    assert report["api_diagnostics"]["fields"]["prompt_char_count"]["p50"] == 2000
+    assert report["api_diagnostics"]["fields"]["request_body_char_count"]["max"] == 2600
     assert report["dependency_markers"]["marker_events"] == 1
     assert report["dependency_markers"]["marker_ratio"] == 0.5
     assert report["dependency_markers"]["by_marker"] == [{"value": "그래서", "count": 1}]
