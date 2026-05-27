@@ -7,7 +7,7 @@ from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
 from utils.queue_utils import put_latest
 from modules.pipeline_events import transcription_to_sentence
-from modules.sentence_buffer import SentenceBuffer, is_complete
+from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 
 log = get_logger("sentence_splitter")
 
@@ -22,10 +22,30 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
     def run():
         import time
         buffer = SentenceBuffer()
+        pending_incomplete: SentenceCut | None = None
+
+        def emit_cut(cut: SentenceCut) -> None:
+            if cut.forced:
+                log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
+            log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
+            event = transcription_to_sentence(cut.text, cut.incomplete, cut.source)
+            metrics.increment("sentence.emitted")
+            put_latest(sentence_queue, event, log, "sentence_queue")
+            metrics.log_summary_if_due()
+
+        def merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
+            return SentenceCut(
+                text=f"{first.text} {second.text}".strip(),
+                incomplete=second.incomplete,
+                source=second.source or first.source,
+                elapsed=first.elapsed + second.elapsed,
+                forced=first.forced or second.forced,
+            )
 
         while not stop_event.is_set():
             if pause_event and pause_event.is_set():
                 buffer.reset()
+                pending_incomplete = None
                 wait_while_paused(stop_event, pause_event)
                 # Drain tokens that accumulated while paused so they don't
                 # appear as fresh content after resume.
@@ -56,14 +76,18 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 force_cut_seconds=cfg.splitter.force_cut_seconds,
             )
             if cut:
-                if cut.forced:
-                    log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
-                log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
-                event = transcription_to_sentence(cut.text, cut.incomplete, cut.source)
-                metrics.increment("sentence.emitted")
-                put_latest(sentence_queue, event, log, "sentence_queue")
-                metrics.log_summary_if_due()
+                if pending_incomplete is not None:
+                    emit_cut(merge_cuts(pending_incomplete, cut))
+                    pending_incomplete = None
+                elif cut.incomplete:
+                    pending_incomplete = cut
+                    metrics.increment("sentence.incomplete_buffered")
+                    log.info("Sentence buffered for next chunk: %s", cut.text)
+                else:
+                    emit_cut(cut)
 
+        if pending_incomplete is not None:
+            emit_cut(pending_incomplete)
         log.info("Sentence splitter stopped")
 
     return start_daemon_thread("SentenceSplitter", run)

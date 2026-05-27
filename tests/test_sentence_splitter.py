@@ -91,11 +91,12 @@ class TestSentenceSplitterThread(unittest.TestCase):
         sq: queue.Queue = queue.Queue()
         stop = threading.Event()
         with patch("modules.sentence_splitter.cfg", _fast_cfg()):
-            start(tq, sq, stop)
+            thread = start(tq, sq, stop)
             for token in tokens:
                 tq.put(token)
             time.sleep(wait)
             stop.set()
+            thread.join(timeout=2)
 
         results = []
         while not sq.empty():
@@ -112,6 +113,44 @@ class TestSentenceSplitterThread(unittest.TestCase):
         results = self._run(["게임 하고"], wait=1.5)
         self.assertGreater(len(results), 0)
         self.assertTrue(results[0].incomplete)
+
+    def test_incomplete_force_cut_waits_for_next_chunk(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(min_wait=0.1, force_cut=0.3)):
+            thread = start(tq, sq, stop)
+            tq.put("partial thought")
+            time.sleep(0.6)
+            self.assertTrue(sq.empty(), "Incomplete cut should be buffered, not emitted immediately")
+
+            tq.put("finished!")
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.text, "partial thought finished!")
+        self.assertFalse(result.incomplete)
+
+    def test_two_incomplete_cuts_emit_bounded_merge(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(min_wait=0.1, force_cut=0.3)):
+            thread = start(tq, sq, stop)
+            tq.put("first fragment")
+            time.sleep(0.6)
+            self.assertTrue(sq.empty())
+
+            tq.put("second fragment")
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.text, "first fragment second fragment")
+        self.assertTrue(result.incomplete)
 
     def test_buffer_accumulates_multiple_tokens(self):
         results = self._run(["진짜", "대박이에요"], wait=1.0)
