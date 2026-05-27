@@ -1141,13 +1141,13 @@ class TestTranslateOptimizations(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
-    def test_source_aware_corrections_restore_omitted_stock_streamer_phrase(self):
+    def test_source_aware_corrections_do_not_restore_stock_streamer_phrase(self):
         source = "내일 서버 설명회 때 한번 오시면 되겠습니다. 구독과 좋아요는 저에게 아주 큰 힘이 됩니다."
         target = "明天伺服器說明會時來一趟就好。"
 
         self.assertEqual(
             _apply_source_aware_corrections(source, target),
-            "明天伺服器說明會時來一趟就好。訂閱和按讚對我幫助很大。",
+            target,
         )
 
     def test_mwmeu_name_rendering_fixes_runtime_variants(self):
@@ -1568,6 +1568,18 @@ class TestSttTemplateGarbageGuard(unittest.TestCase):
         for e in t._engines:
             e.translate.assert_not_called()
 
+    def test_subscribe_cta_template_skips_engine_call(self):
+        t = _make_translator()
+
+        outcome = t.translate_event("구독과 좋아요 부탁드립니다!", incomplete=False)
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "policy")
+        self.assertEqual(outcome.filter_reason, "stt_template_garbage")
+        self.assertIsNone(outcome.target_text)
+        for e in t._engines:
+            e.translate.assert_not_called()
+
     def test_stt_template_garbage_not_written_to_memory_or_db(self):
         t = _make_translator()
         t._record_success = MagicMock()
@@ -1639,6 +1651,17 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다."
         )
         sanitized = "입주비는 안 받습니다. 저희 스폰서분들도 너무 감사하게도 좀 많이 붙어가지고"
+
+        outcome = t.translate_event(raw, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, raw)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+
+    def test_subscribe_cta_prefix_engine_receives_sanitized_text(self):
+        t = _make_translator()
+        raw = "구독과 좋아요 부탁 어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
+        sanitized = "어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
 
         outcome = t.translate_event(raw, incomplete=False)
 

@@ -191,6 +191,14 @@ class TestTranslationPolicy(unittest.TestCase):
             policy.rejection_reason("구독과 좋아요는 저에게 아주 큰 힘이 됩니다."),
             "stt_template_garbage",
         )
+        self.assertEqual(
+            policy.rejection_reason("구독과 좋아요 부탁드립니다!"),
+            "stt_template_garbage",
+        )
+        self.assertEqual(
+            policy.rejection_reason("좋아요랑 구독 부탁해요!"),
+            "stt_template_garbage",
+        )
 
     def test_genuine_short_thanks_is_not_rejected(self):
         # Real streamer thanking subs — must NOT be blocked.
@@ -262,6 +270,12 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
                 "구독과 좋아요는 저에게 아주 큰 힘이 됩니다. 댓글로 남겨주세요!"
             ),
             "댓글로 남겨주세요!",
+        )
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "구독과 좋아요 부탁 어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
+            ),
+            "어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?",
         )
 
     def test_strip_repeated_leading_template(self):

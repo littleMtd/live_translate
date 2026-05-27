@@ -148,14 +148,6 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
     ),
 )
 
-_SOURCE_AWARE_COMPLETION_SUFFIXES = (
-    (
-        ("구독과 좋아요",),
-        ("訂閱", "按讚", "喜歡"),
-        "訂閱和按讚對我幫助很大。",
-    ),
-)
-
 _SHARED_NAME_SCOPE = "__shared__"
 _HADES_PROFILE_ID = "hades_chxxnnx"
 _MWMEU_PROFILE_ID = "mwmeu"
@@ -457,22 +449,6 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         corrected = corrected.replace("更懂鞋", "神力更強")
         corrected = corrected.replace("更懂鞋子", "神力更強")
 
-    return _append_missing_source_aware_suffixes(source, corrected)
-
-
-def _append_missing_source_aware_suffixes(source: str, result: str) -> str:
-    corrected = result
-    for source_terms, target_markers, suffix in _SOURCE_AWARE_COMPLETION_SUFFIXES:
-        if not any(term in source for term in source_terms):
-            continue
-        if any(marker in corrected for marker in target_markers):
-            continue
-        corrected = corrected.strip()
-        if not corrected:
-            corrected = suffix
-            continue
-        separator = "" if corrected.endswith(("。", "！", "？", "…")) else "。"
-        corrected = f"{corrected}{separator}{suffix}"
     return corrected
 
 
