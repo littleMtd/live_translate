@@ -103,6 +103,22 @@ def _stt_event(**overrides):
     return base
 
 
+def _audio_event(**overrides):
+    base = {
+        "event_type": "audio",
+        "run_id": "run-x",
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "stage": "vad",
+        "cut_reason": "silence",
+        "audio_seconds": 5.0,
+        "raw_audio_seconds": 4.6,
+        "overlap_seconds": 0.4,
+        "adaptive_active": False,
+    }
+    base.update(overrides)
+    return base
+
+
 def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(
@@ -128,6 +144,28 @@ def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
     assert {"value": "rate_limited", "count": 1} in report["stt_summary"]["by_reason"]
     assert {"value": "below_volume_threshold", "count": 1} in report["stt_summary"]["by_reason"]
     assert report["runs"][0]["stt"]["requests_sent"] == 2
+
+
+def test_audio_summary_counts_vad_cut_reasons(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-a"),
+            _audio_event(run_id="run-a", cut_reason="silence", audio_seconds=5, overlap_seconds=0.4),
+            _audio_event(run_id="run-a", cut_reason="hard_max", audio_seconds=9, adaptive_active=True, overlap_seconds=1.0),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+
+    assert report["audio_events"] == 2
+    assert report["audio_summary"]["total"] == 2
+    assert {"value": "silence", "count": 1} in report["audio_summary"]["by_cut_reason"]
+    assert {"value": "hard_max", "count": 1} in report["audio_summary"]["by_cut_reason"]
+    assert {"value": "True", "count": 1} in report["audio_summary"]["by_adaptive_active"]
+    assert report["audio_summary"]["audio_seconds"]["max"] == 9
+    assert report["runs"][0]["audio"]["total"] == 2
 
 
 def test_empty_target_summary_groups_by_source_and_reason(tmp_path):

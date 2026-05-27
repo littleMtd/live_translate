@@ -57,6 +57,59 @@ def _audio_seconds(audio: np.ndarray) -> float:
     return round(len(audio) / max(1, cfg.audio.sample_rate), 3)
 
 
+def _cfg_audio_bool(name: str, default: bool) -> bool:
+    value = getattr(cfg.audio, name, default)
+    return bool(value) if isinstance(value, bool) else default
+
+
+def _cfg_audio_float(name: str, default: float) -> float:
+    value = getattr(cfg.audio, name, default)
+    return float(value) if isinstance(value, (int, float)) else default
+
+
+def _peak(audio: np.ndarray) -> float:
+    return float(np.max(np.abs(audio))) if len(audio) else 0.0
+
+
+def _normalize_audio_for_stt(audio: np.ndarray) -> tuple[np.ndarray, dict[str, float | bool]]:
+    raw_rms = _rms(audio)
+    raw_peak = _peak(audio)
+    stats: dict[str, float | bool] = {
+        "audio_rms": round(raw_rms, 6),
+        "audio_peak": round(raw_peak, 6),
+        "normalized_rms": round(raw_rms, 6),
+        "normalized_peak": round(raw_peak, 6),
+        "normalization_gain": 1.0,
+        "normalization_limited": False,
+    }
+    if not _cfg_audio_bool("stt_normalize_enabled", False) or raw_rms <= 0:
+        return audio, stats
+
+    target_rms = max(0.0, _cfg_audio_float("stt_target_rms", 0.0))
+    max_gain = max(1.0, _cfg_audio_float("stt_max_gain", 1.0))
+    peak_limit = min(1.0, max(0.0, _cfg_audio_float("stt_peak_limit", 1.0)))
+    if target_rms <= 0 or peak_limit <= 0:
+        return audio, stats
+
+    gain = min(max_gain, target_rms / raw_rms)
+    normalized = audio.astype(np.float32, copy=True) * np.float32(gain)
+    limited = False
+    normalized_peak = _peak(normalized)
+    if normalized_peak > peak_limit:
+        normalized *= np.float32(peak_limit / normalized_peak)
+        limited = True
+
+    stats.update(
+        {
+            "normalized_rms": round(_rms(normalized), 6),
+            "normalized_peak": round(_peak(normalized), 6),
+            "normalization_gain": round(float(gain), 3),
+            "normalization_limited": limited,
+        }
+    )
+    return normalized.astype(np.float32, copy=False), stats
+
+
 def _segment_rejection_reason(segments: list[dict]) -> tuple[str, float | None, float | None]:
     stats = segment_stats(segments)
     if stats is None:
@@ -270,7 +323,8 @@ class STTEngine:
                 request_sent=False,
             )
             return None
-        if _rms(audio) < cfg.audio.volume_threshold:
+        raw_rms = _rms(audio)
+        if raw_rms < cfg.audio.volume_threshold:
             self._last_avg_logprob = None
             self._last_no_speech_prob = None
             log.debug("Groq STT skipped: audio below volume threshold")
@@ -280,12 +334,29 @@ class STTEngine:
                 status="skipped",
                 reason="below_volume_threshold",
                 request_sent=False,
+                audio_stats={
+                    "audio_rms": round(raw_rms, 6),
+                    "audio_peak": round(_peak(audio), 6),
+                    "normalized_rms": round(raw_rms, 6),
+                    "normalized_peak": round(_peak(audio), 6),
+                    "normalization_gain": 1.0,
+                    "normalization_limited": False,
+                },
             )
             return None
         request_sent = False
+        audio_stats = {
+            "audio_rms": round(raw_rms, 6),
+            "audio_peak": round(_peak(audio), 6),
+            "normalized_rms": round(raw_rms, 6),
+            "normalized_peak": round(_peak(audio), 6),
+            "normalization_gain": 1.0,
+            "normalization_limited": False,
+        }
         try:
+            request_audio, audio_stats = _normalize_audio_for_stt(audio)
             buf = io.BytesIO()
-            sf.write(buf, audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
+            sf.write(buf, request_audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
             buf.seek(0)
             buf.name = "audio.wav"
             dynamic_prompt = self._build_groq_prompt()
@@ -313,6 +384,7 @@ class STTEngine:
                     reason="language",
                     request_sent=request_sent,
                     text=text,
+                    audio_stats=audio_stats,
                 )
                 return None
 
@@ -337,6 +409,7 @@ class STTEngine:
                     text=text,
                     avg_logprob=avg_logprob,
                     no_speech_prob=no_speech_prob,
+                    audio_stats=audio_stats,
                 )
                 return None
 
@@ -350,6 +423,7 @@ class STTEngine:
                     reason="empty",
                     request_sent=request_sent,
                     text=text,
+                    audio_stats=audio_stats,
                 )
                 return None
             if _is_hallucinated(text):
@@ -362,6 +436,7 @@ class STTEngine:
                     reason="hallucinated",
                     request_sent=request_sent,
                     text=text,
+                    audio_stats=audio_stats,
                 )
                 return None
             log.debug("Groq: %s", text)
@@ -377,6 +452,7 @@ class STTEngine:
                 text=text,
                 avg_logprob=stats.logprob if stats else None,
                 no_speech_prob=stats.no_speech if stats else None,
+                audio_stats=audio_stats,
             )
             return text
         except Exception as e:
@@ -399,6 +475,7 @@ class STTEngine:
                 status="failed",
                 reason=reason,
                 request_sent=request_sent,
+                audio_stats=audio_stats,
             )
             return None
 
@@ -424,7 +501,9 @@ class STTEngine:
         text: str = "",
         avg_logprob: float | None = None,
         no_speech_prob: float | None = None,
+        audio_stats: dict[str, float | bool] | None = None,
     ) -> None:
+        audio_stats = audio_stats or {}
         runtime_events.emit(
             "stt",
             engine="groq",
@@ -438,6 +517,12 @@ class STTEngine:
             profile_id=cfg.active_streamer_profile,
             avg_logprob=avg_logprob,
             no_speech_prob=no_speech_prob,
+            audio_rms=audio_stats.get("audio_rms"),
+            audio_peak=audio_stats.get("audio_peak"),
+            normalized_rms=audio_stats.get("normalized_rms"),
+            normalized_peak=audio_stats.get("normalized_peak"),
+            normalization_gain=audio_stats.get("normalization_gain"),
+            normalization_limited=audio_stats.get("normalization_limited"),
         )
 
 

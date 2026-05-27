@@ -107,6 +107,13 @@ class TestVadState(unittest.TestCase):
         m.audio.vad_max_speech_sec = self._MAX_SEC
         m.audio.vad_hard_max_speech_sec = self._MAX_SEC
         m.audio.vad_overlap_sec = 0.0
+        m.audio.vad_silence_overlap_sec = 0.0
+        m.audio.vad_adaptive_enabled = False
+        m.audio.vad_adaptive_after_boundary_cuts = 1
+        m.audio.vad_adaptive_silence_sec = self._SILENCE_SEC
+        m.audio.vad_adaptive_max_speech_sec = self._MAX_SEC
+        m.audio.vad_adaptive_hard_max_speech_sec = self._MAX_SEC
+        m.audio.vad_adaptive_overlap_sec = 0.0
         return m
 
     def _loud(self, n=10):
@@ -206,6 +213,55 @@ class TestVadState(unittest.TestCase):
 
         self.assertEqual(len(first), 20)
         self.assertEqual(len(second), 20)
+
+    def test_natural_silence_cut_uses_short_speech_overlap(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        cfg.audio.vad_silence_overlap_sec = 0.1
+        with patch("modules.audio_capture.cfg", cfg):
+            vad = _VadState(q)
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+            first = q.get_nowait()
+
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+            second = q.get_nowait()
+
+        self.assertEqual(len(first), 20)
+        self.assertEqual(len(second), 30)
+        np.testing.assert_allclose(second[:10], self._loud(10))
+
+    def test_adaptive_vad_extends_next_segment_after_boundary_cut(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        cfg.audio.vad_hard_max_speech_sec = 0.8
+        cfg.audio.vad_overlap_sec = 0.1
+        cfg.audio.vad_adaptive_enabled = True
+        cfg.audio.vad_adaptive_after_boundary_cuts = 1
+        cfg.audio.vad_adaptive_silence_sec = 0.2
+        cfg.audio.vad_adaptive_max_speech_sec = 0.7
+        cfg.audio.vad_adaptive_hard_max_speech_sec = 0.9
+        cfg.audio.vad_adaptive_overlap_sec = 0.2
+        with patch("modules.audio_capture.cfg", cfg):
+            vad = _VadState(q)
+            for _ in range(5):
+                vad.push(self._loud(10))
+            vad.push(self._quiet(5))  # soft-max emit activates adaptive next segment
+            first = q.get_nowait()
+            self.assertEqual(len(first), 55)
+            self.assertEqual(vad._adaptive_segments_remaining, 1)
+
+            for _ in range(5):
+                vad.push(self._loud(10))
+            vad.push(self._quiet(10))  # base silence gate hit, adaptive gate not yet
+            self.assertTrue(q.empty())
+            vad.push(self._quiet(10))  # adaptive silence gate hit
+            second = q.get_nowait()
+
+        self.assertEqual(len(second), 80)
 
     def test_reset_at_max_speech_without_speech(self):
         from modules.audio_capture import _VadState

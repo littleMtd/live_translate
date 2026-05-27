@@ -39,6 +39,17 @@ class _Audio:
     vad_max_speech_sec:    float = 6.5
     vad_hard_max_speech_sec: float = 9.0
     vad_overlap_sec:       float = 1.0
+    vad_silence_overlap_sec: float = 0.4
+    vad_adaptive_enabled:   bool  = True
+    vad_adaptive_after_boundary_cuts: int = 1
+    vad_adaptive_silence_sec: float = 1.1
+    vad_adaptive_max_speech_sec: float = 7.5
+    vad_adaptive_hard_max_speech_sec: float = 10.0
+    vad_adaptive_overlap_sec: float = 1.2
+    stt_normalize_enabled: bool  = True
+    stt_target_rms:       float = 0.08
+    stt_max_gain:         float = 4.0
+    stt_peak_limit:       float = 0.95
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
     vad_silero_threshold:  float = 0.5   # speech probability threshold (0–1)

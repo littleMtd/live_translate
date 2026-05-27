@@ -25,6 +25,7 @@ from modules.stt import (
     _NOISE_TAGS,
     _SENSEVOICE_PROBE_EVERY,
     _TAG_RE,
+    _normalize_audio_for_stt,
     STTEngine,
 )
 from modules.pipeline_events import TranscriptionEvent
@@ -181,6 +182,30 @@ class TestTranscribeGroq(unittest.TestCase):
 
     def _audio(self, n=16000):
         return np.full(n, 0.1, dtype=np.float32)  # RMS=0.1 > volume_threshold
+
+    def test_normalize_audio_for_stt_targets_rms_without_mutating_input(self):
+        audio = np.full(1600, 0.02, dtype=np.float32)
+
+        normalized, stats = _normalize_audio_for_stt(audio)
+
+        self.assertIsNot(normalized, audio)
+        self.assertAlmostEqual(float(np.sqrt(np.mean(np.square(audio)))), 0.02, places=3)
+        self.assertLessEqual(stats["normalization_gain"], 4.0)
+        self.assertAlmostEqual(stats["normalized_rms"], 0.08, places=2)
+
+    def test_normalize_audio_for_stt_peak_limits(self):
+        audio = np.array([0.01, 0.9, -0.9], dtype=np.float32)
+
+        mock_cfg = MagicMock()
+        mock_cfg.audio.stt_normalize_enabled = True
+        mock_cfg.audio.stt_target_rms = 1.0
+        mock_cfg.audio.stt_max_gain = 4.0
+        mock_cfg.audio.stt_peak_limit = 0.5
+        with patch("modules.stt.cfg", mock_cfg):
+            normalized, stats = _normalize_audio_for_stt(audio)
+
+        self.assertLessEqual(float(np.max(np.abs(normalized))), 0.5)
+        self.assertTrue(stats["normalization_limited"])
 
     def test_returns_transcribed_text(self):
         eng = _make_engine_groq("안녕하세요")

@@ -50,6 +50,7 @@ def analyze_runtime_events(
     events = list(_read_events(event_path))
     translation_events = [event for event in events if event.get("event_type") == "translation"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
+    audio_events = [event for event in events if event.get("event_type") == "audio"]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -68,6 +69,7 @@ def analyze_runtime_events(
         "total_events": len(events),
         "translation_events": len(translation_events),
         "stt_events": len(stt_events),
+        "audio_events": len(audio_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
         "status_breakdown": _status_breakdown(translation_events),
@@ -83,13 +85,14 @@ def analyze_runtime_events(
             {"flag": flag, "count": count}
             for flag, count in quality_flags.most_common()
         ],
+        "audio_summary": _audio_summary(audio_events),
         "stt_summary": _stt_summary(stt_events),
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
         "dependency_markers": _dependency_marker_summary(translation_events),
         "analyzer_output_notes": ANALYZER_OUTPUT_NOTES,
-        "runs": _run_summaries(translation_events, stt_events, labels, top_n),
+        "runs": _run_summaries(translation_events, stt_events, audio_events, labels, top_n),
         "latest": _latest_samples(translation_events, top_n),
         "flagged_samples": _flagged_samples(translation_events, top_n),
         "empty_targets": _empty_target_summary(translation_events, top_n),
@@ -146,6 +149,7 @@ def load_run_labels(path: Path | None = None) -> dict[str, dict[str, str]]:
 def _run_summaries(
     events: list[dict[str, Any]],
     stt_events: list[dict[str, Any]],
+    audio_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
     top_n: int,
 ) -> list[dict[str, Any]]:
@@ -155,6 +159,9 @@ def _run_summaries(
     grouped_stt: dict[str, list[dict[str, Any]]] = {}
     for event in stt_events:
         grouped_stt.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
+    grouped_audio: dict[str, list[dict[str, Any]]] = {}
+    for event in audio_events:
+        grouped_audio.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
 
     summaries = []
     for run_id, run_events in grouped.items():
@@ -194,6 +201,7 @@ def _run_summaries(
                     ]
                 ),
                 "stt": _stt_summary(grouped_stt.get(run_id, [])),
+                "audio": _audio_summary(grouped_audio.get(run_id, [])),
                 "success_latency_ms": _latency_summary(
                     [
                         latency
@@ -405,6 +413,35 @@ def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _audio_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "total": len(events),
+        "by_cut_reason": _count_by(events, "cut_reason"),
+        "by_adaptive_active": _count_by(events, "adaptive_active"),
+        "audio_seconds": _latency_summary(
+            [
+                seconds
+                for event in events
+                if (seconds := _float_or_none(event.get("audio_seconds"))) is not None
+            ]
+        ),
+        "raw_audio_seconds": _latency_summary(
+            [
+                seconds
+                for event in events
+                if (seconds := _float_or_none(event.get("raw_audio_seconds"))) is not None
+            ]
+        ),
+        "overlap_seconds": _latency_summary(
+            [
+                seconds
+                for event in events
+                if (seconds := _float_or_none(event.get("overlap_seconds"))) is not None
+            ]
+        ),
+    }
+
+
 def _request_budget(requests_sent: int) -> dict[str, float | int]:
     limit = max(0, int(getattr(cfg.stt, "groq_daily_request_limit", 0) or 0))
     remaining = max(0, limit - requests_sent) if limit else 0
@@ -445,7 +482,8 @@ def _print_report(report: dict[str, Any]) -> None:
     print(
         f"Events: {report['total_events']} | "
         f"Translations: {report['translation_events']} | "
-        f"STT: {report['stt_events']}"
+        f"STT: {report['stt_events']} | "
+        f"Audio: {report.get('audio_events', 0)}"
     )
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(f"Status breakdown: {report['status_breakdown']}")
@@ -462,6 +500,13 @@ def _print_report(report: dict[str, Any]) -> None:
         f"status={report['stt_summary']['by_status']} | "
         f"reasons={report['stt_summary']['by_reason']}"
     )
+    print(
+        "Audio summary: "
+        f"chunks={report['audio_summary']['total']} | "
+        f"cuts={report['audio_summary']['by_cut_reason']} | "
+        f"adaptive={report['audio_summary']['by_adaptive_active']} | "
+        f"seconds={report['audio_summary']['audio_seconds']}"
+    )
     if report.get("runs"):
         print("\nRuns:")
         for run in report["runs"]:
@@ -472,6 +517,7 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"{run['duration_sec']}s, "
                 f"status={run['status_breakdown']}, "
                 f"stt={run['stt']['by_status']}, "
+                f"audio_cuts={run['audio']['by_cut_reason']}, "
                 f"success_latency={run['success_latency_ms']}, "
                 f"queue_latency={run['queue_latency_ms']}, "
                 f"retry_rate={run['retry_summary']['retry_rate']}, "

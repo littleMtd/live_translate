@@ -151,6 +151,28 @@ class TestVadConfig(unittest.TestCase):
         self.assertGreaterEqual(cfg.audio.vad_overlap_sec, 0)
         self.assertLess(cfg.audio.vad_overlap_sec, cfg.audio.vad_max_speech_sec)
 
+    def test_vad_silence_overlap_is_shorter_than_soft_max(self):
+        self.assertGreaterEqual(cfg.audio.vad_silence_overlap_sec, 0)
+        self.assertLess(cfg.audio.vad_silence_overlap_sec, cfg.audio.vad_max_speech_sec)
+
+    def test_vad_adaptive_limits_are_not_shorter_than_base(self):
+        self.assertIsInstance(cfg.audio.vad_adaptive_enabled, bool)
+        self.assertGreaterEqual(cfg.audio.vad_adaptive_after_boundary_cuts, 0)
+        self.assertGreaterEqual(cfg.audio.vad_adaptive_silence_sec, cfg.audio.vad_silence_sec)
+        self.assertGreaterEqual(cfg.audio.vad_adaptive_max_speech_sec, cfg.audio.vad_max_speech_sec)
+        self.assertGreaterEqual(
+            cfg.audio.vad_adaptive_hard_max_speech_sec,
+            cfg.audio.vad_hard_max_speech_sec,
+        )
+        self.assertGreaterEqual(cfg.audio.vad_adaptive_overlap_sec, cfg.audio.vad_overlap_sec)
+
+    def test_stt_normalization_config_is_bounded(self):
+        self.assertIsInstance(cfg.audio.stt_normalize_enabled, bool)
+        self.assertGreater(cfg.audio.stt_target_rms, 0)
+        self.assertGreaterEqual(cfg.audio.stt_max_gain, 1)
+        self.assertGreater(cfg.audio.stt_peak_limit, 0)
+        self.assertLessEqual(cfg.audio.stt_peak_limit, 1)
+
     def test_vad_silence_less_than_max(self):
         # A silence gate larger than max_speech would mean we never cut on silence
         self.assertLess(cfg.audio.vad_silence_sec, cfg.audio.vad_max_speech_sec)
