@@ -278,6 +278,20 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertFalse(emit.call_args.kwargs["request_sent"])
         eng._groq_client.audio.transcriptions.create.assert_not_called()
 
+    def test_normalizes_before_volume_skip(self):
+        eng = _make_engine_groq("작게 말해도 들려요")
+        quiet_audio = np.full(16000, 0.006, dtype=np.float32)
+
+        with patch("modules.stt.runtime_events.emit") as emit:
+            result = eng._transcribe_groq(quiet_audio)
+
+        self.assertEqual(result, "작게 말해도 들려요")
+        eng._groq_client.audio.transcriptions.create.assert_called_once()
+        self.assertEqual(emit.call_args.kwargs["status"], "success")
+        self.assertTrue(emit.call_args.kwargs["request_sent"])
+        self.assertLess(emit.call_args.kwargs["audio_rms"], 0.01)
+        self.assertGreaterEqual(emit.call_args.kwargs["normalized_rms"], 0.01)
+
     def test_returns_none_when_groq_client_is_none(self):
         eng = _make_engine_groq()
         eng._groq_client = None

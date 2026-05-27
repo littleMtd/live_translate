@@ -323,8 +323,9 @@ class STTEngine:
                 request_sent=False,
             )
             return None
-        raw_rms = _rms(audio)
-        if raw_rms < cfg.audio.volume_threshold:
+        request_audio, audio_stats = _normalize_audio_for_stt(audio)
+        gate_rms = _rms(request_audio)
+        if gate_rms < cfg.audio.volume_threshold:
             self._last_avg_logprob = None
             self._last_no_speech_prob = None
             log.debug("Groq STT skipped: audio below volume threshold")
@@ -334,27 +335,11 @@ class STTEngine:
                 status="skipped",
                 reason="below_volume_threshold",
                 request_sent=False,
-                audio_stats={
-                    "audio_rms": round(raw_rms, 6),
-                    "audio_peak": round(_peak(audio), 6),
-                    "normalized_rms": round(raw_rms, 6),
-                    "normalized_peak": round(_peak(audio), 6),
-                    "normalization_gain": 1.0,
-                    "normalization_limited": False,
-                },
+                audio_stats=audio_stats,
             )
             return None
         request_sent = False
-        audio_stats = {
-            "audio_rms": round(raw_rms, 6),
-            "audio_peak": round(_peak(audio), 6),
-            "normalized_rms": round(raw_rms, 6),
-            "normalized_peak": round(_peak(audio), 6),
-            "normalization_gain": 1.0,
-            "normalization_limited": False,
-        }
         try:
-            request_audio, audio_stats = _normalize_audio_for_stt(audio)
             buf = io.BytesIO()
             sf.write(buf, request_audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
             buf.seek(0)

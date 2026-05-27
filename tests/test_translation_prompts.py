@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "d0a7502ca98e352fc85718ddfd4b17b9601e41f5139a9643f92dff7d011cdb42"
+_TRANSLATION_PROFILE_DATA_HASH = "73aba7801273ee613faf953fb409f946b97e84861e39d515625ebe141704cb3c"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -55,6 +55,9 @@ def test_hades_translation_profiles_contain_glossary_mappings():
         "Minecraft",
         "服主",
         "服主房",
+        "楓之谷",
+        "美少女夢工場",
+        "血味",
     )
 
     for qwen in (False, True):

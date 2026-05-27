@@ -1103,6 +1103,53 @@ class TestTranslateOptimizations(unittest.TestCase):
             "Kkiyun和Yenan。Chulgu哥。剛受神降的巫女不是神力更強嗎？幾乎是大神巫。",
         )
 
+    def test_source_aware_corrections_fix_current_hades_hot_terms(self):
+        cases = (
+            (
+                "메이플은 좀 아기자기하네?",
+                "《仙境傳說》確實有點萌萌的。",
+                "《楓之谷》確實有點萌萌的。",
+            ),
+            (
+                "메이플은 좀 아기자기하네?",
+                "MapleStory確實有點萌萌的。",
+                "楓之谷確實有點萌萌的。",
+            ),
+            (
+                "프린세스 메이커 갓겜임.",
+                "《公主製造》真是神作。",
+                "《美少女夢工場》真是神作。",
+            ),
+            (
+                "포스터가 피맛이 너무 느껴져서",
+                "海報實在太有酒味了。",
+                "海報實在太有血味了。",
+            ),
+            (
+                "창나면 일단 사과부터 하면",
+                "如果開戰，先道歉。",
+                "如果出事，先道歉。",
+            ),
+            (
+                "다 죽여버릴 것 같은 그런 느낌",
+                "這有種讓人想死的感覺。",
+                "這有種殺氣很重的感覺。",
+            ),
+        )
+
+        for source, target, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(_apply_source_aware_corrections(source, target), expected)
+
+    def test_source_aware_corrections_restore_omitted_stock_streamer_phrase(self):
+        source = "내일 서버 설명회 때 한번 오시면 되겠습니다. 구독과 좋아요는 저에게 아주 큰 힘이 됩니다."
+        target = "明天伺服器說明會時來一趟就好。"
+
+        self.assertEqual(
+            _apply_source_aware_corrections(source, target),
+            "明天伺服器說明會時來一趟就好。訂閱和按讚對我幫助很大。",
+        )
+
     def test_mwmeu_name_rendering_fixes_runtime_variants(self):
         cases = (
             ("이비가 찾은 거예요", "伊比姐姐找到了", "이비姐姐找到了"),

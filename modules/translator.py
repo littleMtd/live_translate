@@ -97,6 +97,30 @@ _META_GARBAGE_MARKERS = (
 )
 
 _SOURCE_AWARE_TARGET_REPLACEMENTS = (
+    (
+        ("메이플", "메이플스토리"),
+        (("仙境傳說", "楓之谷"), ("MapleStory", "楓之谷")),
+    ),
+    (
+        ("프린세스 메이커",),
+        (("公主製造", "美少女夢工場"), ("Princess Maker", "美少女夢工場")),
+    ),
+    (
+        ("스타크래프트", "스타컬프트"),
+        (("StarCraft", "星海爭霸"), ("星際爭霸", "星海爭霸")),
+    ),
+    (
+        ("피맛",),
+        (("酒味", "血味"), ("皮馬特", "血味"), ("血的味道", "血味")),
+    ),
+    (
+        ("창나", "창이 나"),
+        (("開戰", "出事"), ("開打", "出事")),
+    ),
+    (
+        ("다 죽여버릴 것", "죽여버릴 것"),
+        (("讓人想死", "殺氣很重"), ("想死了", "殺氣很重")),
+    ),
     (("하데스", "하덱스"), (("哈迪斯", "HADES"), ("哈德克斯", "HADES"))),
     (("마가 뜨", "마가뜨"), (("瑪加特", "冷場"), ("馬嘎", "冷場"), ("魔嘎", "冷場"))),
     (("붕 뜨",), (("飄起來的時間", "空掉的時間"), ("浮起來的時間", "空掉的時間"))),
@@ -121,6 +145,14 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
             ("Daisuki desu", "大丈夫です"),
             ("大好きです", "大丈夫です"),
         ),
+    ),
+)
+
+_SOURCE_AWARE_COMPLETION_SUFFIXES = (
+    (
+        ("구독과 좋아요",),
+        ("訂閱", "按讚", "喜歡"),
+        "訂閱和按讚對我幫助很大。",
     ),
 )
 
@@ -425,6 +457,22 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         corrected = corrected.replace("更懂鞋", "神力更強")
         corrected = corrected.replace("更懂鞋子", "神力更強")
 
+    return _append_missing_source_aware_suffixes(source, corrected)
+
+
+def _append_missing_source_aware_suffixes(source: str, result: str) -> str:
+    corrected = result
+    for source_terms, target_markers, suffix in _SOURCE_AWARE_COMPLETION_SUFFIXES:
+        if not any(term in source for term in source_terms):
+            continue
+        if any(marker in corrected for marker in target_markers):
+            continue
+        corrected = corrected.strip()
+        if not corrected:
+            corrected = suffix
+            continue
+        separator = "" if corrected.endswith(("。", "！", "？", "…")) else "。"
+        corrected = f"{corrected}{separator}{suffix}"
     return corrected
 
 
