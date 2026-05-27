@@ -277,6 +277,27 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             ),
             "어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?",
         )
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "구독과 좋아요는 저 이제 2집 녹음하러 가거든요? 여러분들?"
+            ),
+            "저 이제 2집 녹음하러 가거든요? 여러분들?",
+        )
+
+    def test_strip_leading_hard_template_prefix(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다. 우와! 너무 예쁘던데?"
+            ),
+            "우와! 너무 예쁘던데?",
+        )
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다. "
+                "자막 제공 및 광고를 포함하고 있습니다. 우와! 너무 예쁘던데?"
+            ),
+            "우와! 너무 예쁘던데?",
+        )
 
     def test_strip_repeated_leading_template(self):
         self.assertEqual(
@@ -342,12 +363,12 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
         )
         self.assertEqual(policy.last_input, sanitized)
 
-    def test_hard_template_with_real_tail_is_not_stripped(self):
+    def test_hard_template_with_real_tail_is_stripped(self):
         policy = TranslationPolicy(slang={})
         text = "자막 제공 및 광고를 포함하고 있습니다. 좋아 좋아"
 
-        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), text)
-        self.assertIsNone(policy.prepare_input(text))
+        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), "좋아 좋아")
+        self.assertEqual(policy.prepare_input(text), "좋아 좋아")
 
     def test_repeated_conditional_template_with_real_tail_is_sanitized(self):
         policy = TranslationPolicy(slang={})

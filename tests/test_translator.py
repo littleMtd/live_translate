@@ -1669,6 +1669,28 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
         self.assertEqual(outcome.source_text, raw)
         self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
 
+    def test_subscribe_topic_prefix_engine_receives_sanitized_text(self):
+        t = _make_translator()
+        raw = "구독과 좋아요는 저 이제 2집 녹음하러 가거든요? 여러분들?"
+        sanitized = "저 이제 2집 녹음하러 가거든요? 여러분들?"
+
+        outcome = t.translate_event(raw, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, raw)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+
+    def test_hard_template_prefix_engine_receives_sanitized_text(self):
+        t = _make_translator()
+        raw = "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다. 우와! 너무 예쁘던데?"
+        sanitized = "우와! 너무 예쁘던데?"
+
+        outcome = t.translate_event(raw, incomplete=False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.source_text, raw)
+        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+
 
 class TestSttLowValueFragmentGuard(unittest.TestCase):
     def test_low_value_fragment_skips_engine_call(self):

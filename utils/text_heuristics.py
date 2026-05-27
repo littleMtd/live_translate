@@ -179,7 +179,20 @@ STT_TEMPLATE_CONDITIONAL_PHRASES = (
 # Task #9 — boundary sanitizer. Keep this separate from the conditional guard
 # list so stripping can diverge from rejection rules later if runtime data
 # shows different false-positive behavior.
-STT_TEMPLATE_STRIP_PHRASES = STT_TEMPLATE_CONDITIONAL_PHRASES
+STT_TEMPLATE_HARD_PREFIX_STRIP_PHRASES = (
+    "자막 제공 및 자막 제공 및 광고를 포함하고 있습니다",
+    "자막 제공 및 광고를 포함하고 있습니다",
+    "한글자막 제공 및 자막 제공 및 광고를 포함하고 있습니다",
+    "한글자막 제공 및 광고를 포함하고 있습니다",
+    "한글 자막 제공 및 자막 제공 및 광고를 포함하고 있습니다",
+    "한글 자막 제공 및 광고를 포함하고 있습니다",
+)
+
+STT_TEMPLATE_STRIP_PHRASES = (
+    *STT_TEMPLATE_HARD_PREFIX_STRIP_PHRASES,
+    *STT_TEMPLATE_CONDITIONAL_PHRASES,
+    "구독과 좋아요는",
+)
 
 # Significant chars = drop whitespace / punctuation / ellipsis so length
 # ratios are not skewed by trailing "." / "!" / "...".
