@@ -166,6 +166,14 @@ _SOURCE_NORM_SHARED: dict[str, str] = {}
 _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
     _HADES_PROFILE_ID: {
         "服주": "섭주",
+        "김띵귤": "띵귤",
+        "김챗나": "챈나",
+        "김챔나": "챈나",
+        "챗나": "챈나",
+        "챔나": "챈나",
+        "주먹 언니": "솜펀치 언니",
+        "주먹이": "솜펀치",
+        "주먹아": "솜펀치",
         # 채나-family → 챈나-family (longer forms first to avoid bare-substring overlap)
         "천사채나": "천사챈나",
         "채나룬": "챈나룬",
@@ -262,9 +270,35 @@ class _NameRenderingRule:
 _NAME_RENDERING_RULES = (
     _NameRenderingRule(
         _HADES_PROFILE_ID,
-        ("챈나",),
-        ("챈나", "-chan", "-Chan", "－chan", "－Chan", "–chan", "–Chan", "—chan", "—Chan"),
+        ("챈나", "김챗나", "김챔나", "챗나", "챔나"),
+        (
+            "챈나",
+            "-chan",
+            "-Chan",
+            "－chan",
+            "－Chan",
+            "–chan",
+            "–Chan",
+            "—chan",
+            "—Chan",
+            "金chat",
+            "金Chat",
+            "金챗나",
+            "金챔나",
+        ),
         "Chxxnnx",
+    ),
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("솜주먹", "솜펀치", "주먹이", "주먹아", "주먹 언니"),
+        ("솜주먹", "솜펀치", "桑拳頭", "拳頭", "棉拳", "Som Punch"),
+        "Sompunch",
+    ),
+    _NameRenderingRule(
+        _HADES_PROFILE_ID,
+        ("띵귤", "김띵귤", "싱귤"),
+        ("띵귤", "싱귤", "金叮菊", "金丁橘", "叮菊", "丁橘"),
+        "Singgyul",
     ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,

@@ -324,6 +324,42 @@ class TranslationPolicy:
         def _trim_trailing_boundary(value: str) -> str:
             return value.rstrip(" \t\r\n.!?~…。．！？，、")
 
+        def _has_useful_korean(value: str) -> bool:
+            significant = STT_INSIGNIFICANT_RE.sub("", value)
+            return len(significant) >= 2 and bool(KOREAN_CHAR_RE.search(value))
+
+        def _strip_internal_template_phrases(value: str) -> tuple[str, bool]:
+            changed_inner = False
+            phrases = tuple(
+                phrase
+                for phrase in STT_TEMPLATE_STRIP_PHRASES
+                if phrase != "구독과 좋아요는"
+            )
+
+            for phrase in sorted(set(phrases), key=len, reverse=True):
+                search_start = 0
+                while True:
+                    start = value.find(phrase, search_start)
+                    if start < 0:
+                        break
+
+                    end = start + len(phrase)
+                    prefix = value[:start].rstrip()
+                    suffix = _trim_leading_boundary(value[end:])
+                    if not prefix or not suffix:
+                        search_start = end
+                        continue
+
+                    if not _has_useful_korean(prefix) or not _has_useful_korean(suffix):
+                        search_start = end
+                        continue
+
+                    value = f"{prefix} {suffix}".strip()
+                    changed_inner = True
+                    search_start = max(len(prefix), 0)
+
+            return value, changed_inner
+
         stripped = normalized
         changed = False
 
@@ -356,6 +392,9 @@ class TranslationPolicy:
                 break
             stripped = next_value
             changed = True
+
+        stripped, internal_changed = _strip_internal_template_phrases(stripped)
+        changed = changed or internal_changed
 
         if not changed:
             return normalized

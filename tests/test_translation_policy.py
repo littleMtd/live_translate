@@ -196,6 +196,14 @@ class TestTranslationPolicy(unittest.TestCase):
             "stt_template_garbage",
         )
         self.assertEqual(
+            policy.rejection_reason("구독과 좋아요 부탁 드립니다."),
+            "stt_template_garbage",
+        )
+        self.assertEqual(
+            policy.rejection_reason("구독, 좋아요, 알림설정 부탁드립니다."),
+            "stt_template_garbage",
+        )
+        self.assertEqual(
             policy.rejection_reason("좋아요랑 구독 부탁해요!"),
             "stt_template_garbage",
         )
@@ -283,6 +291,18 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             ),
             "저 이제 2집 녹음하러 가거든요? 여러분들?",
         )
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "구독과 좋아요 부탁 드립니다. 야, 샌 몬스터 죽이면 돈 더 많이 줘?"
+            ),
+            "야, 샌 몬스터 죽이면 돈 더 많이 줘?",
+        )
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "구독, 좋아요, 알림 이거 안되네? 야야 좋다 포탑 올빵하니까 좋은데?"
+            ),
+            "이거 안되네? 야야 좋다 포탑 올빵하니까 좋은데?",
+        )
 
     def test_strip_leading_hard_template_prefix(self):
         self.assertEqual(
@@ -307,8 +327,16 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             "진짜내용.",
         )
 
-    def test_strip_internal_template_not_removed(self):
-        text = "우리 채널에 시청해주셔서 감사합니다! 고맙습니다!"
+    def test_strip_internal_template_sentence(self):
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(
+                "따아 이거 진짜 위기상황 시청해주셔서 감사합니다. 근데 너네 이거 다 알아?"
+            ),
+            "따아 이거 진짜 위기상황 근데 너네 이거 다 알아?",
+        )
+
+    def test_partial_internal_thanks_is_not_removed(self):
+        text = "우리 채널에 시청해주셔서 감사하다는 댓글이 많아요!"
 
         self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), text)
 
@@ -369,6 +397,17 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
 
         self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), "좋아 좋아")
         self.assertEqual(policy.prepare_input(text), "좋아 좋아")
+
+    def test_hard_template_inside_real_speech_is_stripped(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "피망업 노노노 자막 제공 및 자막 제공 및 광고를 포함하고 있습니다. "
+            "거짓말 하지마! 저희는 돈이 없어요."
+        )
+
+        expected = "피망업 노노노 거짓말 하지마! 저희는 돈이 없어요."
+        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), expected)
+        self.assertEqual(policy.prepare_input(text), expected)
 
     def test_repeated_conditional_template_with_real_tail_is_sanitized(self):
         policy = TranslationPolicy(slang={})

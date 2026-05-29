@@ -1236,6 +1236,10 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("봉준님 불러요", "奉主來了", "Kim Bongjun來了"),
             ("김봉준이 말했어요", "奉俊說了", "Kim Bongjun說了"),
             ("키마는 대기 중", "Kima待機中", "Kyma待機中"),
+            ("솜주먹 바보님", "桑拳頭笨蛋", "Sompunch笨蛋"),
+            ("솜주먹 언니 와요", "拳頭姐姐來了", "Sompunch姐姐來了"),
+            ("김띵귤 기강 잡아라", "金叮菊管管紀律", "Singgyul管管紀律"),
+            ("김챗나 방", "金chat的房間", "Chxxnnx的房間"),
             ("고세구가 왔어요", "高世久來了", "Gosegu來了"),
         )
 
@@ -1251,6 +1255,8 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("김봉준이 말했어요", "김봉준說了", "Kim Bongjun說了"),
             ("성태는 지금 와요", "성태來了", "KimSungtae來了"),
             ("키마는 대기 중", "키마待機中", "Kyma待機中"),
+            ("솜펀치 언니 와요", "솜펀치姐姐來了", "Sompunch姐姐來了"),
+            ("띵귤이 왔어요", "띵귤來了", "Singgyul來了"),
         )
 
         with _active_translation_profile("hades_chxxnnx"):
@@ -1694,7 +1700,7 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
     def test_subscribe_cta_prefix_engine_receives_sanitized_text(self):
         t = _make_translator()
         raw = "구독과 좋아요 부탁 어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
-        sanitized = "어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
+        sanitized = "어? 진짜? 카페에 챈나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
 
         outcome = t.translate_event(raw, incomplete=False)
 
@@ -1808,6 +1814,22 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
             twice = _normalize_source_before_matching(once)
             self.assertEqual(once, "섭주 화이팅")
             self.assertEqual(twice, once)
+
+    def test_hades_runtime_name_variants_normalized(self):
+        cases = [
+            ("김띵귤 왔어", "띵귤 왔어"),
+            ("김챗나 방", "챈나 방"),
+            ("김챔나 방", "챈나 방"),
+            ("챗나야 빨리 와", "챈나야 빨리 와"),
+            ("주먹이 왔어", "솜펀치 왔어"),
+            ("주먹 언니 와요", "솜펀치 언니 와요"),
+        ]
+        with _active_translation_profile("hades_chxxnnx"):
+            for raw, expected in cases:
+                with self.subTest(raw=raw):
+                    once = _normalize_source_before_matching(raw)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(_normalize_source_before_matching(once), once)
 
     def test_hades_채나_family_normalized(self):
         cases = [
