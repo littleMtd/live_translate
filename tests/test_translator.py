@@ -1186,9 +1186,14 @@ class TestTranslateOptimizations(unittest.TestCase):
     def test_mwmeu_name_rendering_fixes_runtime_variants(self):
         cases = (
             ("이비가 찾은 거예요", "伊比姐姐找到了", "이비姐姐找到了"),
+            ("이비 언니랑 같이 해요", "李比姐姐一起玩", "이비姐姐一起玩"),
             ("수아가 답변했어요", "數亞姐姐回答了", "수아姐姐回答了"),
             ("리츠랑 초은이가 앉았어요", "利茨和初雲坐下了", "리츠和초은坐下了"),
+            ("리츠와 아이들이요", "Rits與小孩們", "리츠與小孩們"),
+            ("리츠가 많이 힘들었어", "リツ好像很累", "리츠好像很累"),
+            ("리츠 언니가 했어요", "Ritz姐姐做了", "리츠姐姐做了"),
             ("지한 언니가 말했어요", "志安姐姐說了", "지한姐姐說了"),
+            ("지한이가 왔어요", "Z-Han來了", "지한來了"),
             ("웬즈들이 가까이서 봤어요", "wenz們近距離看到了", "WENs們近距離看到了"),
         )
 
@@ -1216,6 +1221,23 @@ class TestTranslateOptimizations(unittest.TestCase):
                 _apply_source_aware_corrections(source, target),
                 "一進去就直接說：「大丈夫です！Arigatou gozaimasu！」",
             )
+
+    def test_mwmeu_current_stream_hot_terms_are_corrected(self):
+        cases = (
+            ("오버쿡드 2 할게요", "Oma-kooks 立刻投！投！", "《胡鬧廚房2》"),
+            ("어금니 같아요", "像牙齦", "像臼齒"),
+            ("짬밥순이 아니었어?", "不是按餃子順序來的嗎？", "不是按資歷順來的嗎？"),
+            ("땡글즈 플러스 이제", "Tanggulz Plus怡潔", "땡글즈 Plus 이제"),
+            ("겟머츠 아니고 땡글즈예요", "不是GetMuts，是Tanggulz", "不是겟머츠，是땡글즈"),
+            ("띠빵뽕 버스기사", "叮糖餅司機", "띠빵뽕司機"),
+            ("신호등즈가 맞나?", "信號燈們對嗎？", "信號燈즈對嗎？"),
+            ("리츠 선배는 했어요", "リツ生趴伊做到了", "리츠前輩做到了"),
+        )
+
+        with _active_translation_profile("mwmeu"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
     def test_mwmeu_name_rendering_is_profile_gated(self):
         source = "리츠랑 초은이가 앉았어요"
@@ -1698,15 +1720,16 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
         self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
 
     def test_subscribe_cta_prefix_engine_receives_sanitized_text(self):
-        t = _make_translator()
-        raw = "구독과 좋아요 부탁 어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
-        sanitized = "어? 진짜? 카페에 챈나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
+        with _active_translation_profile("hades_chxxnnx"):
+            t = _make_translator()
+            raw = "구독과 좋아요 부탁 어? 진짜? 카페에 챗나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
+            sanitized = "어? 진짜? 카페에 챈나룩 서버 포스터 누가 큐티 버전으로 올려주셨다고요?"
 
-        outcome = t.translate_event(raw, incomplete=False)
+            outcome = t.translate_event(raw, incomplete=False)
 
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.source_text, raw)
-        self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
+            self.assertEqual(outcome.status, "success")
+            self.assertEqual(outcome.source_text, raw)
+            self.assertEqual(t._engines[0].translate.call_args.args[0], sanitized)
 
     def test_subscribe_topic_prefix_engine_receives_sanitized_text(self):
         t = _make_translator()
@@ -1869,6 +1892,19 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
                 "이비한테 초은이 집에 가야 되고 초은아 웬즈들이 기다려. 리츠가 수아가 지한 언니랑 왔어.",
             )
 
+    def test_mwmeu_profile_normalizes_current_stream_game_variants(self):
+        raw = (
+            "오마쿡스 바로 투 하자. 플러스 인제 생빠이니까 토화기 들고 "
+            "명예 소변관 해. 나는 이 가나디아인데."
+        )
+
+        with _active_translation_profile("mwmeu"):
+            self.assertEqual(
+                _normalize_source_before_matching(raw),
+                "오버쿡드 2 하자. 플러스 이제 선배니까 소화기 들고 "
+                "명예 소방관 해. 나는 이 강아지인데.",
+            )
+
     def test_mwmeu_profile_normalizes_chiikawa_runtime_variants(self):
         raw = "시에가파크 갔다가 시가와 굿즈랑 하치와래랑 모몽가를 봤어."
 
@@ -1949,6 +1985,18 @@ class TestSourceNormIntegration(unittest.TestCase):
             self.assertEqual(outcome.target_text, "초은和Chiikawa")
             call_text = t._engines[0].translate.call_args[0][0]
             self.assertEqual(call_text, "초은이 치이카와파크 갔어")
+
+    def test_mwmeu_current_stream_variants_engine_receives_normalized_text(self):
+        with _active_translation_profile("mwmeu"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = "Oma-kooks 立刻投！投！"
+
+            outcome = t.translate_event("오마쿡스 바로 투 할게")
+
+            self.assertEqual(outcome.source_text, "오마쿡스 바로 투 할게")
+            self.assertEqual(outcome.target_text, "《胡鬧廚房2》")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "오버쿡드 2 할게")
 
 
 if __name__ == "__main__":
