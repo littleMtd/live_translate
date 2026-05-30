@@ -90,6 +90,8 @@ def _make_engine_sv() -> STTEngine:
     eng._groq_rate_limited_until = 0.0
     eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
+    eng._utterance_seq = 0
+    eng._current_utterance_id = ""
     return eng
 
 
@@ -174,6 +176,8 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._groq_rate_limited_until = 0.0
     eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
+    eng._utterance_seq = 0
+    eng._current_utterance_id = ""
     return eng
 
 
@@ -367,6 +371,39 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual(event.text, "Groq result")
         self.assertEqual(event.engine, "groq")
         self.assertEqual(event.profile_id, "isegye_lilpa")
+
+    def test_transcribe_event_mints_incrementing_utterance_id(self):
+        eng = _make_engine_groq("Groq result")
+        # Distinct transcripts so dedupe_transcript_overlap doesn't swallow the
+        # second call as a repeat of the first.
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp("첫번째 문장"),
+            _make_groq_resp("두번째 문장"),
+        ]
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+                patch("modules.stt.runtime_events.emit") as emit:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = ""
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            first = eng.transcribe_event(self._audio())
+            first_emit_id = emit.call_args.kwargs["utterance_id"]
+            second = eng.transcribe_event(self._audio())
+            second_emit_id = emit.call_args.kwargs["utterance_id"]
+
+        # Each transcription gets a fresh monotonic id, shared between the
+        # returned TranscriptionEvent and its emitted stt runtime event.
+        self.assertEqual(first.utterance_id, "utt-1")
+        self.assertEqual(first_emit_id, "utt-1")
+        self.assertEqual(second.utterance_id, "utt-2")
+        self.assertEqual(second_emit_id, "utt-2")
 
     def test_transcribe_event_includes_groq_confidence_metadata(self):
         eng = _make_engine_groq("Groq result")

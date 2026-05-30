@@ -136,6 +136,10 @@ class STTEngine:
         self._last_transcript: str = ""
         self._last_avg_logprob: float | None = None
         self._last_no_speech_prob: float | None = None
+        # Monotonic per-transcription counter; minted once per transcribe_event
+        # call (single STT thread, so no lock needed) to correlate downstream events.
+        self._utterance_seq = 0
+        self._current_utterance_id = ""
         if self._use_groq:
             self._init_groq()
             self._init_groq_fallback()
@@ -204,6 +208,8 @@ class STTEngine:
         return event.text if event else None
 
     def transcribe_event(self, audio: np.ndarray) -> TranscriptionEvent | None:
+        self._utterance_seq += 1
+        self._current_utterance_id = f"utt-{self._utterance_seq}"
         if not self._use_groq:
             result = self._transcribe_sensevoice(audio)
             if result is not None:
@@ -256,6 +262,7 @@ class STTEngine:
             text=text,
             engine=engine,
             profile_id=cfg.active_streamer_profile,
+            utterance_id=self._current_utterance_id,
             avg_logprob=self._last_avg_logprob,
             no_speech_prob=self._last_no_speech_prob,
         )
@@ -475,8 +482,8 @@ class STTEngine:
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
 
-    @staticmethod
     def _emit_stt_runtime_event(
+        self,
         *,
         audio: np.ndarray,
         started: float,
@@ -491,6 +498,7 @@ class STTEngine:
         audio_stats = audio_stats or {}
         runtime_events.emit(
             "stt",
+            utterance_id=getattr(self, "_current_utterance_id", ""),
             engine="groq",
             model=cfg.stt.groq_model,
             status=status,

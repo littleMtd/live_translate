@@ -153,6 +153,22 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["retry_reason"], "")
         self.assertFalse(kwargs["starts_with_dependency_marker"])
 
+    def test_translation_event_carries_utterance_id(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            # utterance_id rides the same sentence-metadata channel as stt_engine,
+            # joining this translation event back to its stt/audio events.
+            sentence_q.put({"text": "안녕하세요", "incomplete": False, "utterance_id": "utt-42"})
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        self.assertEqual(events.emit.call_args.kwargs["utterance_id"], "utt-42")
+
     def test_translation_event_carries_active_profile(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
