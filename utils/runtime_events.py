@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
@@ -167,6 +168,78 @@ def _is_japanese(char: str) -> bool:
     return "\u3040" <= char <= "\u30ff" or "\u31f0" <= char <= "\u31ff"
 
 
+# Label/refusal phrasing that should never appear in a zh-TW subtitle: leaked
+# prompt scaffolding ("translation:", "\ubc88\uc5ed:") or the model's English refusal
+# boilerplate. Deliberately excludes bare CJK apology words (\u62b1\u6b49/\uc8c4\uc1a1) because
+# those are legitimate translations of a streamer actually apologising.
+_META_LEAK_RE = re.compile(
+    r"(?:^|\s)(?:input|output|translation|translate|source|target|\ubc88\uc5ed|\ucd9c\ub825|\uc785\ub825|\u8bd1\u6587|\u539f\u6587)\s*[:\uff1a]"
+    r"|\b(?:i\s*(?:can\s*not|cannot|can't|am\s*unable)|i'?m\s*sorry|as\s*an\s*ai"
+    r"|i\s*apologize|unable\s*to\s*translate)\b",
+    re.IGNORECASE,
+)
+
+_BRACKET_PAIRS = {")": "(", "]": "[", "}": "{", "\uff09": "\uff08", "\u3011": "\u3010", "\u300d": "\u300c", "\u300f": "\u300e"}
+_BRACKET_OPENERS = frozenset(_BRACKET_PAIRS.values())
+
+# Per-flag deductions from a perfect score of 1.0. Tuned so a single leakage
+# flag drops to "warn" and two stacked failures drop to "bad"; empty output is
+# an automatic zero. Kept here as the single source of truth for the scalar.
+_QUALITY_PENALTIES = {
+    "empty_target": 1.0,
+    "target_meta_leak": 0.6,
+    "low_target_cjk": 0.4,
+    "target_has_hangul": 0.4,
+    "repetitive_target": 0.4,
+    "target_high_latin": 0.3,
+    "very_short_target": 0.3,
+    "target_has_japanese": 0.25,
+    "long_target_ratio": 0.2,
+    "unbalanced_brackets": 0.15,
+    "low_source_hangul": 0.1,
+}
+
+
+def _distinct_bigram_ratio(text: str) -> float:
+    """Distinct character bigrams / total \u2014 a degeneration signal.
+
+    Whitespace is stripped first so the metric works for space-free CJK. A low
+    ratio means the text loops on a few characters ("\uc88b\uc544\uc88b\uc544\uc88b\uc544" / "\u7684\u7684\u7684\u7684").
+    Returns 1.0 for text too short to have a repeated bigram.
+    """
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) < 2:
+        return 1.0
+    bigrams = [compact[i : i + 2] for i in range(len(compact) - 1)]
+    return len(set(bigrams)) / len(bigrams)
+
+
+def _brackets_balanced(text: str) -> bool:
+    stack: list[str] = []
+    for char in text:
+        if char in _BRACKET_OPENERS:
+            stack.append(char)
+        elif char in _BRACKET_PAIRS:
+            if not stack or stack[-1] != _BRACKET_PAIRS[char]:
+                return False
+            stack.pop()
+    return not stack
+
+
+def quality_score(flags: list[str]) -> float:
+    """Collapse the qualitative flags into a comparable 0.0\u20131.0 scalar."""
+    penalty = sum(_QUALITY_PENALTIES.get(flag, 0.0) for flag in flags)
+    return round(max(0.0, 1.0 - penalty), 3)
+
+
+def quality_severity(score: float) -> str:
+    if score >= 0.8:
+        return "ok"
+    if score >= 0.5:
+        return "warn"
+    return "bad"
+
+
 def translation_quality(source_text: str, target_text: str | None) -> dict[str, Any]:
     source = source_text or ""
     target = target_text or ""
@@ -179,6 +252,7 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
     target_latin_ratio = round(_ratio(target, _is_latin), 3)
     target_japanese_count = sum(1 for char in target if _is_japanese(char))
     len_ratio = round(target_len / max(1, source_len), 3)
+    distinct_bigram_ratio = round(_distinct_bigram_ratio(target), 3)
 
     flags: list[str] = []
     if not target:
@@ -197,6 +271,15 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         flags.append("target_high_latin")
     if target_japanese_count > 0:
         flags.append("target_has_japanese")
+    # Degeneration: long output that loops on a few characters/bigrams.
+    if len(re.sub(r"\s+", "", target)) >= 6 and distinct_bigram_ratio < 0.5:
+        flags.append("repetitive_target")
+    if target and _META_LEAK_RE.search(target):
+        flags.append("target_meta_leak")
+    if target and not _brackets_balanced(target):
+        flags.append("unbalanced_brackets")
+
+    score = quality_score(flags)
 
     return {
         "source_len": source_len,
@@ -208,7 +291,10 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         "target_latin_ratio": target_latin_ratio,
         "target_japanese_count": target_japanese_count,
         "target_source_len_ratio": len_ratio,
+        "target_distinct_bigram_ratio": distinct_bigram_ratio,
         "quality_flags": flags,
+        "quality_score": score,
+        "quality_severity": quality_severity(score),
     }
 
 

@@ -1118,6 +1118,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             result = outcome.target_text
             if result:
                 metrics.increment("translation.success")
+                # Surface low-quality output in the 60 s metrics summary so a
+                # degrading stretch is visible without scraping the JSONL.
+                severity = event_fields.get("quality_severity")
+                if severity in ("bad", "warn"):
+                    metrics.increment(f"translation.quality.{severity}")
                 now = time.monotonic()
                 if result == last_result and (now - last_result_time) < _DEDUP_SUBTITLE_SEC:
                     log.debug("Suppressing duplicate subtitle: %s", result[:30])
