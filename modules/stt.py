@@ -16,7 +16,7 @@ from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
 from modules.pipeline_events import TranscriptionEvent
 from modules.streamer_profiles import build_stt_glossary
 from modules.stt_policy import (
-    build_groq_prompt,
+    build_groq_prompt_budget,
     dedupe_transcript_overlap,
     is_hallucinated,
     normalize_prompt_text,
@@ -141,6 +141,7 @@ class STTEngine:
         self._utterance_seq = 0
         self._current_utterance_id = ""
         self._last_audio_seconds = 0.0
+        self._last_prompt_budget = None
         if self._use_groq:
             self._init_groq()
             self._init_groq_fallback()
@@ -475,7 +476,7 @@ class STTEngine:
             return None
 
     def _build_groq_prompt(self) -> str | None:
-        return build_groq_prompt(
+        budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
             use_profile_glossary=cfg.stt.use_profile_glossary,
             active_profile=cfg.active_streamer_profile,
@@ -484,6 +485,8 @@ class STTEngine:
             max_context_chars=_GROQ_CONTEXT_CHARS,
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
+        self._last_prompt_budget = budget
+        return budget.prompt
 
     def _emit_stt_runtime_event(
         self,
@@ -499,6 +502,9 @@ class STTEngine:
         audio_stats: dict[str, float | bool] | None = None,
     ) -> None:
         audio_stats = audio_stats or {}
+        # Prompt budget only reflects this request; on skipped paths no prompt
+        # was built, so the (possibly stale) budget is intentionally omitted.
+        budget = getattr(self, "_last_prompt_budget", None) if request_sent else None
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
@@ -519,6 +525,12 @@ class STTEngine:
             normalized_peak=audio_stats.get("normalized_peak"),
             normalization_gain=audio_stats.get("normalization_gain"),
             normalization_limited=audio_stats.get("normalization_limited"),
+            prompt_bytes=budget.prompt_bytes if budget else None,
+            prompt_max_bytes=budget.max_prompt_bytes if budget else None,
+            glossary_present=budget.glossary_present if budget else None,
+            glossary_truncated=budget.glossary_truncated if budget else None,
+            context_present=budget.context_present if budget else None,
+            context_included=budget.context_included if budget else None,
         )
 
 

@@ -222,6 +222,31 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertTrue(emit.call_args.kwargs["request_sent"])
         self.assertEqual(emit.call_args.kwargs["text_len"], 5)
 
+    def test_success_event_includes_prompt_budget(self):
+        eng = _make_engine_groq("안녕하세요")
+        with patch("modules.stt.runtime_events.emit") as emit:
+            eng._transcribe_groq(self._audio())
+
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["status"], "success")
+        # A request was sent, so prompt-budget fields are populated (not None).
+        self.assertIsInstance(kwargs["prompt_bytes"], int)
+        self.assertIn("glossary_truncated", kwargs)
+        self.assertIn("context_included", kwargs)
+
+    def test_skipped_event_omits_prompt_budget(self):
+        eng = _make_engine_groq()
+        eng._groq_rate_limited_until = time.monotonic() + 60
+
+        with patch("modules.stt.runtime_events.emit") as emit:
+            self.assertIsNone(eng._transcribe_groq(self._audio()))
+
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["status"], "skipped")
+        # No request sent → no prompt was built → budget fields are None.
+        self.assertIsNone(kwargs["prompt_bytes"])
+        self.assertIsNone(kwargs["glossary_truncated"])
+
     def test_returns_none_for_empty_response(self):
         eng = _make_engine_groq("")
         self.assertIsNone(eng._transcribe_groq(self._audio()))

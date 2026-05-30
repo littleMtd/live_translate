@@ -3,6 +3,7 @@ import unittest
 
 from modules.stt_policy import (
     build_groq_prompt,
+    build_groq_prompt_budget,
     dedupe_transcript_overlap,
     is_hallucinated,
     normalize_prompt_text,
@@ -101,6 +102,57 @@ class TestSttPolicy(unittest.TestCase):
         self.assertIsNotNone(prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 80)
         self.assertIn("Recent Korean transcript context:", prompt)
+
+    def test_prompt_budget_clean_fit_reports_everything_present(self):
+        budget = build_groq_prompt_budget(
+            seed_prompt="seed prompt",
+            use_profile_glossary=True,
+            active_profile="profile",
+            last_transcript="recent transcript",
+            glossary_builder=lambda profile: f"{profile} glossary",
+            max_context_chars=50,
+        )
+
+        self.assertTrue(budget.glossary_present)
+        self.assertFalse(budget.glossary_truncated)
+        self.assertTrue(budget.context_present)
+        self.assertTrue(budget.context_included)
+        self.assertEqual(budget.prompt_bytes, len(budget.prompt.encode("utf-8")))
+
+    def test_prompt_budget_tight_limit_sacrifices_glossary_keeps_context(self):
+        # The exact regression we want visibility on: a long glossary under a
+        # tight byte budget must be truncated/dropped while recent context
+        # (reserved) still makes it in.
+        budget = build_groq_prompt_budget(
+            seed_prompt="seed prompt",
+            use_profile_glossary=True,
+            active_profile="profile",
+            last_transcript="recent context " * 20,
+            glossary_builder=lambda profile: "term " * 100,
+            max_context_chars=120,
+            max_prompt_chars=80,
+        )
+
+        self.assertTrue(budget.glossary_present)
+        self.assertTrue(budget.glossary_truncated)
+        self.assertTrue(budget.context_present)
+        self.assertTrue(budget.context_included)
+        self.assertLessEqual(budget.prompt_bytes, 80)
+
+    def test_prompt_budget_no_glossary_no_context(self):
+        budget = build_groq_prompt_budget(
+            seed_prompt="seed prompt",
+            use_profile_glossary=False,
+            active_profile="profile",
+            last_transcript="",
+            glossary_builder=lambda profile: "unused",
+            max_context_chars=50,
+        )
+
+        self.assertFalse(budget.glossary_present)
+        self.assertFalse(budget.glossary_truncated)
+        self.assertFalse(budget.context_present)
+        self.assertFalse(budget.context_included)
 
     def test_build_groq_prompt_keeps_hades_profile_under_groq_limit(self):
         from config import cfg

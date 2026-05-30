@@ -145,7 +145,23 @@ def should_reject_segments(
     return False
 
 
-def build_groq_prompt(
+@dataclass(frozen=True)
+class GroqPromptBudget:
+    """Prompt assembled for a Groq STT request plus how it fit the budget.
+
+    Lets the runtime log answer "did a long glossary crowd out the recent
+    context?" — the exact failure that blew the Groq prompt length before.
+    """
+    prompt: str | None
+    prompt_bytes: int
+    max_prompt_bytes: int | None
+    glossary_present: bool       # a profile glossary was requested and non-empty
+    glossary_truncated: bool     # it had to be shortened (or fully dropped) to fit
+    context_present: bool        # there was a recent-transcript tail to add
+    context_included: bool       # …and it actually survived into the final prompt
+
+
+def build_groq_prompt_budget(
     *,
     seed_prompt: str,
     use_profile_glossary: bool,
@@ -154,8 +170,11 @@ def build_groq_prompt(
     glossary_builder: Callable[[str], str],
     max_context_chars: int,
     max_prompt_chars: int | None = None,
-) -> str | None:
+) -> GroqPromptBudget:
     prompt_parts: list[str] = []
+    glossary_present = False
+    glossary_truncated = False
+    context_included = False
 
     normalized_seed = normalize_prompt_text(seed_prompt)
     if normalized_seed:
@@ -168,38 +187,81 @@ def build_groq_prompt(
         separator = 1 if prompt_parts else 0
         return max_prompt_chars - used - separator
 
-    def append_with_budget(text: str, *, reserve_after: int = 0) -> None:
+    def append_with_budget(text: str, *, reserve_after: int = 0) -> tuple[bool, bool]:
+        """Append `text` if it fits. Returns (appended, truncated)."""
         text = normalize_prompt_text(text)
         if not text:
-            return
+            return False, False
         budget = remaining_chars()
+        truncated = False
         if budget is not None:
             budget -= reserve_after
             if budget <= 0:
-                return
+                return False, True
             if _encoded_len(text) > budget:
                 text = _truncate_encoded(text, budget).rstrip(" ,.;")
+                truncated = True
         if text:
             prompt_parts.append(text)
+            return True, truncated
+        return False, truncated
 
     recent_context = normalize_prompt_text(last_transcript, max_context_chars)
     recent_context_part = (
         f"{_RECENT_CONTEXT_PREFIX}{recent_context}" if recent_context else ""
     )
+    context_present = bool(recent_context_part)
 
     if use_profile_glossary:
+        glossary_text = normalize_prompt_text(glossary_builder(active_profile))
+        glossary_present = bool(glossary_text)
         reserve_after = 0
         if recent_context_part and max_prompt_chars is not None:
             # Keep the previous transcript tail available even when a profile
             # glossary is long. The glossary can be truncated; context cannot
             # help STT if it is crowded out entirely.
             reserve_after = 1 + _encoded_len(recent_context_part)
-        append_with_budget(glossary_builder(active_profile), reserve_after=reserve_after)
+        appended, truncated = append_with_budget(glossary_text, reserve_after=reserve_after)
+        if glossary_present and (truncated or not appended):
+            glossary_truncated = True
 
     if recent_context_part:
-        append_with_budget(recent_context_part)
+        context_included, _ = append_with_budget(recent_context_part)
 
     prompt = "\n".join(prompt_parts)
     if max_prompt_chars is not None and _encoded_len(prompt) > max_prompt_chars:
         prompt = _truncate_encoded(prompt, max_prompt_chars)
-    return prompt or None
+        context_included = _RECENT_CONTEXT_PREFIX in prompt
+
+    prompt = prompt or None
+    return GroqPromptBudget(
+        prompt=prompt,
+        prompt_bytes=_encoded_len(prompt) if prompt else 0,
+        max_prompt_bytes=max_prompt_chars,
+        glossary_present=glossary_present,
+        glossary_truncated=glossary_truncated,
+        context_present=context_present,
+        context_included=context_included,
+    )
+
+
+def build_groq_prompt(
+    *,
+    seed_prompt: str,
+    use_profile_glossary: bool,
+    active_profile: str,
+    last_transcript: str,
+    glossary_builder: Callable[[str], str],
+    max_context_chars: int,
+    max_prompt_chars: int | None = None,
+) -> str | None:
+    """Backward-compatible wrapper returning just the assembled prompt string."""
+    return build_groq_prompt_budget(
+        seed_prompt=seed_prompt,
+        use_profile_glossary=use_profile_glossary,
+        active_profile=active_profile,
+        last_transcript=last_transcript,
+        glossary_builder=glossary_builder,
+        max_context_chars=max_context_chars,
+        max_prompt_chars=max_prompt_chars,
+    ).prompt
