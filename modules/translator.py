@@ -28,6 +28,8 @@ from modules.translation_engines import (
     _build_engine_chain,
     get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
+    get_last_token_usage,
+    reset_last_token_usage,
 )
 from modules.translation_runtime import (
     FallbackState,
@@ -1031,6 +1033,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     "sequence_id": seq,
                     "starts_with_dependency_marker": bool(marker),
                     "dependency_marker": marker,
+                    "profile_id": cfg.active_streamer_profile,
+                    "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
                 }
             )
             started = time.monotonic()
@@ -1039,6 +1043,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             if worker_translator is None:
                 worker_translator = Translator()
                 worker_state.translator = worker_translator
+            # Reset before translating so cache hits / failures (which never reach an
+            # engine) don't inherit the previous call's token usage on this worker thread.
+            reset_last_token_usage()
             try:
                 outcome = worker_translator.translate_event(text, incomplete)
             except Exception:
@@ -1055,6 +1062,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             elapsed = completed_at - started
             diagnostics = get_last_engine_diagnostics()
             api_diagnostics = get_last_engine_api_diagnostics()
+            for usage_key, usage_value in get_last_token_usage().items():
+                if usage_value is not None:
+                    metadata[f"token_{usage_key}"] = usage_value
             retry_count = 0
             retry_reason = ""
             if _retry_diagnostics_apply(outcome, diagnostics):

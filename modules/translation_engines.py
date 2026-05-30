@@ -23,6 +23,7 @@ _GROQ_COMPACT_SYSTEM_PROMPT = (
     "Keep uncertain names and brands as names; do not invent facts."
 )
 _ENGINE_DIAGNOSTICS = threading.local()
+_TOKEN_USAGE = threading.local()
 _NVIDIA_INFLIGHT_LOCK = threading.Lock()
 _NVIDIA_INFLIGHT_COUNT = 0
 
@@ -311,12 +312,34 @@ def _usage_value(usage, *names: str):
     return None
 
 
+def reset_last_token_usage() -> None:
+    """Clear per-thread token usage so a cache hit/failure can't inherit a stale count."""
+    _TOKEN_USAGE.value = {}
+
+
+def get_last_token_usage() -> dict[str, int | None]:
+    """Token usage parsed from the last engine response in this thread (empty if none)."""
+    value = getattr(_TOKEN_USAGE, "value", None)
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _log_token_usage(engine: str, usage) -> None:
-    prompt_tokens = _usage_value(usage, "prompt_token_count", "promptTokenCount", "input_tokens")
-    output_tokens = _usage_value(usage, "candidates_token_count", "candidatesTokenCount", "output_tokens", "response_token_count")
-    total_tokens = _usage_value(usage, "total_token_count", "totalTokenCount")
+    # OpenAI-compatible (prompt_tokens/completion_tokens), Gemini (*_token_count),
+    # and Anthropic (input_tokens/output_tokens) field names are all accepted so a
+    # single chokepoint captures usage regardless of which engine produced it.
+    prompt_tokens = _usage_value(usage, "prompt_token_count", "promptTokenCount", "input_tokens", "prompt_tokens")
+    output_tokens = _usage_value(usage, "candidates_token_count", "candidatesTokenCount", "output_tokens", "response_token_count", "completion_tokens")
+    total_tokens = _usage_value(usage, "total_token_count", "totalTokenCount", "total_tokens")
     cache_write = _usage_value(usage, "cache_creation_input_tokens")
     cache_read = _usage_value(usage, "cache_read_input_tokens")
+
+    _TOKEN_USAGE.value = {
+        "prompt": _optional_int_diagnostic(prompt_tokens),
+        "output": _optional_int_diagnostic(output_tokens),
+        "total": _optional_int_diagnostic(total_tokens),
+        "cache_read": _optional_int_diagnostic(cache_read),
+        "cache_write": _optional_int_diagnostic(cache_write),
+    }
 
     parts = [f"{engine} tokens"]
     if prompt_tokens is not None:
@@ -630,9 +653,7 @@ class OllamaEngine(TranslationEngine):
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 data = _json.loads(r.read())
             log.info("Ollama translate: %.0fms", (time.monotonic() - _t0) * 1000)
-            usage = data.get("usage", {})
-            log.info("Ollama tokens | prompt=%s output=%s",
-                     usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+            _log_token_usage("Ollama", data.get("usage"))
             result = data["choices"][0]["message"]["content"].strip()
             log.debug("Ollama: %.30s → %s", text, result)
             return result
@@ -800,9 +821,7 @@ class NvidiaEngine(TranslationEngine):
                     _nvidia_inflight_finished()
                 _api_response_loaded = time.monotonic()
                 log.info("Nvidia translate: %.0fms", (_api_response_loaded - _t0) * 1000)
-                usage = data.get("usage", {})
-                log.info("Nvidia tokens | prompt=%s output=%s",
-                         usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+                _log_token_usage("Nvidia", data.get("usage"))
                 msg = data["choices"][0]["message"]
                 content = (msg.get("content") or "").strip()
                 if self._strip_think:
@@ -954,9 +973,7 @@ class GroqTranslationEngine(TranslationEngine):
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 data = _json.loads(r.read())
             log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
-            usage = data.get("usage", {})
-            log.info("Groq tokens | prompt=%s output=%s",
-                     usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+            _log_token_usage("Groq", data.get("usage"))
             content = (data["choices"][0]["message"].get("content") or "").strip()
             if self._strip_think:
                 content = _strip_think_tags(content)
@@ -995,9 +1012,7 @@ class GroqTranslationEngine(TranslationEngine):
                     with urllib.request.urlopen(req, timeout=self._timeout) as r:
                         data = _json.loads(r.read())
                     log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
-                    usage = data.get("usage", {})
-                    log.info("Groq tokens | prompt=%s output=%s",
-                             usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+                    _log_token_usage("Groq", data.get("usage"))
                     content = (data["choices"][0]["message"].get("content") or "").strip()
                     if self._strip_think:
                         content = _strip_think_tags(content)

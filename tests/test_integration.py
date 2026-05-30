@@ -48,7 +48,20 @@ def _mock_primary(text: str):
     mock_engine.translate.return_value = text or None
     with patch("modules.translator._build_engine_chain", return_value=[mock_engine]), \
          patch("modules.translator._get_db", return_value=_NoOpDB()):
+        yield mock_engine
+
+
+@contextmanager
+def _active_profile(profile_id: str, use_profile: bool = True):
+    original_profile = cfg.translation.streamer_profile
+    original_use_profile = cfg.translation.use_profile
+    object.__setattr__(cfg.translation, "streamer_profile", profile_id)
+    object.__setattr__(cfg.translation, "use_profile", use_profile)
+    try:
         yield
+    finally:
+        object.__setattr__(cfg.translation, "streamer_profile", original_profile)
+        object.__setattr__(cfg.translation, "use_profile", original_use_profile)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +152,84 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["retry_count"], 0)
         self.assertEqual(kwargs["retry_reason"], "")
         self.assertFalse(kwargs["starts_with_dependency_marker"])
+
+    def test_translation_event_carries_active_profile(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _active_profile("stellive_hina", use_profile=True), \
+                _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "안녕하세요", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["profile_id"], "stellive_hina")
+        self.assertTrue(kwargs["profile_applied"])
+
+    def test_translation_event_marks_profile_not_applied(self):
+        # Negative case: a profile id may be configured but use_profile=False means
+        # no profile-specific rules were applied — the event must say so.
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _active_profile("stellive_hina", use_profile=False), \
+                _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "안녕하세요", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["profile_id"], "stellive_hina")
+        self.assertFalse(kwargs["profile_applied"])
+
+    def test_translation_event_reports_token_usage(self):
+        from modules.translation_engines import _log_token_usage
+
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        def _translate_with_usage(*_a, **_kw):
+            _log_token_usage("mock", {"prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49})
+            return "你好"
+
+        with _mock_primary("你好") as engine, patch("modules.translator.runtime_events") as events:
+            engine.translate.side_effect = _translate_with_usage
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "안녕하세요", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["token_prompt"], 42)
+        self.assertEqual(kwargs["token_output"], 7)
+        self.assertEqual(kwargs["token_total"], 49)
+        # None-valued usage fields (cache_read/cache_write here) must not pollute the event.
+        self.assertNotIn("token_cache_read", kwargs)
+
+    def test_translation_event_omits_token_fields_without_usage(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "안녕하세요", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertNotIn("token_prompt", kwargs)
+        self.assertNotIn("token_total", kwargs)
 
     def test_translator_workers_translate_ahead_but_emit_in_order(self):
         sentence_q = queue.Queue()
