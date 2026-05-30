@@ -599,13 +599,50 @@ def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
     return bool(cfg.translation.use_profile) and cfg.active_streamer_profile == rule.scope
 
 
+# Per-worker record of source-normalization / target-correction rules that
+# actually fired on the current translation, so the runtime event can show
+# whether "海洞 -> 해둥이"-style rescues are routine or rarely needed anymore.
+_LAST_CORRECTIONS = threading.local()
+
+
+def reset_corrections() -> None:
+    _LAST_CORRECTIONS.value = []
+
+
+def _record_correction(stage: str, rule: str, before: str, after: str) -> None:
+    bucket = getattr(_LAST_CORRECTIONS, "value", None)
+    if not isinstance(bucket, list):
+        bucket = []
+        _LAST_CORRECTIONS.value = bucket
+    bucket.append({"stage": stage, "rule": rule, "before": before, "after": after})
+
+
+def get_corrections() -> list[dict]:
+    value = getattr(_LAST_CORRECTIONS, "value", None)
+    return list(value) if isinstance(value, list) else []
+
+
+def _replace_recording(text: str, wrong: str, right: str, *, stage: str, rule_id: str) -> str:
+    """Apply text.replace(wrong, right), recording the rule iff it changed text."""
+    if wrong and wrong in text:
+        new = text.replace(wrong, right)
+        if new != text:
+            _record_correction(stage, rule_id, wrong, right)
+            return new
+    return text
+
+
 def _replace_wrong_name_forms(result: str, rule: _NameRenderingRule) -> str:
     if not rule.wrong_forms:
         return result
 
     alternatives = sorted({rule.canonical, *rule.wrong_forms}, key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(alternative) for alternative in alternatives))
-    return pattern.sub(rule.canonical, result)
+    corrected = pattern.sub(rule.canonical, result)
+    if corrected != result:
+        present = "|".join(form for form in rule.wrong_forms if form in result)
+        _record_correction("name_render", f"name:{rule.canonical}", present, rule.canonical)
+    return corrected
 
 
 def _normalize_source_before_matching(text: str) -> str:
@@ -620,7 +657,9 @@ def _normalize_source_before_matching(text: str) -> str:
     if profile_id and bool(cfg.translation.use_profile):
         norm.update(_SOURCE_NORM_BY_PROFILE.get(profile_id, {}))
     for noisy, canonical in sorted(norm.items(), key=lambda item: len(item[0]), reverse=True):
-        text = text.replace(noisy, canonical)
+        text = _replace_recording(
+            text, noisy, canonical, stage="source_norm", rule_id=f"{noisy}->{canonical}"
+        )
     return text
 
 
@@ -630,7 +669,9 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         if not any(term in source for term in source_terms):
             continue
         for wrong, right in replacements:
-            corrected = corrected.replace(wrong, right)
+            corrected = _replace_recording(
+                corrected, wrong, right, stage="target_correction", rule_id=f"{wrong}->{right}"
+            )
 
     if cfg.translation.use_profile:
         profile_replacements = _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.get(cfg.active_streamer_profile, ())
@@ -638,7 +679,10 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
             if not any(term in source for term in source_terms):
                 continue
             for wrong, right in replacements:
-                corrected = corrected.replace(wrong, right)
+                corrected = _replace_recording(
+                    corrected, wrong, right,
+                    stage="target_correction", rule_id=f"profile:{wrong}->{right}",
+                )
 
     for rule in _NAME_RENDERING_RULES:
         if not _name_rendering_rule_enabled(rule):
@@ -648,8 +692,12 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         corrected = _replace_wrong_name_forms(corrected, rule)
 
     if "무당" in source and "신발" in source:
-        corrected = corrected.replace("更懂鞋", "神力更強")
-        corrected = corrected.replace("更懂鞋子", "神力更強")
+        corrected = _replace_recording(
+            corrected, "更懂鞋", "神力更強", stage="target_correction", rule_id="mudang_shoes"
+        )
+        corrected = _replace_recording(
+            corrected, "更懂鞋子", "神力更強", stage="target_correction", rule_id="mudang_shoes"
+        )
 
     return corrected
 
@@ -1044,8 +1092,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 worker_translator = Translator()
                 worker_state.translator = worker_translator
             # Reset before translating so cache hits / failures (which never reach an
-            # engine) don't inherit the previous call's token usage on this worker thread.
+            # engine) don't inherit the previous call's token usage / corrections.
             reset_last_token_usage()
+            reset_corrections()
             try:
                 outcome = worker_translator.translate_event(text, incomplete)
             except Exception:
@@ -1065,6 +1114,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             for usage_key, usage_value in get_last_token_usage().items():
                 if usage_value is not None:
                     metadata[f"token_{usage_key}"] = usage_value
+            corrections = get_corrections()
+            if corrections:
+                metadata["corrections"] = corrections
+                metadata["correction_count"] = len(corrections)
             retry_count = 0
             retry_reason = ""
             if _retry_diagnostics_apply(outcome, diagnostics):

@@ -29,6 +29,8 @@ from modules.translator import (
     _looks_like_meta_garbage_output,
     _normalize_source_before_matching,
     _write_history,
+    get_corrections,
+    reset_corrections,
     TranslationOutcome,
     Translator,
 )
@@ -128,6 +130,51 @@ def _active_translation_profile(profile_id: str, use_profile: bool = True):
     finally:
         object.__setattr__(cfg.translation, "streamer_profile", original_profile)
         object.__setattr__(cfg.translation, "use_profile", original_use_profile)
+
+
+# ---------------------------------------------------------------------------
+# Correction recording (source normalization / target corrections)
+# ---------------------------------------------------------------------------
+
+class TestCorrectionRecording(unittest.TestCase):
+    def setUp(self):
+        reset_corrections()
+
+    def test_source_normalization_records_rule_before_after(self):
+        with _active_translation_profile("stellive_hina"):
+            out = _normalize_source_before_matching("해동이 안녕")
+
+        self.assertEqual(out, "해둥이 안녕")
+        recs = get_corrections()
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["stage"], "source_norm")
+        self.assertEqual(recs[0]["before"], "해동이")
+        self.assertEqual(recs[0]["after"], "해둥이")
+
+    def test_shared_target_correction_records(self):
+        # 어금니 ("molar") present in source -> mistranslated 牙齦 ("gum") fixed.
+        out = _apply_source_aware_corrections("어금니 아파요", "牙齦很痛")
+
+        self.assertEqual(out, "臼齒很痛")
+        recs = get_corrections()
+        self.assertTrue(
+            any(r["stage"] == "target_correction" and r["before"] == "牙齦" and r["after"] == "臼齒"
+                for r in recs)
+        )
+
+    def test_profile_target_correction_records_海洞_rescue(self):
+        with _active_translation_profile("stellive_hina"):
+            out = _apply_source_aware_corrections("해둥이들 안녕", "海洞們 你好")
+
+        self.assertIn("해둥이們", out)
+        recs = get_corrections()
+        self.assertTrue(any(r["after"] == "해둥이們" for r in recs))
+
+    def test_no_correction_records_nothing(self):
+        out = _apply_source_aware_corrections("일반적인 문장입니다", "這是一個普通的句子")
+
+        self.assertEqual(out, "這是一個普通的句子")
+        self.assertEqual(get_corrections(), [])
 
 
 # ---------------------------------------------------------------------------

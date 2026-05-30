@@ -153,6 +153,26 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["retry_reason"], "")
         self.assertFalse(kwargs["starts_with_dependency_marker"])
 
+    def test_translation_event_carries_corrections(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        # Source has 어금니 (molar); mocked engine returns the 牙齦 (gum)
+        # mistranslation, which the shared target-correction rule rescues.
+        with _mock_primary("牙齦很痛"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({"text": "어금니 아파요", "incomplete": False})
+            self.assertEqual(subtitle_q.get(timeout=5), "臼齒很痛")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertGreaterEqual(kwargs["correction_count"], 1)
+        self.assertTrue(
+            any(c["before"] == "牙齦" and c["after"] == "臼齒" for c in kwargs["corrections"])
+        )
+
     def test_translation_event_carries_utterance_id(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
