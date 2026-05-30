@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "d500187a71a6af0a69b9943b4551c31592d2d51bfc2528b146ce006e86e4418f"
+_TRANSLATION_PROFILE_DATA_HASH = "607cb9c9d376e6e51483d1813d58159b51d7490b52b9bc65a8dfa8747b613e02"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -85,6 +85,10 @@ def test_stellive_translation_profiles_contain_official_romanization():
     for qwen in (False, True):
         profile = get_translation_profile("stellive_hina", qwen=qwen)
         assert "Shirayuki Hina" in profile
+        assert "해둥이" in profile
+        assert "Yuni" in profile
+        assert "楓之谷" in profile
+        assert "투니버스 메들리" in profile
 
 
 def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):

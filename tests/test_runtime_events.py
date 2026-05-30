@@ -117,6 +117,17 @@ def test_translation_quality_flags_empty_target():
     assert "empty_target" in result["quality_flags"]
 
 
+def test_translation_quality_observes_target_scripts():
+    result = translation_quality("시라유키 히나 해둥이", "這是 Shirayuki Hina ちゃん 해둥이")
+
+    assert result["target_hangul_ratio"] > 0
+    assert result["target_latin_ratio"] > 0
+    assert result["target_japanese_count"] > 0
+    assert "target_has_hangul" in result["quality_flags"]
+    assert "target_high_latin" in result["quality_flags"]
+    assert "target_has_japanese" in result["quality_flags"]
+
+
 def test_is_cjk_covers_extension_ranges():
     # Basic CJK
     assert _is_cjk("中")

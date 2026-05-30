@@ -113,6 +113,26 @@ def test_hades_stt_glossary_contains_profile_glossary_terms():
         assert term in glossary
 
 
+def test_stellive_hina_stt_glossary_contains_current_profile_terms():
+    glossary = build_stt_glossary("stellive_hina")
+
+    for term in (
+        "시라유키 히나",
+        "Shirayuki Hina",
+        "해둥이",
+        "Haedungi",
+        "아야츠노 유니",
+        "Yuni",
+        "메이플",
+        "MapleStory",
+        "투니버스 메들리",
+        "포포 서버",
+        "세키로",
+        "Valorant",
+    ):
+        assert term in glossary
+
+
 def test_stt_glossary_keeps_hades_terms_profile_bound():
     general_glossary = build_stt_glossary("")
     isegye_glossary = build_stt_glossary("isegye_lilpa")

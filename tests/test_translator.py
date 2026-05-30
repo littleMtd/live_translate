@@ -1174,6 +1174,36 @@ class TestTranslateOptimizations(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
+    def test_stellive_hina_current_stream_terms_are_corrected(self):
+        cases = (
+            ("해둥이 금지", "海洞禁止", "해둥이禁止"),
+            ("해둥아 너를 처음 본 순간부터", "海洞啊，從第一次見到你", "해둥아，從第一次見到你"),
+            ("유니 선배 생일이구나", "優妮前輩生日啊", "Yuni前輩生日啊"),
+            ("그냥 유니가 1기생이다", "Yuni是個日記生", "Yuni是個1期生"),
+            ("히나유키 히나가 시켰다고 할게", "希拉尤基·Hina叫的", "Shirayuki Hina叫的"),
+            ("메이플 하고 싶다", "想玩 Maple", "想玩 楓之谷"),
+            ("투니버스 메들리 보고 들어왔어요", "看了Touriverus Madeline才進來的", "看了투니버스 메들리才進來的"),
+        )
+
+        with _active_translation_profile("stellive_hina"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    self.assertEqual(_apply_source_aware_corrections(source, target), expected)
+
+    def test_stellive_hina_current_stream_terms_are_profile_gated(self):
+        cases = (
+            ("해둥이 금지", "海洞禁止"),
+            ("유니 선배 생일이구나", "優妮前輩生日啊"),
+            ("히나유키 히나가 시켰다고 할게", "希拉尤基·Hina叫的"),
+            ("투니버스 메들리 보고 들어왔어요", "看了Touriverus Madeline才進來的"),
+        )
+
+        for profile_id in ("", "hades_chxxnnx", "mwmeu"):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    for source, target in cases:
+                        self.assertEqual(_apply_source_aware_corrections(source, target), target)
+
     def test_source_aware_corrections_do_not_restore_stock_streamer_phrase(self):
         source = "내일 서버 설명회 때 한번 오시면 되겠습니다. 구독과 좋아요는 저에게 아주 큰 힘이 됩니다."
         target = "明天伺服器說明會時來一趟就好。"
@@ -1802,6 +1832,26 @@ class TestSttSongFragmentGuard(unittest.TestCase):
 
 
 class TestSourceNormBeforeMatching(unittest.TestCase):
+    def test_stellive_hina_profile_normalizes_runtime_variants(self):
+        raw = "히나유키 히나랑 해동이 일기생이 투리버스 메들린 얘기했어"
+
+        with _active_translation_profile("stellive_hina"):
+            self.assertEqual(
+                _normalize_source_before_matching(raw),
+                "시라유키 히나랑 해둥이 1기생이 투니버스 메들리 얘기했어",
+            )
+
+    def test_stellive_hina_norm_is_profile_and_use_profile_gated(self):
+        raw = "히나유키 히나랑 해동이 일기생"
+
+        for profile_id in ("", "hades_chxxnnx", "mwmeu", "isegye_lilpa"):
+            with self.subTest(profile_id=profile_id):
+                with _active_translation_profile(profile_id):
+                    self.assertEqual(_normalize_source_before_matching(raw), raw)
+
+        with _active_translation_profile("stellive_hina", use_profile=False):
+            self.assertEqual(_normalize_source_before_matching(raw), raw)
+
     def test_hades_profile_normalizes_mixed_script(self):
         with _active_translation_profile("hades_chxxnnx"):
             self.assertEqual(_normalize_source_before_matching("服주 화이팅"), "섭주 화이팅")

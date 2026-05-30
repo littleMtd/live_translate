@@ -150,8 +150,8 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
         (("生趴伊", "前輩"), ("森拜", "前輩")),
     ),
     (
-        ("메이플", "메이플스토리"),
-        (("仙境傳說", "楓之谷"), ("MapleStory", "楓之谷")),
+        ("메이플", "메이플스토리", "Maple"),
+        (("仙境傳說", "楓之谷"), ("MapleStory", "楓之谷"), ("Maple", "楓之谷")),
     ),
     (
         ("프린세스 메이커",),
@@ -210,11 +210,19 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
 )
 
 _SHARED_NAME_SCOPE = "__shared__"
+_STELLIVE_HINA_PROFILE_ID = "stellive_hina"
 _HADES_PROFILE_ID = "hades_chxxnnx"
 _MWMEU_PROFILE_ID = "mwmeu"
 
 _SOURCE_NORM_SHARED: dict[str, str] = {}
 _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
+    _STELLIVE_HINA_PROFILE_ID: {
+        "히나유키 히나": "시라유키 히나",
+        "해동이": "해둥이",
+        "해동아": "해둥아",
+        "일기생": "1기생",
+        "투리버스 메들린": "투니버스 메들리",
+    },
     _HADES_PROFILE_ID: {
         "服주": "섭주",
         "김띵귤": "띵귤",
@@ -291,6 +299,46 @@ _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
     },
 }
 
+_PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS: dict[
+    str, tuple[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], ...]
+] = {
+    _STELLIVE_HINA_PROFILE_ID: (
+        (
+            ("해둥이", "해둥아", "해둥", "해동이", "해동아"),
+            (
+                ("海洞啊", "해둥아"),
+                ("海洞們", "해둥이們"),
+                ("海洞们", "해둥이們"),
+                ("海洞", "해둥이"),
+            ),
+        ),
+        (
+            ("유니", "아야츠노 유니"),
+            (("優妮", "Yuni"), ("優尼", "Yuni"), ("尤尼", "Yuni")),
+        ),
+        (
+            ("1기생",),
+            (("日記生", "1期生"),),
+        ),
+        (
+            ("시라유키 히나", "히나유키 히나"),
+            (
+                ("希拉尤基·Hina", "Shirayuki Hina"),
+                ("希拉尤基 Hina", "Shirayuki Hina"),
+            ),
+        ),
+        (
+            ("투니버스 메들리", "투리버스 메들린"),
+            (
+                ("Touriverus Madeline", "투니버스 메들리"),
+                ("Touriverse Madeline", "투니버스 메들리"),
+                ("Touriverus", "투니버스"),
+                ("Touriverse", "투니버스"),
+            ),
+        ),
+    ),
+}
+
 _KOREAN_NAME_SUFFIXES = frozenset(
     (
         "이에요",
@@ -338,6 +386,24 @@ class _NameRenderingRule:
 
 
 _NAME_RENDERING_RULES = (
+    _NameRenderingRule(
+        _STELLIVE_HINA_PROFILE_ID,
+        ("시라유키 히나", "히나유키 히나"),
+        ("시라유키 히나", "히나유키 히나", "希拉尤基·Hina", "希拉尤基 Hina"),
+        "Shirayuki Hina",
+    ),
+    _NameRenderingRule(
+        _STELLIVE_HINA_PROFILE_ID,
+        ("아야츠노 유니",),
+        ("아야츠노 유니", "Ayatsuno Yuni"),
+        "Ayatsuno Yuni",
+    ),
+    _NameRenderingRule(
+        _STELLIVE_HINA_PROFILE_ID,
+        ("유니",),
+        ("유니", "優妮", "優尼", "尤尼"),
+        "Yuni",
+    ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("챈나", "김챗나", "김챔나", "챗나", "챔나", "Chaenna", "CHXXNNX", "Chxxnnx"),
@@ -563,6 +629,14 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
             continue
         for wrong, right in replacements:
             corrected = corrected.replace(wrong, right)
+
+    if cfg.translation.use_profile:
+        profile_replacements = _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.get(cfg.active_streamer_profile, ())
+        for source_terms, replacements in profile_replacements:
+            if not any(term in source for term in source_terms):
+                continue
+            for wrong, right in replacements:
+                corrected = corrected.replace(wrong, right)
 
     for rule in _NAME_RENDERING_RULES:
         if not _name_rendering_rule_enabled(rule):

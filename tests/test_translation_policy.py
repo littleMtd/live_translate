@@ -207,6 +207,10 @@ class TestTranslationPolicy(unittest.TestCase):
             policy.rejection_reason("좋아요랑 구독 부탁해요!"),
             "stt_template_garbage",
         )
+        self.assertEqual(
+            policy.rejection_reason("구독과 좋아요를 눌러주세요!"),
+            "stt_template_garbage",
+        )
 
     def test_genuine_short_thanks_is_not_rejected(self):
         # Real streamer thanking subs — must NOT be blocked.
@@ -397,6 +401,33 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
 
         self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), "좋아 좋아")
         self.assertEqual(policy.prepare_input(text), "좋아 좋아")
+
+    def test_video_caption_template_does_not_leave_dead_prefix(self):
+        policy = TranslationPolicy(slang={})
+        text = "이 영상은 자막 제공 및 광고를 포함하고 있습니다."
+
+        self.assertIsNone(TranslationPolicy.strip_stt_template_fragments(text))
+        self.assertIsNone(policy.prepare_input(text))
+
+    def test_video_outro_template_tail_is_stripped(self):
+        policy = TranslationPolicy(slang={})
+        text = "시청자 여러분, 오늘 영상은 여기까지입니다. 6개월 구독 고맙습니다. 감사합니다."
+
+        self.assertEqual(
+            TranslationPolicy.strip_stt_template_fragments(text),
+            "6개월 구독 고맙습니다. 감사합니다.",
+        )
+        self.assertEqual(policy.prepare_input(text), "6개월 구독 고맙습니다. 감사합니다.")
+
+    def test_kakaotalk_caption_template_with_real_tail_is_stripped(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "자막 제공 및 자막 제공 및 광고는 kakaotalk 플러스친구의 "
+            "홈페이지에서 확인하실 수 있습니다. 진짜 이쁘다"
+        )
+
+        self.assertEqual(TranslationPolicy.strip_stt_template_fragments(text), "진짜 이쁘다")
+        self.assertEqual(policy.prepare_input(text), "진짜 이쁘다")
 
     def test_hard_template_inside_real_speech_is_stripped(self):
         policy = TranslationPolicy(slang={})

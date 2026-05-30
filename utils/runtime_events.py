@@ -163,6 +163,10 @@ def _is_latin(char: str) -> bool:
     return ("A" <= char <= "Z") or ("a" <= char <= "z")
 
 
+def _is_japanese(char: str) -> bool:
+    return "\u3040" <= char <= "\u30ff" or "\u31f0" <= char <= "\u31ff"
+
+
 def translation_quality(source_text: str, target_text: str | None) -> dict[str, Any]:
     source = source_text or ""
     target = target_text or ""
@@ -171,6 +175,9 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
     source_hangul_ratio = round(_ratio(source, _is_hangul), 3)
     source_latin_ratio = round(_ratio(source, _is_latin), 3)
     target_cjk_ratio = round(_ratio(target, _is_cjk), 3)
+    target_hangul_ratio = round(_ratio(target, _is_hangul), 3)
+    target_latin_ratio = round(_ratio(target, _is_latin), 3)
+    target_japanese_count = sum(1 for char in target if _is_japanese(char))
     len_ratio = round(target_len / max(1, source_len), 3)
 
     flags: list[str] = []
@@ -184,6 +191,12 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         flags.append("very_short_target")
     if target_len > 40 and len_ratio >= 1.5:
         flags.append("long_target_ratio")
+    if target_len >= 4 and target_hangul_ratio > 0:
+        flags.append("target_has_hangul")
+    if target_len >= 8 and (target_latin_ratio >= 0.18 or sum(1 for char in target if _is_latin(char)) >= 8):
+        flags.append("target_high_latin")
+    if target_japanese_count > 0:
+        flags.append("target_has_japanese")
 
     return {
         "source_len": source_len,
@@ -191,6 +204,9 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         "source_hangul_ratio": source_hangul_ratio,
         "source_latin_ratio": source_latin_ratio,
         "target_cjk_ratio": target_cjk_ratio,
+        "target_hangul_ratio": target_hangul_ratio,
+        "target_latin_ratio": target_latin_ratio,
+        "target_japanese_count": target_japanese_count,
         "target_source_len_ratio": len_ratio,
         "quality_flags": flags,
     }

@@ -17,6 +17,7 @@ from utils.text_heuristics import (
     STT_SONG_CONTEXT_MARKERS,
     STT_SONG_FRAGMENT_MARKERS,
     STT_TEMPLATE_CONDITIONAL_PHRASES,
+    STT_TEMPLATE_HARD_PREFIX_STRIP_PHRASES,
     STT_TEMPLATE_HARD_PHRASES,
     STT_TEMPLATE_STRIP_PHRASES,
 )
@@ -435,7 +436,11 @@ class TranslationPolicy:
 
     @staticmethod
     def _strip_trailing_hard_template_suffix(text: str) -> str | None:
-        hard_phrases = ("한글 자막 제공", *STT_TEMPLATE_HARD_PHRASES)
+        hard_phrases = (
+            "한글 자막 제공",
+            *STT_TEMPLATE_HARD_PREFIX_STRIP_PHRASES,
+            *STT_TEMPLATE_HARD_PHRASES,
+        )
         hard_indexes = [
             index
             for phrase in hard_phrases
