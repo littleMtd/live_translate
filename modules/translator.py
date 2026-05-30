@@ -173,6 +173,15 @@ _SOURCE_AWARE_TARGET_REPLACEMENTS = (
         ("다 죽여버릴 것", "죽여버릴 것"),
         (("讓人想死", "殺氣很重"), ("想死了", "殺氣很重")),
     ),
+    (
+        ("띵띵이",),
+        (
+            ("TINGGYUL", "띵띵이"),
+            ("TingGyul", "띵띵이"),
+            ("Tinggyul", "띵띵이"),
+            ("Singgyul", "띵띵이"),
+        ),
+    ),
     (("하데스", "하덱스"), (("哈迪斯", "HADES"), ("哈德克斯", "HADES"))),
     (("마가 뜨", "마가뜨"), (("瑪加特", "冷場"), ("馬嘎", "冷場"), ("魔嘎", "冷場"))),
     (("붕 뜨",), (("飄起來的時間", "空掉的時間"), ("浮起來的時間", "空掉的時間"))),
@@ -209,13 +218,18 @@ _SOURCE_NORM_BY_PROFILE: dict[str, dict[str, str]] = {
     _HADES_PROFILE_ID: {
         "服주": "섭주",
         "김띵귤": "띵귤",
+        "팅귤": "띵귤",
+        "틴귤": "띵귤",
         "김챗나": "챈나",
         "김챔나": "챈나",
         "챗나": "챈나",
         "챔나": "챈나",
+        "채엔나": "챈나",
+        "차엔나": "챈나",
         "주먹 언니": "솜펀치 언니",
         "주먹이": "솜펀치",
         "주먹아": "솜펀치",
+        "큐마": "키마",
         # 채나-family → 챈나-family (longer forms first to avoid bare-substring overlap)
         "천사채나": "천사챈나",
         "채나룬": "챈나룬",
@@ -326,9 +340,11 @@ class _NameRenderingRule:
 _NAME_RENDERING_RULES = (
     _NameRenderingRule(
         _HADES_PROFILE_ID,
-        ("챈나", "김챗나", "김챔나", "챗나", "챔나"),
+        ("챈나", "김챗나", "김챔나", "챗나", "챔나", "Chaenna", "CHXXNNX", "Chxxnnx"),
         (
             "챈나",
+            "Chaenna",
+            "CHXXNNX",
             "-chan",
             "-Chan",
             "－chan",
@@ -353,7 +369,17 @@ _NAME_RENDERING_RULES = (
     _NameRenderingRule(
         _HADES_PROFILE_ID,
         ("띵귤", "김띵귤", "싱귤"),
-        ("띵귤", "싱귤", "金叮菊", "金丁橘", "叮菊", "丁橘"),
+        (
+            "띵귤",
+            "싱귤",
+            "TINGGYUL",
+            "TingGyul",
+            "Tinggyul",
+            "金叮菊",
+            "金丁橘",
+            "叮菊",
+            "丁橘",
+        ),
         "Singgyul",
     ),
     _NameRenderingRule(
@@ -370,8 +396,8 @@ _NAME_RENDERING_RULES = (
     ),
     _NameRenderingRule(
         _HADES_PROFILE_ID,
-        ("키마",),
-        ("키마", "Kima", "基馬"),
+        ("키마", "큐마"),
+        ("키마", "큐마", "Kima", "基馬"),
         "Kyma",
     ),
     _NameRenderingRule(

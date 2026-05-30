@@ -151,6 +151,7 @@ STT_SONG_CONTEXT_MARKERS = (
 STT_TEMPLATE_HARD_PHRASES = (
     "자막 제공",
     "한글자막 제공",  # redundant with "자막 제공" but listed for clarity
+    "시청자님의 자막이 필요하다면 댓글에 링크를 적어주세요",
     "광고를 포함하고 있습니다",
     "카카오톡 플러스친구",
     "kakaotalk 플러스친구",
@@ -193,6 +194,7 @@ STT_TEMPLATE_HARD_PREFIX_STRIP_PHRASES = (
     "한글자막 제공 및 광고를 포함하고 있습니다",
     "한글 자막 제공 및 자막 제공 및 광고를 포함하고 있습니다",
     "한글 자막 제공 및 광고를 포함하고 있습니다",
+    "시청자님의 자막이 필요하다면 댓글에 링크를 적어주세요",
 )
 
 STT_TEMPLATE_STRIP_PHRASES = (

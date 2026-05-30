@@ -85,6 +85,7 @@ class TestSttPolicy(unittest.TestCase):
         self.assertIsNotNone(prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 80)
         self.assertTrue(prompt.startswith("seed prompt"))
+        self.assertIn("Recent Korean transcript context:", prompt)
 
     def test_build_groq_prompt_respects_max_prompt_chars_for_korean_text(self):
         prompt = build_groq_prompt(
@@ -99,6 +100,7 @@ class TestSttPolicy(unittest.TestCase):
 
         self.assertIsNotNone(prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 80)
+        self.assertIn("Recent Korean transcript context:", prompt)
 
     def test_build_groq_prompt_keeps_hades_profile_under_groq_limit(self):
         from config import cfg
@@ -117,6 +119,7 @@ class TestSttPolicy(unittest.TestCase):
         self.assertIsNotNone(prompt)
         self.assertLessEqual(len(prompt.encode("utf-8")), 896)
         self.assertIn("Korean gaming livestream speech", prompt)
+        self.assertIn("Recent Korean transcript context:", prompt)
 
     def test_dedupe_transcript_overlap_removes_repeated_word_prefix(self):
         self.assertEqual(

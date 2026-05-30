@@ -1258,10 +1258,15 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("봉준님 불러요", "奉主來了", "Kim Bongjun來了"),
             ("김봉준이 말했어요", "奉俊說了", "Kim Bongjun說了"),
             ("키마는 대기 중", "Kima待機中", "Kyma待機中"),
+            ("큐마는 대기 중", "큐마待機中", "Kyma待機中"),
             ("솜주먹 바보님", "桑拳頭笨蛋", "Sompunch笨蛋"),
             ("솜주먹 언니 와요", "拳頭姐姐來了", "Sompunch姐姐來了"),
             ("김띵귤 기강 잡아라", "金叮菊管管紀律", "Singgyul管管紀律"),
+            ("띵귤이 왔어요", "TINGGYUL來了", "Singgyul來了"),
+            ("띵띵이도 친구 많아", "Singgyul朋友很多", "띵띵이朋友很多"),
             ("김챗나 방", "金chat的房間", "Chxxnnx的房間"),
+            ("챈나가 왔어요", "Chaenna來了", "Chxxnnx來了"),
+            ("챈나가 왔어요", "CHXXNNX來了", "Chxxnnx來了"),
             ("고세구가 왔어요", "高世久來了", "Gosegu來了"),
         )
 
@@ -1846,6 +1851,11 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
             ("챗나야 빨리 와", "챈나야 빨리 와"),
             ("주먹이 왔어", "솜펀치 왔어"),
             ("주먹 언니 와요", "솜펀치 언니 와요"),
+            ("팅귤이 왔어", "띵귤이 왔어"),
+            ("틴귤아 와", "띵귤아 와"),
+            ("큐마는 대기 중", "키마는 대기 중"),
+            ("채엔나 방", "챈나 방"),
+            ("차엔나 방", "챈나 방"),
         ]
         with _active_translation_profile("hades_chxxnnx"):
             for raw, expected in cases:

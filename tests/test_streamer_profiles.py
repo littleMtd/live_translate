@@ -90,7 +90,26 @@ def test_build_stt_glossary_deduplicates_loaded_terms(tmp_path):
 def test_hades_stt_glossary_contains_profile_glossary_terms():
     glossary = build_stt_glossary("hades_chxxnnx")
 
-    for term in ("챈나", "키마", "마크", "섭주", "메이플", "프린세스 메이커", "피맛"):
+    for term in (
+        "챈나",
+        "Chaenna",
+        "CHXXNNX",
+        "솜펀치",
+        "띵띵이",
+        "TINGGYUL",
+        "키마",
+        "큐마",
+        "지옥견",
+        "수제비",
+        "마크",
+        "섭주",
+        "메이플",
+        "프린세스 메이커",
+        "피맛",
+        "MEGA PIECE HARMONY",
+        "Planet B",
+        "하데쮸 유치원",
+    ):
         assert term in glossary
 
 

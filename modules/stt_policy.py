@@ -168,12 +168,13 @@ def build_groq_prompt(
         separator = 1 if prompt_parts else 0
         return max_prompt_chars - used - separator
 
-    def append_with_budget(text: str) -> None:
+    def append_with_budget(text: str, *, reserve_after: int = 0) -> None:
         text = normalize_prompt_text(text)
         if not text:
             return
         budget = remaining_chars()
         if budget is not None:
+            budget -= reserve_after
             if budget <= 0:
                 return
             if _encoded_len(text) > budget:
@@ -181,12 +182,22 @@ def build_groq_prompt(
         if text:
             prompt_parts.append(text)
 
-    if use_profile_glossary:
-        append_with_budget(glossary_builder(active_profile))
-
     recent_context = normalize_prompt_text(last_transcript, max_context_chars)
-    if recent_context:
-        append_with_budget(f"{_RECENT_CONTEXT_PREFIX}{recent_context}")
+    recent_context_part = (
+        f"{_RECENT_CONTEXT_PREFIX}{recent_context}" if recent_context else ""
+    )
+
+    if use_profile_glossary:
+        reserve_after = 0
+        if recent_context_part and max_prompt_chars is not None:
+            # Keep the previous transcript tail available even when a profile
+            # glossary is long. The glossary can be truncated; context cannot
+            # help STT if it is crowded out entirely.
+            reserve_after = 1 + _encoded_len(recent_context_part)
+        append_with_budget(glossary_builder(active_profile), reserve_after=reserve_after)
+
+    if recent_context_part:
+        append_with_budget(recent_context_part)
 
     prompt = "\n".join(prompt_parts)
     if max_prompt_chars is not None and _encoded_len(prompt) > max_prompt_chars:

@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "935e384b771d3b4a272d3c976d64d580ab632184f33200f380cc7b60f15cf525"
+_TRANSLATION_PROFILE_DATA_HASH = "d500187a71a6af0a69b9943b4551c31592d2d51bfc2528b146ce006e86e4418f"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -46,10 +46,15 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
 def test_hades_translation_profiles_contain_glossary_mappings():
     required_terms = (
         "Chxxnnx",
+        "Chaenna",
+        "CHXXNNX",
         "Sompunch",
         "Yeon Chorok",
         "Singgyul",
+        "띵띵이",
         "Kyma",
+        "지옥견",
+        "수제비",
         "Kim Bongjun",
         "KimSungtae",
         "Minecraft",
@@ -58,6 +63,8 @@ def test_hades_translation_profiles_contain_glossary_mappings():
         "楓之谷",
         "美少女夢工場",
         "血味",
+        "MEGA PIECE HARMONY",
+        "Planet B",
     )
 
     for qwen in (False, True):

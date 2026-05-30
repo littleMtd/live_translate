@@ -417,6 +417,19 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
             "팻으로 넣어드려요? 몬스터!",
         )
 
+    def test_caption_link_template_is_rejected(self):
+        policy = TranslationPolicy(slang={})
+        text = "시청자님의 자막이 필요하다면 댓글에 링크를 적어주세요."
+
+        self.assertEqual(policy.rejection_reason(text), "stt_template_garbage")
+        self.assertIsNone(policy.prepare_input(text))
+
+    def test_caption_link_template_tail_is_stripped(self):
+        policy = TranslationPolicy(slang={})
+        text = "자 기다려 시청자님의 자막이 필요하다면 댓글에 링크를 적어주세요."
+
+        self.assertEqual(policy.prepare_input(text), "자 기다려")
+
 
 class TestSttLowValueFragmentGuard(unittest.TestCase):
     def test_pure_low_value_fragment_is_rejected_without_last_input_update(self):
