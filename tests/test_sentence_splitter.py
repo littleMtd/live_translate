@@ -180,6 +180,76 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(results[0].no_speech_prob, 0.1)
 
 
+class TestSentenceRuntimeEvent(unittest.TestCase):
+    """The splitter emits a `sentence` runtime event describing assembly."""
+
+    def _sentence_emits(self, tokens, wait, cfg=None):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        with patch("modules.sentence_splitter.cfg", cfg or _fast_cfg()), \
+                patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            for token in tokens:
+                tq.put(token)
+            time.sleep(wait)
+            stop.set()
+            thread.join(timeout=2)
+        return [c.kwargs for c in events.emit.call_args_list
+                if c.args and c.args[0] == "sentence"]
+
+    def test_natural_cut_emits_sentence_event(self):
+        token = TranscriptionEvent(
+            text="안녕하세요",
+            engine="groq",
+            profile_id="isegye_lilpa",
+            utterance_id="utt-5",
+            audio_seconds=1.2,
+        )
+        emits = self._sentence_emits([token], wait=1.0)
+
+        self.assertEqual(len(emits), 1)
+        kw = emits[0]
+        self.assertEqual(kw["utterance_id"], "utt-5")
+        self.assertEqual(kw["cut_reason"], "natural")
+        self.assertEqual(kw["chunk_count"], 1)
+        self.assertEqual(kw["audio_seconds"], 1.2)
+        self.assertFalse(kw["incomplete"])
+        self.assertFalse(kw["forced"])
+
+    def test_merged_cut_reports_combined_assembly(self):
+        first = TranscriptionEvent(
+            text="first fragment", engine="groq", profile_id="a",
+            utterance_id="utt-1", audio_seconds=1.0,
+        )
+        second = TranscriptionEvent(
+            text="second fragment", engine="groq", profile_id="a",
+            utterance_id="utt-2", audio_seconds=2.0,
+        )
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(min_wait=0.1, force_cut=0.3)), \
+                patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            tq.put(first)
+            time.sleep(0.6)   # force-cut "first" as incomplete -> buffered
+            tq.put(second)
+            sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        emits = [c.kwargs for c in events.emit.call_args_list
+                 if c.args and c.args[0] == "sentence"]
+        self.assertEqual(len(emits), 1)
+        kw = emits[0]
+        self.assertTrue(kw["cut_reason"].startswith("merged:"))
+        self.assertEqual(kw["chunk_count"], 2)
+        self.assertEqual(kw["audio_seconds"], 3.0)
+        # Merged sentence keeps the latest source's correlation id.
+        self.assertEqual(kw["utterance_id"], "utt-2")
+
+
 class TestSentenceSplitterPause(unittest.TestCase):
 
     def test_pause_prevents_output(self):

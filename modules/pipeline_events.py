@@ -9,6 +9,9 @@ class TranscriptionEvent:
     # Correlation id minted once per STT transcription so audio→stt→sentence→
     # translation events for the same utterance can be joined in the logs.
     utterance_id: str = ""
+    # Duration of the audio chunk this transcription came from; summed by the
+    # sentence buffer to report a sentence's total audio span.
+    audio_seconds: float = 0.0
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
 

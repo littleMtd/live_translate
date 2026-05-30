@@ -58,6 +58,64 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertIsNotNone(cut)
         self.assertIs(cut.source, latest)
 
+    def test_natural_cut_reports_assembly_metadata(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(text="안녕", engine="groq", profile_id="a", audio_seconds=0.8),
+            now=1.0,
+        )
+        buffer.push(
+            TranscriptionEvent(text="하세요", engine="groq", profile_id="a", audio_seconds=0.5),
+            now=1.1,
+        )
+
+        cut = buffer.pop_ready(1.5, min_wait_seconds=0.3, force_cut_seconds=2.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.cut_reason, "natural")
+        self.assertEqual(cut.chunk_count, 2)
+        self.assertEqual(cut.audio_seconds, 1.3)
+
+    def test_forced_blob_cut_reason_and_counts(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(text="지금 게임 하고", engine="groq", profile_id="a", audio_seconds=2.0),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(2.0, min_wait_seconds=5.0, force_cut_seconds=0.5)
+
+        self.assertEqual(cut.cut_reason, "forced_blob")
+        self.assertTrue(cut.incomplete)
+        self.assertEqual(cut.chunk_count, 1)
+        self.assertEqual(cut.audio_seconds, 2.0)
+
+    def test_forced_prefix_attributes_audio_and_resets_residual_tally(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="오늘 날씨 진짜 좋네요. 그래서 산책 길게 갈까",
+                engine="groq",
+                profile_id="a",
+                audio_seconds=3.0,
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertEqual(cut.cut_reason, "forced_prefix")
+        self.assertEqual(cut.chunk_count, 1)
+        self.assertEqual(cut.audio_seconds, 3.0)
+        # Residual carried back starts a fresh tally (audio attributed to prefix).
+        buffer.push(
+            TranscriptionEvent(text="계속합니다", engine="groq", profile_id="a", audio_seconds=1.0),
+            now=14.0,
+        )
+        cut2 = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        self.assertEqual(cut2.chunk_count, 1)
+        self.assertEqual(cut2.audio_seconds, 1.0)
+
     def test_reset_clears_pending_text(self):
         buffer = SentenceBuffer()
         buffer.push("안녕하세요", now=1.0)

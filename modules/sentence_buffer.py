@@ -62,6 +62,16 @@ class SentenceCut:
     source: TranscriptionEvent | None
     elapsed: float
     forced: bool
+    # Why the buffer released this cut: "natural" (complete ending reached
+    # within the wait window), "forced_prefix" (time-boxed but a punctuation
+    # boundary let us emit a complete prefix), or "forced_blob" (time-boxed
+    # whole-buffer release with no safe boundary).
+    cut_reason: str = ""
+    # How many pushed STT chunks composed this cut, and their summed audio
+    # duration — lets the log tell "STT couldn't hear it" from "we cut a half
+    # sentence too early".
+    chunk_count: int = 0
+    audio_seconds: float = 0.0
 
 
 def is_complete(text: str) -> bool:
@@ -80,11 +90,15 @@ class SentenceBuffer:
         self._buffer = ""
         self._first_token_time: float | None = None
         self._latest_source: TranscriptionEvent | None = None
+        self._chunk_count = 0
+        self._total_audio_seconds = 0.0
 
     def reset(self) -> None:
         self._buffer = ""
         self._first_token_time = None
         self._latest_source = None
+        self._chunk_count = 0
+        self._total_audio_seconds = 0.0
 
     def push(self, token: str | TranscriptionEvent, now: float) -> None:
         token_text = transcription_text(token)
@@ -92,6 +106,8 @@ class SentenceBuffer:
             self._first_token_time = now
         if isinstance(token, TranscriptionEvent):
             self._latest_source = token
+            self._total_audio_seconds += token.audio_seconds
+        self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
 
     def pop_ready(
@@ -121,13 +137,20 @@ class SentenceBuffer:
                     source=self._latest_source,
                     elapsed=elapsed,
                     forced=True,
+                    cut_reason="forced_prefix",
+                    chunk_count=self._chunk_count,
+                    audio_seconds=round(self._total_audio_seconds, 3),
                 )
                 if residual and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL:
                     # Residual policy (c): carry it back into the buffer and
                     # restart the time-box clock so the leftover fragment does
                     # not immediately force-cut on the next pop (§11.11 #1).
+                    # The accumulated chunk/audio totals are attributed to the
+                    # emitted prefix; the residual starts a fresh tally.
                     self._buffer = residual
                     self._first_token_time = now
+                    self._chunk_count = 0
+                    self._total_audio_seconds = 0.0
                 else:
                     # Trivial / empty residual → drop, full reset.
                     self.reset()
@@ -141,6 +164,9 @@ class SentenceBuffer:
                 source=self._latest_source,
                 elapsed=elapsed,
                 forced=True,
+                cut_reason="forced_blob",
+                chunk_count=self._chunk_count,
+                audio_seconds=round(self._total_audio_seconds, 3),
             )
             self.reset()
             return cut
@@ -152,6 +178,9 @@ class SentenceBuffer:
                 source=self._latest_source,
                 elapsed=elapsed,
                 forced=False,
+                cut_reason="natural",
+                chunk_count=self._chunk_count,
+                audio_seconds=round(self._total_audio_seconds, 3),
             )
             self.reset()
             return cut

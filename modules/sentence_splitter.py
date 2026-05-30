@@ -6,6 +6,7 @@ from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
 from utils.queue_utils import put_latest
+from utils.runtime_events import runtime_events
 from modules.pipeline_events import transcription_to_sentence
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 
@@ -28,6 +29,20 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             if cut.forced:
                 log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
             log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
+            source = cut.source
+            runtime_events.emit(
+                "sentence",
+                utterance_id=source.utterance_id if source else "",
+                profile_id=source.profile_id if source else "",
+                stt_engine=source.engine if source else "",
+                cut_reason=cut.cut_reason,
+                incomplete=cut.incomplete,
+                forced=cut.forced,
+                chunk_count=cut.chunk_count,
+                audio_seconds=cut.audio_seconds,
+                text_len=len(cut.text or ""),
+                elapsed_ms=round(cut.elapsed * 1000, 2),
+            )
             event = transcription_to_sentence(cut.text, cut.incomplete, cut.source)
             metrics.increment("sentence.emitted")
             put_latest(sentence_queue, event, log, "sentence_queue")
@@ -40,6 +55,11 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 source=second.source or first.source,
                 elapsed=first.elapsed + second.elapsed,
                 forced=first.forced or second.forced,
+                # A merge means an incomplete cut was stitched to its follow-up;
+                # surface that distinctly while summing the constituents' tallies.
+                cut_reason=f"merged:{first.cut_reason}+{second.cut_reason}",
+                chunk_count=first.chunk_count + second.chunk_count,
+                audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
             )
 
         while not stop_event.is_set():
