@@ -2,7 +2,6 @@ import io
 import queue
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -550,10 +549,13 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             stop_event.set()
             return
         # Collection-mode audio dump: one session dir per run so per-run
-        # utterance ids (utt-1, utt-2…) don't collide across restarts.
+        # utterance ids (utt-1, utt-2…) don't collide across restarts. Keyed by
+        # runtime_events.run_id (timestamp-pid) so two restarts in the same
+        # second land in different dirs AND the dir matches the run_id stamped
+        # on every runtime event, making audio joinable from the logs.
         dump_dir: Path | None = None
         if cfg.stt.dump_audio:
-            dump_dir = _AUDIO_DUMP_ROOT / datetime.now().strftime("%Y%m%dT%H%M%S")
+            dump_dir = _AUDIO_DUMP_ROOT / runtime_events.run_id
             log.info("STT audio dump enabled → %s", dump_dir)
         while not stop_event.is_set():
             has_audio, audio = poll_queue(audio_queue, stop_event, pause_event)
