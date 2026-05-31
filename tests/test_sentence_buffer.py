@@ -76,6 +76,21 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertEqual(cut.chunk_count, 2)
         self.assertEqual(cut.audio_seconds, 1.3)
 
+    def test_natural_cut_collects_all_source_utterance_ids(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(text="안녕", engine="groq", profile_id="a", utterance_id="utt-1"),
+            now=1.0,
+        )
+        buffer.push(
+            TranscriptionEvent(text="하세요", engine="groq", profile_id="a", utterance_id="utt-2"),
+            now=1.1,
+        )
+
+        cut = buffer.pop_ready(1.5, min_wait_seconds=0.3, force_cut_seconds=2.0)
+
+        self.assertEqual(cut.source_utterance_ids, ("utt-1", "utt-2"))
+
     def test_forced_blob_cut_reason_and_counts(self):
         buffer = SentenceBuffer()
         buffer.push(

@@ -25,7 +25,7 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
     assert len(files) == 1
     assert files[0].name == "runtime_events_20260514.jsonl"
     record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["schema_version"] == 1
+    assert record["schema_version"] == 2
     assert record["event_type"] == "translation"
     assert record["run_id"] == "test-run"
     assert record["source_text"] == "안녕하세요"

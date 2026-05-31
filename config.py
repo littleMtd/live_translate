@@ -71,6 +71,11 @@ class _STT:
     groq_rate_limit_cooldown_sec: float = 60.0
     groq_daily_request_limit: int = 2000
     use_profile_glossary:   bool  = True
+    # Collection-mode only: dump each transcribed chunk's audio to
+    # logs/audio_dump/<session>/<utterance_id>.wav so STT-vs-translation error
+    # attribution can be verified by replaying the original speech. Off by
+    # default — it writes one wav per utterance and is meant for labeling runs.
+    dump_audio:             bool  = False
     batch_size_s:           int   = 60
     queue_maxsize:          int   = 20
     # Groq verbose_json confidence filters

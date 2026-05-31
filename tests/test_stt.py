@@ -590,6 +590,36 @@ class TestSttThread(unittest.TestCase):
         self.assertEqual(result.text, "테스트")
         self.assertEqual(result.engine, "groq")
 
+    def test_audio_dump_writes_wav_when_enabled(self):
+        import tempfile
+        from pathlib import Path
+        from config import cfg
+        from modules.stt import start as stt_start
+
+        audio_q: queue.Queue = queue.Queue()
+        text_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        tmp = Path(tempfile.mkdtemp())
+
+        object.__setattr__(cfg.stt, "dump_audio", True)
+        try:
+            with patch("modules.stt.STTEngine") as MockEngine, \
+                    patch("modules.stt._AUDIO_DUMP_ROOT", tmp):
+                instance = MockEngine.return_value
+                instance.available = True
+                instance.transcribe_event.return_value = TranscriptionEvent(
+                    text="테스트", engine="groq", profile_id="", utterance_id="utt-1",
+                )
+                stt_start(audio_q, text_q, stop)
+                audio_q.put(self._audio())
+                text_q.get(timeout=3)
+                stop.set()
+        finally:
+            object.__setattr__(cfg.stt, "dump_audio", False)
+
+        wavs = list(tmp.glob("**/utt-1.wav"))
+        self.assertEqual(len(wavs), 1, "expected one dumped wav named by utterance_id")
+
     def test_none_transcription_not_forwarded(self):
         from modules.stt import start as stt_start
         audio_q: queue.Queue = queue.Queue()

@@ -2,11 +2,13 @@ import io
 import queue
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 import numpy as np
 import soundfile as sf
 
 from config import cfg
-from utils.audio import rms as _rms
+from utils.audio import rms as _rms, write_wav
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
@@ -34,6 +36,7 @@ _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
 _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
 _GROQ_CONTEXT_CHARS = 120
 _GROQ_PROMPT_MAX_CHARS = 896
+_AUDIO_DUMP_ROOT = Path(__file__).resolve().parent.parent / "logs" / "audio_dump"
 
 
 def _is_groq_rate_limit_error(exc: Exception) -> bool:
@@ -546,6 +549,12 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             log.error("STT thread aborting: no engine available")
             stop_event.set()
             return
+        # Collection-mode audio dump: one session dir per run so per-run
+        # utterance ids (utt-1, utt-2…) don't collide across restarts.
+        dump_dir: Path | None = None
+        if cfg.stt.dump_audio:
+            dump_dir = _AUDIO_DUMP_ROOT / datetime.now().strftime("%Y%m%dT%H%M%S")
+            log.info("STT audio dump enabled → %s", dump_dir)
         while not stop_event.is_set():
             has_audio, audio = poll_queue(audio_queue, stop_event, pause_event)
             if not has_audio:
@@ -556,6 +565,11 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             metrics.observe_latency("stt", time.monotonic() - started)
             if event:
                 metrics.increment("stt.success")
+                if dump_dir is not None and event.utterance_id:
+                    try:
+                        write_wav(dump_dir / f"{event.utterance_id}.wav", audio, cfg.audio.sample_rate)
+                    except Exception as exc:  # never let dumping break transcription
+                        log.warning("Audio dump failed for %s: %s", event.utterance_id, exc)
                 put_latest(text_queue, event, log, "text_queue", "tokens")
             else:
                 metrics.increment("stt.none")

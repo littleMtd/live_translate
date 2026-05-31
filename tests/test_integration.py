@@ -189,6 +189,29 @@ class TestTranslatorThread(unittest.TestCase):
 
         self.assertEqual(events.emit.call_args.kwargs["utterance_id"], "utt-42")
 
+    def test_translation_event_carries_source_utterance_ids(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("你好"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            # A sentence assembled from several STT chunks lists them all, so a
+            # mistranslation can be traced back to each chunk's audio/confidence.
+            sentence_q.put({
+                "text": "안녕하세요",
+                "incomplete": False,
+                "utterance_id": "utt-3",
+                "source_utterance_ids": ["utt-1", "utt-2", "utt-3"],
+            })
+            self.assertEqual(subtitle_q.get(timeout=5), "你好")
+            stop.set()
+            t.join(timeout=2)
+
+        self.assertEqual(
+            events.emit.call_args.kwargs["source_utterance_ids"], ["utt-1", "utt-2", "utt-3"]
+        )
+
     def test_translation_event_carries_active_profile(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()

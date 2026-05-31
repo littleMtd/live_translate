@@ -72,6 +72,9 @@ class SentenceCut:
     # sentence too early".
     chunk_count: int = 0
     audio_seconds: float = 0.0
+    # utterance_id of every contributing STT chunk, so each one's audio +
+    # confidence can be joined back when attributing a mistranslation.
+    source_utterance_ids: tuple[str, ...] = ()
 
 
 def is_complete(text: str) -> bool:
@@ -92,6 +95,7 @@ class SentenceBuffer:
         self._latest_source: TranscriptionEvent | None = None
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
+        self._source_utterance_ids: list[str] = []
 
     def reset(self) -> None:
         self._buffer = ""
@@ -99,6 +103,7 @@ class SentenceBuffer:
         self._latest_source = None
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
+        self._source_utterance_ids = []
 
     def push(self, token: str | TranscriptionEvent, now: float) -> None:
         token_text = transcription_text(token)
@@ -107,6 +112,8 @@ class SentenceBuffer:
         if isinstance(token, TranscriptionEvent):
             self._latest_source = token
             self._total_audio_seconds += token.audio_seconds
+            if token.utterance_id:
+                self._source_utterance_ids.append(token.utterance_id)
         self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
 
@@ -140,6 +147,7 @@ class SentenceBuffer:
                     cut_reason="forced_prefix",
                     chunk_count=self._chunk_count,
                     audio_seconds=round(self._total_audio_seconds, 3),
+                    source_utterance_ids=tuple(self._source_utterance_ids),
                 )
                 if residual and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL:
                     # Residual policy (c): carry it back into the buffer and
@@ -151,6 +159,7 @@ class SentenceBuffer:
                     self._first_token_time = now
                     self._chunk_count = 0
                     self._total_audio_seconds = 0.0
+                    self._source_utterance_ids = []
                 else:
                     # Trivial / empty residual → drop, full reset.
                     self.reset()
@@ -167,6 +176,7 @@ class SentenceBuffer:
                 cut_reason="forced_blob",
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
+                source_utterance_ids=tuple(self._source_utterance_ids),
             )
             self.reset()
             return cut
@@ -181,6 +191,7 @@ class SentenceBuffer:
                 cut_reason="natural",
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
+                source_utterance_ids=tuple(self._source_utterance_ids),
             )
             self.reset()
             return cut

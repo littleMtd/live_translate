@@ -246,8 +246,10 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertTrue(kw["cut_reason"].startswith("merged:"))
         self.assertEqual(kw["chunk_count"], 2)
         self.assertEqual(kw["audio_seconds"], 3.0)
-        # Merged sentence keeps the latest source's correlation id.
+        # Merged sentence keeps the latest source's correlation id...
         self.assertEqual(kw["utterance_id"], "utt-2")
+        # ...but lists every contributing chunk for full attribution.
+        self.assertEqual(kw["source_utterance_ids"], ["utt-1", "utt-2"])
 
 
 class TestSentenceSplitterPause(unittest.TestCase):

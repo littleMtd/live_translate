@@ -38,6 +38,28 @@ class TestUtteranceIdPropagation(unittest.TestCase):
         self.assertEqual(sentence_metadata("x")["utterance_id"], "")
         self.assertEqual(sentence_metadata({"text": "x"})["utterance_id"], "")
 
+    def test_transcription_to_sentence_carries_source_utterance_ids(self):
+        source = TranscriptionEvent(text="x", engine="groq", profile_id="", utterance_id="utt-9")
+        sentence = transcription_to_sentence(
+            "x", incomplete=False, source=source, source_utterance_ids=("utt-7", "utt-8", "utt-9")
+        )
+        self.assertEqual(sentence.source_utterance_ids, ("utt-7", "utt-8", "utt-9"))
+
+    def test_transcription_to_sentence_defaults_ids_to_single_source(self):
+        # No explicit list -> fall back to the single source's id.
+        source = TranscriptionEvent(text="x", engine="groq", profile_id="", utterance_id="utt-3")
+        sentence = transcription_to_sentence("x", incomplete=False, source=source)
+        self.assertEqual(sentence.source_utterance_ids, ("utt-3",))
+
+    def test_sentence_metadata_exposes_source_utterance_ids(self):
+        event = SentenceEvent(text="x", source_utterance_ids=("utt-1", "utt-2"))
+        self.assertEqual(sentence_metadata(event)["source_utterance_ids"], ["utt-1", "utt-2"])
+        self.assertEqual(
+            sentence_metadata({"text": "x", "source_utterance_ids": ("utt-5",)})["source_utterance_ids"],
+            ["utt-5"],
+        )
+        self.assertEqual(sentence_metadata("x")["source_utterance_ids"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

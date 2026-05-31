@@ -25,6 +25,10 @@ class SentenceEvent:
     # Carried through from the source TranscriptionEvent. When two cuts are
     # merged this holds the latest source's id (see sentence_buffer.merge_cuts).
     utterance_id: str = ""
+    # Every STT chunk that composed this sentence (a sentence is usually built
+    # from several pushes / merged cuts). Lets each contributing transcription's
+    # audio + confidence be joined back for STT-vs-translation error attribution.
+    source_utterance_ids: tuple[str, ...] = ()
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
 
@@ -41,15 +45,17 @@ def transcription_to_sentence(
     text: str,
     incomplete: bool,
     source: TranscriptionEvent | None = None,
+    source_utterance_ids: tuple[str, ...] = (),
 ) -> SentenceEvent:
     if source is None:
-        return SentenceEvent(text=text, incomplete=incomplete)
+        return SentenceEvent(text=text, incomplete=incomplete, source_utterance_ids=source_utterance_ids)
     return SentenceEvent(
         text=text,
         incomplete=incomplete,
         profile_id=source.profile_id,
         stt_engine=source.engine,
         utterance_id=source.utterance_id,
+        source_utterance_ids=source_utterance_ids or ((source.utterance_id,) if source.utterance_id else ()),
         avg_logprob=source.avg_logprob,
         no_speech_prob=source.no_speech_prob,
     )
@@ -77,6 +83,7 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
             "profile_id": item.profile_id,
             "stt_engine": item.stt_engine,
             "utterance_id": item.utterance_id,
+            "source_utterance_ids": list(item.source_utterance_ids),
             "avg_logprob": item.avg_logprob,
             "no_speech_prob": item.no_speech_prob,
         }
@@ -85,6 +92,7 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
             "profile_id": item.get("profile_id", ""),
             "stt_engine": item.get("stt_engine", ""),
             "utterance_id": item.get("utterance_id", ""),
+            "source_utterance_ids": list(item.get("source_utterance_ids", ())),
             "avg_logprob": item.get("avg_logprob"),
             "no_speech_prob": item.get("no_speech_prob"),
         }
@@ -92,6 +100,7 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         "profile_id": "",
         "stt_engine": "",
         "utterance_id": "",
+        "source_utterance_ids": [],
         "avg_logprob": None,
         "no_speech_prob": None,
     }

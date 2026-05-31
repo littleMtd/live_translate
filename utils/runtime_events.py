@@ -16,6 +16,12 @@ log = get_logger("runtime_events")
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
+# Bumped to 2 when the event schema gained the fields added for STT-vs-translation
+# error attribution (utterance_id, source_utterance_ids, sentence events, prompt
+# budget, corrections, token usage, quality_score). Filter `schema_version == 2`
+# to get only records with the full modern schema and ignore older mixed data.
+_SCHEMA_VERSION = 2
+
 # Types that are safe to pass straight to json.dumps without coercion.
 _JSON_NATIVE_TYPES = (str, bool, int, float, type(None))
 
@@ -99,7 +105,7 @@ class RuntimeEventWriter:
     def emit(self, event_type: str, **fields: Any) -> None:
         normalized_fields = {key: _normalize_value(value) for key, value in fields.items()}
         record = {
-            "schema_version": 1,
+            "schema_version": _SCHEMA_VERSION,
             "event_type": event_type,
             "run_id": self.run_id,
             "created_at": self._clock(),
@@ -111,7 +117,7 @@ class RuntimeEventWriter:
             # Normalization should make this unreachable, but stay defensive
             # so a malformed field never silently drops the whole event.
             fallback = {
-                "schema_version": 1,
+                "schema_version": _SCHEMA_VERSION,
                 "event_type": event_type,
                 "run_id": self.run_id,
                 "created_at": self._clock(),

@@ -40,10 +40,13 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 forced=cut.forced,
                 chunk_count=cut.chunk_count,
                 audio_seconds=cut.audio_seconds,
+                source_utterance_ids=list(cut.source_utterance_ids),
                 text_len=len(cut.text or ""),
                 elapsed_ms=round(cut.elapsed * 1000, 2),
             )
-            event = transcription_to_sentence(cut.text, cut.incomplete, cut.source)
+            event = transcription_to_sentence(
+                cut.text, cut.incomplete, cut.source, cut.source_utterance_ids
+            )
             metrics.increment("sentence.emitted")
             put_latest(sentence_queue, event, log, "sentence_queue")
             metrics.log_summary_if_due()
@@ -60,6 +63,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 cut_reason=f"merged:{first.cut_reason}+{second.cut_reason}",
                 chunk_count=first.chunk_count + second.chunk_count,
                 audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
+                source_utterance_ids=first.source_utterance_ids + second.source_utterance_ids,
             )
 
         while not stop_event.is_set():
