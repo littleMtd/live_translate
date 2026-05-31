@@ -105,13 +105,17 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertEqual(cut.chunk_count, 1)
         self.assertEqual(cut.audio_seconds, 2.0)
 
-    def test_forced_prefix_attributes_audio_and_resets_residual_tally(self):
+    def test_forced_prefix_residual_keeps_source_attribution(self):
+        # A chunk can straddle the punctuation boundary, so the residual must
+        # NOT drop the source ids/audio of the chunks seen so far — otherwise a
+        # mistranslation in the carried-over text becomes un-attributable.
         buffer = SentenceBuffer()
         buffer.push(
             TranscriptionEvent(
                 text="오늘 날씨 진짜 좋네요. 그래서 산책 길게 갈까",
                 engine="groq",
                 profile_id="a",
+                utterance_id="utt-1",
                 audio_seconds=3.0,
             ),
             now=1.0,
@@ -120,16 +124,22 @@ class TestSentenceBuffer(unittest.TestCase):
         cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
 
         self.assertEqual(cut.cut_reason, "forced_prefix")
-        self.assertEqual(cut.chunk_count, 1)
-        self.assertEqual(cut.audio_seconds, 3.0)
-        # Residual carried back starts a fresh tally (audio attributed to prefix).
+        self.assertEqual(cut.source_utterance_ids, ("utt-1",))
+
+        # Residual carried back keeps utt-1; the next sentence still lists it
+        # (plus the new chunk) so the earlier audio remains attributable.
         buffer.push(
-            TranscriptionEvent(text="계속합니다", engine="groq", profile_id="a", audio_seconds=1.0),
+            TranscriptionEvent(
+                text="계속합니다", engine="groq", profile_id="a",
+                utterance_id="utt-2", audio_seconds=1.0,
+            ),
             now=14.0,
         )
         cut2 = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
-        self.assertEqual(cut2.chunk_count, 1)
-        self.assertEqual(cut2.audio_seconds, 1.0)
+        self.assertIn("utt-1", cut2.source_utterance_ids)
+        self.assertIn("utt-2", cut2.source_utterance_ids)
+        self.assertEqual(cut2.chunk_count, 2)
+        self.assertEqual(cut2.audio_seconds, 4.0)
 
     def test_reset_clears_pending_text(self):
         buffer = SentenceBuffer()

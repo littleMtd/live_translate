@@ -153,13 +153,17 @@ class SentenceBuffer:
                     # Residual policy (c): carry it back into the buffer and
                     # restart the time-box clock so the leftover fragment does
                     # not immediately force-cut on the next pop (§11.11 #1).
-                    # The accumulated chunk/audio totals are attributed to the
-                    # emitted prefix; the residual starts a fresh tally.
+                    #
+                    # Keep the chunk/audio/source-id tallies rather than zeroing
+                    # them: a single STT chunk can straddle the punctuation
+                    # boundary, so the residual may still derive from ANY chunk
+                    # seen so far. Carrying the tallies forward over-counts (the
+                    # prefix cut and the residual-derived sentence share source
+                    # ids) but never DROPS a source — so the earlier chunks'
+                    # audio stays attributable for STT-vs-translation analysis.
+                    # Only the time-box clock restarts.
                     self._buffer = residual
                     self._first_token_time = now
-                    self._chunk_count = 0
-                    self._total_audio_seconds = 0.0
-                    self._source_utterance_ids = []
                 else:
                     # Trivial / empty residual → drop, full reset.
                     self.reset()
