@@ -88,17 +88,27 @@ class SubtitleWindow:
             if self._pause:
                 self._pause.set()
             self._drain_all_queues()
-            self._flash("⏸")
+            self._flash("⏸", ms=None)
             log.info("Pipeline paused")
 
-    def _flash(self, symbol: str, ms: int = 1500):
+    def _cancel_hide(self):
+        if self._root is None or self._hide_job is None:
+            self._hide_job = None
+            return
+        try:
+            self._root.after_cancel(self._hide_job)
+        except tk.TclError:
+            pass
+        self._hide_job = None
+
+    def _flash(self, symbol: str, ms: int | None = 1500):
         if self._root is None:
             return
         try:
             self._draw_outlined_text(symbol)
-            if self._hide_job:
-                self._root.after_cancel(self._hide_job)
-            self._hide_job = self._root.after(ms, self._hide)
+            self._cancel_hide()
+            if ms is not None:
+                self._hide_job = self._root.after(ms, self._hide)
         except tk.TclError:
             pass
 
@@ -195,8 +205,7 @@ class SubtitleWindow:
                 cfg.subtitle.min_display_ms,
                 len(text) * cfg.subtitle.ms_per_char,
             )
-            if self._hide_job:
-                self._root.after_cancel(self._hide_job)
+            self._cancel_hide()
             self._hide_job = self._root.after(cfg.subtitle.idle_hide_ms, self._hide)
         except tk.TclError:
             pass
