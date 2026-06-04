@@ -75,6 +75,8 @@ class SentenceCut:
     # utterance_id of every contributing STT chunk, so each one's audio +
     # confidence can be joined back when attributing a mistranslation.
     source_utterance_ids: tuple[str, ...] = ()
+    source_avg_logprobs: tuple[float | None, ...] = ()
+    source_no_speech_probs: tuple[float | None, ...] = ()
 
 
 def is_complete(text: str) -> bool:
@@ -96,6 +98,8 @@ class SentenceBuffer:
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids: list[str] = []
+        self._source_avg_logprobs: list[float | None] = []
+        self._source_no_speech_probs: list[float | None] = []
 
     def reset(self) -> None:
         self._buffer = ""
@@ -104,6 +108,8 @@ class SentenceBuffer:
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids = []
+        self._source_avg_logprobs = []
+        self._source_no_speech_probs = []
 
     def push(self, token: str | TranscriptionEvent, now: float) -> None:
         token_text = transcription_text(token)
@@ -114,6 +120,8 @@ class SentenceBuffer:
             self._total_audio_seconds += token.audio_seconds
             if token.utterance_id:
                 self._source_utterance_ids.append(token.utterance_id)
+                self._source_avg_logprobs.append(token.avg_logprob)
+                self._source_no_speech_probs.append(token.no_speech_prob)
         self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
 
@@ -148,6 +156,8 @@ class SentenceBuffer:
                     chunk_count=self._chunk_count,
                     audio_seconds=round(self._total_audio_seconds, 3),
                     source_utterance_ids=tuple(self._source_utterance_ids),
+                    source_avg_logprobs=tuple(self._source_avg_logprobs),
+                    source_no_speech_probs=tuple(self._source_no_speech_probs),
                 )
                 if residual and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL:
                     # Residual policy (c): carry it back into the buffer and
@@ -181,6 +191,8 @@ class SentenceBuffer:
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
                 source_utterance_ids=tuple(self._source_utterance_ids),
+                source_avg_logprobs=tuple(self._source_avg_logprobs),
+                source_no_speech_probs=tuple(self._source_no_speech_probs),
             )
             self.reset()
             return cut
@@ -196,6 +208,8 @@ class SentenceBuffer:
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
                 source_utterance_ids=tuple(self._source_utterance_ids),
+                source_avg_logprobs=tuple(self._source_avg_logprobs),
+                source_no_speech_probs=tuple(self._source_no_speech_probs),
             )
             self.reset()
             return cut

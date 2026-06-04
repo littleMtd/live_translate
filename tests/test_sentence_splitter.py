@@ -205,6 +205,8 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
             profile_id="isegye_lilpa",
             utterance_id="utt-5",
             audio_seconds=1.2,
+            avg_logprob=-0.4,
+            no_speech_prob=0.2,
         )
         emits = self._sentence_emits([token], wait=1.0)
 
@@ -214,6 +216,11 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertEqual(kw["cut_reason"], "natural")
         self.assertEqual(kw["chunk_count"], 1)
         self.assertEqual(kw["audio_seconds"], 1.2)
+        self.assertEqual(kw["source_count"], 1)
+        self.assertEqual(kw["source_avg_logprobs"], [-0.4])
+        self.assertEqual(kw["min_avg_logprob"], -0.4)
+        self.assertEqual(kw["source_no_speech_probs"], [0.2])
+        self.assertEqual(kw["max_no_speech_prob"], 0.2)
         self.assertFalse(kw["incomplete"])
         self.assertFalse(kw["forced"])
 
@@ -221,10 +228,12 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         first = TranscriptionEvent(
             text="first fragment", engine="groq", profile_id="a",
             utterance_id="utt-1", audio_seconds=1.0,
+            avg_logprob=-0.9, no_speech_prob=None,
         )
         second = TranscriptionEvent(
             text="second fragment", engine="groq", profile_id="a",
             utterance_id="utt-2", audio_seconds=2.0,
+            avg_logprob=None, no_speech_prob=0.6,
         )
         tq: queue.Queue = queue.Queue()
         sq: queue.Queue = queue.Queue()
@@ -250,6 +259,11 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertEqual(kw["utterance_id"], "utt-2")
         # ...but lists every contributing chunk for full attribution.
         self.assertEqual(kw["source_utterance_ids"], ["utt-1", "utt-2"])
+        self.assertEqual(kw["source_count"], 2)
+        self.assertEqual(kw["source_avg_logprobs"], [-0.9, None])
+        self.assertEqual(kw["min_avg_logprob"], -0.9)
+        self.assertEqual(kw["source_no_speech_probs"], [None, 0.6])
+        self.assertEqual(kw["max_no_speech_prob"], 0.6)
 
 
 class TestSentenceSplitterPause(unittest.TestCase):

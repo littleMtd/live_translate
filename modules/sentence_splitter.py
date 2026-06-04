@@ -7,7 +7,7 @@ from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events
-from modules.pipeline_events import transcription_to_sentence
+from modules.pipeline_events import source_confidence_summary, transcription_to_sentence
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 
 log = get_logger("sentence_splitter")
@@ -41,11 +41,25 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 chunk_count=cut.chunk_count,
                 audio_seconds=cut.audio_seconds,
                 source_utterance_ids=list(cut.source_utterance_ids),
+                **source_confidence_summary(
+                    cut.source_utterance_ids,
+                    cut.source_avg_logprobs,
+                    cut.source_no_speech_probs,
+                ),
                 text_len=len(cut.text or ""),
                 elapsed_ms=round(cut.elapsed * 1000, 2),
             )
             event = transcription_to_sentence(
-                cut.text, cut.incomplete, cut.source, cut.source_utterance_ids
+                cut.text,
+                cut.incomplete,
+                cut.source,
+                cut.source_utterance_ids,
+                cut.source_avg_logprobs,
+                cut.source_no_speech_probs,
+                cut.cut_reason,
+                cut.forced,
+                cut.chunk_count,
+                cut.audio_seconds,
             )
             metrics.increment("sentence.emitted")
             put_latest(sentence_queue, event, log, "sentence_queue")
@@ -64,6 +78,8 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 chunk_count=first.chunk_count + second.chunk_count,
                 audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
                 source_utterance_ids=first.source_utterance_ids + second.source_utterance_ids,
+                source_avg_logprobs=first.source_avg_logprobs + second.source_avg_logprobs,
+                source_no_speech_probs=first.source_no_speech_probs + second.source_no_speech_probs,
             )
 
         while not stop_event.is_set():

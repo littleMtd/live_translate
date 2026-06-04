@@ -91,6 +91,37 @@ class TestSentenceBuffer(unittest.TestCase):
 
         self.assertEqual(cut.source_utterance_ids, ("utt-1", "utt-2"))
 
+    def test_natural_cut_collects_aligned_source_confidence_arrays(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="first",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+                avg_logprob=-0.5,
+                no_speech_prob=None,
+            ),
+            now=1.0,
+        )
+        buffer.push(
+            TranscriptionEvent(
+                text="done!",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-2",
+                avg_logprob=None,
+                no_speech_prob=0.8,
+            ),
+            now=1.1,
+        )
+
+        cut = buffer.pop_ready(1.5, min_wait_seconds=0.3, force_cut_seconds=2.0)
+
+        self.assertEqual(cut.source_utterance_ids, ("utt-1", "utt-2"))
+        self.assertEqual(cut.source_avg_logprobs, (-0.5, None))
+        self.assertEqual(cut.source_no_speech_probs, (None, 0.8))
+
     def test_forced_blob_cut_reason_and_counts(self):
         buffer = SentenceBuffer()
         buffer.push(
@@ -104,6 +135,38 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertTrue(cut.incomplete)
         self.assertEqual(cut.chunk_count, 1)
         self.assertEqual(cut.audio_seconds, 2.0)
+
+    def test_forced_blob_keeps_source_confidence_arrays(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="first fragment",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+                avg_logprob=-0.9,
+                no_speech_prob=0.1,
+            ),
+            now=1.0,
+        )
+        buffer.push(
+            TranscriptionEvent(
+                text="second fragment",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-2",
+                avg_logprob=-0.2,
+                no_speech_prob=None,
+            ),
+            now=1.1,
+        )
+
+        cut = buffer.pop_ready(2.0, min_wait_seconds=5.0, force_cut_seconds=0.5)
+
+        self.assertEqual(cut.cut_reason, "forced_blob")
+        self.assertEqual(cut.source_utterance_ids, ("utt-1", "utt-2"))
+        self.assertEqual(cut.source_avg_logprobs, (-0.9, -0.2))
+        self.assertEqual(cut.source_no_speech_probs, (0.1, None))
 
     def test_forced_prefix_residual_keeps_source_attribution(self):
         # A chunk can straddle the punctuation boundary, so the residual must
@@ -140,6 +203,43 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertIn("utt-2", cut2.source_utterance_ids)
         self.assertEqual(cut2.chunk_count, 2)
         self.assertEqual(cut2.audio_seconds, 4.0)
+
+    def test_forced_prefix_residual_keeps_source_confidence_arrays(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="complete prefix! residual still going",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+                avg_logprob=-0.6,
+                no_speech_prob=0.3,
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertEqual(cut.cut_reason, "forced_prefix")
+        self.assertEqual(cut.source_avg_logprobs, (-0.6,))
+        self.assertEqual(cut.source_no_speech_probs, (0.3,))
+
+        buffer.push(
+            TranscriptionEvent(
+                text="done!",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-2",
+                avg_logprob=None,
+                no_speech_prob=0.9,
+            ),
+            now=14.0,
+        )
+        cut2 = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertEqual(cut2.source_utterance_ids, ("utt-1", "utt-2"))
+        self.assertEqual(cut2.source_avg_logprobs, (-0.6, None))
+        self.assertEqual(cut2.source_no_speech_probs, (0.3, 0.9))
 
     def test_reset_clears_pending_text(self):
         buffer = SentenceBuffer()

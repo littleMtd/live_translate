@@ -1,4 +1,70 @@
 from dataclasses import dataclass
+from typing import Any
+
+
+def _source_ids(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in (str(item).strip() for item in value) if item)
+
+
+def _aligned_source_values(
+    values: Any,
+    source_utterance_ids: tuple[str, ...],
+    *,
+    fallback: float | None = None,
+) -> tuple[float | None, ...]:
+    count = len(source_utterance_ids)
+    if count == 0:
+        return ()
+
+    if isinstance(values, (list, tuple)):
+        aligned = list(values[:count])
+        if len(aligned) < count:
+            aligned.extend([None] * (count - len(aligned)))
+        return tuple(value if value is None else value for value in aligned)
+
+    if count == 1:
+        return (fallback,)
+    return tuple(None for _ in source_utterance_ids)
+
+
+def _numeric_values(values: tuple[float | None, ...]) -> list[float]:
+    numeric: list[float] = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            numeric.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return numeric
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def source_confidence_summary(
+    source_utterance_ids: Any,
+    source_avg_logprobs: Any = (),
+    source_no_speech_probs: Any = (),
+) -> dict[str, Any]:
+    source_ids = _source_ids(source_utterance_ids)
+    avg_values = _aligned_source_values(source_avg_logprobs, source_ids)
+    no_speech_values = _aligned_source_values(source_no_speech_probs, source_ids)
+    avg_numeric = _numeric_values(avg_values)
+    no_speech_numeric = _numeric_values(no_speech_values)
+    return {
+        "source_count": len(source_ids),
+        "source_avg_logprobs": list(avg_values),
+        "min_avg_logprob": min(avg_numeric) if avg_numeric else None,
+        "source_no_speech_probs": list(no_speech_values),
+        "max_no_speech_prob": max(no_speech_numeric) if no_speech_numeric else None,
+    }
 
 
 @dataclass(frozen=True)
@@ -29,8 +95,14 @@ class SentenceEvent:
     # from several pushes / merged cuts). Lets each contributing transcription's
     # audio + confidence be joined back for STT-vs-translation error attribution.
     source_utterance_ids: tuple[str, ...] = ()
+    source_avg_logprobs: tuple[float | None, ...] = ()
+    source_no_speech_probs: tuple[float | None, ...] = ()
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
+    cut_reason: str = ""
+    forced: bool = False
+    chunk_count: int = 0
+    audio_seconds: float = 0.0
 
 
 def transcription_text(item: str | TranscriptionEvent) -> str:
@@ -46,18 +118,47 @@ def transcription_to_sentence(
     incomplete: bool,
     source: TranscriptionEvent | None = None,
     source_utterance_ids: tuple[str, ...] = (),
+    source_avg_logprobs: tuple[float | None, ...] = (),
+    source_no_speech_probs: tuple[float | None, ...] = (),
+    cut_reason: str = "",
+    forced: bool = False,
+    chunk_count: int = 0,
+    audio_seconds: float = 0.0,
 ) -> SentenceEvent:
+    source_ids = _source_ids(source_utterance_ids)
     if source is None:
-        return SentenceEvent(text=text, incomplete=incomplete, source_utterance_ids=source_utterance_ids)
+        return SentenceEvent(
+            text=text,
+            incomplete=incomplete,
+            source_utterance_ids=source_ids,
+            source_avg_logprobs=_aligned_source_values(source_avg_logprobs, source_ids),
+            source_no_speech_probs=_aligned_source_values(source_no_speech_probs, source_ids),
+            cut_reason=cut_reason,
+            forced=forced,
+            chunk_count=chunk_count,
+            audio_seconds=audio_seconds,
+        )
+    if not source_ids:
+        source_ids = (source.utterance_id,) if source.utterance_id else ()
     return SentenceEvent(
         text=text,
         incomplete=incomplete,
         profile_id=source.profile_id,
         stt_engine=source.engine,
         utterance_id=source.utterance_id,
-        source_utterance_ids=source_utterance_ids or ((source.utterance_id,) if source.utterance_id else ()),
+        source_utterance_ids=source_ids,
+        source_avg_logprobs=_aligned_source_values(
+            source_avg_logprobs, source_ids, fallback=source.avg_logprob
+        ),
+        source_no_speech_probs=_aligned_source_values(
+            source_no_speech_probs, source_ids, fallback=source.no_speech_prob
+        ),
         avg_logprob=source.avg_logprob,
         no_speech_prob=source.no_speech_prob,
+        cut_reason=cut_reason,
+        forced=forced,
+        chunk_count=chunk_count,
+        audio_seconds=audio_seconds,
     )
 
 
@@ -79,22 +180,48 @@ def sentence_incomplete(item: SentenceEvent | dict | str) -> bool:
 
 def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
     if isinstance(item, SentenceEvent):
+        source_ids = _source_ids(item.source_utterance_ids)
+        source_avg_logprobs = _aligned_source_values(
+            item.source_avg_logprobs, source_ids, fallback=item.avg_logprob
+        )
+        source_no_speech_probs = _aligned_source_values(
+            item.source_no_speech_probs, source_ids, fallback=item.no_speech_prob
+        )
         return {
             "profile_id": item.profile_id,
             "stt_engine": item.stt_engine,
             "utterance_id": item.utterance_id,
-            "source_utterance_ids": list(item.source_utterance_ids),
+            "source_utterance_ids": list(source_ids),
             "avg_logprob": item.avg_logprob,
             "no_speech_prob": item.no_speech_prob,
+            "cut_reason": item.cut_reason,
+            "forced": item.forced,
+            "chunk_count": item.chunk_count,
+            "audio_seconds": item.audio_seconds,
+            **source_confidence_summary(
+                source_ids,
+                source_avg_logprobs,
+                source_no_speech_probs,
+            ),
         }
     if isinstance(item, dict):
+        source_ids = _source_ids(item.get("source_utterance_ids", ()))
         return {
             "profile_id": item.get("profile_id", ""),
             "stt_engine": item.get("stt_engine", ""),
             "utterance_id": item.get("utterance_id", ""),
-            "source_utterance_ids": list(item.get("source_utterance_ids", ())),
+            "source_utterance_ids": list(source_ids),
             "avg_logprob": item.get("avg_logprob"),
             "no_speech_prob": item.get("no_speech_prob"),
+            "cut_reason": item.get("cut_reason", ""),
+            "forced": bool(item.get("forced", False)),
+            "chunk_count": _int_or_zero(item.get("chunk_count")),
+            "audio_seconds": item.get("audio_seconds", 0.0),
+            **source_confidence_summary(
+                source_ids,
+                item.get("source_avg_logprobs", ()),
+                item.get("source_no_speech_probs", ()),
+            ),
         }
     return {
         "profile_id": "",
@@ -103,4 +230,9 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         "source_utterance_ids": [],
         "avg_logprob": None,
         "no_speech_prob": None,
+        "cut_reason": "",
+        "forced": False,
+        "chunk_count": 0,
+        "audio_seconds": 0.0,
+        **source_confidence_summary(()),
     }

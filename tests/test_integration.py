@@ -212,6 +212,63 @@ class TestTranslatorThread(unittest.TestCase):
             events.emit.call_args.kwargs["source_utterance_ids"], ["utt-1", "utt-2", "utt-3"]
         )
 
+    def test_translation_event_carries_source_confidence_summary(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("雿末"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({
+                "text": "안녕하세요",
+                "incomplete": False,
+                "utterance_id": "utt-3",
+                "source_utterance_ids": ["utt-1", "utt-2", "utt-3"],
+                "source_avg_logprobs": [-0.3, None, -0.8],
+                "source_no_speech_probs": [None, 0.7, 0.2],
+                "cut_reason": "merged:forced_blob+natural",
+                "forced": True,
+                "chunk_count": 3,
+                "audio_seconds": 4.5,
+            })
+            self.assertEqual(subtitle_q.get(timeout=5), "雿末")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["source_count"], 3)
+        self.assertEqual(kwargs["source_avg_logprobs"], [-0.3, None, -0.8])
+        self.assertEqual(kwargs["min_avg_logprob"], -0.8)
+        self.assertEqual(kwargs["source_no_speech_probs"], [None, 0.7, 0.2])
+        self.assertEqual(kwargs["max_no_speech_prob"], 0.7)
+        self.assertEqual(kwargs["cut_reason"], "merged:forced_blob+natural")
+        self.assertTrue(kwargs["forced"])
+        self.assertEqual(kwargs["chunk_count"], 3)
+        self.assertEqual(kwargs["audio_seconds"], 4.5)
+
+    def test_translation_event_pads_missing_source_confidence_for_legacy_items(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        with _mock_primary("雿末"), patch("modules.translator.runtime_events") as events:
+            t = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({
+                "text": "안녕하세요",
+                "incomplete": False,
+                "source_utterance_ids": ["utt-1", "utt-2"],
+            })
+            self.assertEqual(subtitle_q.get(timeout=5), "雿末")
+            stop.set()
+            t.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["source_count"], 2)
+        self.assertEqual(kwargs["source_avg_logprobs"], [None, None])
+        self.assertIsNone(kwargs["min_avg_logprob"])
+        self.assertEqual(kwargs["source_no_speech_probs"], [None, None])
+        self.assertIsNone(kwargs["max_no_speech_prob"])
+
     def test_translation_event_carries_active_profile(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
