@@ -72,9 +72,10 @@ class SentenceCut:
     # sentence too early".
     chunk_count: int = 0
     audio_seconds: float = 0.0
-    # utterance_id of every contributing STT chunk, so each one's audio +
-    # confidence can be joined back when attributing a mistranslation.
+    # utterance_id of every current-source STT chunk, so each one's audio +
+    # confidence can be joined back without counting prior carry-forward audio.
     source_utterance_ids: tuple[str, ...] = ()
+    evidence_source_utterance_ids: tuple[str, ...] = ()
     source_avg_logprobs: tuple[float | None, ...] = ()
     source_no_speech_probs: tuple[float | None, ...] = ()
 
@@ -98,6 +99,7 @@ class SentenceBuffer:
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids: list[str] = []
+        self._evidence_source_utterance_ids: list[str] = []
         self._source_avg_logprobs: list[float | None] = []
         self._source_no_speech_probs: list[float | None] = []
 
@@ -108,6 +110,7 @@ class SentenceBuffer:
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids = []
+        self._evidence_source_utterance_ids = []
         self._source_avg_logprobs = []
         self._source_no_speech_probs = []
 
@@ -156,6 +159,7 @@ class SentenceBuffer:
                     chunk_count=self._chunk_count,
                     audio_seconds=round(self._total_audio_seconds, 3),
                     source_utterance_ids=tuple(self._source_utterance_ids),
+                    evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                     source_avg_logprobs=tuple(self._source_avg_logprobs),
                     source_no_speech_probs=tuple(self._source_no_speech_probs),
                 )
@@ -164,16 +168,19 @@ class SentenceBuffer:
                     # restart the time-box clock so the leftover fragment does
                     # not immediately force-cut on the next pop (§11.11 #1).
                     #
-                    # Keep the chunk/audio/source-id tallies rather than zeroing
-                    # them: a single STT chunk can straddle the punctuation
-                    # boundary, so the residual may still derive from ANY chunk
-                    # seen so far. Carrying the tallies forward over-counts (the
-                    # prefix cut and the residual-derived sentence share source
-                    # ids) but never DROPS a source — so the earlier chunks'
-                    # audio stays attributable for STT-vs-translation analysis.
-                    # Only the time-box clock restarts.
+                    # Move all pre-carry chunks to evidence-only attribution.
+                    # Without D1 text-to-chunk offsets we cannot partition the
+                    # boundary-straddling chunk, so AS5 keeps carry-forward
+                    # chunks out of current-source/audio accounting.
+                    self._evidence_source_utterance_ids.extend(self._source_utterance_ids)
                     self._buffer = residual
                     self._first_token_time = now
+                    self._latest_source = None
+                    self._chunk_count = 0
+                    self._total_audio_seconds = 0.0
+                    self._source_utterance_ids = []
+                    self._source_avg_logprobs = []
+                    self._source_no_speech_probs = []
                 else:
                     # Trivial / empty residual → drop, full reset.
                     self.reset()
@@ -191,6 +198,7 @@ class SentenceBuffer:
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
                 source_utterance_ids=tuple(self._source_utterance_ids),
+                evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                 source_avg_logprobs=tuple(self._source_avg_logprobs),
                 source_no_speech_probs=tuple(self._source_no_speech_probs),
             )
@@ -208,6 +216,7 @@ class SentenceBuffer:
                 chunk_count=self._chunk_count,
                 audio_seconds=round(self._total_audio_seconds, 3),
                 source_utterance_ids=tuple(self._source_utterance_ids),
+                evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                 source_avg_logprobs=tuple(self._source_avg_logprobs),
                 source_no_speech_probs=tuple(self._source_no_speech_probs),
             )

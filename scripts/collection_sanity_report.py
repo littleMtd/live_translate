@@ -185,6 +185,8 @@ def _join_quality(
     source_confidence_issue_counts: Counter[str] = Counter()
     source_ref_count = 0
     unique_source_ref_count = 0
+    evidence_source_ref_count = 0
+    unique_evidence_source_ref_count = 0
     duplicate_source_ref_count = 0
     multi_chunk_translations = 0
     audio_join_ok_translations = 0
@@ -193,9 +195,14 @@ def _join_quality(
         event = row["event"]
         run_id = str(event.get("run_id") or "")
         source_ids = _string_list(event.get("source_utterance_ids"))
+        evidence_source_ids = _string_list(event.get("evidence_source_utterance_ids"))
         unique_source_ids = _unique_preserving_order(source_ids)
+        unique_evidence_source_ids = _unique_preserving_order(evidence_source_ids)
+        replay_source_ids = _unique_preserving_order(source_ids + evidence_source_ids)
         source_ref_count += len(source_ids)
         unique_source_ref_count += len(unique_source_ids)
+        evidence_source_ref_count += len(evidence_source_ids)
+        unique_evidence_source_ref_count += len(unique_evidence_source_ids)
         duplicate_count = len(source_ids) - len(unique_source_ids)
         duplicate_source_ref_count += duplicate_count
         if len(unique_source_ids) > 1:
@@ -204,7 +211,7 @@ def _join_quality(
             duplicate_source_id_samples.append(
                 {**_sample(row), "duplicate_source_refs": duplicate_count}
             )
-        if not source_ids:
+        if not replay_source_ids:
             missing_source_id_samples.append(_sample(row))
             continue
 
@@ -216,7 +223,7 @@ def _join_quality(
             )
 
         translation_join_ok = True
-        for utterance_id in unique_source_ids:
+        for utterance_id in replay_source_ids:
             stt_row = stt_index.get((run_id, utterance_id))
             audio_path = audio_root / run_id / f"{utterance_id}.wav"
             chunk_ref = {
@@ -243,10 +250,13 @@ def _join_quality(
     return {
         "translation_events": total_translations,
         "translations_with_source_ids": total_translations - len(missing_source_id_samples),
+        "translations_with_replay_source_ids": total_translations - len(missing_source_id_samples),
         "missing_source_id_translations": len(missing_source_id_samples),
         "missing_source_id_samples": missing_source_id_samples[:top_n],
         "source_id_refs": source_ref_count,
         "unique_source_id_refs": unique_source_ref_count,
+        "evidence_source_id_refs": evidence_source_ref_count,
+        "unique_evidence_source_id_refs": unique_evidence_source_ref_count,
         "duplicate_source_id_refs": duplicate_source_ref_count,
         "translations_with_duplicate_source_ids": len(duplicate_source_id_samples),
         "duplicate_source_id_samples": duplicate_source_id_samples[:top_n],
@@ -460,7 +470,7 @@ def _recommendations(
         recommendations.append(
             {
                 "severity": "error",
-                "message": "Fix source_utterance_ids/STT/wav/confidence join gaps before sampling.",
+                "message": "Fix current/evidence source STT/wav/confidence join gaps before sampling.",
             }
         )
     if unknown_profile_events:
@@ -714,6 +724,8 @@ def _print_report(report: dict[str, Any]) -> None:
         "Chunk shape: "
         f"source_refs={join['source_id_refs']}, "
         f"unique_source_refs={join['unique_source_id_refs']}, "
+        f"evidence_refs={join['evidence_source_id_refs']}, "
+        f"unique_evidence_refs={join['unique_evidence_source_id_refs']}, "
         f"multi_chunk_translations={join['multi_chunk_translations']}, "
         f"duplicate_source_refs={join['duplicate_source_id_refs']}"
     )

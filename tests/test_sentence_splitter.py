@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.sentence_splitter import _can_merge_cuts, _is_complete, start
+from modules.sentence_splitter import _can_merge_cuts, _is_complete, _merge_cuts, start
 from modules.pipeline_events import TranscriptionEvent
 from modules.sentence_buffer import SentenceCut
 
@@ -313,6 +313,37 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
 
 
 class TestSentenceMergeGuardrail(unittest.TestCase):
+    def test_merge_cuts_keeps_evidence_separate_from_current_source(self):
+        first = SentenceCut(
+            text="first fragment",
+            incomplete=True,
+            source=None,
+            elapsed=1.0,
+            forced=True,
+            source_utterance_ids=(),
+            evidence_source_utterance_ids=("utt-prior",),
+            chunk_count=0,
+            audio_seconds=0.0,
+        )
+        second = SentenceCut(
+            text="second fragment",
+            incomplete=False,
+            source=None,
+            elapsed=1.0,
+            forced=False,
+            source_utterance_ids=("utt-current",),
+            evidence_source_utterance_ids=("utt-context",),
+            chunk_count=1,
+            audio_seconds=1.5,
+        )
+
+        merged = _merge_cuts(first, second)
+
+        self.assertEqual(merged.source_utterance_ids, ("utt-current",))
+        self.assertEqual(merged.evidence_source_utterance_ids, ("utt-prior", "utt-context"))
+        self.assertEqual(merged.chunk_count, 1)
+        self.assertEqual(merged.audio_seconds, 1.5)
+
     def test_merge_guard_rejects_source_count_over_limit(self):
         first = SentenceCut(
             text="first fragment",

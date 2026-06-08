@@ -165,12 +165,19 @@ def _source_role(
     utterance_id: str,
     primary_utterance_id: str,
     prior_translations: list[dict[str, Any]],
+    legacy_prior_overlap: bool = True,
 ) -> tuple[str, str]:
     if utterance_id == primary_utterance_id:
         return "primary", "matches_translation_utterance_id"
-    if prior_translations:
+    if legacy_prior_overlap and prior_translations:
         return "prior_overlap", "source_utterance_seen_in_prior_translation"
     return "supporting", "current_source_not_primary"
+
+
+def _evidence_role(prior_translations: list[dict[str, Any]]) -> tuple[str, str]:
+    if prior_translations:
+        return "prior_overlap", "evidence_source_seen_in_prior_translation"
+    return "evidence", "evidence_source_carry_forward"
 
 
 def _nearest_prior_row(
@@ -219,6 +226,7 @@ def _source_chunk(
     utterance_id: str,
     run_id: str,
     role: str,
+    source_kind: str,
     prior_translations: list[dict[str, Any]],
     audio_root: Path,
     stt_index: dict[tuple[str, str], dict[str, Any]],
@@ -231,6 +239,7 @@ def _source_chunk(
     return {
         "utterance_id": utterance_id,
         "chunk_role": role,
+        "source_kind": source_kind,
         "prior_translation_lines": [item["line_no"] for item in prior_translations],
         "prior_translation_sequence_ids": [item["sequence_id"] for item in prior_translations],
         "prior_translation_source_texts": [
@@ -260,11 +269,13 @@ def _source_chunk_usage(
     run_id: str,
     role: str,
     role_reason: str,
+    source_kind: str,
     prior_translations: list[dict[str, Any]],
     primary_utterance_id: str,
-    current_translation_source_index: int,
+    current_translation_source_index: int | None,
     row: dict[str, Any],
     translation_cut_reason: str,
+    evidence_source_index: int | None = None,
 ) -> dict[str, Any]:
     prior_indices = [item["translation_index"] for item in prior_translations]
     current_index = _translation_index(row)
@@ -276,6 +287,7 @@ def _source_chunk_usage(
         "run_id": run_id,
         "translation_cut_reason": translation_cut_reason,
         "is_primary_for_this_translation": utterance_id == primary_utterance_id,
+        "source_kind": source_kind,
         "role": role,
         "role_reason": role_reason,
         "first_seen_translation_index": prior_indices[0] if prior_indices else current_index,
@@ -286,6 +298,7 @@ def _source_chunk_usage(
             item["translation_cut_reason"] for item in prior_translations
         ],
         "current_translation_source_index": current_translation_source_index,
+        "evidence_source_index": evidence_source_index,
     }
 
 
@@ -303,12 +316,16 @@ def _sample_entry(
     run_id = str(event.get("run_id") or "")
     primary_utterance_id = str(event.get("utterance_id") or "")
     source_utterance_ids = _string_list(event.get("source_utterance_ids"))
+    evidence_source_utterance_ids = _string_list(event.get("evidence_source_utterance_ids"))
     unique_source_ids = _unique_preserving_order(source_utterance_ids)
+    unique_evidence_source_ids = _unique_preserving_order(evidence_source_utterance_ids)
+    has_explicit_evidence = "evidence_source_utterance_ids" in event
+    nearest_source_ids = source_utterance_ids + evidence_source_utterance_ids
     nearest_sentence_row = _nearest_prior_row(
         sentence_index,
         run_id=run_id,
         line_no=int(row["line_no"]),
-        source_utterance_ids=source_utterance_ids,
+        source_utterance_ids=nearest_source_ids,
     )
     nearest_sentence_event = nearest_sentence_row["event"] if nearest_sentence_row else {}
     translation_cut_reason = _translation_cut_reason(event) or str(
@@ -324,12 +341,35 @@ def _sample_entry(
             utterance_id=utterance_id,
             primary_utterance_id=primary_utterance_id,
             prior_translations=prior_translations,
+            legacy_prior_overlap=not has_explicit_evidence,
         )
         source_chunks.append(
             _source_chunk(
                 utterance_id=utterance_id,
                 run_id=run_id,
                 role=role,
+                source_kind="current",
+                prior_translations=prior_translations,
+                audio_root=audio_root,
+                stt_index=stt_index,
+                audio_index=audio_index,
+            )
+        )
+    current_source_set = set(unique_source_ids)
+    for utterance_id in unique_evidence_source_ids:
+        if utterance_id in current_source_set:
+            continue
+        prior_translations = [
+            item for item in prior_source_usage.get((run_id, utterance_id), [])
+            if int(item["line_no"]) < int(row["line_no"])
+        ]
+        role, _role_reason = _evidence_role(prior_translations)
+        source_chunks.append(
+            _source_chunk(
+                utterance_id=utterance_id,
+                run_id=run_id,
+                role=role,
+                source_kind="evidence",
                 prior_translations=prior_translations,
                 audio_root=audio_root,
                 stt_index=stt_index,
@@ -346,6 +386,7 @@ def _sample_entry(
             utterance_id=utterance_id,
             primary_utterance_id=primary_utterance_id,
             prior_translations=prior_translations,
+            legacy_prior_overlap=not has_explicit_evidence,
         )
         source_chunk_usages.append(
             _source_chunk_usage(
@@ -353,9 +394,31 @@ def _sample_entry(
                 run_id=run_id,
                 role=role,
                 role_reason=role_reason,
+                source_kind="current",
                 prior_translations=prior_translations,
                 primary_utterance_id=primary_utterance_id,
                 current_translation_source_index=source_index,
+                row=row,
+                translation_cut_reason=translation_cut_reason,
+            )
+        )
+    for evidence_index, utterance_id in enumerate(evidence_source_utterance_ids):
+        prior_translations = [
+            item for item in prior_source_usage.get((run_id, utterance_id), [])
+            if int(item["line_no"]) < int(row["line_no"])
+        ]
+        role, role_reason = _evidence_role(prior_translations)
+        source_chunk_usages.append(
+            _source_chunk_usage(
+                utterance_id=utterance_id,
+                run_id=run_id,
+                role=role,
+                role_reason=role_reason,
+                source_kind="evidence",
+                prior_translations=prior_translations,
+                primary_utterance_id=primary_utterance_id,
+                current_translation_source_index=None,
+                evidence_source_index=evidence_index,
                 row=row,
                 translation_cut_reason=translation_cut_reason,
             )
@@ -365,9 +428,12 @@ def _sample_entry(
         "prior_overlap": sum(1 for chunk in source_chunks if chunk["chunk_role"] == "prior_overlap"),
         "supporting": sum(1 for chunk in source_chunks if chunk["chunk_role"] == "supporting"),
     }
+    evidence_role_count = sum(1 for chunk in source_chunks if chunk["chunk_role"] == "evidence")
+    if evidence_role_count:
+        role_counts["evidence"] = evidence_role_count
     prior_overlap_utterance_ids = [
         chunk["utterance_id"] for chunk in source_chunks
-        if chunk["chunk_role"] == "prior_overlap"
+        if chunk["chunk_role"] == "prior_overlap" or chunk["source_kind"] == "evidence"
     ]
     return {
         "sample_id": f"S{sample_index:03d}",
@@ -383,6 +449,10 @@ def _sample_entry(
         "unique_source_utterance_ids": unique_source_ids,
         "source_utterance_id_count": len(source_utterance_ids),
         "unique_source_utterance_id_count": len(unique_source_ids),
+        "evidence_source_utterance_ids": evidence_source_utterance_ids,
+        "unique_evidence_source_utterance_ids": unique_evidence_source_ids,
+        "evidence_source_utterance_id_count": len(evidence_source_utterance_ids),
+        "unique_evidence_source_utterance_id_count": len(unique_evidence_source_ids),
         "source_chunks": source_chunks,
         "source_chunk_usages": source_chunk_usages,
         "source_overlap_warning": bool(prior_overlap_utterance_ids),
@@ -394,6 +464,9 @@ def _sample_entry(
         "sentence_forced": nearest_sentence_event.get("forced"),
         "sentence_source_utterance_ids": _string_list(
             nearest_sentence_event.get("source_utterance_ids")
+        ),
+        "sentence_evidence_source_utterance_ids": _string_list(
+            nearest_sentence_event.get("evidence_source_utterance_ids")
         ),
         "sentence_chunk_count": nearest_sentence_event.get("chunk_count"),
         "sentence_audio_seconds": nearest_sentence_event.get("audio_seconds"),
@@ -466,7 +539,7 @@ def build_labeling_sample(
 
     missing_source_id_samples = [
         sample["sample_id"] for sample in samples
-        if not sample["source_utterance_ids"]
+        if not sample["source_utterance_ids"] and not sample["evidence_source_utterance_ids"]
     ]
     missing_audio = [
         {"sample_id": sample["sample_id"], "utterance_id": chunk["utterance_id"], "audio_path": chunk["audio_path"]}
@@ -493,7 +566,7 @@ def build_labeling_sample(
         "annotation_goal": "Classify each translation as a_translation_error, b_stt_error, both, ok, or unclear.",
         "annotation_rules": [
             "Listen to every source_chunks[].audio_path before assigning b_stt_error.",
-            "Treat source_utterance_ids as an evidence set; forced-prefix residuals may intentionally overlap.",
+            "Treat source_utterance_ids as current source; evidence_source_utterance_ids preserves carry-forward evidence.",
             "Do not estimate rates from hand-picked or quality-filtered samples.",
         ],
         "label_options": [

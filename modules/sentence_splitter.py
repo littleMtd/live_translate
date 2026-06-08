@@ -67,6 +67,9 @@ def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
         chunk_count=first.chunk_count + second.chunk_count,
         audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
         source_utterance_ids=first.source_utterance_ids + second.source_utterance_ids,
+        evidence_source_utterance_ids=(
+            first.evidence_source_utterance_ids + second.evidence_source_utterance_ids
+        ),
         source_avg_logprobs=first.source_avg_logprobs + second.source_avg_logprobs,
         source_no_speech_probs=first.source_no_speech_probs + second.source_no_speech_probs,
     )
@@ -96,6 +99,8 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 chunk_count=cut.chunk_count,
                 audio_seconds=cut.audio_seconds,
                 source_utterance_ids=list(cut.source_utterance_ids),
+                evidence_source_utterance_ids=list(cut.evidence_source_utterance_ids),
+                evidence_source_count=len(cut.evidence_source_utterance_ids),
                 **source_confidence_summary(
                     cut.source_utterance_ids,
                     cut.source_avg_logprobs,
@@ -109,6 +114,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 cut.incomplete,
                 cut.source,
                 cut.source_utterance_ids,
+                cut.evidence_source_utterance_ids,
                 cut.source_avg_logprobs,
                 cut.source_no_speech_probs,
                 cut.cut_reason,

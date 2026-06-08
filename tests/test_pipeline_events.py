@@ -61,6 +61,25 @@ class TestUtteranceIdPropagation(unittest.TestCase):
         )
         self.assertEqual(sentence_metadata("x")["source_utterance_ids"], [])
 
+    def test_sentence_metadata_exposes_evidence_source_utterance_ids(self):
+        event = SentenceEvent(
+            text="x",
+            source_utterance_ids=("utt-2",),
+            evidence_source_utterance_ids=("utt-1",),
+        )
+        meta = sentence_metadata(event)
+
+        self.assertEqual(meta["source_utterance_ids"], ["utt-2"])
+        self.assertEqual(meta["source_count"], 1)
+        self.assertEqual(meta["evidence_source_utterance_ids"], ["utt-1"])
+        self.assertEqual(meta["evidence_source_count"], 1)
+        self.assertEqual(
+            sentence_metadata({"text": "x", "evidence_source_utterance_ids": ("utt-7",)})[
+                "evidence_source_utterance_ids"
+            ],
+            ["utt-7"],
+        )
+
     def test_sentence_metadata_aligns_source_confidence_arrays(self):
         event = SentenceEvent(
             text="x",

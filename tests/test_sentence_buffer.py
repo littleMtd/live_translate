@@ -168,10 +168,9 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertEqual(cut.source_avg_logprobs, (-0.9, -0.2))
         self.assertEqual(cut.source_no_speech_probs, (0.1, None))
 
-    def test_forced_prefix_residual_keeps_source_attribution(self):
-        # A chunk can straddle the punctuation boundary, so the residual must
-        # NOT drop the source ids/audio of the chunks seen so far — otherwise a
-        # mistranslation in the carried-over text becomes un-attributable.
+    def test_forced_prefix_residual_moves_prior_chunks_to_evidence(self):
+        # Carried residual chunks remain available as evidence, but they do not
+        # count as current source/audio for the residual-derived sentence.
         buffer = SentenceBuffer()
         buffer.push(
             TranscriptionEvent(
@@ -188,9 +187,10 @@ class TestSentenceBuffer(unittest.TestCase):
 
         self.assertEqual(cut.cut_reason, "forced_prefix")
         self.assertEqual(cut.source_utterance_ids, ("utt-1",))
+        self.assertEqual(cut.evidence_source_utterance_ids, ())
 
-        # Residual carried back keeps utt-1; the next sentence still lists it
-        # (plus the new chunk) so the earlier audio remains attributable.
+        # Residual carried back keeps utt-1 as evidence. Only the new chunk is
+        # current-source/current-audio for the next sentence.
         buffer.push(
             TranscriptionEvent(
                 text="계속합니다", engine="groq", profile_id="a",
@@ -199,12 +199,13 @@ class TestSentenceBuffer(unittest.TestCase):
             now=14.0,
         )
         cut2 = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
-        self.assertIn("utt-1", cut2.source_utterance_ids)
-        self.assertIn("utt-2", cut2.source_utterance_ids)
-        self.assertEqual(cut2.chunk_count, 2)
-        self.assertEqual(cut2.audio_seconds, 4.0)
+        self.assertNotIn("utt-1", cut2.source_utterance_ids)
+        self.assertEqual(cut2.source_utterance_ids, ("utt-2",))
+        self.assertEqual(cut2.evidence_source_utterance_ids, ("utt-1",))
+        self.assertEqual(cut2.chunk_count, 1)
+        self.assertEqual(cut2.audio_seconds, 1.0)
 
-    def test_forced_prefix_residual_keeps_source_confidence_arrays(self):
+    def test_forced_prefix_residual_does_not_double_count_confidence_arrays(self):
         buffer = SentenceBuffer()
         buffer.push(
             TranscriptionEvent(
@@ -223,6 +224,7 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertEqual(cut.cut_reason, "forced_prefix")
         self.assertEqual(cut.source_avg_logprobs, (-0.6,))
         self.assertEqual(cut.source_no_speech_probs, (0.3,))
+        self.assertEqual(cut.evidence_source_utterance_ids, ())
 
         buffer.push(
             TranscriptionEvent(
@@ -237,9 +239,69 @@ class TestSentenceBuffer(unittest.TestCase):
         )
         cut2 = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
 
-        self.assertEqual(cut2.source_utterance_ids, ("utt-1", "utt-2"))
-        self.assertEqual(cut2.source_avg_logprobs, (-0.6, None))
-        self.assertEqual(cut2.source_no_speech_probs, (0.3, 0.9))
+        self.assertEqual(cut2.source_utterance_ids, ("utt-2",))
+        self.assertEqual(cut2.evidence_source_utterance_ids, ("utt-1",))
+        self.assertEqual(cut2.source_avg_logprobs, (None,))
+        self.assertEqual(cut2.source_no_speech_probs, (0.9,))
+        self.assertEqual(cut2.chunk_count, 1)
+
+    def test_pure_residual_forced_blob_can_have_empty_current_source(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="complete prefix! residual only",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+                audio_seconds=3.0,
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        self.assertEqual(cut.cut_reason, "forced_prefix")
+
+        residual = buffer.pop_ready(20.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertEqual(residual.cut_reason, "forced_blob")
+        self.assertEqual(residual.source_utterance_ids, ())
+        self.assertEqual(residual.evidence_source_utterance_ids, ("utt-1",))
+        self.assertEqual(residual.chunk_count, 0)
+        self.assertEqual(residual.audio_seconds, 0.0)
+
+    def test_natural_cut_after_carry_keeps_evidence_out_of_current_source(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="complete prefix! residual",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+                audio_seconds=3.0,
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        self.assertEqual(cut.cut_reason, "forced_prefix")
+
+        buffer.push(
+            TranscriptionEvent(
+                text="done!",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-2",
+                audio_seconds=1.0,
+            ),
+            now=11.1,
+        )
+        natural = buffer.pop_ready(11.5, min_wait_seconds=0.3, force_cut_seconds=8.0)
+
+        self.assertEqual(natural.cut_reason, "natural")
+        self.assertEqual(natural.source_utterance_ids, ("utt-2",))
+        self.assertEqual(natural.evidence_source_utterance_ids, ("utt-1",))
+        self.assertEqual(natural.chunk_count, 1)
+        self.assertEqual(natural.audio_seconds, 1.0)
 
     def test_reset_clears_pending_text(self):
         buffer = SentenceBuffer()

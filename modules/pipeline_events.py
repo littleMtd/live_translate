@@ -91,10 +91,10 @@ class SentenceEvent:
     # Carried through from the source TranscriptionEvent. When two cuts are
     # merged this holds the latest source's id (see sentence_buffer.merge_cuts).
     utterance_id: str = ""
-    # Every STT chunk that composed this sentence (a sentence is usually built
-    # from several pushes / merged cuts). Lets each contributing transcription's
-    # audio + confidence be joined back for STT-vs-translation error attribution.
+    # Current-source STT chunks for this sentence. Prior carry-forward chunks
+    # live in evidence_source_utterance_ids so they do not count as current audio.
     source_utterance_ids: tuple[str, ...] = ()
+    evidence_source_utterance_ids: tuple[str, ...] = ()
     source_avg_logprobs: tuple[float | None, ...] = ()
     source_no_speech_probs: tuple[float | None, ...] = ()
     avg_logprob: float | None = None
@@ -118,6 +118,7 @@ def transcription_to_sentence(
     incomplete: bool,
     source: TranscriptionEvent | None = None,
     source_utterance_ids: tuple[str, ...] = (),
+    evidence_source_utterance_ids: tuple[str, ...] = (),
     source_avg_logprobs: tuple[float | None, ...] = (),
     source_no_speech_probs: tuple[float | None, ...] = (),
     cut_reason: str = "",
@@ -126,11 +127,13 @@ def transcription_to_sentence(
     audio_seconds: float = 0.0,
 ) -> SentenceEvent:
     source_ids = _source_ids(source_utterance_ids)
+    evidence_source_ids = _source_ids(evidence_source_utterance_ids)
     if source is None:
         return SentenceEvent(
             text=text,
             incomplete=incomplete,
             source_utterance_ids=source_ids,
+            evidence_source_utterance_ids=evidence_source_ids,
             source_avg_logprobs=_aligned_source_values(source_avg_logprobs, source_ids),
             source_no_speech_probs=_aligned_source_values(source_no_speech_probs, source_ids),
             cut_reason=cut_reason,
@@ -147,6 +150,7 @@ def transcription_to_sentence(
         stt_engine=source.engine,
         utterance_id=source.utterance_id,
         source_utterance_ids=source_ids,
+        evidence_source_utterance_ids=evidence_source_ids,
         source_avg_logprobs=_aligned_source_values(
             source_avg_logprobs, source_ids, fallback=source.avg_logprob
         ),
@@ -181,6 +185,7 @@ def sentence_incomplete(item: SentenceEvent | dict | str) -> bool:
 def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
     if isinstance(item, SentenceEvent):
         source_ids = _source_ids(item.source_utterance_ids)
+        evidence_source_ids = _source_ids(item.evidence_source_utterance_ids)
         source_avg_logprobs = _aligned_source_values(
             item.source_avg_logprobs, source_ids, fallback=item.avg_logprob
         )
@@ -192,6 +197,8 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
             "stt_engine": item.stt_engine,
             "utterance_id": item.utterance_id,
             "source_utterance_ids": list(source_ids),
+            "evidence_source_utterance_ids": list(evidence_source_ids),
+            "evidence_source_count": len(evidence_source_ids),
             "avg_logprob": item.avg_logprob,
             "no_speech_prob": item.no_speech_prob,
             "cut_reason": item.cut_reason,
@@ -206,11 +213,14 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         }
     if isinstance(item, dict):
         source_ids = _source_ids(item.get("source_utterance_ids", ()))
+        evidence_source_ids = _source_ids(item.get("evidence_source_utterance_ids", ()))
         return {
             "profile_id": item.get("profile_id", ""),
             "stt_engine": item.get("stt_engine", ""),
             "utterance_id": item.get("utterance_id", ""),
             "source_utterance_ids": list(source_ids),
+            "evidence_source_utterance_ids": list(evidence_source_ids),
+            "evidence_source_count": len(evidence_source_ids),
             "avg_logprob": item.get("avg_logprob"),
             "no_speech_prob": item.get("no_speech_prob"),
             "cut_reason": item.get("cut_reason", ""),
@@ -228,6 +238,8 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         "stt_engine": "",
         "utterance_id": "",
         "source_utterance_ids": [],
+        "evidence_source_utterance_ids": [],
+        "evidence_source_count": 0,
         "avg_logprob": None,
         "no_speech_prob": None,
         "cut_reason": "",

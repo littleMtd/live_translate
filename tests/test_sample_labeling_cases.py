@@ -278,6 +278,84 @@ def test_sample_marks_prior_overlap_chunks_without_changing_random_sampling(tmp_
     assert usage["current_translation_source_index"] == 0
 
 
+def test_sample_uses_explicit_evidence_source_for_prior_overlap(tmp_path):
+    events_path = tmp_path / "runtime_events_20260531.jsonl"
+    audio_root = tmp_path / "audio_dump"
+    rows = [
+        _stt_event(1),
+        _stt_event(2),
+        _translation_event(1, source_utterance_ids=["utt-1"], source_text="earlier source"),
+        _translation_event(
+            2,
+            utterance_id="utt-2",
+            source_utterance_ids=["utt-2"],
+            evidence_source_utterance_ids=["utt-1"],
+            source_text="later source",
+            cut_reason="natural",
+        ),
+    ]
+    _write_jsonl(events_path, rows)
+    _touch_wavs(audio_root, "run-a", ["utt-1", "utt-2"])
+
+    sample = build_labeling_sample(
+        events_path=events_path,
+        audio_root=audio_root,
+        sample_size=1,
+        seed=0,
+        min_population=0,
+    )
+
+    item = sample["samples"][0]
+    assert item["sequence_id"] == 2
+    assert item["source_utterance_ids"] == ["utt-2"]
+    assert item["evidence_source_utterance_ids"] == ["utt-1"]
+    assert item["prior_overlap_utterance_ids"] == ["utt-1"]
+    assert [chunk["utterance_id"] for chunk in item["source_chunks"]] == ["utt-2", "utt-1"]
+    assert [chunk["source_kind"] for chunk in item["source_chunks"]] == ["current", "evidence"]
+    assert [chunk["chunk_role"] for chunk in item["source_chunks"]] == ["primary", "prior_overlap"]
+    assert item["chunk_role_counts"] == {"primary": 1, "prior_overlap": 1, "supporting": 0}
+    assert item["source_chunk_usages"][0]["source_kind"] == "current"
+    assert item["source_chunk_usages"][1]["source_kind"] == "evidence"
+    assert item["source_chunk_usages"][1]["evidence_source_index"] == 0
+    assert item["source_chunk_usages"][1]["current_translation_source_index"] is None
+
+
+def test_sample_allows_evidence_only_current_source_empty(tmp_path):
+    events_path = tmp_path / "runtime_events_20260531.jsonl"
+    audio_root = tmp_path / "audio_dump"
+    rows = [
+        _stt_event(1),
+        _translation_event(
+            1,
+            utterance_id="",
+            source_utterance_ids=[],
+            evidence_source_utterance_ids=["utt-1"],
+            source_count=0,
+            source_avg_logprobs=[],
+            source_no_speech_probs=[],
+            min_avg_logprob=None,
+            max_no_speech_prob=None,
+            cut_reason="forced_blob",
+        ),
+    ]
+    _write_jsonl(events_path, rows)
+    _touch_wavs(audio_root, "run-a", ["utt-1"])
+
+    sample = build_labeling_sample(
+        events_path=events_path,
+        audio_root=audio_root,
+        sample_size=1,
+        seed=1,
+        min_population=0,
+    )
+
+    item = sample["samples"][0]
+    assert item["source_utterance_ids"] == []
+    assert item["evidence_source_utterance_ids"] == ["utt-1"]
+    assert item["source_chunks"][0]["source_kind"] == "evidence"
+    assert sample["quality_control"]["missing_source_id_samples"] == []
+
+
 def test_sample_joins_nearest_sentence_and_audio_context_without_chunk_cut_reason(tmp_path):
     events_path = tmp_path / "runtime_events_20260531.jsonl"
     audio_root = tmp_path / "audio_dump"

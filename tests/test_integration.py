@@ -203,6 +203,7 @@ class TestTranslatorThread(unittest.TestCase):
                 "incomplete": False,
                 "utterance_id": "utt-3",
                 "source_utterance_ids": ["utt-1", "utt-2", "utt-3"],
+                "evidence_source_utterance_ids": ["utt-prior"],
             })
             self.assertEqual(subtitle_q.get(timeout=5), "你好")
             stop.set()
@@ -211,6 +212,8 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(
             events.emit.call_args.kwargs["source_utterance_ids"], ["utt-1", "utt-2", "utt-3"]
         )
+        self.assertEqual(events.emit.call_args.kwargs["evidence_source_utterance_ids"], ["utt-prior"])
+        self.assertEqual(events.emit.call_args.kwargs["evidence_source_count"], 1)
 
     def test_translation_event_carries_source_confidence_summary(self):
         sentence_q = queue.Queue()

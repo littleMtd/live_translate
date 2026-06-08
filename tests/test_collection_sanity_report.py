@@ -154,6 +154,40 @@ def test_report_join_quality_counts_multi_chunk_duplicates_and_gaps(tmp_path):
     assert report["ready_for_sampling"] is False
 
 
+def test_report_allows_evidence_only_source_for_replay_join(tmp_path):
+    events_path = tmp_path / "runtime_events_20260531.jsonl"
+    audio_root = tmp_path / "audio_dump"
+    rows = [
+        _stt_event(1),
+        _translation_event(
+            1,
+            source_utterance_ids=[],
+            evidence_source_utterance_ids=["utt-1"],
+            source_count=0,
+            source_avg_logprobs=[],
+            source_no_speech_probs=[],
+            min_avg_logprob=None,
+            max_no_speech_prob=None,
+        ),
+    ]
+    _write_jsonl(events_path, rows)
+    _touch_wavs(audio_root, "run-a", ["utt-1"])
+
+    report = build_collection_sanity_report(
+        events_path=events_path,
+        audio_root=audio_root,
+        min_population=0,
+    )
+    join = report["join_quality"]
+
+    assert join["translations_with_source_ids"] == 1
+    assert join["missing_source_id_translations"] == 0
+    assert join["source_id_refs"] == 0
+    assert join["evidence_source_id_refs"] == 1
+    assert join["audio_join_ok_translations"] == 1
+    assert report["ready_for_sampling"] is True
+
+
 def test_report_flags_source_confidence_diagnostic_alignment_gaps(tmp_path):
     events_path = tmp_path / "runtime_events_20260531.jsonl"
     audio_root = tmp_path / "audio_dump"
