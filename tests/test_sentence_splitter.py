@@ -4,8 +4,9 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.sentence_splitter import _is_complete, start
+from modules.sentence_splitter import _can_merge_cuts, _is_complete, start
 from modules.pipeline_events import TranscriptionEvent
+from modules.sentence_buffer import SentenceCut
 
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
@@ -13,6 +14,8 @@ def _fast_cfg(min_wait: float = 0.3, force_cut: float = 0.8) -> MagicMock:
     m = MagicMock()
     m.splitter.min_wait_seconds = min_wait
     m.splitter.force_cut_seconds = force_cut
+    m.splitter.max_merge_source_count = 2
+    m.splitter.max_merge_text_chars = 120
     return m
 
 
@@ -152,6 +155,49 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(result.text, "first fragment second fragment")
         self.assertTrue(result.incomplete)
 
+    def test_unsafe_incomplete_merge_emits_pending_then_buffers_current(self):
+        first = TranscriptionEvent(
+            text="first fragment",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-1",
+        )
+        second = TranscriptionEvent(
+            text="second fragment",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-2",
+        )
+        third = TranscriptionEvent(
+            text="third fragment",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-3",
+        )
+
+        tq = queue.Queue()
+        sq = queue.Queue()
+        stop = threading.Event()
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(min_wait=0.1, force_cut=0.3)):
+            thread = start(tq, sq, stop)
+            tq.put(first)
+            tq.put(second)
+            time.sleep(0.6)
+            self.assertTrue(sq.empty())
+
+            # A third incomplete cut would exceed max_merge_source_count if
+            # merged with the pending two-source cut, so the pending cut is
+            # emitted alone and the third cut remains pending until shutdown.
+            tq.put(third)
+            first_result = sq.get(timeout=2)
+            stop.set()
+            second_result = sq.get(timeout=2)
+            thread.join(timeout=2)
+
+        self.assertEqual(first_result.source_utterance_ids, ("utt-1", "utt-2"))
+        self.assertEqual(second_result.text, "third fragment")
+        self.assertEqual(second_result.source_utterance_ids, ("utt-3",))
+
     def test_buffer_accumulates_multiple_tokens(self):
         results = self._run(["진짜", "대박이에요"], wait=1.0)
         self.assertEqual(len(results), 1)
@@ -264,6 +310,54 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertEqual(kw["min_avg_logprob"], -0.9)
         self.assertEqual(kw["source_no_speech_probs"], [None, 0.6])
         self.assertEqual(kw["max_no_speech_prob"], 0.6)
+
+
+class TestSentenceMergeGuardrail(unittest.TestCase):
+    def test_merge_guard_rejects_source_count_over_limit(self):
+        first = SentenceCut(
+            text="first fragment",
+            incomplete=True,
+            source=None,
+            elapsed=1.0,
+            forced=True,
+            source_utterance_ids=("utt-1", "utt-2"),
+            chunk_count=2,
+        )
+        second = SentenceCut(
+            text="second fragment",
+            incomplete=True,
+            source=None,
+            elapsed=1.0,
+            forced=True,
+            source_utterance_ids=("utt-3",),
+            chunk_count=1,
+        )
+
+        with patch("modules.sentence_splitter.cfg", _fast_cfg()):
+            self.assertFalse(_can_merge_cuts(first, second))
+
+    def test_merge_guard_rejects_text_over_limit(self):
+        first = SentenceCut(
+            text="a" * 80,
+            incomplete=True,
+            source=None,
+            elapsed=1.0,
+            forced=True,
+            source_utterance_ids=("utt-1",),
+            chunk_count=1,
+        )
+        second = SentenceCut(
+            text="b" * 80,
+            incomplete=True,
+            source=None,
+            elapsed=1.0,
+            forced=True,
+            source_utterance_ids=("utt-2",),
+            chunk_count=1,
+        )
+
+        with patch("modules.sentence_splitter.cfg", _fast_cfg()):
+            self.assertFalse(_can_merge_cuts(first, second))
 
 
 class TestSentenceSplitterPause(unittest.TestCase):

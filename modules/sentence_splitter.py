@@ -12,9 +12,64 @@ from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 
 log = get_logger("sentence_splitter")
 
+_DEFAULT_MAX_MERGE_SOURCE_COUNT = 2
+_DEFAULT_MAX_MERGE_TEXT_CHARS = 120
+
 
 def _is_complete(text: str) -> bool:
     return is_complete(text)
+
+
+def _int_setting(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _merge_source_count(first: SentenceCut, second: SentenceCut) -> int:
+    if first.source_utterance_ids or second.source_utterance_ids:
+        return len(first.source_utterance_ids) + len(second.source_utterance_ids)
+    return first.chunk_count + second.chunk_count
+
+
+def _merged_text_len(first: SentenceCut, second: SentenceCut) -> int:
+    return len(f"{first.text} {second.text}".strip())
+
+
+def _can_merge_cuts(first: SentenceCut, second: SentenceCut) -> bool:
+    max_sources = _int_setting(
+        getattr(cfg.splitter, "max_merge_source_count", _DEFAULT_MAX_MERGE_SOURCE_COUNT),
+        _DEFAULT_MAX_MERGE_SOURCE_COUNT,
+    )
+    max_chars = _int_setting(
+        getattr(cfg.splitter, "max_merge_text_chars", _DEFAULT_MAX_MERGE_TEXT_CHARS),
+        _DEFAULT_MAX_MERGE_TEXT_CHARS,
+    )
+
+    if max_sources > 0 and _merge_source_count(first, second) > max_sources:
+        return False
+    if max_chars > 0 and _merged_text_len(first, second) > max_chars:
+        return False
+    return True
+
+
+def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
+    return SentenceCut(
+        text=f"{first.text} {second.text}".strip(),
+        incomplete=second.incomplete,
+        source=second.source or first.source,
+        elapsed=first.elapsed + second.elapsed,
+        forced=first.forced or second.forced,
+        # A merge means an incomplete cut was stitched to its follow-up;
+        # surface that distinctly while summing the constituents' tallies.
+        cut_reason=f"merged:{first.cut_reason}+{second.cut_reason}",
+        chunk_count=first.chunk_count + second.chunk_count,
+        audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
+        source_utterance_ids=first.source_utterance_ids + second.source_utterance_ids,
+        source_avg_logprobs=first.source_avg_logprobs + second.source_avg_logprobs,
+        source_no_speech_probs=first.source_no_speech_probs + second.source_no_speech_probs,
+    )
 
 
 def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
@@ -65,23 +120,6 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             put_latest(sentence_queue, event, log, "sentence_queue")
             metrics.log_summary_if_due()
 
-        def merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
-            return SentenceCut(
-                text=f"{first.text} {second.text}".strip(),
-                incomplete=second.incomplete,
-                source=second.source or first.source,
-                elapsed=first.elapsed + second.elapsed,
-                forced=first.forced or second.forced,
-                # A merge means an incomplete cut was stitched to its follow-up;
-                # surface that distinctly while summing the constituents' tallies.
-                cut_reason=f"merged:{first.cut_reason}+{second.cut_reason}",
-                chunk_count=first.chunk_count + second.chunk_count,
-                audio_seconds=round(first.audio_seconds + second.audio_seconds, 3),
-                source_utterance_ids=first.source_utterance_ids + second.source_utterance_ids,
-                source_avg_logprobs=first.source_avg_logprobs + second.source_avg_logprobs,
-                source_no_speech_probs=first.source_no_speech_probs + second.source_no_speech_probs,
-            )
-
         while not stop_event.is_set():
             if pause_event and pause_event.is_set():
                 buffer.reset()
@@ -117,8 +155,26 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             )
             if cut:
                 if pending_incomplete is not None:
-                    emit_cut(merge_cuts(pending_incomplete, cut))
-                    pending_incomplete = None
+                    if _can_merge_cuts(pending_incomplete, cut):
+                        emit_cut(_merge_cuts(pending_incomplete, cut))
+                        pending_incomplete = None
+                    else:
+                        log.info(
+                            "Sentence merge skipped: sources=%d chars=%d reason=%s+%s",
+                            _merge_source_count(pending_incomplete, cut),
+                            _merged_text_len(pending_incomplete, cut),
+                            pending_incomplete.cut_reason,
+                            cut.cut_reason,
+                        )
+                        metrics.increment("sentence.merge_skipped")
+                        emit_cut(pending_incomplete)
+                        if cut.incomplete:
+                            pending_incomplete = cut
+                            metrics.increment("sentence.incomplete_buffered")
+                            log.info("Sentence buffered for next chunk: %s", cut.text)
+                        else:
+                            pending_incomplete = None
+                            emit_cut(cut)
                 elif cut.incomplete:
                     pending_incomplete = cut
                     metrics.increment("sentence.incomplete_buffered")
