@@ -43,3 +43,35 @@ def put_latest(q: queue.Queue, item, logger, queue_name: str, unit: str = "items
         metrics.increment(f"queue.{queue_name}.dropped", drained)
         logger.warning("%s backlog cleared (%d %s), keeping latest", queue_name, drained, unit)
     return drained
+
+
+def drop_oldest_put(q: queue.Queue, item) -> int:
+    """Put item into q, dropping only the oldest entry when the queue is full."""
+    try:
+        q.put_nowait(item)
+        return 0
+    except queue.Full:
+        dropped = 0
+        try:
+            q.get_nowait()
+            dropped = 1
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+            return dropped
+        except queue.Full:
+            log.error(
+                "drop_oldest_put: queue still full after dropping one item. "
+                "Check for multiple concurrent producers on the same queue."
+            )
+            return dropped
+
+
+def put_drop_oldest(q: queue.Queue, item, logger, queue_name: str, unit: str = "items") -> int:
+    """Put item and log when the oldest queued entry is dropped."""
+    dropped = drop_oldest_put(q, item)
+    if dropped:
+        metrics.increment(f"queue.{queue_name}.dropped", dropped)
+        logger.warning("%s oldest item dropped (%d %s), keeping backlog", queue_name, dropped, unit)
+    return dropped

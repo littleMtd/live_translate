@@ -5,7 +5,7 @@ from config import cfg
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
-from utils.queue_utils import put_latest
+from utils.queue_utils import put_drop_oldest
 from utils.runtime_events import runtime_events
 from modules.pipeline_events import source_confidence_summary, transcription_to_sentence
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
@@ -144,7 +144,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 cut.audio_seconds,
             )
             metrics.increment("sentence.emitted")
-            put_latest(sentence_queue, event, log, "sentence_queue")
+            put_drop_oldest(sentence_queue, event, log, "sentence_queue")
             metrics.log_summary_if_due()
 
         while not stop_event.is_set():

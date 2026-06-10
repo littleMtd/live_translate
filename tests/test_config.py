@@ -111,6 +111,9 @@ class TestConfig(unittest.TestCase):
         self.assertGreater(cfg.translation.queue_maxsize, 0)
         self.assertGreater(cfg.subtitle.queue_maxsize, 0)
 
+    def test_translation_queue_keeps_small_bursts(self):
+        self.assertGreaterEqual(cfg.translation.queue_maxsize, 8)
+
     def test_stt_profile_glossary_flag_is_bool(self):
         self.assertIsInstance(cfg.stt.use_profile_glossary, bool)
 
@@ -147,6 +150,12 @@ class TestVadConfig(unittest.TestCase):
 
     def test_vad_min_speech_sec_positive(self):
         self.assertGreater(cfg.audio.vad_min_speech_sec, 0)
+
+    def test_vad_near_miss_threshold_keeps_short_speech_overlap(self):
+        self.assertGreaterEqual(cfg.audio.vad_near_miss_min_speech_sec, 0)
+        self.assertLess(cfg.audio.vad_near_miss_min_speech_sec, cfg.audio.vad_min_speech_sec)
+        self.assertGreater(cfg.audio.vad_near_miss_overlap_sec, 0)
+        self.assertLess(cfg.audio.vad_near_miss_overlap_sec, cfg.audio.vad_hard_max_speech_sec)
 
     def test_vad_max_speech_greater_than_min(self):
         self.assertGreater(cfg.audio.vad_max_speech_sec, cfg.audio.vad_min_speech_sec)

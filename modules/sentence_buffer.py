@@ -201,7 +201,10 @@ class SentenceBuffer:
         complete = is_complete(self._buffer)
 
         if self._silence_complete_enabled and self._silence_complete_pending:
-            if not _ends_with_incomplete_ending(self._buffer):
+            if (
+                not _ends_with_incomplete_ending(self._buffer)
+                and _significant_len(self._buffer) >= _MIN_PREFIX_SIGNIFICANT
+            ):
                 cut = SentenceCut(
                     text=self._buffer.strip(),
                     incomplete=False,

@@ -35,11 +35,13 @@ class _Audio:
     vad_enabled:           bool  = True
     vad_silence_sec:       float = 0.90  # silence duration that triggers a cut
     vad_min_speech_sec:    float = 0.8   # discard chunks shorter than this
+    vad_near_miss_min_speech_sec: float = 0.3  # retain overlap for short speech below STT length
     # Prefer complete speech turns over minimum latency. Runtime logs showed
     # 7-10s chunks keep better sentence coherence for chaotic livestream speech.
     vad_max_speech_sec:    float = 6.5
     vad_hard_max_speech_sec: float = 9.0
     vad_overlap_sec:       float = 1.0
+    vad_near_miss_overlap_sec: float = 1.5
     vad_silence_overlap_sec: float = 0.4
     vad_adaptive_enabled:   bool  = True
     vad_adaptive_after_boundary_cuts: int = 1
@@ -193,7 +195,7 @@ class _Translation:
     target_lang:    str          = "zh-TW"
     max_tokens:     int          = 200
     temperature:    float        = 0.1
-    queue_maxsize:  int          = 2
+    queue_maxsize:  int          = 8
     context_window: int          = 10  # recent translations passed as context to LLM
     # Safety cap on per-input length. Oversized inputs are almost always STT
     # hallucinations (repeated phrases, chunk-boundary glitches). Rejecting them

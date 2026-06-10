@@ -112,10 +112,16 @@ class _VadState:
         sr = cfg.audio.sample_rate
         self._silence_gate     = int(cfg.audio.vad_silence_sec    * sr)
         self._min_speech       = int(cfg.audio.vad_min_speech_sec * sr)
+        self._near_miss_min_speech = int(
+            max(0.0, _cfg_float("vad_near_miss_min_speech_sec", 0.3)) * sr
+        )
         self._max_speech       = int(cfg.audio.vad_max_speech_sec * sr)
         hard_max_sec = getattr(cfg.audio, "vad_hard_max_speech_sec", cfg.audio.vad_max_speech_sec)
         self._hard_max_speech  = int(max(cfg.audio.vad_max_speech_sec, hard_max_sec) * sr)
         self._overlap_samples  = int(max(0.0, getattr(cfg.audio, "vad_overlap_sec", 0.0)) * sr)
+        self._near_miss_overlap_samples = int(
+            max(0.0, _cfg_float("vad_near_miss_overlap_sec", 1.5)) * sr
+        )
         self._silence_overlap_samples = int(max(0.0, _cfg_float("vad_silence_overlap_sec", 0.0)) * sr)
         self._adaptive_enabled = _cfg_bool("vad_adaptive_enabled", False)
         self._adaptive_segments_after_boundary = max(
@@ -186,17 +192,46 @@ class _VadState:
             next_overlap = overlap_samples if cut_reason != "silence" else self._silence_overlap_samples
             self._emit(cut_reason=cut_reason, next_overlap_samples=next_overlap)
         elif hard_max_hit:
+            was_adaptive = self._adaptive_active()
+            raw_total_samples = self._total_samples
+            speech_samples = self._speech_samples
+            silent_samples = self._silent_samples
+            raw_chunk = np.concatenate(self._buf)
+            rms_value = _rms(raw_chunk)
+            peak_value = float(np.max(np.abs(raw_chunk))) if len(raw_chunk) else 0.0
+            if self._near_miss_min_speech <= speech_samples < self._min_speech:
+                metrics.increment("audio.cut.discard_hard_max_near_miss_overlap")
+                next_overlap = self._next_overlap(
+                    raw_chunk,
+                    "discard_hard_max_near_miss_overlap",
+                    self._near_miss_overlap_samples,
+                )
+                self._reset()
+                self._pending_overlap = next_overlap
+                self._emit_vad_runtime_event(
+                    cut_reason="discard_hard_max_near_miss_overlap",
+                    audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                    raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                    overlap_seconds=len(next_overlap) / cfg.audio.sample_rate,
+                    adaptive_active=was_adaptive,
+                    speech_seconds=speech_samples / cfg.audio.sample_rate,
+                    silence_seconds=silent_samples / cfg.audio.sample_rate,
+                    rms_value=rms_value,
+                    peak_value=peak_value,
+                    queue_drained=0,
+                )
+                return
             metrics.increment("audio.cut.discard_hard_max_no_speech")
             self._emit_vad_runtime_event(
                 cut_reason="discard_hard_max_no_speech",
-                audio_seconds=self._total_samples / cfg.audio.sample_rate,
-                raw_audio_seconds=self._total_samples / cfg.audio.sample_rate,
+                audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
                 overlap_seconds=0.0,
-                adaptive_active=self._adaptive_active(),
-                speech_seconds=self._speech_samples / cfg.audio.sample_rate,
-                silence_seconds=self._silent_samples / cfg.audio.sample_rate,
-                rms_value=0.0,
-                peak_value=0.0,
+                adaptive_active=was_adaptive,
+                speech_seconds=speech_samples / cfg.audio.sample_rate,
+                silence_seconds=silent_samples / cfg.audio.sample_rate,
+                rms_value=rms_value,
+                peak_value=peak_value,
                 queue_drained=0,
             )
             # Mostly silence at max length — discard

@@ -78,7 +78,26 @@ class TestSentenceBuffer(unittest.TestCase):
         cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
         self.assertIsNotNone(cut)
         self.assertEqual(cut.cut_reason, "forced_blob")
-        self.assertTrue(cut.incomplete)
+        self.assertTrue(cut.forced)
+
+    def test_silence_cut_does_not_complete_too_short_text(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="네",
+                engine="groq",
+                profile_id="a",
+                vad_cut_reason="silence",
+            ),
+            now=1.0,
+        )
+
+        self.assertIsNone(buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0))
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.cut_reason, "forced_blob")
+        self.assertTrue(cut.forced)
 
     def test_segment_gap_can_supply_forced_prefix_boundary(self):
         buffer = SentenceBuffer(segment_gap_split_enabled=True, segment_gap_seconds=0.6)

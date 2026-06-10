@@ -104,9 +104,11 @@ class TestVadState(unittest.TestCase):
         m.audio.volume_threshold = self._THRESHOLD
         m.audio.vad_silence_sec = self._SILENCE_SEC
         m.audio.vad_min_speech_sec = self._MIN_SEC
+        m.audio.vad_near_miss_min_speech_sec = 0.03
         m.audio.vad_max_speech_sec = self._MAX_SEC
         m.audio.vad_hard_max_speech_sec = self._MAX_SEC
         m.audio.vad_overlap_sec = 0.0
+        m.audio.vad_near_miss_overlap_sec = 0.2
         m.audio.vad_silence_overlap_sec = 0.0
         m.audio.vad_adaptive_enabled = False
         m.audio.vad_adaptive_after_boundary_cuts = 1
@@ -278,6 +280,31 @@ class TestVadState(unittest.TestCase):
             for _ in range(5):
                 vad.push(self._quiet(10))
         self.assertTrue(q.empty(), "Silence-only max should be discarded, not emitted")
+
+    def test_hard_max_near_miss_retains_tail_overlap(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        cfg = self._make_cfg()
+        with patch("modules.audio_capture.cfg", cfg), \
+                patch("modules.audio_capture.runtime_events.emit") as emit:
+            vad = _VadState(q)
+            vad.push(self._loud(3))    # near-miss speech: >= 3 samples, < min 5
+            vad.push(self._quiet(47))  # hard max reached; keep tail overlap only
+
+            self.assertTrue(q.empty())
+            self.assertEqual(len(vad._pending_overlap), 20)
+            emit.assert_called_once()
+            self.assertEqual(emit.call_args.kwargs["cut_reason"], "discard_hard_max_near_miss_overlap")
+            self.assertGreater(emit.call_args.kwargs["rms"], 0.0)
+            self.assertEqual(emit.call_args.kwargs["peak"], 0.5)
+
+            vad.push(self._loud(10))
+            vad.push(self._quiet(10))
+            chunk = q.get_nowait()
+
+        self.assertEqual(len(chunk), 40)
+        self.assertEqual(chunk.overlap_seconds, 0.2)
+        self.assertEqual(chunk.vad_cut_reason, "silence")
 
     def test_reset_clears_state(self):
         from modules.audio_capture import _VadState
