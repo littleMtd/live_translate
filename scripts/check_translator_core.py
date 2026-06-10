@@ -21,6 +21,7 @@ from scripts.update_translation_profile_snapshot import (
 JSON_FIXTURES = [
     PROJECT_ROOT / "data" / "default_slang.json",
     PROJECT_ROOT / "data" / "streamer_profiles.json",
+    PROJECT_ROOT / "data" / "translation_corrections.json",
     PROJECT_ROOT / "data" / "translation_profiles.json",
     PROJECT_ROOT / "data" / "eval_cases.json",
 ]
@@ -33,6 +34,7 @@ FOCUSED_TESTS = [
     "tests/test_metrics.py",
     "tests/test_translation_memory.py",
     "tests/test_translation_runtime.py",
+    "tests/test_translation_corrections.py",
     "tests/test_translator.py",
 ]
 
@@ -80,7 +82,14 @@ def check_eval_cases() -> CheckResult:
 
 def run_focused_pytest() -> CheckResult:
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", *FOCUSED_TESTS, "-q"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            *FOCUSED_TESTS,
+            "-q",
+            "--basetemp=.pytest-tmpcheck-translator-core",
+        ],
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,

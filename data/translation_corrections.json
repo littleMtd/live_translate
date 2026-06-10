@@ -1,0 +1,991 @@
+{
+  "source_norm": {
+    "shared": {},
+    "profiles": {
+      "stellive_hina": {
+        "히나유키 히나": "시라유키 히나",
+        "해동이": "해둥이",
+        "해동아": "해둥아",
+        "일기생": "1기생",
+        "투리버스 메들린": "투니버스 메들리"
+      },
+      "hades_chxxnnx": {
+        "服주": "섭주",
+        "김띵귤": "띵귤",
+        "팅귤": "띵귤",
+        "틴귤": "띵귤",
+        "김챗나": "챈나",
+        "김챔나": "챈나",
+        "챗나": "챈나",
+        "챔나": "챈나",
+        "채엔나": "챈나",
+        "차엔나": "챈나",
+        "주먹 언니": "솜펀치 언니",
+        "주먹이": "솜펀치",
+        "주먹아": "솜펀치",
+        "큐마": "키마",
+        "천사채나": "천사챈나",
+        "채나룬": "챈나룬",
+        "채나롱": "챈나롱",
+        "채나로": "챈나로",
+        "채나님": "챈나님",
+        "채나야": "챈나야",
+        "채나": "챈나"
+      },
+      "mwmeu": {
+        "오마쿡스 바로 투": "오버쿡드 2",
+        "오마쿡스 바루 투": "오버쿡드 2",
+        "오마쿡스 투": "오버쿡드 2",
+        "오버쿡스 투": "오버쿡드 2",
+        "오버쿡드 투": "오버쿡드 2",
+        "오마쿡스": "오버쿡드",
+        "오버쿡스": "오버쿡드",
+        "플러스 인제": "플러스 이제",
+        "생빠이": "선배",
+        "샌바이": "선배",
+        "센빠이": "선배",
+        "토화기": "소화기",
+        "소변관": "소방관",
+        "가나디아": "강아지",
+        "이변이": "이비",
+        "이츠 언니": "리츠 언니",
+        "이츠가": "리츠가",
+        "이츠랑": "리츠랑",
+        "이츠는": "리츠는",
+        "릿츠": "리츠",
+        "소아 언니": "수아 언니",
+        "소아가": "수아가",
+        "초운이": "초은이",
+        "초운": "초은",
+        "조은이": "초은이",
+        "조은아": "초은아",
+        "조은": "초은",
+        "초원이랑": "초은이랑",
+        "초원이": "초은이",
+        "엔즈": "웬즈",
+        "왠즈": "웬즈",
+        "왠지들": "웬즈들",
+        "지안 언니": "지한 언니",
+        "지안언니": "지한언니",
+        "지안이": "지한이",
+        "시에가파크": "치이카와파크",
+        "치카와파크": "치이카와파크",
+        "치에이카와": "치이카와",
+        "치에카와": "치이카와",
+        "시이카와": "치이카와",
+        "시가와": "치이카와",
+        "지휘카와": "치이카와",
+        "치유카": "치이카와",
+        "치이칸": "치이카와",
+        "치카와": "치이카와",
+        "하치와래": "하치와레",
+        "하츠와 아래": "하치와레",
+        "하츠와": "하치와레"
+      }
+    }
+  },
+  "source_aware_target_replacements": [
+    {
+      "source_terms": [
+        "오버쿡드 2",
+        "오마쿡스"
+      ],
+      "replacements": [
+        {
+          "wrong": "Oma-kooks 立刻投！投！",
+          "right": "《胡鬧廚房2》"
+        },
+        {
+          "wrong": "Oma-kooks",
+          "right": "《胡鬧廚房2》"
+        },
+        {
+          "wrong": "Overcooked! 2",
+          "right": "《胡鬧廚房2》"
+        },
+        {
+          "wrong": "Overcooked 2",
+          "right": "《胡鬧廚房2》"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "어금니"
+      ],
+      "replacements": [
+        {
+          "wrong": "牙齦",
+          "right": "臼齒"
+        },
+        {
+          "wrong": "牙龈",
+          "right": "臼齒"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "짬밥순",
+        "짬밥 순"
+      ],
+      "replacements": [
+        {
+          "wrong": "餃子順序",
+          "right": "資歷順"
+        },
+        {
+          "wrong": "年資順序",
+          "right": "資歷順"
+        },
+        {
+          "wrong": "飯順序",
+          "right": "資歷順"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "땡글즈"
+      ],
+      "replacements": [
+        {
+          "wrong": "Tanggulz Plus怡潔",
+          "right": "땡글즈 Plus 이제"
+        },
+        {
+          "wrong": "Tanggulz",
+          "right": "땡글즈"
+        },
+        {
+          "wrong": "噹噹茲",
+          "right": "땡글즈"
+        },
+        {
+          "wrong": "噹噹們",
+          "right": "땡글즈"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "겟머츠"
+      ],
+      "replacements": [
+        {
+          "wrong": "GetMuts",
+          "right": "겟머츠"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "띠빵뽕"
+      ],
+      "replacements": [
+        {
+          "wrong": "叮叮糖餅",
+          "right": "띠빵뽕"
+        },
+        {
+          "wrong": "叮糖餅",
+          "right": "띠빵뽕"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "신호등즈"
+      ],
+      "replacements": [
+        {
+          "wrong": "信號燈們",
+          "right": "信號燈즈"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "선배",
+        "생빠이",
+        "샌바이",
+        "센빠이"
+      ],
+      "replacements": [
+        {
+          "wrong": "生趴伊",
+          "right": "前輩"
+        },
+        {
+          "wrong": "森拜",
+          "right": "前輩"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "메이플",
+        "메이플스토리",
+        "Maple"
+      ],
+      "replacements": [
+        {
+          "wrong": "仙境傳說",
+          "right": "楓之谷"
+        },
+        {
+          "wrong": "MapleStory",
+          "right": "楓之谷"
+        },
+        {
+          "wrong": "Maple",
+          "right": "楓之谷"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "프린세스 메이커"
+      ],
+      "replacements": [
+        {
+          "wrong": "公主製造",
+          "right": "美少女夢工場"
+        },
+        {
+          "wrong": "Princess Maker",
+          "right": "美少女夢工場"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "스타크래프트",
+        "스타컬프트"
+      ],
+      "replacements": [
+        {
+          "wrong": "StarCraft",
+          "right": "星海爭霸"
+        },
+        {
+          "wrong": "星際爭霸",
+          "right": "星海爭霸"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "피맛"
+      ],
+      "replacements": [
+        {
+          "wrong": "酒味",
+          "right": "血味"
+        },
+        {
+          "wrong": "皮馬特",
+          "right": "血味"
+        },
+        {
+          "wrong": "血的味道",
+          "right": "血味"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "창나",
+        "창이 나"
+      ],
+      "replacements": [
+        {
+          "wrong": "開戰",
+          "right": "出事"
+        },
+        {
+          "wrong": "開打",
+          "right": "出事"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "다 죽여버릴 것",
+        "죽여버릴 것"
+      ],
+      "replacements": [
+        {
+          "wrong": "讓人想死",
+          "right": "殺氣很重"
+        },
+        {
+          "wrong": "想死了",
+          "right": "殺氣很重"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "띵띵이"
+      ],
+      "replacements": [
+        {
+          "wrong": "TINGGYUL",
+          "right": "띵띵이"
+        },
+        {
+          "wrong": "TingGyul",
+          "right": "띵띵이"
+        },
+        {
+          "wrong": "Tinggyul",
+          "right": "띵띵이"
+        },
+        {
+          "wrong": "Singgyul",
+          "right": "띵띵이"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "하데스",
+        "하덱스"
+      ],
+      "replacements": [
+        {
+          "wrong": "哈迪斯",
+          "right": "HADES"
+        },
+        {
+          "wrong": "哈德克斯",
+          "right": "HADES"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "마가 뜨",
+        "마가뜨"
+      ],
+      "replacements": [
+        {
+          "wrong": "瑪加特",
+          "right": "冷場"
+        },
+        {
+          "wrong": "馬嘎",
+          "right": "冷場"
+        },
+        {
+          "wrong": "魔嘎",
+          "right": "冷場"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "붕 뜨"
+      ],
+      "replacements": [
+        {
+          "wrong": "飄起來的時間",
+          "right": "空掉的時間"
+        },
+        {
+          "wrong": "浮起來的時間",
+          "right": "空掉的時間"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "개복치"
+      ],
+      "replacements": [
+        {
+          "wrong": "鯛魚燒",
+          "right": "玻璃心"
+        },
+        {
+          "wrong": "翻車魚風格",
+          "right": "玻璃心風格"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "끼윤"
+      ],
+      "replacements": [
+        {
+          "wrong": "끼윤",
+          "right": "Kkiyun"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "예난"
+      ],
+      "replacements": [
+        {
+          "wrong": "예난",
+          "right": "Yenan"
+        },
+        {
+          "wrong": "藝蘭",
+          "right": "Yenan"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "히나"
+      ],
+      "replacements": [
+        {
+          "wrong": "希娜",
+          "right": "Hina"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "철구"
+      ],
+      "replacements": [
+        {
+          "wrong": "哲求",
+          "right": "Chulgu"
+        },
+        {
+          "wrong": "鐵球",
+          "right": "Chulgu"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "신빨"
+      ],
+      "replacements": [
+        {
+          "wrong": "更懂鞋",
+          "right": "神力更強"
+        },
+        {
+          "wrong": "鞋比較好",
+          "right": "神力比較強"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "만신"
+      ],
+      "replacements": [
+        {
+          "wrong": "幾乎都滿了，滿了",
+          "right": "幾乎是大神巫"
+        },
+        {
+          "wrong": "都滿了，滿了",
+          "right": "簡直是大神巫"
+        },
+        {
+          "wrong": "滿了，滿了",
+          "right": "大神巫，大神巫"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "다이저고 데스",
+        "다이저 오브 데스",
+        "다이죠부 데스",
+        "다이조부 데스"
+      ],
+      "replacements": [
+        {
+          "wrong": "死亡之舞",
+          "right": "大丈夫です"
+        },
+        {
+          "wrong": "Daisuki desu",
+          "right": "大丈夫です"
+        },
+        {
+          "wrong": "大好きです",
+          "right": "大丈夫です"
+        }
+      ]
+    }
+  ],
+  "profile_source_aware_target_replacements": {
+    "stellive_hina": [
+      {
+        "source_terms": [
+          "해둥이",
+          "해둥아",
+          "해둥",
+          "해동이",
+          "해동아"
+        ],
+        "replacements": [
+          {
+            "wrong": "海洞啊",
+            "right": "해둥아"
+          },
+          {
+            "wrong": "海洞們",
+            "right": "해둥이們"
+          },
+          {
+            "wrong": "海洞们",
+            "right": "해둥이們"
+          },
+          {
+            "wrong": "海洞",
+            "right": "해둥이"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "유니",
+          "아야츠노 유니"
+        ],
+        "replacements": [
+          {
+            "wrong": "優妮",
+            "right": "Yuni"
+          },
+          {
+            "wrong": "優尼",
+            "right": "Yuni"
+          },
+          {
+            "wrong": "尤尼",
+            "right": "Yuni"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "1기생"
+        ],
+        "replacements": [
+          {
+            "wrong": "日記生",
+            "right": "1期生"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "시라유키 히나",
+          "히나유키 히나"
+        ],
+        "replacements": [
+          {
+            "wrong": "希拉尤基·Hina",
+            "right": "Shirayuki Hina"
+          },
+          {
+            "wrong": "希拉尤基 Hina",
+            "right": "Shirayuki Hina"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "투니버스 메들리",
+          "투리버스 메들린"
+        ],
+        "replacements": [
+          {
+            "wrong": "Touriverus Madeline",
+            "right": "투니버스 메들리"
+          },
+          {
+            "wrong": "Touriverse Madeline",
+            "right": "투니버스 메들리"
+          },
+          {
+            "wrong": "Touriverus",
+            "right": "투니버스"
+          },
+          {
+            "wrong": "Touriverse",
+            "right": "투니버스"
+          }
+        ]
+      }
+    ]
+  },
+  "korean_name_suffixes": [
+    "를",
+    "는",
+    "아",
+    "하고",
+    "한테",
+    "이다",
+    "께",
+    "들",
+    "에",
+    "은",
+    "와",
+    "오빠",
+    "누나",
+    "도",
+    "만",
+    "보다",
+    "입니다",
+    "이랑",
+    "가",
+    "의",
+    "이",
+    "을",
+    "랑",
+    "에게",
+    "씨",
+    "형",
+    "야",
+    "예요",
+    "과",
+    "이에요",
+    "언니",
+    "님"
+  ],
+  "name_rendering_rules": [
+    {
+      "scope": "stellive_hina",
+      "source_aliases": [
+        "시라유키 히나",
+        "히나유키 히나"
+      ],
+      "wrong_forms": [
+        "시라유키 히나",
+        "히나유키 히나",
+        "希拉尤基·Hina",
+        "希拉尤基 Hina"
+      ],
+      "canonical": "Shirayuki Hina"
+    },
+    {
+      "scope": "stellive_hina",
+      "source_aliases": [
+        "아야츠노 유니"
+      ],
+      "wrong_forms": [
+        "아야츠노 유니",
+        "Ayatsuno Yuni"
+      ],
+      "canonical": "Ayatsuno Yuni"
+    },
+    {
+      "scope": "stellive_hina",
+      "source_aliases": [
+        "유니"
+      ],
+      "wrong_forms": [
+        "유니",
+        "優妮",
+        "優尼",
+        "尤尼"
+      ],
+      "canonical": "Yuni"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "챈나",
+        "김챗나",
+        "김챔나",
+        "챗나",
+        "챔나",
+        "Chaenna",
+        "CHXXNNX",
+        "Chxxnnx"
+      ],
+      "wrong_forms": [
+        "챈나",
+        "Chaenna",
+        "CHXXNNX",
+        "-chan",
+        "-Chan",
+        "－chan",
+        "－Chan",
+        "–chan",
+        "–Chan",
+        "—chan",
+        "—Chan",
+        "金chat",
+        "金Chat",
+        "金챗나",
+        "金챔나"
+      ],
+      "canonical": "Chxxnnx"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "솜주먹",
+        "솜펀치",
+        "주먹이",
+        "주먹아",
+        "주먹 언니"
+      ],
+      "wrong_forms": [
+        "솜주먹",
+        "솜펀치",
+        "桑拳頭",
+        "拳頭",
+        "棉拳",
+        "Som Punch"
+      ],
+      "canonical": "Sompunch"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "띵귤",
+        "김띵귤",
+        "싱귤"
+      ],
+      "wrong_forms": [
+        "띵귤",
+        "싱귤",
+        "TINGGYUL",
+        "TingGyul",
+        "Tinggyul",
+        "金叮菊",
+        "金丁橘",
+        "叮菊",
+        "丁橘"
+      ],
+      "canonical": "Singgyul"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "김봉준",
+        "봉준"
+      ],
+      "wrong_forms": [
+        "김봉준",
+        "봉준",
+        "Bongjun",
+        "奉俊",
+        "奉主"
+      ],
+      "canonical": "Kim Bongjun"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "성태"
+      ],
+      "wrong_forms": [
+        "성태",
+        "Sungtae老師",
+        "Sungtae哥",
+        "Sungtae",
+        "成泰",
+        "狀態哥"
+      ],
+      "canonical": "KimSungtae"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "키마",
+        "큐마"
+      ],
+      "wrong_forms": [
+        "키마",
+        "큐마",
+        "Kima",
+        "基馬"
+      ],
+      "canonical": "Kyma"
+    },
+    {
+      "scope": "__shared__",
+      "source_aliases": [
+        "고세구"
+      ],
+      "wrong_forms": [
+        "高世久"
+      ],
+      "canonical": "Gosegu"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "지한",
+        "지한이"
+      ],
+      "wrong_forms": [
+        "지한",
+        "지안",
+        "志安",
+        "智漢",
+        "志漢",
+        "Z-Han",
+        "Zhan",
+        "ZHAN"
+      ],
+      "canonical": "지한"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "이비"
+      ],
+      "wrong_forms": [
+        "이비",
+        "이변이",
+        "伊比",
+        "伊變",
+        "李比",
+        "Ivi",
+        "IVI"
+      ],
+      "canonical": "이비"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "수아"
+      ],
+      "wrong_forms": [
+        "수아",
+        "소아",
+        "水亞",
+        "數亞",
+        "素亞",
+        "Sua",
+        "SuA",
+        "SUA"
+      ],
+      "canonical": "수아"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "리츠"
+      ],
+      "wrong_forms": [
+        "리츠",
+        "이츠",
+        "릿츠",
+        "利茨",
+        "米茨",
+        "Rits",
+        "Ritz",
+        "リツ"
+      ],
+      "canonical": "리츠"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "초은",
+        "초은이"
+      ],
+      "wrong_forms": [
+        "초은",
+        "초운",
+        "조은",
+        "초원",
+        "初恩",
+        "初雲",
+        "Choeun",
+        "Cho-eun"
+      ],
+      "canonical": "초은"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "웬즈",
+        "웬즈들",
+        "WENs"
+      ],
+      "wrong_forms": [
+        "웬즈",
+        "왠즈",
+        "왠지",
+        "엔즈",
+        "wenz",
+        "Wenz",
+        "WENZ",
+        "溫斯"
+      ],
+      "canonical": "WENs"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "치이카와",
+        "치이카와파크"
+      ],
+      "wrong_forms": [
+        "치이카와",
+        "치이카와파크",
+        "치카와",
+        "千川",
+        "奇卡瓦",
+        "奇伊卡",
+        "芝伊卡",
+        "千代田",
+        "市川",
+        "Pekawa"
+      ],
+      "canonical": "Chiikawa"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "하치와레"
+      ],
+      "wrong_forms": [
+        "하치와레",
+        "하치와래",
+        "哈奇瓦雷",
+        "哈奇瓦",
+        "哈茨",
+        "黑豆"
+      ],
+      "canonical": "Hachiware"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "모몽가"
+      ],
+      "wrong_forms": [
+        "모몽가",
+        "摩蒙加",
+        "蒙蒙加",
+        "毛毛蟲"
+      ],
+      "canonical": "Momonga"
+    },
+    {
+      "scope": "mwmeu",
+      "source_aliases": [
+        "우사기"
+      ],
+      "wrong_forms": [
+        "우사기",
+        "烏薩奇",
+        "兔子"
+      ],
+      "canonical": "Usagi"
+    }
+  ]
+}
