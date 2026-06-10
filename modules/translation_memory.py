@@ -113,6 +113,29 @@ class TranslationMemory:
     def cache_lookup(self, text: str, incomplete: bool, prompt_ver: str) -> str | None:
         return cache_lookup(self.cache, text, incomplete, prompt_ver)
 
+    def invalidate(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None,
+        result: str | None = None,
+    ) -> None:
+        self.cache.pop((text, incomplete, prompt_ver), None)
+        self._forget_recent(text, result)
+        if incomplete or active_engine is None:
+            return
+        db = self._db_factory()
+        delete = getattr(db, "delete", None)
+        if callable(delete):
+            delete(
+                text,
+                cfg.translation.target_lang,
+                active_engine.engine_name,
+                active_engine.model_name,
+                prompt_ver,
+            )
+
     def db_lookup(self, text: str, engine: TranslationEngine, prompt_ver: str) -> str | None:
         return self._db_factory().lookup(
             text,
@@ -135,3 +158,13 @@ class TranslationMemory:
     def _remember_recent(self, text: str, result: str, incomplete: bool) -> None:
         if not incomplete:
             self.recent.append((text, result))
+
+    def _forget_recent(self, text: str, result: str | None = None) -> None:
+        self.recent = deque(
+            (
+                (source, target)
+                for source, target in self.recent
+                if not (source == text and (result is None or target == result))
+            ),
+            maxlen=self.recent.maxlen,
+        )

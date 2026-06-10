@@ -979,6 +979,7 @@ class Translator:
         if lookup.result:
             target_text = _apply_source_aware_corrections(text, lookup.result)
             if _looks_like_meta_garbage_output(target_text):
+                self._invalidate_cached_translation(text, incomplete, prompt_ver, engine, lookup.result)
                 return TranslationOutcome(
                     source_text=raw_text,
                     target_text=None,
@@ -1098,6 +1099,17 @@ class Translator:
                 prompt_ver,
                 self._active_engine(),
             )
+
+    def _invalidate_cached_translation(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None,
+        result: str | None,
+    ) -> None:
+        with self._state_guard():
+            self._memory_state().invalidate(text, incomplete, prompt_ver, active_engine, result)
 
     def _active_engine(self) -> TranslationEngine | None:
         return active_engine(self._engines, self._active_idx)

@@ -32,6 +32,29 @@ def test_validate_config_accepts_nvidia_backend_without_engine_chain(monkeypatch
     main_module._validate_config(stt_only=False)
 
 
+def test_validate_config_warns_for_missing_nvidia_fallback_key(monkeypatch):
+    import main as main_module
+
+    warnings = []
+    original_chain = main_module.cfg.translation.engine_chain
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "fake-key")
+    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "groq", lambda: "")
+    monkeypatch.setattr(
+        main_module.log,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
+    try:
+        object.__setattr__(main_module.cfg.translation, "engine_chain", ("groq",))
+
+        main_module._validate_config(stt_only=False)
+    finally:
+        object.__setattr__(main_module.cfg.translation, "engine_chain", original_chain)
+
+    assert warnings == ["Engine 'groq' skipped - API key not set"]
+
+
 def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
     import main as main_module
 

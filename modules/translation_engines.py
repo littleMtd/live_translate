@@ -1069,8 +1069,9 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     """Build an ordered list of available engines.
 
     Picks cfg.live_engine or cfg.clip_engine based on current translation_mode.
-    "ollama"/"nvidia" bypass engine_chain entirely — no fallback.
-    "anthropic" (default) uses engine_chain with ordered fallback.
+    "ollama" bypasses engine_chain entirely.
+    "nvidia" uses NvidiaEngine first, then appends available engines from engine_chain.
+    "anthropic" (default) uses engine_chain directly as ordered fallback.
     """
     mode = cfg.translation.translation_mode
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine

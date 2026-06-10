@@ -186,10 +186,34 @@ class TranslationDB:
                     (key, target_text, target_lang, engine, model, now, now, prompt_version),
                 )
                 self._conn.commit()
-            # Eviction runs outside the write lock so concurrent lookups are not blocked.
+            # Eviction uses its own short lock after the upsert commit.
             self._evict_if_needed()
         except Exception as e:
             log.error("DB store error: %s", e)
+
+    def delete(
+        self,
+        source_text: str,
+        target_lang: str,
+        engine: str,
+        model: str,
+        prompt_version: str = "v1",
+    ) -> None:
+        if self._conn is None:
+            return
+        key = _normalize(source_text)
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "DELETE FROM translations "
+                    "WHERE source_text=? AND target_lang=? AND engine=? AND model=? AND prompt_version=?",
+                    (key, target_lang, engine, model, prompt_version),
+                )
+                self._conn.commit()
+            if cur.rowcount:
+                log.debug("DB cache entry deleted: %s (prompt_version=%s)", key[:30], prompt_version)
+        except Exception as e:
+            log.error("DB delete error: %s", e)
 
     def _evict_if_needed(self) -> None:
         if self._conn is None:

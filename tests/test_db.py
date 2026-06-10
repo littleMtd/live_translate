@@ -83,6 +83,26 @@ class TestTranslationDBStoreAndLookup(unittest.TestCase):
         self.assertEqual(gemini_result, "Gemini結果")
         self.assertEqual(claude_result, "Claude結果")
 
+    def test_delete_removes_matching_entry(self):
+        self.db.store("text", "target", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+
+        self.db.delete("text", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+
+        result = self.db.lookup("text", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+        self.assertIsNone(result)
+
+    def test_delete_preserves_other_prompt_versions(self):
+        self.db.store("text", "old", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+        self.db.store("text", "new", "zh-TW", "gemini", "gemini-2.5-flash", "v2")
+
+        self.db.delete("text", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+
+        self.assertIsNone(self.db.lookup("text", "zh-TW", "gemini", "gemini-2.5-flash", "v1"))
+        self.assertEqual(
+            self.db.lookup("text", "zh-TW", "gemini", "gemini-2.5-flash", "v2"),
+            "new",
+        )
+
     def test_eviction_keeps_most_recent(self):
         max_rows = 5
         evict_path = self._tmp.name + ".evict.db"
@@ -126,6 +146,12 @@ class TestTranslationDBUnavailable(unittest.TestCase):
             self.db.store("anything", "result", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
         except Exception as e:
             self.fail(f"store() raised an exception when DB unavailable: {e}")
+
+    def test_unavailable_db_delete_silently_ignored(self):
+        try:
+            self.db.delete("anything", "zh-TW", "gemini", "gemini-2.5-flash", "v1")
+        except Exception as e:
+            self.fail(f"delete() raised an exception when DB unavailable: {e}")
 
     def test_available_false_when_conn_none(self):
         self.assertFalse(self.db.available)

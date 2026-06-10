@@ -11,6 +11,7 @@ class _FakeDB:
         self.lookup_result = None
         self.lookup_calls = []
         self.store_calls = []
+        self.delete_calls = []
 
     def lookup(self, *args):
         self.lookup_calls.append(args)
@@ -18,6 +19,9 @@ class _FakeDB:
 
     def store(self, *args):
         self.store_calls.append(args)
+
+    def delete(self, *args):
+        self.delete_calls.append(args)
 
 
 def _engine() -> MagicMock:
@@ -107,6 +111,31 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(history, [("source", "result")])
         self.assertEqual(list(memory.recent), [])
         self.assertEqual(fake_db.store_calls, [])
+
+    def test_invalidate_removes_cache_recent_and_db_entry(self):
+        memory, _, fake_db = self._memory()
+        engine = _engine()
+        memory.cache_store("source", False, "poisoned", "v1")
+        memory.recent.append(("source", "poisoned"))
+        memory.recent.append(("other", "safe"))
+
+        memory.invalidate("source", False, "v1", engine, "poisoned")
+
+        self.assertIsNone(memory.cache_lookup("source", False, "v1"))
+        self.assertEqual(list(memory.recent), [("other", "safe")])
+        self.assertEqual(
+            fake_db.delete_calls,
+            [("source", "zh-TW", "engine", "model", "v1")],
+        )
+
+    def test_invalidate_incomplete_skips_db_delete(self):
+        memory, _, fake_db = self._memory()
+        memory.cache_store("source", True, "poisoned", "v1")
+
+        memory.invalidate("source", True, "v1", _engine(), "poisoned")
+
+        self.assertIsNone(memory.cache_lookup("source", True, "v1"))
+        self.assertEqual(fake_db.delete_calls, [])
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ _KEY_FOR_ENGINE = {
     "google_translate": lambda: cfg.keys.google_translate,
     "deepseek":         lambda: cfg.keys.deepseek,
     "deepl":            lambda: cfg.keys.deepl,
+    "groq":             lambda: cfg.keys.groq_fallback,
     "nvidia":           lambda: cfg.keys.nvidia,
     "ollama":           lambda: True,
 }
@@ -48,6 +49,15 @@ def _selected_translation_backend() -> str:
     return cfg.live_engine
 
 
+def _warn_missing_engine_chain_keys() -> list[str]:
+    available = [name for name in cfg.translation.engine_chain
+                 if _KEY_FOR_ENGINE.get(name, lambda: True)()]
+    missing = [name for name in cfg.translation.engine_chain if name not in available]
+    for name in missing:
+        log.warning("Engine %r skipped - API key not set", name)
+    return available
+
+
 def _validate_config(stt_only: bool):
     if stt_only:
         return
@@ -56,17 +66,15 @@ def _validate_config(stt_only: bool):
         if not _KEY_FOR_ENGINE.get(backend, lambda: True)():
             log.error("Startup error: no API key set for translation backend %r", backend)
             sys.exit(1)
+        if backend == "nvidia":
+            _warn_missing_engine_chain_keys()
         return
 
-    available = [name for name in cfg.translation.engine_chain
-                 if _KEY_FOR_ENGINE.get(name, lambda: True)()]
+    available = _warn_missing_engine_chain_keys()
     if not available:
         log.error("Startup error: no API key set for any engine in engine_chain %s",
                   cfg.translation.engine_chain)
         sys.exit(1)
-    missing = [name for name in cfg.translation.engine_chain if name not in available]
-    for name in missing:
-        log.warning("Engine %r skipped — API key not set", name)
 
 
 def _handle_signal(sig, frame):

@@ -1271,6 +1271,8 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(outcome.result_source, "post_policy")
         self.assertEqual(outcome.cache_status, "memory_hit")
         self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        self.assertIsNone(t._memory.cache_lookup(source, False, prompt_ver))
+        self.assertEqual(list(t._memory.recent), [])
         for engine in t._engines:
             engine.translate.assert_not_called()
 
