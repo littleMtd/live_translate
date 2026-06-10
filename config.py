@@ -83,6 +83,10 @@ class _STT:
     # Groq verbose_json confidence filters
     no_speech_threshold:    float = 0.6    # reject if avg no_speech_prob exceeds this
     avg_logprob_threshold:  float = -1.0   # reject if avg_logprob below this
+    context_avg_logprob_threshold: float = -0.7
+    context_no_speech_threshold:   float = 0.3
+    context_max_age_sec:           float = 30.0
+    context_min_chars:             int   = 4
     # Listen mode keeps STT-only output usable for songs/music, where Whisper
     # confidence is usually lower than normal speech.
     listen_no_speech_threshold:    float = 0.8

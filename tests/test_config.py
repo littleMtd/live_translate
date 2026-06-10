@@ -114,6 +114,12 @@ class TestConfig(unittest.TestCase):
     def test_stt_profile_glossary_flag_is_bool(self):
         self.assertIsInstance(cfg.stt.use_profile_glossary, bool)
 
+    def test_stt_context_gate_defaults_are_stricter_than_reject_thresholds(self):
+        self.assertGreater(cfg.stt.context_avg_logprob_threshold, cfg.stt.avg_logprob_threshold)
+        self.assertLess(cfg.stt.context_no_speech_threshold, cfg.stt.no_speech_threshold)
+        self.assertGreater(cfg.stt.context_max_age_sec, 0)
+        self.assertGreater(cfg.stt.context_min_chars, 0)
+
     def test_groq_stt_fails_fast_for_live_subtitles(self):
         self.assertEqual(cfg.stt.groq_max_retries, 0)
         self.assertLessEqual(cfg.stt.groq_timeout, 10)

@@ -91,6 +91,11 @@ def _make_engine_sv() -> STTEngine:
     eng._groq_fallback_rate_limited_until = 0.0
     eng._groq_prefer_fallback_key = False
     eng._last_transcript = ""
+    eng._last_context_transcript = ""
+    eng._last_context_updated_at = None
+    eng._last_context_gate_reason = ""
+    eng._last_prompt_context_gated = False
+    eng._last_prompt_context_gate_reason = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
     eng._last_sensevoice_error = False
@@ -178,6 +183,11 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._groq_rate_limited_until = 0.0
     eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
+    eng._last_context_transcript = ""
+    eng._last_context_updated_at = None
+    eng._last_context_gate_reason = ""
+    eng._last_prompt_context_gated = False
+    eng._last_prompt_context_gate_reason = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
     eng._last_sensevoice_error = False
@@ -794,6 +804,8 @@ class TestGroqPromptBuilder(unittest.TestCase):
     def test_build_groq_prompt_includes_seed_glossary_and_recent_context(self):
         eng = _make_engine_groq("ignored")
         eng._last_transcript = "  previous   line with   extra spaces  "
+        eng._last_context_transcript = "  previous   line with   extra spaces  "
+        eng._last_context_updated_at = time.monotonic()
 
         with patch("modules.stt.cfg") as mock_cfg, \
             patch("modules.stt.build_stt_glossary", return_value="profile terms") as glossary:
@@ -811,6 +823,8 @@ class TestGroqPromptBuilder(unittest.TestCase):
     def test_build_groq_prompt_can_skip_profile_glossary(self):
         eng = _make_engine_groq("ignored")
         eng._last_transcript = "recent context"
+        eng._last_context_transcript = "recent context"
+        eng._last_context_updated_at = time.monotonic()
 
         with patch("modules.stt.cfg") as mock_cfg, \
              patch("modules.stt.build_stt_glossary") as glossary:
@@ -821,10 +835,46 @@ class TestGroqPromptBuilder(unittest.TestCase):
         self.assertEqual(prompt, "seed prompt\nRecent Korean transcript context: recent context")
         glossary.assert_not_called()
 
+    def test_build_groq_prompt_uses_context_transcript_not_dedupe_transcript(self):
+        eng = _make_engine_groq("ignored")
+        eng._last_transcript = "low confidence transcript"
+        eng._last_context_transcript = ""
+        eng._last_context_gate_reason = "avg_logprob"
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+             patch("modules.stt.build_stt_glossary") as glossary:
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            prompt = eng._build_groq_prompt()
+
+        self.assertEqual(prompt, "seed prompt")
+        self.assertTrue(eng._last_prompt_context_gated)
+        self.assertEqual(eng._last_prompt_context_gate_reason, "avg_logprob")
+        glossary.assert_not_called()
+
+    def test_build_groq_prompt_expires_old_context(self):
+        eng = _make_engine_groq("ignored")
+        eng._last_transcript = "old transcript"
+        eng._last_context_transcript = "old transcript"
+        eng._last_context_updated_at = time.monotonic() - 60
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.context_max_age_sec = 30.0
+            prompt = eng._build_groq_prompt()
+
+        self.assertEqual(prompt, "seed prompt")
+        self.assertEqual(eng._last_context_transcript, "")
+        self.assertTrue(eng._last_prompt_context_gated)
+        self.assertEqual(eng._last_prompt_context_gate_reason, "expired")
+
     @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
     def test_transcribe_groq_passes_structured_prompt(self):
         eng = _make_engine_groq("transcribed")
         eng._last_transcript = "recent context"
+        eng._last_context_transcript = "recent context"
+        eng._last_context_updated_at = time.monotonic()
         audio = np.full(16000, 0.1, dtype=np.float32)
 
         with patch("modules.stt.cfg") as mock_cfg, \
@@ -847,6 +897,120 @@ class TestGroqPromptBuilder(unittest.TestCase):
             sent_prompt,
             "seed prompt\nprofile terms\nRecent Korean transcript context: recent context",
         )
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+    def test_good_groq_result_becomes_next_prompt_context(self):
+        eng = _make_engine_groq()
+        audio = np.full(16000, 0.1, dtype=np.float32)
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp(
+                "첫번째 문장",
+                segments=[{"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0}],
+            ),
+            _make_groq_resp(
+                "두번째 문장",
+                segments=[{"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0}],
+            ),
+        ]
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.max_japanese_chars = 2
+            first = eng.transcribe_event(audio)
+            second = eng.transcribe_event(audio)
+
+        self.assertEqual(first.text, "첫번째 문장")
+        self.assertEqual(second.text, "두번째 문장")
+        second_prompt = eng._groq_client.audio.transcriptions.create.call_args_list[1].kwargs["prompt"]
+        self.assertEqual(
+            second_prompt,
+            "seed prompt\nRecent Korean transcript context: 첫번째 문장",
+        )
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+    def test_low_confidence_groq_result_is_not_next_prompt_context(self):
+        eng = _make_engine_groq()
+        audio = np.full(16000, 0.1, dtype=np.float32)
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp(
+                "첫번째 문장",
+                segments=[{"avg_logprob": -0.8, "no_speech_prob": 0.1, "compression_ratio": 1.0}],
+            ),
+            _make_groq_resp(
+                "두번째 문장",
+                segments=[{"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0}],
+            ),
+        ]
+
+        with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.max_japanese_chars = 2
+            first = eng.transcribe_event(audio)
+            second = eng.transcribe_event(audio)
+
+        self.assertEqual(first.text, "첫번째 문장")
+        self.assertEqual(second.text, "두번째 문장")
+        second_prompt = eng._groq_client.audio.transcriptions.create.call_args_list[1].kwargs["prompt"]
+        self.assertEqual(second_prompt, "seed prompt")
+        self.assertTrue(emit.call_args_list[1].kwargs["context_gated"])
+        self.assertEqual(emit.call_args_list[1].kwargs["context_gate_reason"], "avg_logprob")
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+    def test_filtered_groq_result_clears_prompt_context(self):
+        eng = _make_engine_groq()
+        audio = np.full(16000, 0.1, dtype=np.float32)
+        eng._last_transcript = "좋은 이전 문장"
+        eng._last_context_transcript = "좋은 이전 문장"
+        eng._last_context_updated_at = time.monotonic()
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "잡음",
+            segments=[{"avg_logprob": -0.1, "no_speech_prob": 0.9, "compression_ratio": 1.0}],
+        )
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(audio)
+
+        self.assertIsNone(event)
+        self.assertEqual(eng._last_context_transcript, "")
+        self.assertEqual(eng._last_context_gate_reason, "filtered_no_speech_prob")
 
 
 class TestStreamerSttGlossary(unittest.TestCase):

@@ -69,6 +69,16 @@ def _cfg_audio_float(name: str, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) else default
 
 
+def _cfg_stt_float(name: str, default: float) -> float:
+    value = getattr(cfg.stt, name, default)
+    return float(value) if isinstance(value, (int, float)) else default
+
+
+def _cfg_stt_int(name: str, default: int) -> int:
+    value = getattr(cfg.stt, name, default)
+    return int(value) if isinstance(value, int) else default
+
+
 def _peak(audio: np.ndarray) -> float:
     return float(np.max(np.abs(audio))) if len(audio) else 0.0
 
@@ -127,6 +137,11 @@ class STTEngine:
         # rate-limits, which avoids burning primary quota during live capture.
         self._groq_prefer_fallback_key = False
         self._last_transcript: str = ""
+        self._last_context_transcript: str = ""
+        self._last_context_updated_at: float | None = None
+        self._last_context_gate_reason: str = ""
+        self._last_prompt_context_gated = False
+        self._last_prompt_context_gate_reason = ""
         self._last_avg_logprob: float | None = None
         self._last_no_speech_prob: float | None = None
         self._last_sensevoice_error = False
@@ -216,6 +231,7 @@ class STTEngine:
                     return None
                 self._consecutive_none = 0
                 self._last_transcript = result
+                self._update_context_transcript(result, "sensevoice")
                 return self._event(result, "sensevoice")
             if not self._last_sensevoice_error:
                 return None
@@ -239,6 +255,7 @@ class STTEngine:
                         self._use_groq = False
                         self._consecutive_none = 0
                         self._last_transcript = probe
+                        self._update_context_transcript(probe, "sensevoice")
                         return self._event(probe, "sensevoice")
 
         result = self._transcribe_groq(audio)
@@ -248,6 +265,7 @@ class STTEngine:
                 return None
             self._consecutive_none = 0
             self._last_transcript = result
+            self._update_context_transcript(result, "groq")
             return self._event(result, "groq")
         else:
             self._consecutive_none += 1
@@ -379,6 +397,7 @@ class STTEngine:
             if should_reject_language(detected_lang, text, log):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
+                self._clear_context_transcript("filtered_language")
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -402,6 +421,7 @@ class STTEngine:
             if reason is not None:
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
+                self._clear_context_transcript(f"filtered_{reason or 'segments'}")
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -418,6 +438,7 @@ class STTEngine:
             if not text:
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
+                self._clear_context_transcript("filtered_empty")
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -431,6 +452,7 @@ class STTEngine:
             if _is_hallucinated(text):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
+                self._clear_context_transcript("filtered_hallucinated")
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
@@ -520,17 +542,70 @@ class STTEngine:
             return None
 
     def _build_groq_prompt(self) -> str | None:
+        context_transcript = self._context_transcript_for_prompt()
         budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
             use_profile_glossary=cfg.stt.use_profile_glossary,
             active_profile=cfg.active_streamer_profile,
-            last_transcript=self._last_transcript,
+            last_transcript=context_transcript,
             glossary_builder=build_stt_glossary,
             max_context_chars=_GROQ_CONTEXT_CHARS,
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
         self._last_prompt_budget = budget
         return budget.prompt
+
+    def _context_transcript_for_prompt(self) -> str:
+        self._last_prompt_context_gated = False
+        self._last_prompt_context_gate_reason = ""
+        context = getattr(self, "_last_context_transcript", "")
+        if not context:
+            if getattr(self, "_last_transcript", ""):
+                self._last_prompt_context_gated = True
+                self._last_prompt_context_gate_reason = (
+                    getattr(self, "_last_context_gate_reason", "") or "not_context_eligible"
+                )
+            return ""
+
+        max_age = _cfg_stt_float("context_max_age_sec", 30.0)
+        updated_at = getattr(self, "_last_context_updated_at", None)
+        if max_age > 0 and updated_at is not None and time.monotonic() - updated_at > max_age:
+            self._clear_context_transcript("expired")
+            if getattr(self, "_last_transcript", ""):
+                self._last_prompt_context_gated = True
+                self._last_prompt_context_gate_reason = "expired"
+            return ""
+
+        return context
+
+    def _clear_context_transcript(self, reason: str) -> None:
+        self._last_context_transcript = ""
+        self._last_context_updated_at = None
+        self._last_context_gate_reason = reason
+
+    def _update_context_transcript(self, text: str, engine: str) -> None:
+        compact = "".join((text or "").split())
+        min_chars = _cfg_stt_int("context_min_chars", 4)
+        if len(compact) < min_chars:
+            self._clear_context_transcript("too_short")
+            return
+
+        if engine == "groq":
+            avg_logprob = getattr(self, "_last_avg_logprob", None)
+            no_speech_prob = getattr(self, "_last_no_speech_prob", None)
+            if avg_logprob is None or no_speech_prob is None:
+                self._clear_context_transcript("missing_confidence")
+                return
+            if avg_logprob < _cfg_stt_float("context_avg_logprob_threshold", -0.7):
+                self._clear_context_transcript("avg_logprob")
+                return
+            if no_speech_prob > _cfg_stt_float("context_no_speech_threshold", 0.3):
+                self._clear_context_transcript("no_speech_prob")
+                return
+
+        self._last_context_transcript = text
+        self._last_context_updated_at = time.monotonic()
+        self._last_context_gate_reason = ""
 
     def _emit_stt_runtime_event(
         self,
@@ -575,6 +650,8 @@ class STTEngine:
             glossary_truncated=budget.glossary_truncated if budget else None,
             context_present=budget.context_present if budget else None,
             context_included=budget.context_included if budget else None,
+            context_gated=bool(getattr(self, "_last_prompt_context_gated", False)) if request_sent else False,
+            context_gate_reason=getattr(self, "_last_prompt_context_gate_reason", "") if request_sent else "",
         )
 
 
