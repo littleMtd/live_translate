@@ -89,9 +89,11 @@ def _make_engine_sv() -> STTEngine:
     eng._sv_fallback_counter = 0
     eng._groq_rate_limited_until = 0.0
     eng._groq_fallback_rate_limited_until = 0.0
+    eng._groq_prefer_fallback_key = False
     eng._last_transcript = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
+    eng._last_sensevoice_error = False
     return eng
 
 
@@ -178,6 +180,7 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._last_transcript = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
+    eng._last_sensevoice_error = False
     return eng
 
 
@@ -282,6 +285,89 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertTrue(emit.call_args.kwargs["request_sent"])
         self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
 
+    def test_primary_rate_limit_retries_same_chunk_with_fallback_key(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+            def __str__(self):
+                return "Error code: 429 - rate_limit_exceeded"
+
+        eng = _make_engine_groq()
+        fallback_client = MagicMock()
+        fallback_client.audio.transcriptions.create.return_value = _make_groq_resp("fallback result")
+        eng._groq_fallback_client = fallback_client
+        eng._groq_client.audio.transcriptions.create.side_effect = RateLimitError()
+
+        with self.assertLogs("stt", level="WARNING") as cm:
+            with patch("modules.stt.runtime_events.emit") as emit:
+                result = eng._transcribe_groq(self._audio())
+
+        self.assertEqual(result, "fallback result")
+        self.assertTrue(any("retrying same chunk with fallback key" in line for line in cm.output))
+        eng._groq_client.audio.transcriptions.create.assert_called_once()
+        fallback_client.audio.transcriptions.create.assert_called_once()
+        self.assertEqual(emit.call_count, 2)
+        self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
+        self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
+        self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
+        self.assertLessEqual(eng._groq_fallback_rate_limited_until, time.monotonic())
+        self.assertTrue(eng._groq_prefer_fallback_key)
+
+    def test_primary_rate_limit_switches_future_chunks_to_fallback_key(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+            def __str__(self):
+                return "Error code: 429 - rate_limit_exceeded"
+
+        eng = _make_engine_groq()
+        fallback_client = MagicMock()
+        fallback_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp("first fallback"),
+            _make_groq_resp("second fallback"),
+        ]
+        eng._groq_fallback_client = fallback_client
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            RateLimitError(),
+            AssertionError("primary should not be retried after fallback preference is set"),
+        ]
+
+        with patch("modules.stt.runtime_events.emit"):
+            self.assertEqual(eng._transcribe_groq(self._audio()), "first fallback")
+            eng._groq_rate_limited_until = 0.0
+            self.assertEqual(eng._transcribe_groq(self._audio()), "second fallback")
+
+        self.assertEqual(eng._groq_client.audio.transcriptions.create.call_count, 1)
+        self.assertEqual(fallback_client.audio.transcriptions.create.call_count, 2)
+
+    def test_fallback_rate_limit_switches_back_to_primary_key(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+            def __str__(self):
+                return "Error code: 429 - rate_limit_exceeded"
+
+        eng = _make_engine_groq("primary result")
+        fallback_client = MagicMock()
+        fallback_client.audio.transcriptions.create.side_effect = RateLimitError()
+        eng._groq_fallback_client = fallback_client
+        eng._groq_prefer_fallback_key = True
+
+        with self.assertLogs("stt", level="WARNING") as cm:
+            with patch("modules.stt.runtime_events.emit") as emit:
+                result = eng._transcribe_groq(self._audio())
+
+        self.assertEqual(result, "primary result")
+        self.assertTrue(any("retrying same chunk with primary key" in line for line in cm.output))
+        fallback_client.audio.transcriptions.create.assert_called_once()
+        eng._groq_client.audio.transcriptions.create.assert_called_once()
+        self.assertEqual(emit.call_count, 2)
+        self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
+        self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
+        self.assertFalse(eng._groq_prefer_fallback_key)
+
     def test_rate_limit_cooldown_skips_without_request(self):
         eng = _make_engine_groq()
         eng._groq_rate_limited_until = time.monotonic() + 60
@@ -364,7 +450,7 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual(result, "테스트")
         eng._sense_voice.generate.assert_called_once()
 
-    def test_falls_back_to_groq_when_sensevoice_returns_none(self):
+    def test_sensevoice_no_speech_does_not_switch_to_groq(self):
         eng = _make_engine_sv()
         eng._sense_voice.generate.return_value = _sv_response("<|BGM|>")
         groq_mock = MagicMock()
@@ -374,7 +460,22 @@ class TestTranscribeFallback(unittest.TestCase):
         with patch.object(eng, "_init_groq"):   # prevent real Groq init
             result = eng.transcribe(self._audio())
 
+        self.assertIsNone(result)
+        self.assertFalse(eng._use_groq)
+        groq_mock.audio.transcriptions.create.assert_not_called()
+
+    def test_falls_back_to_groq_when_sensevoice_errors(self):
+        eng = _make_engine_sv()
+        eng._sense_voice.generate.side_effect = RuntimeError("sensevoice crashed")
+        groq_mock = MagicMock()
+        groq_mock.audio.transcriptions.create.return_value = _make_groq_resp("Groq result")
+        eng._groq_client = groq_mock
+
+        with patch.object(eng, "_init_groq"):   # prevent real Groq init
+            result = eng.transcribe(self._audio())
+
         self.assertEqual(result, "Groq result")
+        self.assertTrue(eng._use_groq)
 
     def test_transcribe_event_includes_engine_and_profile(self):
         eng = _make_engine_groq("Groq result")

@@ -122,9 +122,29 @@ def should_reject_segments(
     max_compression_ratio: float = 2.4,
     logger=log,
 ) -> bool:
+    reason, _stats = segment_rejection_reason(
+        segments,
+        text=text,
+        no_speech_threshold=no_speech_threshold,
+        avg_logprob_threshold=avg_logprob_threshold,
+        max_compression_ratio=max_compression_ratio,
+        logger=logger,
+    )
+    return reason is not None
+
+
+def segment_rejection_reason(
+    segments: list[dict],
+    *,
+    text: str,
+    no_speech_threshold: float,
+    avg_logprob_threshold: float,
+    max_compression_ratio: float = 2.4,
+    logger=log,
+) -> tuple[str | None, SegmentStats | None]:
     stats = segment_stats(segments)
     if stats is None:
-        return False
+        return None, None
 
     logger.debug(
         "Groq segment stats: no_speech=%.2f logprob=%.2f comp=%.2f",
@@ -134,15 +154,15 @@ def should_reject_segments(
     )
     if stats.no_speech > no_speech_threshold:
         logger.warning("Groq STT rejected (no_speech_prob=%.2f): %s", stats.no_speech, text[:40])
-        return True
+        return "no_speech_prob", stats
     if stats.logprob < avg_logprob_threshold:
         logger.warning("Groq STT rejected (avg_logprob=%.2f): %s", stats.logprob, text[:40])
-        return True
+        return "avg_logprob", stats
     if stats.compression_ratio > max_compression_ratio:
         logger.warning("Groq STT rejected (compression_ratio=%.2f): %s", stats.compression_ratio, text[:40])
-        return True
+        return "compression_ratio", stats
 
-    return False
+    return None, stats
 
 
 @dataclass(frozen=True)

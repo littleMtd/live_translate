@@ -3,6 +3,7 @@ import queue
 import re
 import threading
 import time
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -779,6 +780,43 @@ class TranslationOutcome:
         }
 
 
+@dataclass
+class _TranslatorSharedState:
+    evolver: PromptEvolver
+    memory: TranslationMemory
+    policy: TranslationPolicy
+    fallback: FallbackState
+    lock: object
+
+
+def _new_translation_memory() -> TranslationMemory:
+    recent_window = max(getattr(cfg.translation, 'context_window', 0) or 0, 30)
+    return TranslationMemory(
+        recent_window=recent_window,
+        max_cache_size=_CACHE_MAX_SIZE,
+        db_factory=_get_db,
+        history_writer=_write_history,
+    )
+
+
+def _new_translation_policy() -> TranslationPolicy:
+    return TranslationPolicy(
+        slang=cfg.translation.slang,
+        min_translate_chars=_MIN_TRANSLATE_CHARS,
+        max_translate_chars=cfg.translation.max_translate_chars,
+    )
+
+
+def _new_translator_shared_state() -> _TranslatorSharedState:
+    return _TranslatorSharedState(
+        evolver=PromptEvolver(),
+        memory=_new_translation_memory(),
+        policy=_new_translation_policy(),
+        fallback=FallbackState(),
+        lock=threading.RLock(),
+    )
+
+
 def _outcome_used_api(outcome: TranslationOutcome) -> bool:
     if outcome.result_source == "api":
         return True
@@ -825,26 +863,49 @@ class _CompletedTranslation:
 
 
 class Translator:
-    def __init__(self):
-        self._evolver = PromptEvolver()
+    def __init__(self, shared_state: _TranslatorSharedState | None = None):
+        self._shared_state = shared_state or _new_translator_shared_state()
+        self._state_lock = self._shared_state.lock
+        self._fallback_state_obj = self._shared_state.fallback
+        self._evolver = self._shared_state.evolver
         self._engines: list[TranslationEngine] = _build_engine_chain()
-        self._active_idx = 0
-        self._probe_counter = 0
-        self._consecutive_primary_failures = 0
-        # 保留最近的翻译历史以提供上下文；至少保留 30 条以增强上下文感知
-        recent_window = max(getattr(cfg.translation, 'context_window', 0) or 0, 30)
-        self._memory = TranslationMemory(
-            recent_window=recent_window,
-            max_cache_size=_CACHE_MAX_SIZE,
-            db_factory=_get_db,
-            history_writer=_write_history,
-        )
-        self._policy = TranslationPolicy(
-            slang=cfg.translation.slang,
-            min_translate_chars=_MIN_TRANSLATE_CHARS,
-            max_translate_chars=cfg.translation.max_translate_chars,
-        )
+        self._memory = self._shared_state.memory
+        self._policy = self._shared_state.policy
         self._last_input: str = ""
+
+    def _state_guard(self):
+        return getattr(self, "_state_lock", None) or nullcontext()
+
+    def _fallback_state(self) -> FallbackState:
+        state = getattr(self, "_fallback_state_obj", None)
+        if state is None:
+            state = FallbackState()
+            self._fallback_state_obj = state
+        return state
+
+    @property
+    def _active_idx(self) -> int:
+        return self._fallback_state().active_idx
+
+    @_active_idx.setter
+    def _active_idx(self, value: int) -> None:
+        self._fallback_state().active_idx = value
+
+    @property
+    def _probe_counter(self) -> int:
+        return self._fallback_state().probe_counter
+
+    @_probe_counter.setter
+    def _probe_counter(self, value: int) -> None:
+        self._fallback_state().probe_counter = value
+
+    @property
+    def _consecutive_primary_failures(self) -> int:
+        return self._fallback_state().consecutive_primary_failures
+
+    @_consecutive_primary_failures.setter
+    def _consecutive_primary_failures(self, value: int) -> None:
+        self._fallback_state().consecutive_primary_failures = value
 
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         return self.translate_event(text, incomplete).target_text
@@ -911,7 +972,9 @@ class Translator:
                 prompt_version=prompt_ver,
             )
 
-        result = self._call_with_fallback(text, system_prompt, incomplete, self._memory_state().context())
+        with self._state_guard():
+            history = self._memory_state().context()
+        result = self._call_with_fallback(text, system_prompt, incomplete, history)
         engine = self._active_engine()
         if result:
             result = _apply_source_aware_corrections(text, result)
@@ -958,8 +1021,9 @@ class Translator:
         )
 
     def _prepare_input(self, text: str) -> str | None:
-        prepared = self._policy_state().prepare_input(text)
-        self._last_input = self._policy_state().last_input
+        with self._state_guard():
+            prepared = self._policy_state().prepare_input(text)
+            self._last_input = self._policy_state().last_input
         return prepared
 
     def _policy_state(self) -> TranslationPolicy:
@@ -974,32 +1038,35 @@ class Translator:
             return None
 
         log.debug("Slang hit: %s → %s", text, slang_result)
-        self._evolver.record(text, slang_result)
-        self._memory_state().record_direct(text, slang_result, incomplete)
+        with self._state_guard():
+            self._evolver.record(text, slang_result)
+            self._memory_state().record_direct(text, slang_result, incomplete)
         return slang_result
 
     def _lookup_existing_translation_event(self, text: str, incomplete: bool,
                                            prompt_ver: str) -> MemoryLookup:
-        lookup = self._memory_state().lookup_existing_event(
-            text,
-            incomplete,
-            prompt_ver,
-            self._active_engine(),
-        )
+        with self._state_guard():
+            lookup = self._memory_state().lookup_existing_event(
+                text,
+                incomplete,
+                prompt_ver,
+                self._active_engine(),
+            )
         if lookup.result:
             log.debug("Cache hit: %s", text[:20])
         return lookup
 
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str) -> None:
-        self._evolver.record(text, result)
-        self._memory_state().record_success(
-            text,
-            result,
-            incomplete,
-            prompt_ver,
-            self._active_engine(),
-        )
+        with self._state_guard():
+            self._evolver.record(text, result)
+            self._memory_state().record_success(
+                text,
+                result,
+                incomplete,
+                prompt_ver,
+                self._active_engine(),
+            )
 
     def _active_engine(self) -> TranslationEngine | None:
         return active_engine(self._engines, self._active_idx)
@@ -1012,7 +1079,8 @@ class Translator:
     def _build_system_prompt(self) -> str:
         is_qwen = _is_qwen_model()
         base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
-        system_prompt = self._evolver.build_system_prompt(base_prompt)
+        with self._state_guard():
+            system_prompt = self._evolver.build_system_prompt(base_prompt)
 
         if not cfg.translation.use_profile:
             return system_prompt
@@ -1030,7 +1098,17 @@ class Translator:
 
     def _call_with_fallback(self, text: str, system_prompt: str, incomplete: bool,
                             history: list[tuple[str, str]] | None = None) -> str | None:
-        state = FallbackState(self._active_idx, self._probe_counter, self._consecutive_primary_failures)
+        fallback_state = self._fallback_state()
+        lock = getattr(self, "_state_lock", None)
+        if lock is None:
+            state = fallback_state
+        else:
+            with lock:
+                state = FallbackState(
+                    fallback_state.active_idx,
+                    fallback_state.probe_counter,
+                    fallback_state.consecutive_primary_failures,
+                )
         result = call_with_fallback(
             self._engines,
             state,
@@ -1043,9 +1121,11 @@ class Translator:
             _looks_untranslated,
             log,
         )
-        self._active_idx = state.active_idx
-        self._probe_counter = state.probe_counter
-        self._consecutive_primary_failures = state.consecutive_primary_failures
+        if lock is not None:
+            with lock:
+                fallback_state.active_idx = state.active_idx
+                fallback_state.probe_counter = state.probe_counter
+                fallback_state.consecutive_primary_failures = state.consecutive_primary_failures
         return result
 
     def _get_prompt_version_hash(self) -> str:
@@ -1059,6 +1139,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
     def run():
+        shared_state = _new_translator_shared_state()
         worker_state = threading.local()
         executor = ThreadPoolExecutor(
             max_workers=_TRANSLATION_WORKERS,
@@ -1087,15 +1168,18 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             )
             started = time.monotonic()
             worker_id = threading.current_thread().name
-            worker_translator = getattr(worker_state, "translator", None)
-            if worker_translator is None:
-                worker_translator = Translator()
-                worker_state.translator = worker_translator
             # Reset before translating so cache hits / failures (which never reach an
             # engine) don't inherit the previous call's token usage / corrections.
             reset_last_token_usage()
             reset_corrections()
             try:
+                worker_translator = getattr(worker_state, "translator", None)
+                if worker_translator is None:
+                    try:
+                        worker_translator = Translator(shared_state=shared_state)
+                    except TypeError:
+                        worker_translator = Translator()
+                    worker_state.translator = worker_translator
                 outcome = worker_translator.translate_event(text, incomplete)
             except Exception:
                 log.exception("Translation worker failed for: %.40s", text)

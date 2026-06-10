@@ -853,6 +853,68 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         events.emit.assert_called_once()
         return events.emit.call_args.kwargs
 
+    def test_translation_workers_share_translator_state(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        first_started = threading.Event()
+        second_started = threading.Event()
+        release_first = threading.Event()
+
+        class _SharedFakeTranslator:
+            instances: list["_SharedFakeTranslator"] = []
+            calls: list[str] = []
+            lock = threading.Lock()
+
+            def __init__(self, shared_state=None):
+                self.shared_state = shared_state
+                with self.__class__.lock:
+                    self.__class__.instances.append(self)
+
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                with self.__class__.lock:
+                    self.__class__.calls.append(text)
+                if text == "first":
+                    first_started.set()
+                    second_started.wait(timeout=3)
+                    release_first.wait(timeout=3)
+                else:
+                    second_started.set()
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"out-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                )
+
+        with patch.object(translator_module, "Translator", _SharedFakeTranslator), \
+                patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                sentence_q.put({"text": "first", "incomplete": False})
+                self.assertTrue(first_started.wait(timeout=3))
+                sentence_q.put({"text": "second", "incomplete": False})
+                self.assertTrue(second_started.wait(timeout=3))
+                release_first.set()
+
+                deadline = time.monotonic() + 3
+                while events.emit.call_count < 2 and time.monotonic() < deadline:
+                    stop.wait(0.005)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertGreaterEqual(len(_SharedFakeTranslator.instances), 2)
+        shared_state_ids = {id(instance.shared_state) for instance in _SharedFakeTranslator.instances}
+        self.assertEqual(len(shared_state_ids), 1)
+        self.assertIsNotNone(_SharedFakeTranslator.instances[0].shared_state)
+        self.assertCountEqual(_SharedFakeTranslator.calls, ["first", "second"])
+        self.assertEqual(events.emit.call_count, 2)
+
     def test_memory_hit_ignores_stale_nvidia_retry_diagnostics(self):
         event = self._emit_outcome_with_stale_nvidia_diagnostics(
             TranslationOutcome(

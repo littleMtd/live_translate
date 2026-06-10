@@ -194,7 +194,8 @@ def main():
         else:
             threads.append(_stt_printer(sentence_queue, stop_event))
             log.info("STT-only mode — press Ctrl+C to stop")
-        stop_event.wait()
+        while not stop_event.is_set():
+            stop_event.wait(1.0)
     else:
         threads.append(translator.start(sentence_queue, subtitle_queue, stop_event, pause_event))
         log.info("All background threads started. Opening subtitle window (Ctrl+C to quit).")

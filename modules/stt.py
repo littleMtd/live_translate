@@ -21,6 +21,7 @@ from modules.stt_policy import (
     dedupe_transcript_overlap,
     is_hallucinated,
     normalize_prompt_text,
+    segment_rejection_reason,
     segment_stats,
     should_reject_language,
     should_reject_segments,
@@ -112,19 +113,6 @@ def _normalize_audio_for_stt(audio: np.ndarray) -> tuple[np.ndarray, dict[str, f
     return normalized.astype(np.float32, copy=False), stats
 
 
-def _segment_rejection_reason(segments: list[dict]) -> tuple[str, float | None, float | None]:
-    stats = segment_stats(segments)
-    if stats is None:
-        return "segments", None, None
-    if stats.no_speech > cfg.stt.no_speech_threshold:
-        return "no_speech_prob", stats.logprob, stats.no_speech
-    if stats.logprob < cfg.stt.avg_logprob_threshold:
-        return "avg_logprob", stats.logprob, stats.no_speech
-    if stats.compression_ratio > 2.4:
-        return "compression_ratio", stats.logprob, stats.no_speech
-    return "segments", stats.logprob, stats.no_speech
-
-
 class STTEngine:
     def __init__(self):
         self._sense_voice = None
@@ -135,9 +123,11 @@ class STTEngine:
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
         self._groq_rate_limited_until = 0.0
         self._groq_fallback_rate_limited_until = 0.0
+        self._groq_prefer_fallback_key = False
         self._last_transcript: str = ""
         self._last_avg_logprob: float | None = None
         self._last_no_speech_prob: float | None = None
+        self._last_sensevoice_error = False
         # Monotonic per-transcription counter; minted once per transcribe_event
         # call (single STT thread, so no lock needed) to correlate downstream events.
         self._utterance_seq = 0
@@ -172,6 +162,7 @@ class STTEngine:
             log.error("Failed to load SenseVoice-Small: %s — will use Groq", e)
             self._use_groq = True
             self._init_groq()
+            self._init_groq_fallback()
 
     def _init_groq(self):
         if not cfg.keys.groq:
@@ -224,9 +215,12 @@ class STTEngine:
                 self._consecutive_none = 0
                 self._last_transcript = result
                 return self._event(result, "sensevoice")
-            # SenseVoice failed — fall through to Groq
+            if not self._last_sensevoice_error:
+                return None
+            # SenseVoice engine failed — fall through to Groq
             self._use_groq = True
             self._init_groq()
+            self._init_groq_fallback()
         else:
             # Periodically probe SenseVoice recovery (mirrors translator fallback logic).
             # Only attempt if we actually loaded a SenseVoice model at some point.
@@ -276,6 +270,7 @@ class STTEngine:
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
+        self._last_sensevoice_error = False
         try:
             res = self._sense_voice.generate(
                 input=audio,
@@ -297,6 +292,7 @@ class STTEngine:
             return text
         except Exception as e:
             log.error("SenseVoice error: %s", e)
+            self._last_sensevoice_error = True
             return None
 
     def _transcribe_groq(self, audio: np.ndarray) -> str | None:
@@ -308,12 +304,18 @@ class STTEngine:
             self._groq_fallback_client is not None
             and started >= self._groq_fallback_rate_limited_until
         )
-        if primary_ready:
+        prefer_fallback = bool(getattr(self, "_groq_prefer_fallback_key", False))
+        if prefer_fallback and fallback_ready:
+            active_client = self._groq_fallback_client
+            using_fallback = True
+            log.debug("Using preferred Groq fallback key")
+        elif primary_ready:
             active_client = self._groq_client
             using_fallback = False
         elif fallback_ready:
             active_client = self._groq_fallback_client
             using_fallback = True
+            self._groq_prefer_fallback_key = True
             log.debug("Primary Groq key rate-limited; using fallback key")
         else:
             if self._groq_client is None and self._groq_fallback_client is None:
@@ -395,18 +397,24 @@ class STTEngine:
                 avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
                 logger=log,
             ):
-                reason, avg_logprob, no_speech_prob = _segment_rejection_reason(segments)
+                reason, stats = segment_rejection_reason(
+                    segments,
+                    text=text,
+                    no_speech_threshold=cfg.stt.no_speech_threshold,
+                    avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
+                    logger=log,
+                )
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(
                     audio=audio,
                     started=started,
                     status="filtered",
-                    reason=reason,
+                    reason=reason or "segments",
                     request_sent=request_sent,
                     text=text,
-                    avg_logprob=avg_logprob,
-                    no_speech_prob=no_speech_prob,
+                    avg_logprob=stats.logprob if stats else None,
+                    no_speech_prob=stats.no_speech if stats else None,
                     audio_stats=audio_stats,
                 )
                 return None
@@ -457,13 +465,51 @@ class STTEngine:
             self._last_avg_logprob = None
             self._last_no_speech_prob = None
             if _is_groq_rate_limit_error(e):
-                log.warning("Groq STT rate limited; dropping chunk without SDK retry: %s", e)
                 reason = "rate_limited"
                 cooldown_end = time.monotonic() + max(0.0, cfg.stt.groq_rate_limit_cooldown_sec)
                 if using_fallback:
                     self._groq_fallback_rate_limited_until = cooldown_end
+                    self._groq_prefer_fallback_key = False
+                    if (
+                        self._groq_client is not None
+                        and time.monotonic() >= self._groq_rate_limited_until
+                    ):
+                        log.warning(
+                            "Groq STT fallback key rate limited; retrying same chunk with primary key: %s",
+                            e,
+                        )
+                        self._emit_stt_runtime_event(
+                            audio=audio,
+                            started=started,
+                            status="failed",
+                            reason=reason,
+                            request_sent=request_sent,
+                            audio_stats=audio_stats,
+                        )
+                        return self._transcribe_groq(audio)
+                    log.warning("Groq STT fallback key rate limited; dropping chunk: %s", e)
                 else:
                     self._groq_rate_limited_until = cooldown_end
+                    if self._groq_fallback_client is not None:
+                        self._groq_prefer_fallback_key = True
+                    if (
+                        self._groq_fallback_client is not None
+                        and time.monotonic() >= self._groq_fallback_rate_limited_until
+                    ):
+                        log.warning(
+                            "Groq STT primary key rate limited; retrying same chunk with fallback key: %s",
+                            e,
+                        )
+                        self._emit_stt_runtime_event(
+                            audio=audio,
+                            started=started,
+                            status="failed",
+                            reason=reason,
+                            request_sent=request_sent,
+                            audio_stats=audio_stats,
+                        )
+                        return self._transcribe_groq(audio)
+                    log.warning("Groq STT rate limited; dropping chunk without fallback retry: %s", e)
             else:
                 log.error("Groq STT error: %s", e)
                 reason = "error"
