@@ -100,6 +100,8 @@ class _STT:
 class _Splitter:
     min_wait_seconds:  int = 3
     force_cut_seconds: int = 8
+    max_merge_source_count: int = 2
+    max_merge_text_chars: int = 120
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
