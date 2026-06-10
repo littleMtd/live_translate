@@ -2,7 +2,9 @@
 import unittest
 
 from modules.pipeline_events import (
+    AudioChunk,
     SentenceEvent,
+    SegmentInfo,
     TranscriptionEvent,
     sentence_metadata,
     source_confidence_summary,
@@ -11,6 +13,32 @@ from modules.pipeline_events import (
 
 
 class TestUtteranceIdPropagation(unittest.TestCase):
+    def test_audio_chunk_proxies_legacy_audio_shape_access(self):
+        audio = [1, 2, 3]
+        chunk = AudioChunk(audio=audio, overlap_seconds=0.5, vad_cut_reason="silence")
+
+        self.assertEqual(len(chunk), 3)
+        self.assertEqual(chunk[1], 2)
+        self.assertEqual(chunk.overlap_seconds, 0.5)
+        self.assertEqual(chunk.vad_cut_reason, "silence")
+
+    def test_transcription_event_can_carry_segment_metadata(self):
+        event = TranscriptionEvent(
+            text="안녕하세요",
+            engine="groq",
+            profile_id="",
+            segments=(
+                SegmentInfo(start=0.1, end=0.8, text="안녕하세요", avg_logprob=-0.2, no_speech_prob=0.1),
+            ),
+            overlap_seconds=0.4,
+            vad_cut_reason="silence",
+        )
+
+        self.assertEqual(event.segments[0].start, 0.1)
+        self.assertEqual(event.segments[0].end, 0.8)
+        self.assertEqual(event.overlap_seconds, 0.4)
+        self.assertEqual(event.vad_cut_reason, "silence")
+
     def test_transcription_to_sentence_carries_utterance_id(self):
         source = TranscriptionEvent(
             text="안녕하세요",

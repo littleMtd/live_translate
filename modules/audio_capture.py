@@ -10,6 +10,7 @@ from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events
+from modules.pipeline_events import AudioChunk
 
 log = get_logger("audio_capture")
 
@@ -256,11 +257,22 @@ class _VadState:
         metrics.increment(f"audio.cut.{cut_reason}")
         if was_adaptive:
             metrics.increment("audio.vad.adaptive")
-        drained = put_latest(self._q, chunk, log, "audio_queue", "chunks")
         rms_value = _rms(chunk)
         peak_value = float(np.max(np.abs(chunk))) if len(chunk) else 0.0
         overlap_seconds = len(chunk) - raw_total_samples
         overlap_seconds = max(0, overlap_seconds) / cfg.audio.sample_rate
+        drained = put_latest(
+            self._q,
+            AudioChunk(
+                audio=chunk,
+                overlap_seconds=overlap_seconds,
+                vad_cut_reason=cut_reason,
+                raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+            ),
+            log,
+            "audio_queue",
+            "chunks",
+        )
         self._emit_vad_runtime_event(
             cut_reason=cut_reason,
             audio_seconds=len(chunk) / cfg.audio.sample_rate,
@@ -367,7 +379,18 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                             log.debug("Silence detected, skipping chunk")
                             continue
                         metrics.increment("audio.chunks")
-                        put_latest(audio_queue, chunk.copy(), log, "audio_queue", "chunks")
+                        put_latest(
+                            audio_queue,
+                            AudioChunk(
+                                audio=chunk.copy(),
+                                overlap_seconds=0.0,
+                                vad_cut_reason="fixed",
+                                raw_audio_seconds=len(chunk) / cfg.audio.sample_rate,
+                            ),
+                            log,
+                            "audio_queue",
+                            "chunks",
+                        )
 
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
             capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)

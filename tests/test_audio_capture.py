@@ -124,6 +124,7 @@ class TestVadState(unittest.TestCase):
 
     def test_emit_after_speech_then_silence(self):
         from modules.audio_capture import _VadState
+        from modules.pipeline_events import AudioChunk
         q = queue.Queue()
         with patch("modules.audio_capture.cfg", self._make_cfg()):
             vad = _VadState(q)
@@ -131,7 +132,10 @@ class TestVadState(unittest.TestCase):
             vad.push(self._quiet(10))  # silent_samples=10 >= gate 10 → emit
         self.assertFalse(q.empty(), "Expected chunk to be emitted")
         chunk = q.get_nowait()
+        self.assertIsInstance(chunk, AudioChunk)
         self.assertEqual(len(chunk), 20)
+        self.assertEqual(chunk.vad_cut_reason, "silence")
+        self.assertEqual(chunk.overlap_seconds, 0.0)
 
     def test_no_emit_silence_below_gate(self):
         from modules.audio_capture import _VadState
@@ -195,6 +199,8 @@ class TestVadState(unittest.TestCase):
 
         self.assertEqual(len(first), 55)
         self.assertEqual(len(second), 30)
+        self.assertEqual(second.overlap_seconds, 0.1)
+        self.assertEqual(second.vad_cut_reason, "silence")
 
     def test_natural_silence_cut_does_not_create_overlap(self):
         from modules.audio_capture import _VadState

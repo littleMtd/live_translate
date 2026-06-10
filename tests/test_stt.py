@@ -28,7 +28,7 @@ from modules.stt import (
     _normalize_audio_for_stt,
     STTEngine,
 )
-from modules.pipeline_events import TranscriptionEvent
+from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +98,11 @@ def _make_engine_sv() -> STTEngine:
     eng._last_prompt_context_gate_reason = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
+    eng._last_audio_seconds = 0.0
+    eng._last_segments = ()
+    eng._current_overlap_seconds = 0.0
+    eng._current_vad_cut_reason = ""
+    eng._last_prompt_budget = None
     eng._last_sensevoice_error = False
     return eng
 
@@ -190,6 +195,11 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._last_prompt_context_gate_reason = ""
     eng._utterance_seq = 0
     eng._current_utterance_id = ""
+    eng._last_audio_seconds = 0.0
+    eng._last_segments = ()
+    eng._current_overlap_seconds = 0.0
+    eng._current_vad_cut_reason = ""
+    eng._last_prompt_budget = None
     eng._last_sensevoice_error = False
     return eng
 
@@ -546,8 +556,8 @@ class TestTranscribeFallback(unittest.TestCase):
         eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
             "Groq result",
             segments=[
-                {"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
-                {"avg_logprob": -0.4, "no_speech_prob": 0.3, "compression_ratio": 1.0},
+                {"start": 0.0, "end": 0.8, "text": "Groq", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"start": 0.8, "end": 1.6, "text": "result", "avg_logprob": -0.4, "no_speech_prob": 0.3, "compression_ratio": 1.0},
             ],
         )
 
@@ -562,11 +572,27 @@ class TestTranscribeFallback(unittest.TestCase):
             mock_cfg.stt.no_speech_threshold = 0.6
             mock_cfg.stt.avg_logprob_threshold = -1.0
             mock_cfg.stt.max_japanese_chars = 2
-            event = eng.transcribe_event(self._audio())
+            event = eng.transcribe_event(
+                AudioChunk(
+                    audio=self._audio(),
+                    overlap_seconds=0.4,
+                    vad_cut_reason="silence",
+                    raw_audio_seconds=1.2,
+                )
+            )
 
         self.assertIsNotNone(event)
         self.assertAlmostEqual(event.avg_logprob, -0.3)
         self.assertAlmostEqual(event.no_speech_prob, 0.2)
+        self.assertEqual(event.overlap_seconds, 0.4)
+        self.assertEqual(event.vad_cut_reason, "silence")
+        self.assertEqual(
+            event.segments,
+            (
+                SegmentInfo(start=0.0, end=0.8, text="Groq", avg_logprob=-0.2, no_speech_prob=0.1),
+                SegmentInfo(start=0.8, end=1.6, text="result", avg_logprob=-0.4, no_speech_prob=0.3),
+            ),
+        )
 
     def test_transcribe_event_dedupes_overlap_against_previous_text(self):
         eng = _make_engine_groq("여기 기지를 우리가 이제 막아야 돼요")

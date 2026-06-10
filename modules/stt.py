@@ -14,7 +14,7 @@ from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events
 from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
-from modules.pipeline_events import TranscriptionEvent
+from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
 from modules.streamer_profiles import build_stt_glossary
 from modules.stt_policy import (
     build_groq_prompt_budget,
@@ -57,6 +57,37 @@ def _normalize_prompt_text(text: str, max_chars: int | None = None) -> str:
 
 def _audio_seconds(audio: np.ndarray) -> float:
     return round(len(audio) / max(1, cfg.audio.sample_rate), 3)
+
+
+def _audio_chunk(item: np.ndarray | AudioChunk) -> AudioChunk:
+    if isinstance(item, AudioChunk):
+        return item
+    return AudioChunk(audio=item)
+
+
+def _float_or_none(value) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _segment_infos(segments: list[dict]) -> tuple[SegmentInfo, ...]:
+    infos: list[SegmentInfo] = []
+    for segment in segments:
+        get = segment.get if isinstance(segment, dict) else lambda name, default=None: getattr(segment, name, default)
+        infos.append(
+            SegmentInfo(
+                start=_float_or_none(get("start")),
+                end=_float_or_none(get("end")),
+                text=str(get("text", "") or "").strip(),
+                avg_logprob=_float_or_none(get("avg_logprob")),
+                no_speech_prob=_float_or_none(get("no_speech_prob")),
+            )
+        )
+    return tuple(infos)
 
 
 def _cfg_audio_bool(name: str, default: bool) -> bool:
@@ -150,6 +181,9 @@ class STTEngine:
         self._utterance_seq = 0
         self._current_utterance_id = ""
         self._last_audio_seconds = 0.0
+        self._last_segments: tuple[SegmentInfo, ...] = ()
+        self._current_overlap_seconds = 0.0
+        self._current_vad_cut_reason = ""
         self._last_prompt_budget = None
         if self._use_groq:
             self._init_groq()
@@ -215,15 +249,20 @@ class STTEngine:
         except Exception as e:
             log.error("Failed to init Groq fallback client: %s", e)
 
-    def transcribe(self, audio: np.ndarray) -> str | None:
+    def transcribe(self, audio: np.ndarray | AudioChunk) -> str | None:
         event = self.transcribe_event(audio)
         return event.text if event else None
 
-    def transcribe_event(self, audio: np.ndarray) -> TranscriptionEvent | None:
+    def transcribe_event(self, audio: np.ndarray | AudioChunk) -> TranscriptionEvent | None:
+        chunk = _audio_chunk(audio)
+        audio = chunk.audio
         self._utterance_seq += 1
         self._current_utterance_id = f"utt-{self._utterance_seq}"
         self._last_audio_seconds = _audio_seconds(audio)
+        self._current_overlap_seconds = float(chunk.overlap_seconds or 0.0)
+        self._current_vad_cut_reason = str(chunk.vad_cut_reason or "")
         if not self._use_groq:
+            self._last_segments = ()
             result = self._transcribe_sensevoice(audio)
             if result is not None:
                 result = dedupe_transcript_overlap(self._last_transcript, result)
@@ -246,6 +285,7 @@ class STTEngine:
                 self._sv_fallback_counter += 1
                 if self._sv_fallback_counter >= _SENSEVOICE_PROBE_EVERY:
                     self._sv_fallback_counter = 0
+                    self._last_segments = ()
                     probe = self._transcribe_sensevoice(audio)
                     if probe is not None:
                         probe = dedupe_transcript_overlap(self._last_transcript, probe)
@@ -285,6 +325,9 @@ class STTEngine:
             audio_seconds=self._last_audio_seconds,
             avg_logprob=self._last_avg_logprob,
             no_speech_prob=self._last_no_speech_prob,
+            segments=getattr(self, "_last_segments", ()),
+            overlap_seconds=getattr(self, "_current_overlap_seconds", 0.0),
+            vad_cut_reason=getattr(self, "_current_vad_cut_reason", ""),
         )
 
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
@@ -319,6 +362,7 @@ class STTEngine:
         started = time.monotonic()
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
+        self._last_segments = ()
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
             self._groq_fallback_client is not None
@@ -411,6 +455,7 @@ class STTEngine:
 
             # Confidence filtering via segment metadata
             segments = getattr(resp, "segments", None) or []
+            self._last_segments = _segment_infos(segments)
             reason, stats = segment_rejection_reason(
                 segments,
                 text=text,
@@ -465,6 +510,7 @@ class STTEngine:
                 return None
             log.debug("Groq: %s", text)
             stats = segment_stats(segments)
+            self._last_segments = _segment_infos(segments)
             self._last_avg_logprob = stats.logprob if stats else None
             self._last_no_speech_prob = stats.no_speech if stats else None
             self._emit_stt_runtime_event(
@@ -638,6 +684,9 @@ class STTEngine:
             profile_id=cfg.active_streamer_profile,
             avg_logprob=avg_logprob,
             no_speech_prob=no_speech_prob,
+            segment_count=len(getattr(self, "_last_segments", ())),
+            overlap_seconds=round(getattr(self, "_current_overlap_seconds", 0.0), 3),
+            vad_cut_reason=getattr(self, "_current_vad_cut_reason", ""),
             audio_rms=audio_stats.get("audio_rms"),
             audio_peak=audio_stats.get("audio_peak"),
             normalized_rms=audio_stats.get("normalized_rms"),
@@ -677,12 +726,14 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             dump_dir = _AUDIO_DUMP_ROOT / runtime_events.run_id
             log.info("STT audio dump enabled → %s", dump_dir)
         while not stop_event.is_set():
-            has_audio, audio = poll_queue(audio_queue, stop_event, pause_event)
+            has_audio, audio_item = poll_queue(audio_queue, stop_event, pause_event)
             if not has_audio:
                 continue
 
+            chunk = _audio_chunk(audio_item)
+            audio = chunk.audio
             started = time.monotonic()
-            event = engine.transcribe_event(audio)
+            event = engine.transcribe_event(chunk)
             metrics.observe_latency("stt", time.monotonic() - started)
             if event:
                 metrics.increment("stt.success")

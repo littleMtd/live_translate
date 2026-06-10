@@ -68,6 +68,33 @@ def source_confidence_summary(
 
 
 @dataclass(frozen=True)
+class SegmentInfo:
+    start: float | None = None
+    end: float | None = None
+    text: str = ""
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = None
+
+
+@dataclass(frozen=True)
+class AudioChunk:
+    audio: Any
+    overlap_seconds: float = 0.0
+    vad_cut_reason: str = ""
+    raw_audio_seconds: float = 0.0
+
+    def __len__(self) -> int:
+        return len(self.audio)
+
+    def __getitem__(self, key: Any) -> Any:
+        return self.audio[key]
+
+    @property
+    def dtype(self) -> Any:
+        return getattr(self.audio, "dtype", None)
+
+
+@dataclass(frozen=True)
 class TranscriptionEvent:
     text: str
     engine: str
@@ -80,6 +107,9 @@ class TranscriptionEvent:
     audio_seconds: float = 0.0
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
+    segments: tuple[SegmentInfo, ...] = ()
+    overlap_seconds: float = 0.0
+    vad_cut_reason: str = ""
 
 
 @dataclass(frozen=True)
