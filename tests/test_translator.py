@@ -824,6 +824,9 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         stop = threading.Event()
 
         class _FakeTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
             def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
                 return outcome
 
@@ -1136,6 +1139,50 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(result, "你好")
         self.assertEqual(t._consecutive_primary_failures, 0, "success should reset failure counter")
         self.assertEqual(t._active_idx, 0, "primary should remain active")
+
+    def test_concurrent_state_merge_does_not_regress_failures(self):
+        shared = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=2,
+        )
+        before = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+        after = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+
+        translator_module._merge_fallback_state(shared, before, after)
+
+        self.assertEqual(shared.active_idx, 0)
+        self.assertEqual(shared.consecutive_primary_failures, 2)
+
+    def test_concurrent_state_merge_preserves_hard_switch(self):
+        shared = translator_module.FallbackState(
+            active_idx=1,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+        before = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+        after = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+
+        translator_module._merge_fallback_state(shared, before, after)
+
+        self.assertEqual(shared.active_idx, 1)
+        self.assertEqual(shared.consecutive_primary_failures, 0)
 
 
 # ---------------------------------------------------------------------------

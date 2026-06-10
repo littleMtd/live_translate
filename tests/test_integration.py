@@ -359,6 +359,9 @@ class TestTranslatorThread(unittest.TestCase):
         fast_finished = threading.Event()
 
         class _FakeTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
             def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
                 if text == "slow":
                     slow_started.set()
@@ -405,6 +408,9 @@ class TestTranslatorThread(unittest.TestCase):
         stop = threading.Event()
 
         class _FakeTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
             def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
                 return TranslationOutcome(
                     source_text=text,
@@ -440,6 +446,9 @@ class TestTranslatorThread(unittest.TestCase):
         release_workers = threading.Event()
 
         class _FakeTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
             def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
                 if text == "first":
                     first_started.set()

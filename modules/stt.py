@@ -24,7 +24,6 @@ from modules.stt_policy import (
     segment_rejection_reason,
     segment_stats,
     should_reject_language,
-    should_reject_segments,
 )
 
 log = get_logger("stt")
@@ -123,6 +122,9 @@ class STTEngine:
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
         self._groq_rate_limited_until = 0.0
         self._groq_fallback_rate_limited_until = 0.0
+        # Once the primary key hits 429, keep preferring the fallback key even
+        # after primary cooldown. We switch back only if the fallback key also
+        # rate-limits, which avoids burning primary quota during live capture.
         self._groq_prefer_fallback_key = False
         self._last_transcript: str = ""
         self._last_avg_logprob: float | None = None
@@ -390,20 +392,14 @@ class STTEngine:
 
             # Confidence filtering via segment metadata
             segments = getattr(resp, "segments", None) or []
-            if should_reject_segments(
+            reason, stats = segment_rejection_reason(
                 segments,
                 text=text,
                 no_speech_threshold=cfg.stt.no_speech_threshold,
                 avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
                 logger=log,
-            ):
-                reason, stats = segment_rejection_reason(
-                    segments,
-                    text=text,
-                    no_speech_threshold=cfg.stt.no_speech_threshold,
-                    avg_logprob_threshold=cfg.stt.avg_logprob_threshold,
-                    logger=log,
-                )
+            )
+            if reason is not None:
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
                 self._emit_stt_runtime_event(

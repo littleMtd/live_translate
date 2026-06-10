@@ -817,6 +817,37 @@ def _new_translator_shared_state() -> _TranslatorSharedState:
     )
 
 
+def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: FallbackState) -> None:
+    if (
+        shared.active_idx == before.active_idx
+        and shared.probe_counter == before.probe_counter
+        and shared.consecutive_primary_failures == before.consecutive_primary_failures
+    ):
+        shared.active_idx = after.active_idx
+        shared.probe_counter = after.probe_counter
+        shared.consecutive_primary_failures = after.consecutive_primary_failures
+        return
+
+    if after.active_idx == 0 and before.active_idx > 0 and shared.active_idx == before.active_idx:
+        shared.active_idx = 0
+        shared.probe_counter = 0
+        shared.consecutive_primary_failures = 0
+        return
+
+    if after.active_idx > before.active_idx and after.active_idx >= shared.active_idx:
+        shared.active_idx = after.active_idx
+        shared.probe_counter = after.probe_counter
+        shared.consecutive_primary_failures = after.consecutive_primary_failures
+        return
+
+    if shared.active_idx == after.active_idx:
+        shared.probe_counter = max(shared.probe_counter, after.probe_counter)
+        shared.consecutive_primary_failures = max(
+            shared.consecutive_primary_failures,
+            after.consecutive_primary_failures,
+        )
+
+
 def _outcome_used_api(outcome: TranslationOutcome) -> bool:
     if outcome.result_source == "api":
         return True
@@ -1104,10 +1135,15 @@ class Translator:
             state = fallback_state
         else:
             with lock:
-                state = FallbackState(
+                before_state = FallbackState(
                     fallback_state.active_idx,
                     fallback_state.probe_counter,
                     fallback_state.consecutive_primary_failures,
+                )
+                state = FallbackState(
+                    before_state.active_idx,
+                    before_state.probe_counter,
+                    before_state.consecutive_primary_failures,
                 )
         result = call_with_fallback(
             self._engines,
@@ -1123,9 +1159,7 @@ class Translator:
         )
         if lock is not None:
             with lock:
-                fallback_state.active_idx = state.active_idx
-                fallback_state.probe_counter = state.probe_counter
-                fallback_state.consecutive_primary_failures = state.consecutive_primary_failures
+                _merge_fallback_state(fallback_state, before_state, state)
         return result
 
     def _get_prompt_version_hash(self) -> str:
@@ -1175,10 +1209,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             try:
                 worker_translator = getattr(worker_state, "translator", None)
                 if worker_translator is None:
-                    try:
-                        worker_translator = Translator(shared_state=shared_state)
-                    except TypeError:
-                        worker_translator = Translator()
+                    worker_translator = Translator(shared_state=shared_state)
                     worker_state.translator = worker_translator
                 outcome = worker_translator.translate_event(text, incomplete)
             except Exception:
