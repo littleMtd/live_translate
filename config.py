@@ -14,6 +14,7 @@ class _Keys:
     anthropic:        str = os.environ.get("ANTHROPIC_API_KEY", "")
     groq:             str = os.environ.get("GROQ_API_KEY", "")
     groq_fallback:    str = os.environ.get("GROQ_API_KEY_fall_back", "")
+    openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
     gemini:           str = os.environ.get("GEMINI_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepl:            str = os.environ.get("DEEPL_API_KEY", "")
@@ -118,7 +119,7 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 _VALID_STREAMER_PROFILES = known_profile_ids()
 _VALID_TRANSLATION_MODES = {"live", "clip"}
-_VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia", "groq"}
+_VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
 
 
@@ -141,7 +142,7 @@ class _Translation:
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
     # Fallback chain when live_engine="nvidia" times out.
-    engine_chain:   tuple        = ("groq",)
+    engine_chain:   tuple        = ("openrouter", "groq")
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -160,6 +161,17 @@ class _Translation:
     groq_translation_context_window: int = 2
     groq_translation_history_source_chars: int = 160
     groq_translation_history_target_chars: int = 220
+    # OpenRouter fallback (uses OPENROUTER_API_KEY). Paid model, called only
+    # after higher-priority engines in the active chain fail.
+    openrouter_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    openrouter_timeout: int = 8
+    openrouter_compact_prompt: bool = True
+    openrouter_max_tokens: int = 512
+    openrouter_context_window: int = 2
+    openrouter_history_source_chars: int = 160
+    openrouter_history_target_chars: int = 220
+    openrouter_http_referer: str = "http://localhost/live_translate"
+    openrouter_app_name: str = "live_translate"
     # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
     google_translate_lang:    str = "zh-TW"
     # DeepSeek  (uncomment when DeepSeekEngine is implemented)

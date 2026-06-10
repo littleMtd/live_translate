@@ -47,7 +47,7 @@ _LOG_DIR.mkdir(exist_ok=True)
 
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
 _CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
-_FALLBACK_PROBE_EVERY = 10   # after this many fallback calls, probe engines[0] once
+_FALLBACK_PROBE_EVERY = 3    # after this many fallback calls, probe engines[0] once
 _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4

@@ -12,11 +12,12 @@ import threading
 import time
 import unittest
 import unittest.mock
+import modules.translation_engines as translation_engines_module
 import modules.translator as translator_module
 from modules.translation_engines import (
-    _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
-    GroqTranslationEngine, NvidiaEngine, get_last_engine_api_diagnostics,
-    get_last_engine_diagnostics,
+    _build_engine_chain, _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
+    GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine,
+    get_last_engine_api_diagnostics, get_last_engine_diagnostics,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -530,6 +531,154 @@ class TestGroqTranslationEngine(unittest.TestCase):
         self.assertEqual(len(first_payload["messages"]), 4)
         self.assertEqual(len(retry_payload["messages"]), 2)
         self.assertEqual(retry_payload["max_tokens"], 256)
+
+
+# ---------------------------------------------------------------------------
+# OpenRouterTranslationEngine unit tests
+# ---------------------------------------------------------------------------
+
+class TestOpenRouterTranslationEngine(unittest.TestCase):
+
+    def _engine(self) -> OpenRouterTranslationEngine:
+        e = OpenRouterTranslationEngine.__new__(OpenRouterTranslationEngine)
+        e._api_key = "fake-openrouter-key"
+        e._model = "qwen/qwen3-30b-a3b-instruct-2507"
+        e._timeout = 8
+        e._max_tokens = 200
+        e._strip_think = True
+        return e
+
+    def _response(self, content):
+        import json
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+        }).encode()
+        return mock_resp
+
+    def test_request_uses_openrouter_endpoint_headers_and_selected_model(self):
+        import json
+
+        e = self._engine()
+        long_prompt = "full quality prompt " * 500
+
+        with patch("urllib.request.urlopen", return_value=self._response("translated")) as urlopen:
+            result = e.translate("source", long_prompt, False)
+
+        self.assertEqual(result, "translated")
+        req = urlopen.call_args.args[0]
+        headers = {k.lower(): v for k, v in req.header_items()}
+        payload = json.loads(req.data.decode())
+
+        self.assertEqual(req.full_url, "https://openrouter.ai/api/v1/chat/completions")
+        self.assertEqual(headers["accept"], "application/json")
+        self.assertEqual(headers["authorization"], "Bearer fake-openrouter-key")
+        self.assertEqual(headers["user-agent"], "live_translate/1.0")
+        self.assertEqual(headers["http-referer"], "http://localhost/live_translate")
+        self.assertEqual(headers["x-title"], "live_translate")
+        self.assertEqual(payload["model"], "qwen/qwen3-30b-a3b-instruct-2507")
+        self.assertEqual(payload["reasoning"], {"exclude": True})
+        self.assertEqual(payload["max_tokens"], 200)
+        system_message = payload["messages"][0]["content"]
+        self.assertIn("Korean to Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("Active streamer profile:", system_message)
+        self.assertNotIn("full quality prompt", system_message)
+
+    def test_limits_history_for_live_fallback(self):
+        import json
+        from config import cfg
+
+        e = self._engine()
+        history = [
+            (f"source-{i}-" + "x" * 240, f"target-{i}-" + "y" * 300)
+            for i in range(4)
+        ]
+        original_window = cfg.translation.openrouter_context_window
+
+        try:
+            object.__setattr__(cfg.translation, "openrouter_context_window", 2)
+            with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+                result = e.translate("hello", "system", False, history)
+        finally:
+            object.__setattr__(cfg.translation, "openrouter_context_window", original_window)
+
+        self.assertEqual(result, "ok")
+        req = urlopen.call_args.args[0]
+        payload = json.loads(req.data.decode())
+        messages = payload["messages"]
+
+        self.assertEqual(len(messages), 6)
+        self.assertNotIn("source-1-", str(messages))
+        self.assertIn("source-2-", messages[1]["content"])
+        self.assertIn("source-3-", messages[3]["content"])
+        self.assertLessEqual(len(messages[1]["content"]), len("input: ") + 163)
+        self.assertLessEqual(len(messages[2]["content"]), 223)
+
+    def test_returns_none_for_reasoning_only_or_empty_content(self):
+        e = self._engine()
+
+        with patch("urllib.request.urlopen", return_value=self._response(None)):
+            self.assertIsNone(e.translate("hello", "system", False))
+
+        with patch("urllib.request.urlopen", return_value=self._response("<think>notes only")):
+            self.assertIsNone(e.translate("hello", "system", False))
+
+
+class TestOpenRouterFallbackChain(unittest.TestCase):
+    def test_nvidia_backend_uses_openrouter_before_groq_fallback(self):
+        from config import cfg
+
+        class FakeEngine:
+            def __init__(self, name: str):
+                self._name = name
+
+            @property
+            def engine_name(self) -> str:
+                return self._name
+
+            @property
+            def model_name(self) -> str:
+                return f"{self._name}-model"
+
+            @property
+            def available(self) -> bool:
+                return True
+
+            def translate(self, text, system_prompt, incomplete, history=None):
+                return "ok"
+
+        class FakeNvidiaEngine(FakeEngine):
+            def __init__(self):
+                super().__init__("nvidia")
+
+        class FakeOpenRouterEngine(FakeEngine):
+            def __init__(self):
+                super().__init__("openrouter")
+
+        class FakeGroqEngine(FakeEngine):
+            def __init__(self):
+                super().__init__("groq")
+
+        original_mode = cfg.translation.translation_mode
+        original_chain = cfg.translation.engine_chain
+        original_live_engine = cfg.live_engine
+        try:
+            object.__setattr__(cfg.translation, "translation_mode", "live")
+            object.__setattr__(cfg.translation, "engine_chain", ("openrouter", "groq"))
+            object.__setattr__(cfg, "live_engine", "nvidia")
+            with patch.object(translation_engines_module, "NvidiaEngine", FakeNvidiaEngine), \
+                 patch.object(translation_engines_module, "OpenRouterTranslationEngine", FakeOpenRouterEngine), \
+                 patch.object(translation_engines_module, "GroqTranslationEngine", FakeGroqEngine):
+                engines = _build_engine_chain()
+        finally:
+            object.__setattr__(cfg.translation, "translation_mode", original_mode)
+            object.__setattr__(cfg.translation, "engine_chain", original_chain)
+            object.__setattr__(cfg, "live_engine", original_live_engine)
+
+        self.assertEqual([engine.engine_name for engine in engines], ["nvidia", "openrouter", "groq"])
 
 
 # ---------------------------------------------------------------------------

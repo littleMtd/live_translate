@@ -15,12 +15,22 @@ _NVIDIA_MAX_ATTEMPTS = 2
 _NVIDIA_RETRY_DELAY_SEC = 0.5
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_USER_AGENT = "live_translate/1.0"
 _GROQ_COMPACT_SYSTEM_PROMPT = (
     "You are a Korean to Traditional Chinese live subtitle translator. "
     "Translate only the provided Korean input into natural zh-TW. "
     "Output only the translation, with no labels or explanations. "
     "If the input is empty, noise, or unreadable, output an empty string. "
     "Keep uncertain names and brands as names; do not invent facts."
+)
+_OPENROUTER_COMPACT_SYSTEM_PROMPT = (
+    "You are a Korean to Traditional Chinese live subtitle translator. "
+    "Translate only the provided Korean livestream speech into natural zh-TW. "
+    "Output only the translation, with no labels, explanations, romanization, or source text. "
+    "Preserve gaming/anime terms and uncertain person names as names; do not force Chinese phonetic names. "
+    "If the input is empty, noise, or unreadable, output an empty string. "
+    "If the source is uncertain, prefer a short conservative translation over invented detail."
 )
 _ENGINE_DIAGNOSTICS = threading.local()
 _TOKEN_USAGE = threading.local()
@@ -278,6 +288,29 @@ def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[s
     return limited
 
 
+def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    limit = _clamp_int(getattr(cfg.translation, "openrouter_context_window", 2), 2)
+    if limit <= 0:
+        return []
+
+    source_chars = _clamp_int(
+        getattr(cfg.translation, "openrouter_history_source_chars", 160),
+        160,
+    )
+    target_chars = _clamp_int(
+        getattr(cfg.translation, "openrouter_history_target_chars", 220),
+        220,
+    )
+
+    limited: list[tuple[str, str]] = []
+    for source, target in (history or [])[-limit:]:
+        source_text = _truncate_for_groq(source, source_chars)
+        target_text = _truncate_for_groq(target, target_chars)
+        if source_text and target_text:
+            limited.append((source_text, target_text))
+    return limited
+
+
 def _groq_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
         return system_prompt
@@ -285,6 +318,15 @@ def _groq_system_prompt(system_prompt: str) -> str:
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         return f"{_GROQ_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
     return _GROQ_COMPACT_SYSTEM_PROMPT
+
+
+def _openrouter_system_prompt(system_prompt: str) -> str:
+    if not bool(getattr(cfg.translation, "openrouter_compact_prompt", True)):
+        return system_prompt
+    profile_id = getattr(cfg, "active_streamer_profile", "")
+    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
+        return f"{_OPENROUTER_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+    return _OPENROUTER_COMPACT_SYSTEM_PROMPT
 
 
 def _is_groq_token_limit_error(status_code: int, body: str) -> bool:
@@ -901,6 +943,167 @@ class NvidiaEngine(TranslationEngine):
         return None
 
 
+class OpenRouterTranslationEngine(TranslationEngine):
+    """OpenRouter hosted OpenAI-compatible models. Used as paid live fallback."""
+
+    def __init__(self):
+        self._api_key = cfg.keys.openrouter
+        self._model = cfg.translation.openrouter_model
+        self._timeout = cfg.translation.openrouter_timeout
+        self._max_tokens = min(
+            cfg.translation.max_tokens,
+            _clamp_int(getattr(cfg.translation, "openrouter_max_tokens", 256), 256, 1),
+        )
+        _m = self._model.lower()
+        self._strip_think = "qwen3" in _m or "qwen-3" in _m
+        if not self._api_key:
+            log.error("OPENROUTER_API_KEY not set - OpenRouterTranslationEngine unavailable")
+        else:
+            log.info("OpenRouterTranslationEngine ready (model=%s)", self._model)
+
+    @property
+    def engine_name(self) -> str:
+        return "openrouter"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def available(self) -> bool:
+        return bool(self._api_key)
+
+    def translate(self, text: str, system_prompt: str, incomplete: bool,
+                  history: list[tuple[str, str]] | None = None) -> str | None:
+        timeout_config_ms = _timeout_config_ms(self._timeout)
+        source_text_char_count = len(text or "")
+        system_prompt = _openrouter_system_prompt(system_prompt)
+        prompt_char_count = len(system_prompt or "")
+        history = _limited_openrouter_history(history)
+
+        def record_diagnostics(
+            started_at: float | None = None,
+            api_error_type: str | None = None,
+            api_error_message_class: str | None = None,
+            request_body_char_count: int | None = None,
+            message_count: int | None = None,
+        ) -> None:
+            _set_last_engine_diagnostics(
+                "openrouter",
+                0,
+                "",
+                api_attempt_count=1 if started_at is not None else 0,
+                api_timeout_count=1 if api_error_type == "timeout" else 0,
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=timeout_config_ms,
+                api_attempt_timeout_ms=timeout_config_ms,
+                api_attempt_index=1 if started_at is not None else 0,
+                source_text_char_count=source_text_char_count,
+                prompt_char_count=prompt_char_count,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+                context_item_count=len(history or []),
+                api_error_type=api_error_type,
+                api_error_message_class=api_error_message_class,
+            )
+
+        record_diagnostics()
+        if not self._api_key:
+            return None
+        import urllib.request
+        import urllib.error
+        import json as _json
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for ko, zh in history:
+            messages.append({"role": "user", "content": f"input: {ko}"})
+            messages.append({"role": "assistant", "content": zh})
+        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+
+        body = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": cfg.translation.temperature,
+            "max_tokens": self._max_tokens,
+            "reasoning": {"exclude": True},
+        }
+        payload_text = _json.dumps(body)
+        payload = payload_text.encode()
+        request_body_char_count = len(payload_text)
+        message_count = len(messages)
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": _OPENROUTER_USER_AGENT,
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        referer = str(getattr(cfg.translation, "openrouter_http_referer", "") or "").strip()
+        app_name = str(getattr(cfg.translation, "openrouter_app_name", "") or "").strip()
+        if referer:
+            headers["HTTP-Referer"] = referer
+        if app_name:
+            headers["X-Title"] = app_name
+
+        req = urllib.request.Request(_OPENROUTER_BASE_URL, data=payload, headers=headers)
+        started_at: float | None = None
+        try:
+            started_at = time.monotonic()
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = _json.loads(r.read())
+            log.info("OpenRouter translate: %.0fms", (time.monotonic() - started_at) * 1000)
+            _log_token_usage("OpenRouter", data.get("usage"))
+            content = (data["choices"][0]["message"].get("content") or "").strip()
+            if self._strip_think:
+                content = _strip_think_tags(content)
+            record_diagnostics(
+                started_at=started_at,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+            )
+            log.debug("OpenRouter: %.30s -> %s", text, content)
+            return content or None
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode()
+            except Exception:
+                pass
+            if e.code == 401:
+                log.error("OpenRouter auth error - OPENROUTER_API_KEY invalid or expired")
+            elif e.code == 402:
+                log.error("OpenRouter credits exhausted or payment required")
+            elif e.code == 429:
+                log.warning("OpenRouter rate-limit (429): %s", body or e)
+            else:
+                log.error("OpenRouter HTTP %d: %s", e.code, body or e)
+            error_type, message_class = _classify_api_error(e)
+            record_diagnostics(
+                started_at=started_at,
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+            )
+            return None
+        except Exception as e:
+            kind = classify_error(e)
+            if _is_timeout_exception(e) or kind == "network":
+                log.warning("OpenRouter network/timeout error: %s", e)
+            else:
+                log.error("OpenRouter error: %s", e)
+            error_type, message_class = _classify_api_error(e)
+            record_diagnostics(
+                started_at=started_at,
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+            )
+            return None
+
+
 class GroqTranslationEngine(TranslationEngine):
     """Groq hosted models via OpenAI-compatible endpoint. Used as nvidia fallback."""
 
@@ -1058,6 +1261,9 @@ def _make_engine(name: str) -> "TranslationEngine | None":
     if name == "nvidia":
         e = NvidiaEngine()
         return e if e.available else None
+    if name == "openrouter":
+        e = OpenRouterTranslationEngine()
+        return e if e.available else None
     if name == "groq":
         e = GroqTranslationEngine()
         return e if e.available else None
@@ -1094,5 +1300,3 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     if not engines:
         log.error("No translation engines available — all engines failed to initialise")
     return engines
-
-

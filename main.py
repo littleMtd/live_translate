@@ -38,6 +38,7 @@ _KEY_FOR_ENGINE = {
     "deepseek":         lambda: cfg.keys.deepseek,
     "deepl":            lambda: cfg.keys.deepl,
     "groq":             lambda: cfg.keys.groq_fallback,
+    "openrouter":       lambda: cfg.keys.openrouter,
     "nvidia":           lambda: cfg.keys.nvidia,
     "ollama":           lambda: True,
 }
