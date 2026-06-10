@@ -25,6 +25,7 @@ from modules.stt import (
     _NOISE_TAGS,
     _SENSEVOICE_PROBE_EVERY,
     _TAG_RE,
+    _dedupe_segments_by_timestamp,
     _normalize_audio_for_stt,
     STTEngine,
 )
@@ -168,6 +169,23 @@ class TestTranscribeSenseVoice(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # STTEngine._transcribe_groq  (mocked client, numpy required)
 # ---------------------------------------------------------------------------
+
+class TestTimestampDedupe(unittest.TestCase):
+    def test_kept_empty_segment_text_does_not_restore_dropped_text(self):
+        text, kept, dropped, deduped_chars = _dedupe_segments_by_timestamp(
+            "old words new words",
+            [
+                {"start": 0.0, "end": 0.8, "text": "old words"},
+                {"start": 0.9, "end": 1.4, "text": ""},
+            ],
+            1.2,
+        )
+
+        self.assertEqual(text, "")
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, 1)
+        self.assertEqual(deduped_chars, len("old words"))
+
 
 def _make_groq_resp(text: str, language: str = "ko", segments: list[dict] | None = None) -> MagicMock:
     """Build a mock verbose_json Groq response object."""

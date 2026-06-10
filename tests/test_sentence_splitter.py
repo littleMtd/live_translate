@@ -239,7 +239,7 @@ class TestSentenceSplitterThread(unittest.TestCase):
             thread = start(tq, sq, stop)
             tq.put(
                 TranscriptionEvent(
-                    text="지금 여기까지 말하고",
+                    text="지금 여기까지 말했어",
                     engine="groq",
                     profile_id="a",
                     vad_cut_reason="silence",

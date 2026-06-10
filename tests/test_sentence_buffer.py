@@ -3,6 +3,7 @@ import unittest
 from modules.pipeline_events import SegmentInfo, TranscriptionEvent
 from modules.sentence_buffer import (
     SentenceBuffer,
+    _split_prefix_with_reason,
     is_complete,
     split_complete_prefix,
 )
@@ -44,7 +45,7 @@ class TestSentenceBuffer(unittest.TestCase):
         buffer = SentenceBuffer(silence_complete_enabled=True)
         buffer.push(
             TranscriptionEvent(
-                text="지금 여기까지 말하고",
+                text="지금 여기까지 말했어",
                 engine="groq",
                 profile_id="a",
                 vad_cut_reason="silence",
@@ -55,10 +56,29 @@ class TestSentenceBuffer(unittest.TestCase):
         cut = buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
 
         self.assertIsNotNone(cut)
-        self.assertEqual(cut.text, "지금 여기까지 말하고")
+        self.assertEqual(cut.text, "지금 여기까지 말했어")
         self.assertEqual(cut.cut_reason, "silence_complete")
         self.assertFalse(cut.incomplete)
         self.assertFalse(cut.forced)
+
+    def test_silence_cut_does_not_complete_incomplete_ending(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="지금 게임 하고",
+                engine="groq",
+                profile_id="a",
+                vad_cut_reason="silence",
+            ),
+            now=1.0,
+        )
+
+        self.assertIsNone(buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0))
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.cut_reason, "forced_blob")
+        self.assertTrue(cut.incomplete)
 
     def test_segment_gap_can_supply_forced_prefix_boundary(self):
         buffer = SentenceBuffer(segment_gap_split_enabled=True, segment_gap_seconds=0.6)
@@ -82,6 +102,12 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertEqual(cut.cut_reason, "forced_gap_prefix")
         self.assertFalse(cut.incomplete)
         self.assertTrue(cut.forced)
+
+    def test_segment_gap_boundary_requires_space_at_boundary(self):
+        self.assertEqual(
+            _split_prefix_with_reason("abcdef ghij", (3, 6)),
+            ("abcdef", "ghij", "forced_gap_prefix", 6),
+        )
 
     def test_metadata_tracks_latest_transcription_event(self):
         first = TranscriptionEvent(text="안녕", engine="sensevoice", profile_id="a")

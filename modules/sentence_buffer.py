@@ -54,7 +54,7 @@ def _split_prefix_with_reason(
             last = index
             reason = "forced_prefix"
     for boundary in gap_boundaries:
-        if 0 < boundary < len(text) and boundary > last:
+        if 0 < boundary < len(text) and boundary > last and text[boundary].isspace():
             last = boundary
             reason = "forced_gap_prefix"
     if last < 0:
@@ -108,6 +108,11 @@ def is_complete(text: str) -> bool:
         if stripped.endswith(ending):
             return True
     return False
+
+
+def _ends_with_incomplete_ending(text: str) -> bool:
+    stripped = text.rstrip()
+    return any(stripped.endswith(ending) for ending in _INCOMPLETE_ENDINGS)
 
 
 class SentenceBuffer:
@@ -196,22 +201,24 @@ class SentenceBuffer:
         complete = is_complete(self._buffer)
 
         if self._silence_complete_enabled and self._silence_complete_pending:
-            cut = SentenceCut(
-                text=self._buffer.strip(),
-                incomplete=False,
-                source=self._latest_source,
-                elapsed=elapsed,
-                forced=False,
-                cut_reason="silence_complete",
-                chunk_count=self._chunk_count,
-                audio_seconds=round(self._total_audio_seconds, 3),
-                source_utterance_ids=tuple(self._source_utterance_ids),
-                evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
-                source_avg_logprobs=tuple(self._source_avg_logprobs),
-                source_no_speech_probs=tuple(self._source_no_speech_probs),
-            )
-            self.reset()
-            return cut
+            if not _ends_with_incomplete_ending(self._buffer):
+                cut = SentenceCut(
+                    text=self._buffer.strip(),
+                    incomplete=False,
+                    source=self._latest_source,
+                    elapsed=elapsed,
+                    forced=False,
+                    cut_reason="silence_complete",
+                    chunk_count=self._chunk_count,
+                    audio_seconds=round(self._total_audio_seconds, 3),
+                    source_utterance_ids=tuple(self._source_utterance_ids),
+                    evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
+                    source_avg_logprobs=tuple(self._source_avg_logprobs),
+                    source_no_speech_probs=tuple(self._source_no_speech_probs),
+                )
+                self.reset()
+                return cut
+            self._silence_complete_pending = False
 
         if forced:
             buffered = self._buffer.strip()

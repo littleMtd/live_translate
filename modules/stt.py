@@ -123,11 +123,11 @@ def _dedupe_segments_by_timestamp(
     kept_texts = [str(_segment_value(segment, "text", "") or "").strip() for segment in kept]
     dropped_texts = [str(_segment_value(segment, "text", "") or "").strip() for segment in dropped]
     deduped_chars = sum(len(item) for item in dropped_texts)
-    if kept and any(kept_texts):
-        return " ".join(item for item in kept_texts if item).strip(), kept, len(dropped), deduped_chars
-    if not kept:
+    if kept:
+        if any(kept_texts):
+            return " ".join(item for item in kept_texts if item).strip(), kept, len(dropped), deduped_chars
         return "", kept, len(dropped), deduped_chars or len(text or "")
-    return text, kept, len(dropped), deduped_chars
+    return "", kept, len(dropped), deduped_chars or len(text or "")
 
 
 def _cfg_audio_bool(name: str, default: bool) -> bool:
