@@ -82,14 +82,14 @@ class TestTranslationMemory(unittest.TestCase):
     def test_lookup_existing_caches_db_hit(self):
         metrics.reset()
         fake_db = _FakeDB()
-        fake_db.lookup_result = "db result"
+        fake_db.lookup_result = "資料庫結果"
         memory, _, _ = self._memory(fake_db)
 
         result = memory.lookup_existing("source", False, "v1", _engine())
 
-        self.assertEqual(result, "db result")
-        self.assertEqual(memory.cache_lookup("source", False, "v1"), "db result")
-        self.assertEqual(list(memory.recent), [("source", "db result")])
+        self.assertEqual(result, "資料庫結果")
+        self.assertEqual(memory.cache_lookup("source", False, "v1"), "資料庫結果")
+        self.assertEqual(list(memory.recent), [("source", "資料庫結果")])
         self.assertEqual(metrics.snapshot().counters["translation.cache.db_hit"], 1)
 
     def test_record_success_writes_complete_translation_to_db(self):
@@ -111,6 +111,55 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(history, [("source", "result")])
         self.assertEqual(list(memory.recent), [])
         self.assertEqual(fake_db.store_calls, [])
+
+    def test_record_success_gates_bad_quality_from_recent_but_keeps_cache_db_history(self):
+        metrics.reset()
+        memory, history, fake_db = self._memory()
+        engine = _engine()
+        source = "안녕하세요 여러분 오늘 방송입니다"
+        bad_target = "I cannot translate this STT garbage"
+
+        memory.record_success(source, bad_target, False, "v1", engine)
+
+        self.assertEqual(history, [(source, bad_target)])
+        self.assertEqual(memory.cache_lookup(source, False, "v1"), bad_target)
+        self.assertEqual(list(memory.recent), [])
+        self.assertEqual(len(fake_db.store_calls), 1)
+        counters = metrics.snapshot().counters
+        self.assertEqual(counters["translation.context_gated"], 1)
+        self.assertEqual(counters["translation.context_gated.bad"], 1)
+
+    def test_memory_hit_bad_quality_does_not_enter_recent(self):
+        metrics.reset()
+        memory, _, _ = self._memory()
+        source = "안녕하세요 여러분 오늘 방송입니다"
+        bad_target = "I cannot translate this STT garbage"
+        memory.cache_store(source, False, bad_target, "v1")
+
+        result = memory.lookup_existing(source, False, "v1", _engine())
+
+        self.assertEqual(result, bad_target)
+        self.assertEqual(list(memory.recent), [])
+        counters = metrics.snapshot().counters
+        self.assertEqual(counters["translation.cache.memory_hit"], 1)
+        self.assertEqual(counters["translation.context_gated"], 1)
+
+    def test_db_hit_bad_quality_is_cached_but_not_remembered_recent(self):
+        metrics.reset()
+        fake_db = _FakeDB()
+        source = "안녕하세요 여러분 오늘 방송입니다"
+        bad_target = "I cannot translate this STT garbage"
+        fake_db.lookup_result = bad_target
+        memory, _, _ = self._memory(fake_db)
+
+        result = memory.lookup_existing(source, False, "v1", _engine())
+
+        self.assertEqual(result, bad_target)
+        self.assertEqual(memory.cache_lookup(source, False, "v1"), bad_target)
+        self.assertEqual(list(memory.recent), [])
+        counters = metrics.snapshot().counters
+        self.assertEqual(counters["translation.cache.db_hit"], 1)
+        self.assertEqual(counters["translation.context_gated"], 1)
 
     def test_invalidate_removes_cache_recent_and_db_entry(self):
         memory, _, fake_db = self._memory()

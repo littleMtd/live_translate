@@ -8,6 +8,7 @@ from config import cfg
 from modules.translation_engines import TranslationEngine
 from modules.translation_runtime import CacheKey, cache_lookup, cache_store
 from utils.metrics import metrics
+from utils.runtime_events import translation_quality
 
 
 DBFactory = Callable[[], object]
@@ -96,7 +97,7 @@ class TranslationMemory:
         if incomplete:
             return
 
-        self.recent.append((text, result))
+        self._remember_recent(text, result, incomplete)
         if active_engine is not None:
             self.db_store(text, result, active_engine, prompt_ver)
 
@@ -156,8 +157,14 @@ class TranslationMemory:
         )
 
     def _remember_recent(self, text: str, result: str, incomplete: bool) -> None:
-        if not incomplete:
-            self.recent.append((text, result))
+        if incomplete:
+            return
+        severity = translation_quality(text, result).get("quality_severity")
+        if severity in ("warn", "bad"):
+            metrics.increment("translation.context_gated")
+            metrics.increment(f"translation.context_gated.{severity}")
+            return
+        self.recent.append((text, result))
 
     def _forget_recent(self, text: str, result: str | None = None) -> None:
         self.recent = deque(
