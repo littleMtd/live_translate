@@ -27,6 +27,14 @@ def _int_setting(value: object, default: int) -> int:
         return default
 
 
+def _float_setting(value: object, default: float) -> float:
+    return float(value) if isinstance(value, (int, float)) else default
+
+
+def _bool_setting(value: object, default: bool) -> bool:
+    return bool(value) if isinstance(value, bool) else default
+
+
 def _merge_source_count(first: SentenceCut, second: SentenceCut) -> int:
     if first.source_utterance_ids or second.source_utterance_ids:
         return len(first.source_utterance_ids) + len(second.source_utterance_ids)
@@ -80,7 +88,20 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
           pause_event: threading.Event | None = None) -> threading.Thread:
     def run():
         import time
-        buffer = SentenceBuffer()
+        buffer = SentenceBuffer(
+            segment_gap_split_enabled=_bool_setting(
+                getattr(cfg.splitter, "segment_gap_split_enabled", False),
+                False,
+            ),
+            segment_gap_seconds=_float_setting(
+                getattr(cfg.splitter, "segment_gap_seconds", 0.6),
+                0.6,
+            ),
+            silence_complete_enabled=_bool_setting(
+                getattr(cfg.splitter, "silence_complete_enabled", False),
+                False,
+            ),
+        )
         pending_incomplete: SentenceCut | None = None
 
         def emit_cut(cut: SentenceCut) -> None:

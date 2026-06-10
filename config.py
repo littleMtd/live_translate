@@ -107,6 +107,9 @@ class _Splitter:
     force_cut_seconds: int = 8
     max_merge_source_count: int = 2
     max_merge_text_chars: int = 120
+    segment_gap_split_enabled: bool = True
+    segment_gap_seconds: float = 0.6
+    silence_complete_enabled: bool = True
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"

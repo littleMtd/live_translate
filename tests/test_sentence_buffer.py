@@ -1,6 +1,6 @@
 import unittest
 
-from modules.pipeline_events import TranscriptionEvent
+from modules.pipeline_events import SegmentInfo, TranscriptionEvent
 from modules.sentence_buffer import (
     SentenceBuffer,
     is_complete,
@@ -38,6 +38,49 @@ class TestSentenceBuffer(unittest.TestCase):
         self.assertIsNotNone(cut)
         self.assertEqual(cut.text, "지금 게임 하고")
         self.assertTrue(cut.incomplete)
+        self.assertTrue(cut.forced)
+
+    def test_silence_cut_can_mark_unpunctuated_buffer_complete(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="지금 여기까지 말하고",
+                engine="groq",
+                profile_id="a",
+                vad_cut_reason="silence",
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.text, "지금 여기까지 말하고")
+        self.assertEqual(cut.cut_reason, "silence_complete")
+        self.assertFalse(cut.incomplete)
+        self.assertFalse(cut.forced)
+
+    def test_segment_gap_can_supply_forced_prefix_boundary(self):
+        buffer = SentenceBuffer(segment_gap_split_enabled=True, segment_gap_seconds=0.6)
+        buffer.push(
+            TranscriptionEvent(
+                text="첫번째 긴 문장 두번째 이어지는 말",
+                engine="groq",
+                profile_id="a",
+                segments=(
+                    SegmentInfo(start=0.0, end=1.0, text="첫번째 긴 문장"),
+                    SegmentInfo(start=1.8, end=2.5, text="두번째 이어지는 말"),
+                ),
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(11.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.text, "첫번째 긴 문장")
+        self.assertEqual(cut.cut_reason, "forced_gap_prefix")
+        self.assertFalse(cut.incomplete)
         self.assertTrue(cut.forced)
 
     def test_metadata_tracks_latest_transcription_event(self):

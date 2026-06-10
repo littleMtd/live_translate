@@ -16,6 +16,9 @@ def _fast_cfg(min_wait: float = 0.3, force_cut: float = 0.8) -> MagicMock:
     m.splitter.force_cut_seconds = force_cut
     m.splitter.max_merge_source_count = 2
     m.splitter.max_merge_text_chars = 120
+    m.splitter.segment_gap_split_enabled = False
+    m.splitter.segment_gap_seconds = 0.6
+    m.splitter.silence_complete_enabled = False
     return m
 
 
@@ -224,6 +227,30 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(results[0].profile_id, "isegye_lilpa")
         self.assertEqual(results[0].avg_logprob, -0.2)
         self.assertEqual(results[0].no_speech_prob, 0.1)
+
+    def test_silence_complete_config_emits_without_waiting_for_complete_ending(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=5.0, force_cut=8.0)
+        cfg.splitter.silence_complete_enabled = True
+
+        with patch("modules.sentence_splitter.cfg", cfg):
+            thread = start(tq, sq, stop)
+            tq.put(
+                TranscriptionEvent(
+                    text="지금 여기까지 말하고",
+                    engine="groq",
+                    profile_id="a",
+                    vad_cut_reason="silence",
+                )
+            )
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.cut_reason, "silence_complete")
+        self.assertFalse(result.incomplete)
 
 
 class TestSentenceRuntimeEvent(unittest.TestCase):

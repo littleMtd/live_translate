@@ -28,30 +28,49 @@ def _significant_len(value: str) -> int:
     return len(STT_INSIGNIFICANT_RE.sub("", value))
 
 
-def split_complete_prefix(text: str) -> tuple[str, str]:
-    """Split `text` at its LAST sentence-final punctuation boundary.
+def _split_prefix_with_reason(
+    text: str,
+    gap_boundaries: tuple[int, ...] = (),
+) -> tuple[str, str, str, int]:
+    """Split `text` at its last trusted punctuation or segment-gap boundary.
 
-    Returns `(complete_prefix, residual)`:
+    Returns `(complete_prefix, residual, reason, boundary_index)`:
       * `complete_prefix` ends at (and includes) the last boundary punctuation;
+        for gap boundaries it ends immediately before the gap;
       * `residual` is whatever trailing fragment follows it (no boundary char,
-        by construction the last boundary is the maximum index).
+        by construction the chosen boundary is the maximum trusted index).
 
     If no boundary punctuation is present, returns `("", text)` — there is no
     safe internal cut, caller keeps the original whole-blob behavior.
     """
     text = text.strip()
     if not text:
-        return "", ""
+        return "", "", "", -1
 
     last = -1
+    reason = ""
     for index, char in enumerate(text):
         if char in _BOUNDARY_CHARS:
             last = index
+            reason = "forced_prefix"
+    for boundary in gap_boundaries:
+        if 0 < boundary < len(text) and boundary > last:
+            last = boundary
+            reason = "forced_gap_prefix"
     if last < 0:
-        return "", text
+        return "", text, "", -1
 
+    if reason == "forced_gap_prefix":
+        prefix = text[:last].strip()
+        residual = text[last:].strip()
+        return prefix, residual, reason, last
     prefix = text[: last + 1].strip()
     residual = text[last + 1 :].strip()
+    return prefix, residual, reason, last + 1
+
+
+def split_complete_prefix(text: str) -> tuple[str, str]:
+    prefix, residual, _reason, _boundary = _split_prefix_with_reason(text)
     return prefix, residual
 
 
@@ -92,7 +111,16 @@ def is_complete(text: str) -> bool:
 
 
 class SentenceBuffer:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        segment_gap_split_enabled: bool = False,
+        segment_gap_seconds: float = 0.6,
+        silence_complete_enabled: bool = False,
+    ):
+        self._segment_gap_split_enabled = segment_gap_split_enabled
+        self._segment_gap_seconds = segment_gap_seconds
+        self._silence_complete_enabled = silence_complete_enabled
         self._buffer = ""
         self._first_token_time: float | None = None
         self._latest_source: TranscriptionEvent | None = None
@@ -102,6 +130,8 @@ class SentenceBuffer:
         self._evidence_source_utterance_ids: list[str] = []
         self._source_avg_logprobs: list[float | None] = []
         self._source_no_speech_probs: list[float | None] = []
+        self._gap_boundaries: list[int] = []
+        self._silence_complete_pending = False
 
     def reset(self) -> None:
         self._buffer = ""
@@ -113,14 +143,37 @@ class SentenceBuffer:
         self._evidence_source_utterance_ids = []
         self._source_avg_logprobs = []
         self._source_no_speech_probs = []
+        self._gap_boundaries = []
+        self._silence_complete_pending = False
+
+    def _record_segment_gap_boundaries(self, token: TranscriptionEvent, start_index: int) -> None:
+        if not self._segment_gap_split_enabled or len(token.segments) < 2:
+            return
+        offset = start_index
+        previous_end: float | None = None
+        for index, segment in enumerate(token.segments):
+            segment_text = (segment.text or "").strip()
+            if index > 0 and segment_text:
+                previous = token.segments[index - 1]
+                if previous_end is not None and segment.start is not None:
+                    gap = segment.start - previous_end
+                    if gap >= self._segment_gap_seconds:
+                        self._gap_boundaries.append(offset)
+                offset += 1
+            offset += len(segment_text)
+            previous_end = segment.end
 
     def push(self, token: str | TranscriptionEvent, now: float) -> None:
         token_text = transcription_text(token)
         if self._first_token_time is None:
             self._first_token_time = now
+        start_index = len(self._buffer) + (1 if self._buffer else 0)
         if isinstance(token, TranscriptionEvent):
             self._latest_source = token
             self._total_audio_seconds += token.audio_seconds
+            self._record_segment_gap_boundaries(token, start_index)
+            if self._silence_complete_enabled and token.vad_cut_reason == "silence":
+                self._silence_complete_pending = True
             if token.utterance_id:
                 self._source_utterance_ids.append(token.utterance_id)
                 self._source_avg_logprobs.append(token.avg_logprob)
@@ -142,9 +195,30 @@ class SentenceBuffer:
         forced = elapsed >= force_cut_seconds
         complete = is_complete(self._buffer)
 
+        if self._silence_complete_enabled and self._silence_complete_pending:
+            cut = SentenceCut(
+                text=self._buffer.strip(),
+                incomplete=False,
+                source=self._latest_source,
+                elapsed=elapsed,
+                forced=False,
+                cut_reason="silence_complete",
+                chunk_count=self._chunk_count,
+                audio_seconds=round(self._total_audio_seconds, 3),
+                source_utterance_ids=tuple(self._source_utterance_ids),
+                evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
+                source_avg_logprobs=tuple(self._source_avg_logprobs),
+                source_no_speech_probs=tuple(self._source_no_speech_probs),
+            )
+            self.reset()
+            return cut
+
         if forced:
             buffered = self._buffer.strip()
-            prefix, residual = split_complete_prefix(buffered)
+            prefix, residual, split_reason, boundary_index = _split_prefix_with_reason(
+                buffered,
+                tuple(self._gap_boundaries) if self._segment_gap_split_enabled else (),
+            )
 
             # Recoverable: a punctuation-bounded complete prefix that is long
             # enough to be worth emitting on its own (§11.11 #5, N=6).
@@ -155,7 +229,7 @@ class SentenceBuffer:
                     source=self._latest_source,
                     elapsed=elapsed,
                     forced=True,
-                    cut_reason="forced_prefix",
+                    cut_reason=split_reason or "forced_prefix",
                     chunk_count=self._chunk_count,
                     audio_seconds=round(self._total_audio_seconds, 3),
                     source_utterance_ids=tuple(self._source_utterance_ids),
@@ -181,6 +255,12 @@ class SentenceBuffer:
                     self._source_utterance_ids = []
                     self._source_avg_logprobs = []
                     self._source_no_speech_probs = []
+                    self._gap_boundaries = [
+                        boundary - boundary_index
+                        for boundary in self._gap_boundaries
+                        if boundary > boundary_index
+                    ]
+                    self._silence_complete_pending = False
                 else:
                     # Trivial / empty residual → drop, full reset.
                     self.reset()

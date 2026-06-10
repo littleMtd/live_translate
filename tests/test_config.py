@@ -184,6 +184,11 @@ class TestVadConfig(unittest.TestCase):
         # A silence gate larger than max_speech would mean we never cut on silence
         self.assertLess(cfg.audio.vad_silence_sec, cfg.audio.vad_max_speech_sec)
 
+    def test_splitter_segment_boundary_flags_are_valid(self):
+        self.assertIsInstance(cfg.splitter.segment_gap_split_enabled, bool)
+        self.assertIsInstance(cfg.splitter.silence_complete_enabled, bool)
+        self.assertGreater(cfg.splitter.segment_gap_seconds, 0)
+
     def test_vad_min_less_than_max(self):
         self.assertLess(cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec)
 
