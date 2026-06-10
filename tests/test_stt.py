@@ -100,6 +100,8 @@ def _make_engine_sv() -> STTEngine:
     eng._current_utterance_id = ""
     eng._last_audio_seconds = 0.0
     eng._last_segments = ()
+    eng._last_timestamp_deduped_segments = 0
+    eng._last_timestamp_deduped_chars = 0
     eng._current_overlap_seconds = 0.0
     eng._current_vad_cut_reason = ""
     eng._last_prompt_budget = None
@@ -197,6 +199,8 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._current_utterance_id = ""
     eng._last_audio_seconds = 0.0
     eng._last_segments = ()
+    eng._last_timestamp_deduped_segments = 0
+    eng._last_timestamp_deduped_chars = 0
     eng._current_overlap_seconds = 0.0
     eng._current_vad_cut_reason = ""
     eng._last_prompt_budget = None
@@ -593,6 +597,77 @@ class TestTranscribeFallback(unittest.TestCase):
                 SegmentInfo(start=0.8, end=1.6, text="result", avg_logprob=-0.4, no_speech_prob=0.3),
             ),
         )
+
+    def test_timestamp_dedupe_drops_fully_overlapped_segments(self):
+        eng = _make_engine_groq("old words new words")
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "old words new words",
+            segments=[
+                {"start": 0.0, "end": 0.8, "text": "old words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"start": 0.9, "end": 1.4, "text": "new", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"start": 1.4, "end": 1.8, "text": "words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+            ],
+        )
+
+        with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.dedupe_by_timestamp = True
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(
+                AudioChunk(audio=self._audio(), overlap_seconds=1.2, vad_cut_reason="soft_max_pause")
+            )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.text, "new words")
+        self.assertEqual([segment.text for segment in event.segments], ["new", "words"])
+        self.assertEqual(emit.call_args.kwargs["timestamp_deduped_segments"], 1)
+        self.assertEqual(emit.call_args.kwargs["timestamp_deduped_chars"], len("old words"))
+
+    def test_timestamp_dedupe_can_be_disabled(self):
+        eng = _make_engine_groq("old words new words")
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "old words new words",
+            segments=[
+                {"start": 0.0, "end": 0.8, "text": "old words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"start": 0.9, "end": 1.4, "text": "new words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+            ],
+        )
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.dedupe_by_timestamp = False
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(
+                AudioChunk(audio=self._audio(), overlap_seconds=1.2, vad_cut_reason="soft_max_pause")
+            )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.text, "old words new words")
+        self.assertEqual([segment.text for segment in event.segments], ["old words", "new words"])
 
     def test_transcribe_event_dedupes_overlap_against_previous_text(self):
         eng = _make_engine_groq("여기 기지를 우리가 이제 막아야 돼요")

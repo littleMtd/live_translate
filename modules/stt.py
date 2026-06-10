@@ -35,6 +35,7 @@ _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
 _SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
 _GROQ_CONTEXT_CHARS = 120
 _GROQ_PROMPT_MAX_CHARS = 896
+_TIMESTAMP_DEDUPE_MARGIN_SEC = 0.3
 _AUDIO_DUMP_ROOT = Path(__file__).resolve().parent.parent / "logs" / "audio_dump"
 
 
@@ -90,6 +91,45 @@ def _segment_infos(segments: list[dict]) -> tuple[SegmentInfo, ...]:
     return tuple(infos)
 
 
+def _segment_value(segment, name: str, default=None):
+    if isinstance(segment, dict):
+        return segment.get(name, default)
+    return getattr(segment, name, default)
+
+
+def _dedupe_segments_by_timestamp(
+    text: str,
+    segments: list,
+    overlap_seconds: float,
+    *,
+    margin_seconds: float = _TIMESTAMP_DEDUPE_MARGIN_SEC,
+) -> tuple[str, list, int, int]:
+    cutoff = overlap_seconds - margin_seconds
+    if cutoff <= 0 or not segments:
+        return text, segments, 0, 0
+
+    kept = []
+    dropped = []
+    for segment in segments:
+        end = _float_or_none(_segment_value(segment, "end"))
+        if end is not None and end <= cutoff:
+            dropped.append(segment)
+        else:
+            kept.append(segment)
+
+    if not dropped:
+        return text, segments, 0, 0
+
+    kept_texts = [str(_segment_value(segment, "text", "") or "").strip() for segment in kept]
+    dropped_texts = [str(_segment_value(segment, "text", "") or "").strip() for segment in dropped]
+    deduped_chars = sum(len(item) for item in dropped_texts)
+    if kept and any(kept_texts):
+        return " ".join(item for item in kept_texts if item).strip(), kept, len(dropped), deduped_chars
+    if not kept:
+        return "", kept, len(dropped), deduped_chars or len(text or "")
+    return text, kept, len(dropped), deduped_chars
+
+
 def _cfg_audio_bool(name: str, default: bool) -> bool:
     value = getattr(cfg.audio, name, default)
     return bool(value) if isinstance(value, bool) else default
@@ -108,6 +148,11 @@ def _cfg_stt_float(name: str, default: float) -> float:
 def _cfg_stt_int(name: str, default: int) -> int:
     value = getattr(cfg.stt, name, default)
     return int(value) if isinstance(value, int) else default
+
+
+def _cfg_stt_bool(name: str, default: bool) -> bool:
+    value = getattr(cfg.stt, name, default)
+    return bool(value) if isinstance(value, bool) else default
 
 
 def _peak(audio: np.ndarray) -> float:
@@ -182,6 +227,8 @@ class STTEngine:
         self._current_utterance_id = ""
         self._last_audio_seconds = 0.0
         self._last_segments: tuple[SegmentInfo, ...] = ()
+        self._last_timestamp_deduped_segments = 0
+        self._last_timestamp_deduped_chars = 0
         self._current_overlap_seconds = 0.0
         self._current_vad_cut_reason = ""
         self._last_prompt_budget = None
@@ -363,6 +410,8 @@ class STTEngine:
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
         self._last_segments = ()
+        self._last_timestamp_deduped_segments = 0
+        self._last_timestamp_deduped_chars = 0
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
             self._groq_fallback_client is not None
@@ -438,6 +487,15 @@ class STTEngine:
             # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
             detected_lang = getattr(resp, "language", None)
             text = (getattr(resp, "text", "") or "").strip()
+            segments = getattr(resp, "segments", None) or []
+            if _cfg_stt_bool("dedupe_by_timestamp", True):
+                text, segments, dropped_segments, dropped_chars = _dedupe_segments_by_timestamp(
+                    text,
+                    list(segments),
+                    getattr(self, "_current_overlap_seconds", 0.0),
+                )
+                self._last_timestamp_deduped_segments = dropped_segments
+                self._last_timestamp_deduped_chars = dropped_chars
             if should_reject_language(detected_lang, text, log):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
@@ -454,7 +512,6 @@ class STTEngine:
                 return None
 
             # Confidence filtering via segment metadata
-            segments = getattr(resp, "segments", None) or []
             self._last_segments = _segment_infos(segments)
             reason, stats = segment_rejection_reason(
                 segments,
@@ -685,6 +742,8 @@ class STTEngine:
             avg_logprob=avg_logprob,
             no_speech_prob=no_speech_prob,
             segment_count=len(getattr(self, "_last_segments", ())),
+            timestamp_deduped_segments=int(getattr(self, "_last_timestamp_deduped_segments", 0)),
+            timestamp_deduped_chars=int(getattr(self, "_last_timestamp_deduped_chars", 0)),
             overlap_seconds=round(getattr(self, "_current_overlap_seconds", 0.0), 3),
             vad_cut_reason=getattr(self, "_current_vad_cut_reason", ""),
             audio_rms=audio_stats.get("audio_rms"),

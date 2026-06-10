@@ -87,6 +87,7 @@ class _STT:
     context_no_speech_threshold:   float = 0.3
     context_max_age_sec:           float = 30.0
     context_min_chars:             int   = 4
+    dedupe_by_timestamp:           bool  = True
     # Listen mode keeps STT-only output usable for songs/music, where Whisper
     # confidence is usually lower than normal speech.
     listen_no_speech_threshold:    float = 0.8
