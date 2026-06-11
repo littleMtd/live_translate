@@ -160,6 +160,8 @@ def test_build_labeling_sample_uniform_random_and_joins_audio_and_confidence(tmp
 
     expected = random.Random(123).sample(list(range(1, 7)), 3)
     assert sample["sampling"]["method"] == "uniform_random_without_replacement"
+    assert sample["sampling"]["raw_population_size"] == 6
+    assert sample["sampling"]["excluded_missing_source_id_population"] == 0
     assert sample["sampling"]["population_size"] == 6
     assert "over_attributed_chunks" in sample["context_tag_options"]
     assert [item["sequence_id"] for item in sample["samples"]] == expected
@@ -410,19 +412,48 @@ def test_missing_audio_fails_by_default_without_resampling(tmp_path):
         )
 
 
-def test_missing_source_utterance_ids_fails_by_default(tmp_path):
+def test_missing_source_utterance_ids_excluded_before_sampling_by_default(tmp_path):
+    events_path = tmp_path / "runtime_events_20260531.jsonl"
+    rows = [
+        _stt_event(1),
+        _translation_event(1),
+        _translation_event(2, source_utterance_ids=[]),
+    ]
+    _write_jsonl(events_path, rows)
+    _touch_wavs(tmp_path / "audio_dump", "run-a", ["utt-1"])
+
+    sample = build_labeling_sample(
+        events_path=events_path,
+        audio_root=tmp_path / "audio_dump",
+        sample_size=1,
+        seed=1,
+        min_population=0,
+    )
+
+    assert sample["sampling"]["raw_population_size"] == 2
+    assert sample["sampling"]["excluded_missing_source_id_population"] == 1
+    assert sample["sampling"]["population_size"] == 1
+    assert sample["samples"][0]["sequence_id"] == 1
+    assert sample["quality_control"]["missing_source_id_samples"] == []
+
+
+def test_missing_source_utterance_ids_reported_with_allow_missing_audio(tmp_path):
     events_path = tmp_path / "runtime_events_20260531.jsonl"
     rows = [_translation_event(1, source_utterance_ids=[])]
     _write_jsonl(events_path, rows)
 
-    with pytest.raises(ValueError, match="missing_source_id_samples=1"):
-        build_labeling_sample(
-            events_path=events_path,
-            audio_root=tmp_path / "audio_dump",
-            sample_size=1,
-            seed=1,
-            min_population=0,
-        )
+    sample = build_labeling_sample(
+        events_path=events_path,
+        audio_root=tmp_path / "audio_dump",
+        sample_size=1,
+        seed=1,
+        min_population=0,
+        allow_missing_audio=True,
+    )
+
+    assert sample["sampling"]["raw_population_size"] == 1
+    assert sample["sampling"]["excluded_missing_source_id_population"] == 0
+    assert sample["quality_control"]["missing_source_id_samples"] == ["S001"]
 
 
 def test_missing_stt_event_fails_by_default(tmp_path):

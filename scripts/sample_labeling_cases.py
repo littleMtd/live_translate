@@ -61,6 +61,13 @@ def translation_population(
     ]
 
 
+def _has_replayable_source_ids(row: dict[str, Any]) -> bool:
+    event = row["event"]
+    return bool(_string_list(event.get("source_utterance_ids")) or _string_list(
+        event.get("evidence_source_utterance_ids")
+    ))
+
+
 def build_stt_index(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
     index: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -506,11 +513,18 @@ def build_labeling_sample(
         raise ValueError("min_population must be non-negative")
 
     rows = read_runtime_rows(events_path)
-    population = translation_population(rows, run_ids)
+    raw_population = translation_population(rows, run_ids)
+    excluded_missing_source_id_population = 0
+    if allow_missing_audio:
+        population = raw_population
+    else:
+        population = [row for row in raw_population if _has_replayable_source_ids(row)]
+        excluded_missing_source_id_population = len(raw_population) - len(population)
     if len(population) < min_population:
         raise ValueError(
             f"population too small: {len(population)} < {min_population}; "
-            "collect more schema_version==2 translation events or lower --min-population"
+            "collect more schema_version==2 replayable translation events, lower --min-population, "
+            "or pass --allow-missing-audio"
         )
     if len(population) < sample_size:
         raise ValueError(f"sample_size {sample_size} exceeds population {len(population)}")
@@ -585,6 +599,8 @@ def build_labeling_sample(
             "event_type": "translation",
             "run_ids": sorted(run_ids) if run_ids is not None else [],
             "seed": selected_seed,
+            "raw_population_size": len(raw_population),
+            "excluded_missing_source_id_population": excluded_missing_source_id_population,
             "population_size": len(population),
             "sample_size": sample_size,
             "min_population": min_population,
