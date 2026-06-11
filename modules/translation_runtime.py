@@ -73,27 +73,7 @@ def call_with_fallback(
         metrics.increment("translation.fallback.no_engines")
         return None
 
-    # ── Probe: if hard-switched to fallback, periodically try primary ─────────
-    if state.active_idx > 0:
-        state.probe_counter += 1
-        if state.probe_counter >= probe_every:
-            state.probe_counter = 0
-            metrics.increment("translation.fallback.probe")
-            probe = engines[0].translate(text, system_prompt, incomplete, history)
-            if probe and not looks_untranslated(probe, text):
-                metrics.increment("translation.fallback.primary_recovered")
-                log.info("Primary engine %s recovered; switching back", engines[0].engine_name)
-                state.active_idx = 0
-                state.consecutive_primary_failures = 0
-                return probe
-            if probe:
-                metrics.increment("translation.bad_output")
-            log.debug(
-                "Primary probe failed, staying on %s",
-                engines[state.active_idx].engine_name,
-            )
-
-    # ── Try primary (current hard-active) engine ──────────────────────────────
+    # Try the current active engine. Primary recovery probes run on a background thread.
     primary_idx = state.active_idx
     metrics.increment("translation.fallback.attempt")
     primary = engines[primary_idx]
@@ -141,3 +121,30 @@ def call_with_fallback(
 
     log.error("All engines failed for: %.40s", text)
     return None
+
+
+def probe_primary_recovery(
+    engines: Sequence[TranslationEngine],
+    state: FallbackState,
+    probe_text: str,
+    system_prompt: str,
+    looks_untranslated: UntranslatedCheck,
+    log,
+) -> bool:
+    """Probe the primary engine without putting a user sentence on the probe path."""
+    if len(engines) < 2 or state.active_idx <= 0 or state.active_idx >= len(engines):
+        return False
+
+    metrics.increment("translation.fallback.probe")
+    probe = engines[0].translate(probe_text, system_prompt, False, [])
+    if probe and not looks_untranslated(probe, probe_text):
+        metrics.increment("translation.fallback.primary_recovered")
+        log.info("Primary engine %s recovered; switching back", engines[0].engine_name)
+        state.active_idx = 0
+        state.probe_counter = 0
+        state.consecutive_primary_failures = 0
+        return True
+    if probe:
+        metrics.increment("translation.bad_output")
+    log.debug("Primary probe failed, staying on %s", engines[state.active_idx].engine_name)
+    return False

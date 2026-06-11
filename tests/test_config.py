@@ -135,6 +135,11 @@ class TestConfig(unittest.TestCase):
 
     def test_nvidia_timeout_fails_fast_for_live_subtitles(self):
         self.assertLessEqual(cfg.nvidia.timeout, 10)
+        self.assertEqual(cfg.nvidia.live_timeout, 5)
+
+    def test_translation_stale_subtitle_fuse_is_enabled(self):
+        self.assertGreater(cfg.translation.max_subtitle_output_delay_ms, 0)
+        self.assertLessEqual(cfg.translation.max_subtitle_output_delay_ms, 30000)
 
     def test_evolve_every_positive(self):
         self.assertGreater(cfg.translation.evolve_every, 0)

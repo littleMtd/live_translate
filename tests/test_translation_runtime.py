@@ -9,6 +9,7 @@ from modules.translation_runtime import (
     cache_lookup,
     cache_store,
     call_with_fallback,
+    probe_primary_recovery,
 )
 from utils.metrics import metrics
 
@@ -70,7 +71,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(snapshot.counters["translation.fallback.attempt"], 2)
         self.assertEqual(snapshot.counters["translation.fallback.success"], 1)
 
-    def test_probe_restores_primary(self):
+    def test_user_path_does_not_probe_primary(self):
         metrics.reset()
         engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback ok")]
         state = FallbackState(active_idx=1, probe_counter=49)
@@ -88,8 +89,29 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             logging.getLogger("test"),
         )
 
-        self.assertEqual(result, "primary ok")
+        self.assertEqual(result, "fallback ok")
+        self.assertEqual(state.active_idx, 1)
+        engines[0].translate.assert_not_called()
+        engines[1].translate.assert_called_once()
+        self.assertNotIn("translation.fallback.probe", metrics.snapshot().counters)
+
+    def test_background_probe_restores_primary(self):
+        metrics.reset()
+        engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback ok")]
+        state = FallbackState(active_idx=1)
+
+        recovered = probe_primary_recovery(
+            engines,
+            state,
+            "probe source",
+            "prompt",
+            lambda result, source: False,
+            logging.getLogger("test"),
+        )
+
+        self.assertTrue(recovered)
         self.assertEqual(state.active_idx, 0)
+        engines[0].translate.assert_called_once_with("probe source", "prompt", False, [])
         engines[1].translate.assert_not_called()
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot.counters["translation.fallback.probe"], 1)

@@ -707,10 +707,10 @@ class TestNvidiaEngine(unittest.TestCase):
         }).encode()
         return mock_resp
 
-    def test_default_live_timeout_uses_regular_timeout(self):
+    def test_default_live_timeout_fails_fast(self):
         from config import cfg
 
-        self.assertEqual(cfg.nvidia.live_timeout, 0)
+        self.assertEqual(cfg.nvidia.live_timeout, 5)
 
     def test_live_mode_uses_live_timeout(self):
         from config import cfg
@@ -1067,6 +1067,53 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertCountEqual(_SharedFakeTranslator.calls, ["first", "second"])
         self.assertEqual(events.emit.call_count, 2)
 
+    def test_stale_translation_skips_subtitle_display(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        orig_delay = getattr(translator_module.cfg.translation, "max_subtitle_output_delay_ms", 30000)
+
+        class _SlowFakeTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
+            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+                time.sleep(0.05)
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"out-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                )
+
+        object.__setattr__(translator_module.cfg.translation, "max_subtitle_output_delay_ms", 1)
+        try:
+            with patch.object(translator_module, "Translator", _SlowFakeTranslator), \
+                    patch.object(translator_module, "runtime_events") as events:
+                thread = translator_module.start(sentence_q, subtitle_q, stop)
+                sentence_q.put({"text": "late", "incomplete": False})
+                deadline = time.monotonic() + 3
+                while not events.emit.called and time.monotonic() < deadline:
+                    stop.wait(0.005)
+                stop.set()
+                thread.join(timeout=2)
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "max_subtitle_output_delay_ms",
+                orig_delay,
+            )
+
+        self.assertTrue(subtitle_q.empty())
+        events.emit.assert_called_once()
+        self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
+        self.assertEqual(events.emit.call_args.kwargs["subtitle_suppressed_reason"], "stale_output_delay")
+        self.assertGreater(events.emit.call_args.kwargs["output_delay_ms"], 1)
+
     def test_memory_hit_ignores_stale_nvidia_retry_diagnostics(self):
         event = self._emit_outcome_with_stale_nvidia_diagnostics(
             TranslationOutcome(
@@ -1232,7 +1279,7 @@ class TestTranslatorThreadPause(unittest.TestCase):
 
 class TestFallbackProbe(unittest.TestCase):
 
-    def test_probe_restores_primary_after_recovery(self):
+    def test_user_translation_path_does_not_probe_primary_after_recovery(self):
         from modules.translator import _FALLBACK_PROBE_EVERY
         t = _make_translator()
         t._active_idx = 1                            # currently on fallback
@@ -1241,10 +1288,11 @@ class TestFallbackProbe(unittest.TestCase):
         t._engines[1].translate.return_value = "fallback"
 
         result = t.translate("안녕하세요")
-        self.assertEqual(result, "你好")
-        self.assertEqual(t._active_idx, 0, "Primary should be restored after successful probe")
+        self.assertEqual(result, "fallback")
+        self.assertEqual(t._active_idx, 1, "User translation path should stay on fallback until background probe")
+        t._engines[0].translate.assert_not_called()
 
-    def test_probe_stays_on_fallback_if_primary_still_down(self):
+    def test_user_translation_path_stays_on_fallback_without_probe(self):
         from modules.translator import _FALLBACK_PROBE_EVERY
         t = _make_translator()
         t._active_idx = 1
@@ -1255,6 +1303,28 @@ class TestFallbackProbe(unittest.TestCase):
         result = t.translate("안녕하세요")
         self.assertEqual(result, "fallback result")
         self.assertEqual(t._active_idx, 1, "Should stay on fallback if probe fails")
+        t._engines[0].translate.assert_not_called()
+
+    def test_background_probe_thread_restores_primary(self):
+        shared = translator_module._new_translator_shared_state()
+        shared.fallback.active_idx = 1
+        stop = threading.Event()
+        engines = [_mock_engine("primary", "你好"), _mock_engine("fallback", "fallback")]
+
+        with patch.object(translator_module, "_build_engine_chain", return_value=engines):
+            thread = translator_module._start_fallback_probe_thread(
+                shared,
+                stop,
+                interval_seconds=0.01,
+            )
+            deadline = time.monotonic() + 1.0
+            while shared.fallback.active_idx != 0 and time.monotonic() < deadline:
+                stop.wait(0.005)
+            stop.set()
+            thread.join(timeout=1)
+
+        self.assertEqual(shared.fallback.active_idx, 0)
+        engines[0].translate.assert_called()
 
     def test_single_failure_uses_fallback_without_switching(self):
         t = _make_translator()

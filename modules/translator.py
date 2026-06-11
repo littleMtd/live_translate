@@ -36,6 +36,7 @@ from modules.translation_runtime import (
     FallbackState,
     active_engine,
     call_with_fallback,
+    probe_primary_recovery,
 )
 from modules.translation_memory import MemoryLookup, TranslationMemory
 from modules.translation_policy import TranslationPolicy
@@ -51,7 +52,9 @@ _LOG_DIR.mkdir(exist_ok=True)
 
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
 _CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
-_FALLBACK_PROBE_EVERY = 3    # after this many fallback calls, probe engines[0] once
+_FALLBACK_PROBE_EVERY = 3    # legacy call-count probe interval; user-path probes are disabled
+_FALLBACK_PROBE_INTERVAL_SEC = 30.0
+_FALLBACK_PROBE_TEXT = "안녕하세요"
 _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
@@ -776,6 +779,69 @@ class Translator:
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
 
 
+def _translation_max_output_delay_ms() -> float:
+    value = getattr(cfg.translation, "max_subtitle_output_delay_ms", 30000)
+    return float(value) if isinstance(value, (int, float)) else 30000.0
+
+
+def _build_probe_system_prompt(shared_state: _TranslatorSharedState) -> str:
+    is_qwen = _is_qwen_model()
+    base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
+    with shared_state.lock:
+        system_prompt = shared_state.evolver.build_system_prompt(base_prompt)
+
+    if not cfg.translation.use_profile:
+        return system_prompt
+
+    streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
+    if streamer_profile:
+        system_prompt += "\n\n" + streamer_profile
+    return system_prompt
+
+
+def _start_fallback_probe_thread(
+    shared_state: _TranslatorSharedState,
+    stop_event: threading.Event,
+    *,
+    interval_seconds: float = _FALLBACK_PROBE_INTERVAL_SEC,
+) -> threading.Thread:
+    def run() -> None:
+        engines: list[TranslationEngine] | None = None
+        while not stop_event.wait(interval_seconds):
+            with shared_state.lock:
+                if shared_state.fallback.active_idx <= 0:
+                    continue
+                probe_state = FallbackState(
+                    shared_state.fallback.active_idx,
+                    shared_state.fallback.probe_counter,
+                    shared_state.fallback.consecutive_primary_failures,
+                )
+            if engines is None:
+                engines = _build_engine_chain()
+            system_prompt = _build_probe_system_prompt(shared_state)
+            try:
+                recovered = probe_primary_recovery(
+                    engines,
+                    probe_state,
+                    _FALLBACK_PROBE_TEXT,
+                    system_prompt,
+                    _looks_untranslated,
+                    log,
+                )
+            except Exception:
+                log.exception("Fallback primary probe failed unexpectedly")
+                continue
+            if not recovered:
+                continue
+            with shared_state.lock:
+                if shared_state.fallback.active_idx > 0:
+                    shared_state.fallback.active_idx = 0
+                    shared_state.fallback.probe_counter = 0
+                    shared_state.fallback.consecutive_primary_failures = 0
+
+    return start_daemon_thread("TranslationFallbackProbe", run)
+
+
 def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
@@ -792,6 +858,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
         next_emit_seq = 0
         last_result = ""
         last_result_time = 0.0
+        _start_fallback_probe_thread(shared_state, stop_event)
 
         def translate_item(seq: int, item, submitted_at: float) -> _CompletedTranslation:
             text = sentence_text(item)
@@ -875,12 +942,13 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             outcome = item.outcome
             elapsed = item.elapsed
             emitted_at = time.monotonic()
+            output_delay_ms = round(max(0.0, emitted_at - item.submitted_at) * 1000, 2)
             event_metadata = item.metadata.copy()
             event_metadata.update(
                 {
                     "engine_latency_ms": round(elapsed * 1000, 2),
                     "queue_wait_ms": round(max(0.0, item.started_at - item.submitted_at) * 1000, 2),
-                    "output_delay_ms": round(max(0.0, emitted_at - item.submitted_at) * 1000, 2),
+                    "output_delay_ms": output_delay_ms,
                     "predecessor_stall_ms": round(max(0.0, emitted_at - item.completed_at) * 1000, 2),
                     "translation_worker_id": item.worker_id,
                     "retry_count": item.retry_count,
@@ -906,6 +974,21 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         **event_fields,
                         subtitle_emitted=False,
                         subtitle_suppressed_reason="duplicate",
+                    )
+                    return
+                max_output_delay_ms = _translation_max_output_delay_ms()
+                if max_output_delay_ms > 0 and output_delay_ms > max_output_delay_ms:
+                    metrics.increment("translation.subtitle.stale_skipped")
+                    log.warning(
+                        "Skipping stale subtitle after %.0fms output delay: %s",
+                        output_delay_ms,
+                        result[:30],
+                    )
+                    runtime_events.emit(
+                        "translation",
+                        **event_fields,
+                        subtitle_emitted=False,
+                        subtitle_suppressed_reason="stale_output_delay",
                     )
                     return
                 last_result = result

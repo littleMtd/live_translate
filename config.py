@@ -202,6 +202,7 @@ class _Translation:
     # at the policy layer prevents a single bad input from burning a day's
     # token budget. Counted in characters, not tokens.
     max_translate_chars: int     = 500
+    max_subtitle_output_delay_ms: int = 30000
     # Translation mode — controls the STT correction section in the system prompt.
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
     translation_mode: str        = "live"
@@ -273,9 +274,8 @@ class _Nvidia:
     model:   str = "qwen/qwen3-next-80b-a3b-instruct"
     # Clip/offline timeout; live mode uses live_timeout below when set.
     timeout: int = 10
-    # Optional live override. 0 means use timeout above; runtime data showed
-    # fixed 5s/7s defaults increase retry tails for current NIM traffic.
-    live_timeout: int = 0
+    # Live override: fail fast so fallback engines can take over when NIM is degraded.
+    live_timeout: int = 5
 
 
 @dataclass(frozen=True)
