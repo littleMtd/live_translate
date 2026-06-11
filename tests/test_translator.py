@@ -2438,3 +2438,43 @@ class TestSourceNormIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# H1 regression: a malformed queue item must not stall the in-order emit loop
+# ---------------------------------------------------------------------------
+
+class TestMalformedItemDoesNotStallEmit(unittest.TestCase):
+
+    def test_bad_item_then_good_item_still_emits(self):
+        from modules.translator import start as translator_start
+
+        class _Boom:
+            def __str__(self):
+                raise RuntimeError("malformed pipeline item")
+
+        sentence_q: queue.Queue = queue.Queue()
+        subtitle_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        engine = _mock_engine("primary", "\u4f60\u597d")
+
+        with patch.object(translator_module, "_build_engine_chain", return_value=[engine]):
+            translator_start(sentence_q, subtitle_q, stop)
+            sentence_q.put(_Boom())   # seq 0 — translate_item raises on sentence_text
+            sentence_q.put({"text": "\uc548\ub155\ud558\uc138\uc694 \uc624\ub298 \ubc29\uc1a1 \uc2dc\uc791\ud569\ub2c8\ub2e4", "incomplete": False})
+
+            deadline = time.monotonic() + 5.0
+            result = None
+            while time.monotonic() < deadline:
+                try:
+                    result = subtitle_q.get(timeout=0.1)
+                    break
+                except queue.Empty:
+                    continue
+            stop.set()
+
+        self.assertEqual(result, "\u4f60\u597d", "good item after malformed item must still emit")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -274,3 +274,13 @@ Mobile Client (Flutter)
 - Phase 3 (2-3 weeks): Usage tracking and analytics
 - Phase 4 (4+ weeks): Backend abstraction and cloud readiness
 - Future: Cross-platform desktop, mobile clients (not scheduled)
+## Queue backpressure strategy (intentional asymmetry)
+
+| Queue | Strategy | Why |
+|-------|----------|-----|
+| `audio_queue` | `put_latest` (drain all, newest wins) | Stale audio is worthless for live subtitles; transcribing it would only delay fresh speech. |
+| `text_queue` | `put_latest` | Same: an STT fragment that the splitter could not consume in time is already stale. |
+| `sentence_queue` | `put_drop_oldest` (drop one) | Sentences are the most valuable unit (already filtered + assembled); keep as much backlog as possible and shed only the oldest. |
+| `subtitle_queue` | `put_latest` | Display shows one subtitle at a time; only the newest matters. |
+
+Do not "unify" these — the difference is deliberate (review L12).

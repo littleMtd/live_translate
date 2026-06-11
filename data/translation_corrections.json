@@ -521,6 +521,23 @@
           "right": "大丈夫です"
         }
       ]
+    },
+    {
+      "source_terms": [
+        "무당",
+        "신발"
+      ],
+      "match": "all",
+      "replacements": [
+        {
+          "wrong": "更懂鞋子",
+          "right": "神力更強"
+        },
+        {
+          "wrong": "更懂鞋",
+          "right": "神力更強"
+        }
+      ]
     }
   ],
   "profile_source_aware_target_replacements": {

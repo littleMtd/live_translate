@@ -125,15 +125,30 @@ _CORRECTION_TABLES = load_translation_corrections()
 _SOURCE_NORM_SHARED = _CORRECTION_TABLES.source_norm_shared
 _SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.source_norm_by_profile
 _SOURCE_AWARE_TARGET_REPLACEMENTS = tuple(
-    (group.source_terms, group.replacements)
+    (group.source_terms, group.replacements, group.match_all)
     for group in _CORRECTION_TABLES.source_aware_target_replacements
 )
 _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS = {
-    profile: tuple((group.source_terms, group.replacements) for group in groups)
+    profile: tuple(
+        (group.source_terms, group.replacements, group.match_all) for group in groups
+    )
     for profile, groups in _CORRECTION_TABLES.profile_source_aware_target_replacements.items()
 }
 _KOREAN_NAME_SUFFIXES = _CORRECTION_TABLES.korean_name_suffixes
 _NAME_RENDERING_RULES = _CORRECTION_TABLES.name_rendering_rules
+
+
+def _sorted_norm_items(norm: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(norm.items(), key=lambda item: len(item[0]), reverse=True))
+
+
+# L4: pre-sorted normalization tables (shared, and shared+profile merged per
+# profile) so the hot path doesn't rebuild + sort a dict per translation.
+_SOURCE_NORM_SHARED_SORTED = _sorted_norm_items(_SOURCE_NORM_SHARED)
+_SOURCE_NORM_WITH_PROFILE_SORTED = {
+    profile: _sorted_norm_items({**_SOURCE_NORM_SHARED, **profile_norm})
+    for profile, profile_norm in _SOURCE_NORM_BY_PROFILE.items()
+}
 
 
 def _looks_like_meta_garbage_output(result: str) -> bool:
@@ -251,21 +266,28 @@ def _normalize_source_before_matching(text: str) -> str:
     Operates on prepared text only; raw_text stored in TranslationOutcome is untouched.
     Profile-gated: normalization only applies when the matching profile is active.
     """
-    norm: dict[str, str] = dict(_SOURCE_NORM_SHARED)
     profile_id = cfg.active_streamer_profile
     if profile_id and bool(cfg.translation.use_profile):
-        norm.update(_SOURCE_NORM_BY_PROFILE.get(profile_id, {}))
-    for noisy, canonical in sorted(norm.items(), key=lambda item: len(item[0]), reverse=True):
+        items = _SOURCE_NORM_WITH_PROFILE_SORTED.get(profile_id, _SOURCE_NORM_SHARED_SORTED)
+    else:
+        items = _SOURCE_NORM_SHARED_SORTED
+    for noisy, canonical in items:
         text = _replace_recording(
             text, noisy, canonical, stage="source_norm", rule_id=f"{noisy}->{canonical}"
         )
     return text
 
 
+def _source_terms_match(source: str, source_terms: tuple[str, ...], match_all: bool) -> bool:
+    if match_all:
+        return all(term in source for term in source_terms)
+    return any(term in source for term in source_terms)
+
+
 def _apply_source_aware_corrections(source: str, result: str) -> str:
     corrected = result
-    for source_terms, replacements in _SOURCE_AWARE_TARGET_REPLACEMENTS:
-        if not any(term in source for term in source_terms):
+    for source_terms, replacements, match_all in _SOURCE_AWARE_TARGET_REPLACEMENTS:
+        if not _source_terms_match(source, source_terms, match_all):
             continue
         for wrong, right in replacements:
             corrected = _replace_recording(
@@ -274,8 +296,8 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
 
     if cfg.translation.use_profile:
         profile_replacements = _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.get(cfg.active_streamer_profile, ())
-        for source_terms, replacements in profile_replacements:
-            if not any(term in source for term in source_terms):
+        for source_terms, replacements, match_all in profile_replacements:
+            if not _source_terms_match(source, source_terms, match_all):
                 continue
             for wrong, right in replacements:
                 corrected = _replace_recording(
@@ -289,14 +311,6 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
         if not _source_has_name_alias(source, rule.source_aliases):
             continue
         corrected = _replace_wrong_name_forms(corrected, rule)
-
-    if "무당" in source and "신발" in source:
-        corrected = _replace_recording(
-            corrected, "更懂鞋", "神力更強", stage="target_correction", rule_id="mudang_shoes"
-        )
-        corrected = _replace_recording(
-            corrected, "更懂鞋子", "神力更強", stage="target_correction", rule_id="mudang_shoes"
-        )
 
     return corrected
 
@@ -336,11 +350,17 @@ def _looks_untranslated(result: str, source: str) -> bool:
     return False
 
 
+_HISTORY_WRITE_LOCK = threading.Lock()
+
+
 def _write_history(ko: str, zh: str) -> None:
     path = _LOG_DIR / f"translations_{datetime.now().strftime('%Y%m%d')}.txt"
     ts = datetime.now().strftime("%H:%M:%S")
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(f"[{ts}] {ko}\n        → {zh}\n")
+    # Serialize appends: history is written outside the shared state lock (M1),
+    # so two workers may reach this concurrently.
+    with _HISTORY_WRITE_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {ko}\n        → {zh}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -542,8 +562,14 @@ class Translator:
     def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
         raw_text = (text or "").strip()
         policy = self._policy_state()
-        filter_reason = policy.rejection_reason(raw_text)
-        text = self._prepare_input(text)
+        # L1: rejection_reason, prepare_input and the sanitize-rejection read
+        # must share one lock section — the policy instance is shared across
+        # workers, so split reads raced and produced wrong filter_reason values.
+        with self._state_guard():
+            filter_reason = policy.rejection_reason(raw_text)
+            text = policy.prepare_input(text)
+            self._last_input = policy.last_input
+            sanitize_rejection = policy._last_sanitize_rejection
         if text is None:
             return TranslationOutcome(
                 source_text=raw_text,
@@ -552,7 +578,7 @@ class Translator:
                 result_source="policy",
                 cache_status="skipped",
                 incomplete=incomplete,
-                filter_reason=filter_reason or policy._last_sanitize_rejection or "unknown",
+                filter_reason=filter_reason or sanitize_rejection or "unknown",
             )
 
         text = _normalize_source_before_matching(text)
@@ -670,33 +696,45 @@ class Translator:
         log.debug("Slang hit: %s → %s", text, slang_result)
         with self._state_guard():
             self._evolver.record(text, slang_result)
-            self._memory_state().record_direct(text, slang_result, incomplete)
+            self._memory_state().record_direct_memory(text, slang_result, incomplete)
+        # File I/O outside the shared lock (M1).
+        self._memory_state().write_history(text, slang_result)
         return slang_result
 
     def _lookup_existing_translation_event(self, text: str, incomplete: bool,
                                            prompt_ver: str) -> MemoryLookup:
+        # Memory cache under the lock; the SQLite read happens outside it (M1)
+        # so a slow DB never blocks the other worker.
         with self._state_guard():
-            lookup = self._memory_state().lookup_existing_event(
-                text,
-                incomplete,
-                prompt_ver,
-                self._active_engine(),
-            )
+            lookup = self._memory_state().lookup_memory_event(text, incomplete, prompt_ver)
+            engine = self._active_engine()
         if lookup.result:
             log.debug("Cache hit: %s", text[:20])
-        return lookup
+            return lookup
+        if incomplete or engine is None:
+            metrics.increment("translation.cache.miss")
+            return MemoryLookup(None, "skipped")
+        db_result = self._memory_state().db_lookup(text, engine, prompt_ver)
+        if db_result:
+            with self._state_guard():
+                lookup = self._memory_state().record_db_hit(
+                    text, incomplete, prompt_ver, db_result
+                )
+            log.debug("Cache hit: %s", text[:20])
+            return lookup
+        metrics.increment("translation.cache.miss")
+        return MemoryLookup(None, "miss")
 
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str) -> None:
         with self._state_guard():
             self._evolver.record(text, result)
-            self._memory_state().record_success(
-                text,
-                result,
-                incomplete,
-                prompt_ver,
-                self._active_engine(),
-            )
+            self._memory_state().record_success_memory(text, result, incomplete, prompt_ver)
+            engine = self._active_engine()
+        # File/DB I/O outside the shared lock (M1).
+        self._memory_state().write_history(text, result)
+        if not incomplete and engine is not None:
+            self._memory_state().db_store(text, result, engine, prompt_ver)
 
     def _invalidate_cached_translation(
         self,
@@ -707,7 +745,10 @@ class Translator:
         result: str | None,
     ) -> None:
         with self._state_guard():
-            self._memory_state().invalidate(text, incomplete, prompt_ver, active_engine, result)
+            self._memory_state().invalidate_memory(text, incomplete, prompt_ver, result)
+        # DB delete outside the shared lock (M1).
+        if not incomplete and active_engine is not None:
+            self._memory_state().invalidate_db(text, active_engine, prompt_ver)
 
     def _active_engine(self) -> TranslationEngine | None:
         return active_engine(self._engines, self._active_idx)
@@ -718,20 +759,7 @@ class Translator:
             self._qwen_log_once = True
 
     def _build_system_prompt(self) -> str:
-        is_qwen = _is_qwen_model()
-        base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
-        with self._state_guard():
-            system_prompt = self._evolver.build_system_prompt(base_prompt)
-
-        if not cfg.translation.use_profile:
-            return system_prompt
-
-        streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
-        if streamer_profile:
-            system_prompt += "\n\n" + streamer_profile
-            log.debug("Appended streamer profile: %s", cfg.active_streamer_profile)
-
-        return system_prompt
+        return _compose_system_prompt(self._evolver, self._state_guard())
 
     @staticmethod
     def _prompt_version(system_prompt: str) -> str:
@@ -777,6 +805,7 @@ class Translator:
 
 
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
+_MAX_COMPLETED_BACKLOG = 64  # completed-but-unemitted results before warning (L8)
 
 
 def _translation_max_output_delay_ms() -> float:
@@ -784,11 +813,12 @@ def _translation_max_output_delay_ms() -> float:
     return float(value) if isinstance(value, (int, float)) else 30000.0
 
 
-def _build_probe_system_prompt(shared_state: _TranslatorSharedState) -> str:
+def _compose_system_prompt(evolver: PromptEvolver, lock_ctx) -> str:
+    """Shared between Translator._build_system_prompt and the probe thread (L5)."""
     is_qwen = _is_qwen_model()
     base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
-    with shared_state.lock:
-        system_prompt = shared_state.evolver.build_system_prompt(base_prompt)
+    with lock_ctx:
+        system_prompt = evolver.build_system_prompt(base_prompt)
 
     if not cfg.translation.use_profile:
         return system_prompt
@@ -796,7 +826,12 @@ def _build_probe_system_prompt(shared_state: _TranslatorSharedState) -> str:
     streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
     if streamer_profile:
         system_prompt += "\n\n" + streamer_profile
+        log.debug("Appended streamer profile: %s", cfg.active_streamer_profile)
     return system_prompt
+
+
+def _build_probe_system_prompt(shared_state: _TranslatorSharedState) -> str:
+    return _compose_system_prompt(shared_state.evolver, shared_state.lock)
 
 
 def _start_fallback_probe_thread(
@@ -807,6 +842,7 @@ def _start_fallback_probe_thread(
 ) -> threading.Thread:
     def run() -> None:
         engines: list[TranslationEngine] | None = None
+        engines_key: tuple | None = None
         while not stop_event.wait(interval_seconds):
             with shared_state.lock:
                 if shared_state.fallback.active_idx <= 0:
@@ -816,8 +852,13 @@ def _start_fallback_probe_thread(
                     shared_state.fallback.probe_counter,
                     shared_state.fallback.consecutive_primary_failures,
                 )
-            if engines is None:
+            # L7: rebuild the probe chain when the engine selection changes
+            # mid-run instead of caching the first build forever.
+            mode = cfg.translation.translation_mode
+            chain_key = (mode, cfg.clip_engine if mode == "clip" else cfg.live_engine)
+            if engines is None or chain_key != engines_key:
                 engines = _build_engine_chain()
+                engines_key = chain_key
             system_prompt = _build_probe_system_prompt(shared_state)
             try:
                 recovered = probe_primary_recovery(
@@ -861,26 +902,32 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
         _start_fallback_probe_thread(shared_state, stop_event)
 
         def translate_item(seq: int, item, submitted_at: float) -> _CompletedTranslation:
-            text = sentence_text(item)
-            incomplete = sentence_incomplete(item)
-            metadata = sentence_metadata(item).copy()
-            marker = _dependency_marker(text)
-            metadata.update(
-                {
-                    "sequence_id": seq,
-                    "starts_with_dependency_marker": bool(marker),
-                    "dependency_marker": marker,
-                    "profile_id": cfg.active_streamer_profile,
-                    "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
-                }
-            )
             started = time.monotonic()
             worker_id = threading.current_thread().name
             # Reset before translating so cache hits / failures (which never reach an
             # engine) don't inherit the previous call's token usage / corrections.
             reset_last_token_usage()
             reset_corrections()
+            # Everything that touches `item` runs inside the try: a malformed item
+            # must yield a synthetic failed outcome, never a lost sequence number
+            # (a gap would stall the in-order emit loop forever).
+            text = ""
+            incomplete = False
+            metadata: dict = {}
             try:
+                text = sentence_text(item)
+                incomplete = sentence_incomplete(item)
+                metadata = sentence_metadata(item).copy()
+                marker = _dependency_marker(text)
+                metadata.update(
+                    {
+                        "sequence_id": seq,
+                        "starts_with_dependency_marker": bool(marker),
+                        "dependency_marker": marker,
+                        "profile_id": cfg.active_streamer_profile,
+                        "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
+                    }
+                )
                 worker_translator = getattr(worker_state, "translator", None)
                 if worker_translator is None:
                     worker_translator = Translator(shared_state=shared_state)
@@ -888,6 +935,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 outcome = worker_translator.translate_event(text, incomplete)
             except Exception:
                 log.exception("Translation worker failed for: %.40s", text)
+                metadata.setdefault("sequence_id", seq)
                 outcome = TranslationOutcome(
                     source_text=(text or "").strip(),
                     target_text=None,
@@ -927,6 +975,31 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 api_event_fields,
             )
 
+        def _failed_completion(seq: int) -> _CompletedTranslation:
+            """Synthetic failed result so a crashed future never leaves a gap in
+            the sequence — a gap would stall the in-order emit loop forever."""
+            now = time.monotonic()
+            return _CompletedTranslation(
+                seq,
+                TranslationOutcome(
+                    source_text="",
+                    target_text=None,
+                    status="failed",
+                    result_source="none",
+                    cache_status="skipped",
+                    incomplete=False,
+                ),
+                0.0,
+                {"sequence_id": seq},
+                now,
+                now,
+                now,
+                "",
+                0,
+                "",
+                dict(_API_EVENT_DEFAULTS),
+            )
+
         def collect_finished() -> None:
             for seq, future in list(pending.items()):
                 if not future.done():
@@ -936,6 +1009,17 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     completed[seq] = future.result()
                 except Exception:
                     log.exception("Translation future failed")
+                    metrics.increment("translation.future_failed")
+                    completed[seq] = _failed_completion(seq)
+            if len(completed) > _MAX_COMPLETED_BACKLOG:
+                # L8: _MAX_PENDING_TRANSLATIONS only bounds in-flight futures;
+                # an emit-loop stall would let this dict grow unboundedly.
+                metrics.increment("translation.completed_backlog_high")
+                log.warning(
+                    "Completed-translation backlog at %d (next_emit_seq=%d) — emit loop may be stalled",
+                    len(completed),
+                    next_emit_seq,
+                )
 
         def emit_completed(item: _CompletedTranslation) -> None:
             nonlocal last_result, last_result_time

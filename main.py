@@ -35,8 +35,8 @@ _KEY_FOR_ENGINE = {
     "gemini":           lambda: cfg.keys.gemini,
     "claude":           lambda: cfg.keys.anthropic,
     "google_translate": lambda: cfg.keys.google_translate,
-    "deepseek":         lambda: cfg.keys.deepseek,
-    "deepl":            lambda: cfg.keys.deepl,
+    # NOTE: only engines implemented in translation_engines._make_engine belong
+    # here; config._VALID_ENGINE_NAMES already rejects anything else (L11).
     "groq":             lambda: cfg.keys.groq_fallback,
     "openrouter":       lambda: cfg.keys.openrouter,
     "nvidia":           lambda: cfg.keys.nvidia,

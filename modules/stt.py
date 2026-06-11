@@ -443,6 +443,10 @@ class STTEngine:
                     2,
                 )
                 log.debug("Both Groq keys rate-limited (%.2fs left on shorter cooldown)", remaining)
+            # M7: chunks dropped during rate-limit cooldown were previously
+            # only visible in per-event logs; surface the loss in the 60 s
+            # metrics summary too.
+            metrics.increment(f"stt.dropped.{reason}")
             self._emit_stt_runtime_event(
                 audio=audio,
                 started=started,
@@ -452,6 +456,10 @@ class STTEngine:
             )
             return None
         request_audio, audio_stats = _normalize_audio_for_stt(audio)
+        # L10 note: the gate intentionally measures the *normalized* audio.
+        # With stt_normalize_enabled the gate is effectively looser than the
+        # raw-audio gates in VAD/fixed capture — that is the point: quiet
+        # speech that normalization can rescue should not be dropped here.
         gate_rms = _rms(request_audio)
         if gate_rms < cfg.audio.volume_threshold:
             self._last_avg_logprob = None
@@ -566,8 +574,8 @@ class STTEngine:
                 )
                 return None
             log.debug("Groq: %s", text)
-            stats = segment_stats(segments)
-            self._last_segments = _segment_infos(segments)
+            # L9: reuse `stats` from segment_rejection_reason above —
+            # segments were already converted/aggregated once.
             self._last_avg_logprob = stats.logprob if stats else None
             self._last_no_speech_prob = stats.no_speech if stats else None
             self._emit_stt_runtime_event(

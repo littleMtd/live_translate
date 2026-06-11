@@ -24,6 +24,14 @@ from utils.api_retry import classify_error, _RETRY_DELAYS
 
 log = get_logger("prompt_evolver")
 
+# Hard cap on evolved slang entries. The evolved prompt feeds the prompt_ver
+# hash that keys both the in-memory and DB translation caches, so every prompt
+# change invalidates all cached translations (intentional: a new prompt may
+# yield different output). An unbounded slang dict would make the prompt grow
+# for the whole stream — more tokens per call AND a cache flush on every
+# evolve cycle. Oldest entries are evicted first (insertion order ≈ LRU-add).
+_MAX_EXTRA_SLANG = 30
+
 _META_SYSTEM = (
     "你是翻譯品質分析師。你會收到一批韓語→繁中的字幕翻譯記錄，"
     "請分析並找出這場直播特有的用語、主播名字、遊戲名稱、或需要修正的翻譯。"
@@ -129,6 +137,12 @@ class PromptEvolver:
             with self._lock:
                 if new_slang:
                     self._extra_slang.update(new_slang)
+                    overflow = len(self._extra_slang) - _MAX_EXTRA_SLANG
+                    if overflow > 0:
+                        for key in list(self._extra_slang)[:overflow]:
+                            del self._extra_slang[key]
+                        log.info("Evolved slang capped at %d entries (%d evicted)",
+                                 _MAX_EXTRA_SLANG, overflow)
                     log.info("Evolved slang: %s", new_slang)
                 if context:
                     self._stream_context = context

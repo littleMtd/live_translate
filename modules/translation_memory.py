@@ -83,6 +83,65 @@ class TranslationMemory:
         self._history_writer(text, result)
         self._remember_recent(text, result, incomplete)
 
+    # ── Split memory/I-O variants ─────────────────────────────────────────────
+    # The methods below let the caller hold its state lock only for in-memory
+    # mutation and perform file/DB I/O outside the lock (review M1): a slow disk
+    # or SQLite write must not block the other worker's cache lookups.
+
+    def record_direct_memory(self, text: str, result: str, incomplete: bool) -> None:
+        """In-memory part of record_direct; caller writes history outside the lock."""
+        self._remember_recent(text, result, incomplete)
+
+    def record_success_memory(
+        self, text: str, result: str, incomplete: bool, prompt_ver: str
+    ) -> None:
+        """In-memory part of record_success; caller does history/DB I/O outside."""
+        self.cache_store(text, incomplete, result, prompt_ver)
+        if not incomplete:
+            self._remember_recent(text, result, incomplete)
+
+    def write_history(self, text: str, result: str) -> None:
+        self._history_writer(text, result)
+
+    def lookup_memory_event(self, text: str, incomplete: bool, prompt_ver: str) -> MemoryLookup:
+        """Cache-only lookup (no DB). Source is "" when undecided — the caller
+        is expected to consult the DB outside the lock and call record_db_hit."""
+        cached = self.cache_lookup(text, incomplete, prompt_ver)
+        if cached:
+            metrics.increment("translation.cache.memory_hit")
+            self._remember_recent(text, cached, incomplete)
+            return MemoryLookup(cached, "memory_hit")
+        return MemoryLookup(None, "")
+
+    def record_db_hit(
+        self, text: str, incomplete: bool, prompt_ver: str, db_result: str
+    ) -> MemoryLookup:
+        metrics.increment("translation.cache.db_hit")
+        self.cache_store(text, incomplete, db_result, prompt_ver)
+        self._remember_recent(text, db_result, incomplete)
+        return MemoryLookup(db_result, "db_hit")
+
+    def invalidate_memory(
+        self, text: str, incomplete: bool, prompt_ver: str, result: str | None = None
+    ) -> None:
+        """In-memory part of invalidate; caller does the DB delete outside."""
+        self.cache.pop((text, incomplete, prompt_ver), None)
+        self._forget_recent(text, result)
+
+    def invalidate_db(
+        self, text: str, active_engine: TranslationEngine, prompt_ver: str
+    ) -> None:
+        db = self._db_factory()
+        delete = getattr(db, "delete", None)
+        if callable(delete):
+            delete(
+                text,
+                cfg.translation.target_lang,
+                active_engine.engine_name,
+                active_engine.model_name,
+                prompt_ver,
+            )
+
     def record_success(
         self,
         text: str,

@@ -154,6 +154,9 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 wait_while_paused(stop_event, pause_event)
                 # Drain tokens that accumulated while paused so they don't
                 # appear as fresh content after resume.
+                # L14 (known, accepted): the STT producer may still be finishing
+                # one item during this drain, so at most one stale token can
+                # slip through after resume — harmless for live subtitles.
                 while True:
                     try:
                         text_queue.get_nowait()

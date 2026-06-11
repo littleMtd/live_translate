@@ -34,7 +34,7 @@ def _wrong_profile(profile_id: str) -> str:
 def test_translation_correction_data_snapshot_counts():
     tables = load_translation_corrections()
 
-    assert len(tables.source_aware_target_replacements) == 26
+    assert len(tables.source_aware_target_replacements) == 27
     assert {profile: len(values) for profile, values in tables.source_norm_by_profile.items()} == {
         "stellive_hina": 5,
         "hades_chxxnnx": 21,
@@ -50,7 +50,7 @@ def test_translation_correction_data_snapshot_counts():
     assert sum(
         len(group.replacements)
         for group in tables.source_aware_target_replacements
-    ) == 60
+    ) == 62
     assert sum(
         len(group.replacements)
         for groups in tables.profile_source_aware_target_replacements.values()
@@ -73,17 +73,22 @@ def test_each_profile_source_norm_rule_triggers_and_is_gated():
 
 def test_each_global_source_aware_rule_triggers_and_is_source_gated():
     with _active_translation_profile(""):
-        for source_terms, replacements in _SOURCE_AWARE_TARGET_REPLACEMENTS:
-            source = source_terms[0]
+        for source_terms, replacements, match_all in _SOURCE_AWARE_TARGET_REPLACEMENTS:
+            source = " ".join(source_terms) if match_all else source_terms[0]
             for wrong, right in replacements:
                 assert _apply_source_aware_corrections(source, wrong) == right
                 assert _apply_source_aware_corrections("__unrelated_source__", wrong) == wrong
+            if match_all and len(source_terms) > 1:
+                # A partial match must not trigger an all-terms rule.
+                partial = source_terms[0]
+                for wrong, right in replacements:
+                    assert _apply_source_aware_corrections(partial, wrong) == wrong
 
 
 def test_each_profile_source_aware_rule_triggers_and_is_profile_gated():
     for profile_id, groups in _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.items():
-        for source_terms, replacements in groups:
-            source = source_terms[0]
+        for source_terms, replacements, match_all in groups:
+            source = " ".join(source_terms) if match_all else source_terms[0]
             for wrong, right in replacements:
                 with _active_translation_profile(profile_id):
                     assert _apply_source_aware_corrections(source, wrong) == right

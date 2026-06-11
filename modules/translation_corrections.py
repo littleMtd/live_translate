@@ -13,6 +13,8 @@ _CORRECTIONS_DATA_PATH = (
 class ReplacementGroup:
     source_terms: tuple[str, ...]
     replacements: tuple[tuple[str, str], ...]
+    # match="all" in the JSON: every source term must be present (default: any).
+    match_all: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,10 +74,15 @@ def _replacement_groups(value: Any, field_name: str) -> tuple[ReplacementGroup, 
                 raise ValueError(f"{replacement_name} must contain string wrong/right fields")
             replacements.append((wrong, right))
 
+        match_mode = raw_group.get("match", "any")
+        if match_mode not in ("any", "all"):
+            raise ValueError(f"{group_name}.match must be \"any\" or \"all\"")
+
         groups.append(
             ReplacementGroup(
                 source_terms=_string_tuple(raw_group.get("source_terms"), f"{group_name}.source_terms"),
                 replacements=tuple(replacements),
+                match_all=(match_mode == "all"),
             )
         )
 

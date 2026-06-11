@@ -407,3 +407,118 @@ class TestFindLoopbackDevice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestCallbackOffloadsToWorker(unittest.TestCase):
+    """H3: the sounddevice callback must only enqueue frames; chunking happens
+    on the worker thread and still reaches audio_queue."""
+
+    def test_fixed_mode_chunks_emitted_via_worker(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        cfg_mock = MagicMock()
+        cfg_mock.audio.sample_rate = 100
+        cfg_mock.audio.chunk_seconds = 1          # chunk = 100 samples
+        cfg_mock.audio.volume_threshold = 0.01
+        cfg_mock.audio.vad_enabled = False
+        cfg_mock.audio.capture_channels = 1
+        cfg_mock.audio.channels = 1
+        cfg_mock.audio.device_name = ""
+
+        captured = {}
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        audio_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch.object(ac, "cfg", cfg_mock), \
+                patch.object(ac, "_find_loopback_device", return_value=0), \
+                patch.object(ac.sd, "InputStream", _FakeStream):
+            thread = ac.start(audio_q, stop)
+            deadline = time.monotonic() + 2.0
+            while "callback" not in captured and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("callback", captured, "InputStream callback not registered")
+
+            loud = np.ones((10, 1), dtype=np.float32) * 0.5
+            for _ in range(12):   # 120 samples > one 100-sample chunk
+                captured["callback"](loud, 10, None, None)
+
+            chunk = None
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                try:
+                    chunk = audio_q.get(timeout=0.1)
+                    break
+                except queue.Empty:
+                    continue
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertIsNotNone(chunk, "worker thread must emit the fixed chunk")
+        self.assertEqual(chunk.vad_cut_reason, "fixed")
+        self.assertEqual(len(chunk.audio), 100)
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestVadEarlyDiscardAtSilenceGate(unittest.TestCase):
+    """M3/M4: insufficient speech is discarded at the silence gate instead of
+    accumulating (with leading silence) until hard_max."""
+
+    def _make_cfg(self):
+        m = MagicMock()
+        m.audio.sample_rate = 100
+        m.audio.volume_threshold = 0.01
+        m.audio.vad_silence_sec = 0.1          # gate = 10 samples
+        m.audio.vad_min_speech_sec = 0.05      # min  =  5 samples
+        m.audio.vad_near_miss_min_speech_sec = 0.03
+        m.audio.vad_max_speech_sec = 0.5
+        m.audio.vad_hard_max_speech_sec = 0.5
+        m.audio.vad_overlap_sec = 0.0
+        m.audio.vad_near_miss_overlap_sec = 0.2
+        m.audio.vad_silence_overlap_sec = 0.0
+        m.audio.vad_adaptive_enabled = False
+        m.audio.vad_adaptive_after_boundary_cuts = 1
+        m.audio.vad_adaptive_silence_sec = 0.1
+        m.audio.vad_adaptive_max_speech_sec = 0.5
+        m.audio.vad_adaptive_hard_max_speech_sec = 0.5
+        m.audio.vad_adaptive_overlap_sec = 0.0
+        return m
+
+    def _loud(self, n):
+        return np.ones(n, dtype=np.float32) * 0.5
+
+    def _quiet(self, n):
+        return np.zeros(n, dtype=np.float32)
+
+    def test_pure_silence_resets_buffer_at_gate(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._quiet(10))   # silence gate hit, zero speech
+            self.assertEqual(vad._total_samples, 0, "buffer must reset at gate")
+            self.assertEqual(len(vad._pending_overlap), 0)
+        self.assertTrue(q.empty())
+
+    def test_near_miss_speech_keeps_overlap_at_gate(self):
+        from modules.audio_capture import _VadState
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", self._make_cfg()):
+            vad = _VadState(q)
+            vad.push(self._loud(3))     # 3 = near_miss min, < min_speech 5
+            vad.push(self._quiet(10))   # silence gate → near-miss discard
+            self.assertEqual(vad._total_samples, 0, "buffer must reset at gate")
+            self.assertGreater(len(vad._pending_overlap), 0,
+                               "near-miss speech must be kept as overlap")
+        self.assertTrue(q.empty())

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from modules.pipeline_events import TranscriptionEvent, transcription_text
+from utils.metrics import metrics
 from utils.text_heuristics import (
     SENTENCE_COMPLETE_ENDINGS,
     SENTENCE_INCOMPLETE_ENDINGS,
@@ -54,9 +55,20 @@ def _split_prefix_with_reason(
             last = index
             reason = "forced_prefix"
     for boundary in gap_boundaries:
-        if 0 < boundary < len(text) and boundary > last and text[boundary].isspace():
+        if not (0 < boundary < len(text)):
+            continue
+        if not text[boundary].isspace():
+            # M6: boundary offsets assume the buffer text equals the segment
+            # texts joined by single spaces; when the STT text diverges the
+            # boundary silently misses. Count it so drift is visible in metrics
+            # instead of the feature degrading invisibly.
+            metrics.increment("sentence.gap_boundary_drifted")
+            continue
+        if boundary > last:
             last = boundary
             reason = "forced_gap_prefix"
+    if reason == "forced_gap_prefix":
+        metrics.increment("sentence.gap_boundary_used")
     if last < 0:
         return "", text, "", -1
 

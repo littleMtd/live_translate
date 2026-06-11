@@ -161,6 +161,7 @@ class _Translation:
     #   "claude-sonnet-4-6"          — quality mode  (cache kicks in at ≥ 2048 sys-tokens)
     #   "claude-haiku-4-5-20251001"  — economy mode  (cache kicks in at ≥ 4096 sys-tokens)
     model:                    str = "claude-sonnet-4-6"
+    claude_timeout:           float = 5.0   # per-request timeout (seconds) for ClaudeEngine
     # Gemini
     gemini_model:             str = "gemini-2.5-flash"
     # Groq fallback (uses GROQ_API_KEY_fall_back)

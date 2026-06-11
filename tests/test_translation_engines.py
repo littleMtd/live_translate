@@ -64,3 +64,45 @@ class TestTokenUsageCapture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGroqRetryExceptionContract(unittest.TestCase):
+    """H2: a timeout during the token-limit retry must return None, not raise."""
+
+    def test_retry_timeout_returns_none(self):
+        import io
+        import socket
+        import urllib.error
+        from unittest.mock import patch
+        from modules.translation_engines import GroqTranslationEngine
+
+        engine = GroqTranslationEngine.__new__(GroqTranslationEngine)
+        engine._api_key = "test-key"
+        engine._model = "qwen/qwen3-32b"
+        engine._timeout = 1
+        engine._max_tokens = 128
+        engine._retry_max_tokens = 96
+        engine._strip_think = False
+
+        token_limit_error = urllib.error.HTTPError(
+            url="https://api.groq.com/openai/v1/chat/completions",
+            code=413,
+            msg="payload too large",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error": {"code": "rate_limit_exceeded", "message": "request too large"}}'),
+        )
+        calls = {"n": 0}
+
+        def _urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise token_limit_error
+            raise urllib.error.URLError(socket.timeout("timed out"))
+
+        with patch("urllib.request.urlopen", side_effect=_urlopen):
+            result = engine.translate(
+                "안녕하세요", "system", False, history=[("안녕", "你好")]
+            )
+
+        self.assertIsNone(result, "retry-path timeout must fail soft (return None)")
+        self.assertEqual(calls["n"], 2)

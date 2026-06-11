@@ -192,38 +192,65 @@ class _VadState:
             next_overlap = overlap_samples if cut_reason != "silence" else self._silence_overlap_samples
             self._emit(cut_reason=cut_reason, next_overlap_samples=next_overlap)
         elif hard_max_hit:
-            was_adaptive = self._adaptive_active()
-            raw_total_samples = self._total_samples
-            speech_samples = self._speech_samples
-            silent_samples = self._silent_samples
-            raw_chunk = np.concatenate(self._buf)
-            rms_value = _rms(raw_chunk)
-            peak_value = float(np.max(np.abs(raw_chunk))) if len(raw_chunk) else 0.0
-            if self._near_miss_min_speech <= speech_samples < self._min_speech:
-                metrics.increment("audio.cut.discard_hard_max_near_miss_overlap")
+            self._discard_insufficient_speech("hard_max")
+        elif silence_hit:
+            # M3/M4: not enough speech at the silence gate. Discard now instead
+            # of accumulating until hard_max — waiting added up-to-hard_max
+            # latency for short utterances and prepended seconds of leading
+            # silence (extra STT cost) to the next chunk. Near-miss speech is
+            # preserved as overlap so a clipped word onset can still be heard.
+            self._discard_insufficient_speech("silence")
+
+    def _discard_insufficient_speech(self, boundary: str) -> None:
+        was_adaptive = self._adaptive_active()
+        raw_total_samples = self._total_samples
+        speech_samples = self._speech_samples
+        silent_samples = self._silent_samples
+        raw_chunk = np.concatenate(self._buf)
+        rms_value = _rms(raw_chunk)
+        peak_value = float(np.max(np.abs(raw_chunk))) if len(raw_chunk) else 0.0
+        if self._near_miss_min_speech <= speech_samples < self._min_speech:
+            cut_reason = f"discard_{boundary}_near_miss_overlap"
+            metrics.increment(f"audio.cut.{cut_reason}")
+            if boundary == "silence":
+                # Speech sits before the silence tail at a silence-gate discard:
+                # trim the tail, then keep up to near_miss_overlap of the rest
+                # (whole chunk when shorter) so the clipped onset survives.
+                source = raw_chunk
+                if 0 < silent_samples < len(raw_chunk):
+                    source = raw_chunk[: -silent_samples]
+                samples = min(self._near_miss_overlap_samples, len(source))
+                next_overlap = (
+                    source[-samples:].copy() if samples > 0 else np.zeros(0, dtype=np.float32)
+                )
+            else:
                 next_overlap = self._next_overlap(
                     raw_chunk,
-                    "discard_hard_max_near_miss_overlap",
+                    cut_reason,
                     self._near_miss_overlap_samples,
                 )
-                self._reset()
-                self._pending_overlap = next_overlap
-                self._emit_vad_runtime_event(
-                    cut_reason="discard_hard_max_near_miss_overlap",
-                    audio_seconds=raw_total_samples / cfg.audio.sample_rate,
-                    raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
-                    overlap_seconds=len(next_overlap) / cfg.audio.sample_rate,
-                    adaptive_active=was_adaptive,
-                    speech_seconds=speech_samples / cfg.audio.sample_rate,
-                    silence_seconds=silent_samples / cfg.audio.sample_rate,
-                    rms_value=rms_value,
-                    peak_value=peak_value,
-                    queue_drained=0,
-                )
-                return
-            metrics.increment("audio.cut.discard_hard_max_no_speech")
+            self._reset()
+            self._pending_overlap = next_overlap
             self._emit_vad_runtime_event(
-                cut_reason="discard_hard_max_no_speech",
+                cut_reason=cut_reason,
+                audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                overlap_seconds=len(next_overlap) / cfg.audio.sample_rate,
+                adaptive_active=was_adaptive,
+                speech_seconds=speech_samples / cfg.audio.sample_rate,
+                silence_seconds=silent_samples / cfg.audio.sample_rate,
+                rms_value=rms_value,
+                peak_value=peak_value,
+                queue_drained=0,
+            )
+            return
+        cut_reason = f"discard_{boundary}_no_speech"
+        metrics.increment(f"audio.cut.{cut_reason}")
+        # Pure-silence resets happen every silence-gate interval while idle;
+        # only surface a runtime event when actual speech was thrown away.
+        if speech_samples > 0:
+            self._emit_vad_runtime_event(
+                cut_reason=cut_reason,
                 audio_seconds=raw_total_samples / cfg.audio.sample_rate,
                 raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
                 overlap_seconds=0.0,
@@ -234,8 +261,8 @@ class _VadState:
                 peak_value=peak_value,
                 queue_drained=0,
             )
-            # Mostly silence at max length — discard
-            self._reset(clear_overlap=True)
+        # Mostly silence — discard
+        self._reset(clear_overlap=True)
 
     def _active_limits(self) -> tuple[int, int, int, int]:
         if not self._adaptive_active():
@@ -294,8 +321,8 @@ class _VadState:
             metrics.increment("audio.vad.adaptive")
         rms_value = _rms(chunk)
         peak_value = float(np.max(np.abs(chunk))) if len(chunk) else 0.0
-        overlap_seconds = len(chunk) - raw_total_samples
-        overlap_seconds = max(0, overlap_seconds) / cfg.audio.sample_rate
+        overlap_sample_count = max(0, len(chunk) - raw_total_samples)
+        overlap_seconds = overlap_sample_count / cfg.audio.sample_rate
         drained = put_latest(
             self._q,
             AudioChunk(
@@ -373,6 +400,9 @@ class _VadState:
 # Public start()
 # ---------------------------------------------------------------------------
 
+_FRAME_QUEUE_MAXSIZE = 64   # 100 ms frames ≈ 6.4 s of headroom for the VAD worker
+
+
 def start(audio_queue: queue.Queue, stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
     # Resolve the loopback device synchronously so a missing device fails fast
@@ -386,20 +416,35 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                 silero = _load_silero(cfg.audio.vad_silero_threshold)
 
             vad           = _VadState(audio_queue, silero) if cfg.audio.vad_enabled else None
-            fixed_buf     = np.zeros(0, dtype=np.float32)
             chunk_samples = cfg.audio.sample_rate * cfg.audio.chunk_seconds
 
+            # The sounddevice callback must return within one block (100 ms) or
+            # WASAPI overflows and silently drops audio. All heavy work (Silero
+            # inference, buffer concatenation) therefore runs on a dedicated
+            # worker thread; the callback only downmixes and enqueues the frame.
+            frame_queue: queue.Queue = queue.Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
+
             def callback(indata, frames, time_info, status):
-                nonlocal fixed_buf
                 if status:
                     log.warning("sounddevice status: %s", status)
                 if pause_event and pause_event.is_set():
                     return
-                mono = _downmix_to_mono(indata)
+                try:
+                    # copy(): sounddevice reuses the indata buffer after return.
+                    frame_queue.put_nowait(_downmix_to_mono(indata).copy())
+                except queue.Full:
+                    metrics.increment("audio.frames_dropped")
 
-                if vad:
-                    vad.push(mono)
-                else:
+            def process_frames():
+                fixed_buf = np.zeros(0, dtype=np.float32)
+                while not stop_event.is_set():
+                    try:
+                        mono = frame_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    if vad:
+                        vad.push(mono)
+                        continue
                     fixed_buf = np.concatenate([fixed_buf, mono])
                     if len(fixed_buf) > _FIXED_BUF_MAX_SAMPLES:
                         excess    = len(fixed_buf) - _FIXED_BUF_MAX_SAMPLES
@@ -427,6 +472,8 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                             "chunks",
                         )
 
+            worker = start_daemon_thread("AudioVadWorker", process_frames)
+
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
             capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)
             log.info(
@@ -446,6 +493,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
             ):
                 while not stop_event.is_set():
                     stop_event.wait(timeout=0.5)
+            worker.join(timeout=2.0)
         except Exception as exc:
             # An exception inside the daemon would otherwise terminate it
             # silently while the rest of the pipeline keeps polling an empty

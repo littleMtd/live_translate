@@ -265,17 +265,26 @@ def _truncate_for_groq(value: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
-def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
-    limit = _clamp_int(getattr(cfg.translation, "groq_translation_context_window", 2), 2)
+def _limited_history(
+    history: list[tuple[str, str]] | None,
+    *,
+    config_prefix: str,
+) -> list[tuple[str, str]]:
+    """Shared history limiter for OpenAI-compatible fallback engines (L5).
+
+    Reads `{prefix}_context_window` / `{prefix}_history_source_chars` /
+    `{prefix}_history_target_chars` from cfg.translation.
+    """
+    limit = _clamp_int(getattr(cfg.translation, f"{config_prefix}_context_window", 2), 2)
     if limit <= 0:
         return []
 
     source_chars = _clamp_int(
-        getattr(cfg.translation, "groq_translation_history_source_chars", 160),
+        getattr(cfg.translation, f"{config_prefix}_history_source_chars", 160),
         160,
     )
     target_chars = _clamp_int(
-        getattr(cfg.translation, "groq_translation_history_target_chars", 220),
+        getattr(cfg.translation, f"{config_prefix}_history_target_chars", 220),
         220,
     )
 
@@ -286,29 +295,14 @@ def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[s
         if source_text and target_text:
             limited.append((source_text, target_text))
     return limited
+
+
+def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    return _limited_history(history, config_prefix="groq_translation")
 
 
 def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
-    limit = _clamp_int(getattr(cfg.translation, "openrouter_context_window", 2), 2)
-    if limit <= 0:
-        return []
-
-    source_chars = _clamp_int(
-        getattr(cfg.translation, "openrouter_history_source_chars", 160),
-        160,
-    )
-    target_chars = _clamp_int(
-        getattr(cfg.translation, "openrouter_history_target_chars", 220),
-        220,
-    )
-
-    limited: list[tuple[str, str]] = []
-    for source, target in (history or [])[-limit:]:
-        source_text = _truncate_for_groq(source, source_chars)
-        target_text = _truncate_for_groq(target, target_chars)
-        if source_text and target_text:
-            limited.append((source_text, target_text))
-    return limited
+    return _limited_history(history, config_prefix="openrouter")
 
 
 def _groq_system_prompt(system_prompt: str) -> str:
@@ -565,7 +559,7 @@ class ClaudeEngine(TranslationEngine):
                 temperature=cfg.translation.temperature,
                 system=[system_content],
                 messages=messages,
-                timeout=5.0,
+                timeout=float(getattr(cfg.translation, "claude_timeout", 5.0) or 5.0),
             )
             log.info("Claude translate: %.0fms", (time.monotonic() - _t0) * 1000)
             _log_token_usage("Claude", getattr(resp, "usage", None))
@@ -886,9 +880,9 @@ class NvidiaEngine(TranslationEngine):
                 return None
             except urllib.error.HTTPError as e:
                 record_attempt_duration(current_attempt_index, _t0)
-                body = ""
+                error_body = ""  # L6: don't shadow the request `body` dict
                 try:
-                    body = e.read().decode()
+                    error_body = e.read().decode()
                 except Exception:
                     pass
                 if e.code == 401:
@@ -898,7 +892,7 @@ class NvidiaEngine(TranslationEngine):
                 elif e.code == 429:
                     log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
                 else:
-                    log.error("Nvidia HTTP %d: %s", e.code, body or e)
+                    log.error("Nvidia HTTP %d: %s", e.code, error_body or e)
                 error_type, message_class = _classify_api_error(e)
                 record_diagnostics(error_type, message_class)
                 return None
@@ -1065,9 +1059,9 @@ class OpenRouterTranslationEngine(TranslationEngine):
             log.debug("OpenRouter: %.30s -> %s", text, content)
             return content or None
         except urllib.error.HTTPError as e:
-            body = ""
+            error_body = ""  # L6: don't shadow the request `body` dict
             try:
-                body = e.read().decode()
+                error_body = e.read().decode()
             except Exception:
                 pass
             if e.code == 401:
@@ -1075,9 +1069,9 @@ class OpenRouterTranslationEngine(TranslationEngine):
             elif e.code == 402:
                 log.error("OpenRouter credits exhausted or payment required")
             elif e.code == 429:
-                log.warning("OpenRouter rate-limit (429): %s", body or e)
+                log.warning("OpenRouter rate-limit (429): %s", error_body or e)
             else:
-                log.error("OpenRouter HTTP %d: %s", e.code, body or e)
+                log.error("OpenRouter HTTP %d: %s", e.code, error_body or e)
             error_type, message_class = _classify_api_error(e)
             record_diagnostics(
                 started_at=started_at,
@@ -1228,6 +1222,16 @@ class GroqTranslationEngine(TranslationEngine):
                     except Exception:
                         pass
                     log.error("Groq HTTP %d: %s", retry_error.code, body or retry_error)
+                    return None
+                except Exception as retry_error:
+                    # This block runs inside an except handler: an uncaught
+                    # timeout/URLError here would escape translate() and break
+                    # the None-on-failure engine contract, skipping the rest of
+                    # the fallback chain. Catch everything and fail soft.
+                    if _is_timeout_exception(retry_error) or classify_error(retry_error) == "network":
+                        log.warning("Groq retry network/timeout error: %s", retry_error)
+                    else:
+                        log.error("Groq retry error: %s", retry_error)
                     return None
             if e.code == 401:
                 log.error("Groq auth error — GROQ_API_KEY_fall_back 無效或已過期")

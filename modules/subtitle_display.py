@@ -6,6 +6,7 @@ import textwrap
 
 from config import cfg
 from utils.logger import get_logger
+from utils.metrics import metrics
 
 log = get_logger("subtitle_display")
 
@@ -124,6 +125,10 @@ class SubtitleWindow:
             while True:
                 candidate = self._queue.get_nowait()
                 if self._translating:
+                    if self._pending_text is not None and self._pending_text != candidate:
+                        # L15: mirror of translator-side stale_skipped — a
+                        # pending subtitle was replaced before it was shown.
+                        metrics.increment("subtitle.pending_overwritten")
                     self._pending_text = candidate
         except queue.Empty:
             pass
