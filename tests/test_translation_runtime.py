@@ -51,7 +51,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         engines = [_engine("primary", None), _engine("fallback", "ok")]
         state = FallbackState()
 
-        result = call_with_fallback(
+        result, used_idx = call_with_fallback(
             engines,
             state,
             "source",
@@ -65,6 +65,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         )
 
         self.assertEqual(result, "ok")
+        self.assertEqual(used_idx, 1)
         self.assertEqual(state.active_idx, 1)
         self.assertEqual(state.probe_counter, 0)
         snapshot = metrics.snapshot()
@@ -76,7 +77,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback ok")]
         state = FallbackState(active_idx=1, probe_counter=49)
 
-        result = call_with_fallback(
+        result, used_idx = call_with_fallback(
             engines,
             state,
             "source",
@@ -90,6 +91,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         )
 
         self.assertEqual(result, "fallback ok")
+        self.assertEqual(used_idx, 1)
         self.assertEqual(state.active_idx, 1)
         engines[0].translate.assert_not_called()
         engines[1].translate.assert_called_once()
@@ -116,6 +118,42 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot.counters["translation.fallback.probe"], 1)
         self.assertEqual(snapshot.counters["translation.fallback.primary_recovered"], 1)
+
+    def test_soft_fallback_reports_fallback_engine_without_switching(self):
+        metrics.reset()
+        engines = [_engine("primary", None), _engine("fallback", "ok")]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            3,  # threshold not reached → soft fallback
+            lambda result, source: False,
+            logging.getLogger("test"),
+        )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(used_idx, 1)        # result attributed to fallback
+        self.assertEqual(state.active_idx, 0)  # active engine stays primary
+        self.assertEqual(state.consecutive_primary_failures, 1)
+
+    def test_all_engines_failed_returns_primary_idx(self):
+        metrics.reset()
+        engines = [_engine("primary", None), _engine("fallback", None)]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines, state, "source", "prompt", False, [], 50, 3,
+            lambda result, source: False, logging.getLogger("test"),
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(used_idx, 0)
 
 
 if __name__ == "__main__":

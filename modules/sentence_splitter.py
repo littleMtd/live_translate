@@ -212,8 +212,20 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 else:
                     emit_cut(cut)
 
-        if pending_incomplete is not None:
+        # Stop: flush the not-yet-cut tail of the buffer so the last sentence
+        # isn't dropped, merging it with a pending incomplete cut when allowed
+        # (same policy as the main loop).
+        final_cut = buffer.flush(time.monotonic())
+        if pending_incomplete is not None and final_cut is not None:
+            if _can_merge_cuts(pending_incomplete, final_cut):
+                emit_cut(_merge_cuts(pending_incomplete, final_cut))
+            else:
+                emit_cut(pending_incomplete)
+                emit_cut(final_cut)
+        elif pending_incomplete is not None:
             emit_cut(pending_incomplete)
+        elif final_cut is not None:
+            emit_cut(final_cut)
         log.info("Sentence splitter stopped")
 
     return start_daemon_thread("SentenceSplitter", run)

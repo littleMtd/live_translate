@@ -68,10 +68,14 @@ def call_with_fallback(
     failure_threshold: int,
     looks_untranslated: UntranslatedCheck,
     log,
-) -> str | None:
+) -> tuple[str | None, int]:
+    """Returns (result, engine_idx) where engine_idx is the engine that
+    actually produced the result. On a soft fallback state.active_idx is NOT
+    advanced, so callers must use the returned index — not the active engine —
+    to attribute the result (engine label, diagnostics, DB cache rows)."""
     if not engines:
         metrics.increment("translation.fallback.no_engines")
-        return None
+        return None, -1
 
     # Try the current active engine. Primary recovery probes run on a background thread.
     primary_idx = state.active_idx
@@ -81,7 +85,7 @@ def call_with_fallback(
 
     if result and not looks_untranslated(result, text):
         state.consecutive_primary_failures = 0
-        return result
+        return result, primary_idx
 
     if result:
         metrics.increment("translation.bad_output")
@@ -115,12 +119,12 @@ def call_with_fallback(
                     failure_threshold - 1,
                     engines[index].engine_name,
                 )
-            return fb_result
+            return fb_result, index
         if fb_result:
             metrics.increment("translation.bad_output")
 
     log.error("All engines failed for: %.40s", text)
-    return None
+    return None, primary_idx
 
 
 def probe_primary_recovery(

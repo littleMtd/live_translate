@@ -634,8 +634,12 @@ class Translator:
 
         with self._state_guard():
             history = self._memory_state().context()
-        result = self._call_with_fallback(text, system_prompt, incomplete, history)
-        engine = self._active_engine()
+        result, used_engine = self._call_with_fallback(text, system_prompt, incomplete, history)
+        # Attribute the outcome to the engine that actually produced it: on a
+        # soft fallback the active engine stays primary, so reading
+        # _active_engine() here mislabeled the result source, API diagnostics
+        # and the DB cache row.
+        engine = used_engine or self._active_engine()
         if result:
             result = _apply_source_aware_corrections(text, result)
             if _looks_like_meta_garbage_output(result):
@@ -652,7 +656,7 @@ class Translator:
                     prompt_version=prompt_ver,
                     filter_reason="meta_garbage_output",
                 )
-            self._record_success(text, result, incomplete, prompt_ver)
+            self._record_success(text, result, incomplete, prompt_ver, engine)
             return TranslationOutcome(
                 source_text=raw_text,
                 target_text=result,
@@ -665,9 +669,15 @@ class Translator:
                 prompt_version=prompt_ver,
             )
         else:
-            # API failure — allow next identical input to retry rather than staying suppressed
-            self._policy_state().reset_last_input()
-            self._last_input = ""
+            # API failure — allow next identical input to retry rather than
+            # staying suppressed. Under the state lock, and only if last_input
+            # is still ours: with two workers, a slow failing request must not
+            # clear the duplicate-suppression state another worker just wrote.
+            with self._state_guard():
+                policy = self._policy_state()
+                if policy.last_input == self._last_input:
+                    policy.reset_last_input()
+                self._last_input = ""
         return TranslationOutcome(
             source_text=raw_text,
             target_text=None,
@@ -729,10 +739,12 @@ class Translator:
         return MemoryLookup(None, "miss")
 
     def _record_success(self, text: str, result: str, incomplete: bool,
-                        prompt_ver: str) -> None:
+                        prompt_ver: str,
+                        engine: TranslationEngine | None = None) -> None:
         with self._state_guard():
             self._memory_state().record_success_memory(text, result, incomplete, prompt_ver)
-            engine = self._active_engine()
+            if engine is None:
+                engine = self._active_engine()
         # File/DB I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
         if not incomplete and engine is not None and _db_cache_enabled():
@@ -769,8 +781,13 @@ class Translator:
     def _prompt_version(system_prompt: str) -> str:
         return hashlib.md5(system_prompt.encode()).hexdigest()[:8]
 
-    def _call_with_fallback(self, text: str, system_prompt: str, incomplete: bool,
-                            history: list[tuple[str, str]] | None = None) -> str | None:
+    def _call_with_fallback(
+        self, text: str, system_prompt: str, incomplete: bool,
+        history: list[tuple[str, str]] | None = None,
+    ) -> tuple[str | None, TranslationEngine | None]:
+        """Returns (result, engine_used). engine_used is the engine that
+        actually produced the result — on a soft fallback this differs from
+        the active engine, which intentionally stays on primary."""
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
         if lock is None:
@@ -787,7 +804,7 @@ class Translator:
                     before_state.probe_counter,
                     before_state.consecutive_primary_failures,
                 )
-        result = call_with_fallback(
+        result, used_idx = call_with_fallback(
             self._engines,
             state,
             text,
@@ -802,7 +819,8 @@ class Translator:
         if lock is not None:
             with lock:
                 _merge_fallback_state(fallback_state, before_state, state)
-        return result
+        used_engine = active_engine(self._engines, used_idx)
+        return result, used_engine
 
     def _get_prompt_version_hash(self) -> str:
         return self._prompt_version(self._build_system_prompt())
@@ -810,6 +828,7 @@ class Translator:
 
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
 _MAX_COMPLETED_BACKLOG = 64  # completed-but-unemitted results before warning (L8)
+_STOP_DRAIN_TIMEOUT_SEC = 5.0  # max wait for in-flight translations at stop
 
 
 def _translation_max_output_delay_ms() -> float:
@@ -1122,7 +1141,29 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     pending[next_seq] = executor.submit(translate_item, next_seq, item, submitted_at)
                     next_seq += 1
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            # Stop accepting work but let already-submitted translations finish:
+            # cancel_futures=True dropped completed-but-unemitted and in-flight
+            # subtitles at stop. Drain in order with a bounded wait so shutdown
+            # can't hang on a stuck engine call.
+            executor.shutdown(wait=False, cancel_futures=False)
+            deadline = time.monotonic() + _STOP_DRAIN_TIMEOUT_SEC
+            while True:
+                collect_finished()
+                while next_emit_seq in completed:
+                    emit_completed(completed.pop(next_emit_seq))
+                    next_emit_seq += 1
+                if not pending and not completed:
+                    break
+                if time.monotonic() >= deadline:
+                    log.warning(
+                        "Stop drain timed out with %d pending / %d completed translations",
+                        len(pending),
+                        len(completed),
+                    )
+                    for future in pending.values():
+                        future.cancel()
+                    break
+                time.sleep(_TRANSLATION_LOOP_POLL_SEC)
             log.info("Translator stopped")
 
     return start_daemon_thread("Translator", run)

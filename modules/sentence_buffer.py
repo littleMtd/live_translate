@@ -198,6 +198,28 @@ class SentenceBuffer:
         self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
 
+    def flush(self, now: float) -> SentenceCut | None:
+        """Drain whatever is buffered as a final cut (used at stage stop so
+        the last not-yet-cut sentence isn't silently dropped)."""
+        if not self._buffer or self._first_token_time is None:
+            return None
+        cut = SentenceCut(
+            text=self._buffer.strip(),
+            incomplete=not is_complete(self._buffer),
+            source=self._latest_source,
+            elapsed=now - self._first_token_time,
+            forced=True,
+            cut_reason="stop_flush",
+            chunk_count=self._chunk_count,
+            audio_seconds=round(self._total_audio_seconds, 3),
+            source_utterance_ids=tuple(self._source_utterance_ids),
+            evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
+            source_avg_logprobs=tuple(self._source_avg_logprobs),
+            source_no_speech_probs=tuple(self._source_no_speech_probs),
+        )
+        self.reset()
+        return cut
+
     def pop_ready(
         self,
         now: float,
