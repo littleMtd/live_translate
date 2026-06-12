@@ -26,9 +26,13 @@ from modules.translation_prompts import (
 from modules.translation_engines import (
     TranslationEngine,
     _build_engine_chain,
+    effective_system_prompt_for_engine,
+    engine_chain_config_key,
     get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
     get_last_token_usage,
+    get_last_token_usage_engine,
+    reset_last_engine_diagnostics,
     reset_last_token_usage,
 )
 from modules.translation_runtime import (
@@ -414,7 +418,11 @@ class _TranslatorSharedState:
 
 
 def _new_translation_memory() -> TranslationMemory:
-    recent_window = max(getattr(cfg.translation, 'context_window', 0) or 0, 30)
+    try:
+        recent_window = int(getattr(cfg.translation, "context_window", 0) or 0)
+    except (TypeError, ValueError):
+        recent_window = 0
+    recent_window = max(recent_window, 0)
     return TranslationMemory(
         recent_window=recent_window,
         max_cache_size=_CACHE_MAX_SIZE,
@@ -501,6 +509,16 @@ def _retry_diagnostics_apply(outcome: TranslationOutcome, diagnostics: dict[str,
     return bool(engine and engine == outcome.engine and _outcome_used_api(outcome))
 
 
+def _token_usage_for_outcome(outcome: TranslationOutcome) -> dict[str, int | None]:
+    if not _outcome_used_api(outcome):
+        return {}
+    usage_engine = get_last_token_usage_engine()
+    outcome_engine = str(outcome.engine or "").strip().lower()
+    if usage_engine and usage_engine != outcome_engine:
+        return {}
+    return get_last_token_usage()
+
+
 @dataclass(frozen=True)
 class _CompletedTranslation:
     seq: int
@@ -522,6 +540,7 @@ class Translator:
         self._state_lock = self._shared_state.lock
         self._fallback_state_obj = self._shared_state.fallback
         self._engines: list[TranslationEngine] = _build_engine_chain()
+        self._engines_key = engine_chain_config_key()
         self._memory = self._shared_state.memory
         self._policy = self._shared_state.policy
         self._last_input: str = ""
@@ -535,6 +554,22 @@ class Translator:
             state = FallbackState()
             self._fallback_state_obj = state
         return state
+
+    def _refresh_engines_if_needed(self) -> None:
+        current_key = engine_chain_config_key()
+        previous_key = getattr(self, "_engines_key", current_key)
+        if previous_key == current_key:
+            self._engines_key = current_key
+            return
+        with self._state_guard():
+            if getattr(self, "_engines_key", previous_key) == current_key:
+                return
+            self._engines = _build_engine_chain()
+            self._engines_key = current_key
+            state = self._fallback_state()
+            state.active_idx = 0
+            state.probe_counter = 0
+            state.consecutive_primary_failures = 0
 
     @property
     def _active_idx(self) -> int:
@@ -571,7 +606,7 @@ class Translator:
         # workers, so split reads raced and produced wrong filter_reason values.
         with self._state_guard():
             filter_reason = policy.rejection_reason(raw_text)
-            text = policy.prepare_input(text)
+            text = policy.prepare_input(raw_text, initial_rejection_reason=filter_reason)
             self._last_input = policy.last_input
             sanitize_rejection = policy._last_sanitize_rejection
         if text is None:
@@ -598,12 +633,13 @@ class Translator:
             )
 
         # 根据当前模型选择对应的 prompt
+        self._refresh_engines_if_needed()
         system_prompt = self._build_system_prompt()
-        prompt_ver = self._prompt_version(system_prompt)
+        engine = self._active_engine()
+        prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
         self._log_prompt_mode_once()
 
-        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver)
-        engine = self._active_engine()
+        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver, engine)
         if lookup.result:
             target_text = _apply_source_aware_corrections(text, lookup.result)
             if _looks_like_meta_garbage_output(target_text):
@@ -640,6 +676,7 @@ class Translator:
         # _active_engine() here mislabeled the result source, API diagnostics
         # and the DB cache row.
         engine = used_engine or self._active_engine()
+        prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
         if result:
             result = _apply_source_aware_corrections(text, result)
             if _looks_like_meta_garbage_output(result):
@@ -714,24 +751,32 @@ class Translator:
         self._memory_state().write_history(text, slang_result)
         return slang_result
 
-    def _lookup_existing_translation_event(self, text: str, incomplete: bool,
-                                           prompt_ver: str) -> MemoryLookup:
+    def _lookup_existing_translation_event(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        engine: TranslationEngine | None = None,
+    ) -> MemoryLookup:
         # Memory cache under the lock; the SQLite read happens outside it (M1)
         # so a slow DB never blocks the other worker.
-        with self._state_guard():
-            lookup = self._memory_state().lookup_memory_event(text, incomplete, prompt_ver)
+        if engine is None:
             engine = self._active_engine()
+        with self._state_guard():
+            lookup = self._memory_state().lookup_memory_event(
+                text, incomplete, prompt_ver, engine
+            )
         if lookup.result:
             log.debug("Cache hit: %s", text[:20])
             return lookup
         if incomplete or engine is None or not _db_cache_enabled():
-            metrics.increment("translation.cache.miss")
+            metrics.increment("translation.cache.skipped")
             return MemoryLookup(None, "skipped")
         db_result = self._memory_state().db_lookup(text, engine, prompt_ver)
         if db_result:
             with self._state_guard():
                 lookup = self._memory_state().record_db_hit(
-                    text, incomplete, prompt_ver, db_result
+                    text, incomplete, prompt_ver, db_result, engine
                 )
             log.debug("Cache hit: %s", text[:20])
             return lookup
@@ -740,11 +785,13 @@ class Translator:
 
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str,
-                        engine: TranslationEngine | None = None) -> None:
+        engine: TranslationEngine | None = None) -> None:
         with self._state_guard():
-            self._memory_state().record_success_memory(text, result, incomplete, prompt_ver)
             if engine is None:
                 engine = self._active_engine()
+            self._memory_state().record_success_memory(
+                text, result, incomplete, prompt_ver, engine
+            )
         # File/DB I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
         if not incomplete and engine is not None and _db_cache_enabled():
@@ -759,7 +806,9 @@ class Translator:
         result: str | None,
     ) -> None:
         with self._state_guard():
-            self._memory_state().invalidate_memory(text, incomplete, prompt_ver, result)
+            self._memory_state().invalidate_memory(
+                text, incomplete, prompt_ver, active_engine, result
+            )
         # DB delete outside the shared lock (M1). The delete is NOT gated on
         # _db_cache_enabled(): stale rows must be purged even if the cache layer
         # was enabled earlier in the session and disabled since.
@@ -780,6 +829,13 @@ class Translator:
     @staticmethod
     def _prompt_version(system_prompt: str) -> str:
         return hashlib.md5(system_prompt.encode()).hexdigest()[:8]
+
+    def _prompt_version_for_engine(
+        self,
+        engine: TranslationEngine | None,
+        system_prompt: str,
+    ) -> str:
+        return self._prompt_version(effective_system_prompt_for_engine(engine, system_prompt))
 
     def _call_with_fallback(
         self, text: str, system_prompt: str, incomplete: bool,
@@ -823,17 +879,25 @@ class Translator:
         return result, used_engine
 
     def _get_prompt_version_hash(self) -> str:
-        return self._prompt_version(self._build_system_prompt())
+        return self._prompt_version_for_engine(self._active_engine(), self._build_system_prompt())
 
 
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
 _MAX_COMPLETED_BACKLOG = 64  # completed-but-unemitted results before warning (L8)
-_STOP_DRAIN_TIMEOUT_SEC = 5.0  # max wait for in-flight translations at stop
+_STOP_DRAIN_TIMEOUT_MARGIN_SEC = 0.5
 
 
 def _translation_max_output_delay_ms() -> float:
     value = getattr(cfg.translation, "max_subtitle_output_delay_ms", 30000)
     return float(value) if isinstance(value, (int, float)) else 30000.0
+
+
+def _stop_drain_timeout_sec() -> float:
+    try:
+        join_timeout = float(getattr(cfg, "thread_join_timeout", 5.0) or 5.0)
+    except (TypeError, ValueError):
+        join_timeout = 5.0
+    return max(_TRANSLATION_LOOP_POLL_SEC, join_timeout - _STOP_DRAIN_TIMEOUT_MARGIN_SEC)
 
 
 def _compose_system_prompt() -> str:
@@ -879,8 +943,7 @@ def _start_fallback_probe_thread(
                 )
             # L7: rebuild the probe chain when the engine selection changes
             # mid-run instead of caching the first build forever.
-            mode = cfg.translation.translation_mode
-            chain_key = (mode, cfg.clip_engine if mode == "clip" else cfg.live_engine)
+            chain_key = engine_chain_config_key()
             if engines is None or chain_key != engines_key:
                 engines = _build_engine_chain()
                 engines_key = chain_key
@@ -931,6 +994,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             worker_id = threading.current_thread().name
             # Reset before translating so cache hits / failures (which never reach an
             # engine) don't inherit the previous call's token usage / corrections.
+            reset_last_engine_diagnostics()
             reset_last_token_usage()
             reset_corrections()
             # Everything that touches `item` runs inside the try: a malformed item
@@ -973,7 +1037,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             elapsed = completed_at - started
             diagnostics = get_last_engine_diagnostics()
             api_diagnostics = get_last_engine_api_diagnostics()
-            for usage_key, usage_value in get_last_token_usage().items():
+            for usage_key, usage_value in _token_usage_for_outcome(outcome).items():
                 if usage_value is not None:
                     metadata[f"token_{usage_key}"] = usage_value
             corrections = get_corrections()
@@ -1146,7 +1210,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             # subtitles at stop. Drain in order with a bounded wait so shutdown
             # can't hang on a stuck engine call.
             executor.shutdown(wait=False, cancel_futures=False)
-            deadline = time.monotonic() + _STOP_DRAIN_TIMEOUT_SEC
+            deadline = time.monotonic() + _stop_drain_timeout_sec()
             while True:
                 collect_finished()
                 while next_emit_seq in completed:

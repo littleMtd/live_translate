@@ -169,6 +169,11 @@ def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
     }
 
 
+def reset_last_engine_diagnostics() -> None:
+    """Clear per-thread engine diagnostics before a new translation attempt."""
+    _ENGINE_DIAGNOSTICS.value = {}
+
+
 def _is_timeout_exception(exc: BaseException) -> bool:
     if isinstance(exc, (socket.timeout, TimeoutError)):
         return True
@@ -296,6 +301,17 @@ def _limited_history(
     return limited
 
 
+def _primary_context_window() -> int:
+    return _clamp_int(getattr(cfg.translation, "context_window", 0), 0)
+
+
+def _limited_primary_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    limit = _primary_context_window()
+    if limit <= 0:
+        return []
+    return list(history or [])[-limit:]
+
+
 def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
     return _limited_history(history, config_prefix="groq_translation")
 
@@ -320,6 +336,18 @@ def _openrouter_system_prompt(system_prompt: str) -> str:
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         return f"{_OPENROUTER_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
     return _OPENROUTER_COMPACT_SYSTEM_PROMPT
+
+
+def effective_system_prompt_for_engine(
+    engine: "TranslationEngine | str | None",
+    system_prompt: str,
+) -> str:
+    engine_name = getattr(engine, "engine_name", engine) or ""
+    if engine_name == "groq":
+        return _groq_system_prompt(system_prompt)
+    if engine_name == "openrouter":
+        return _openrouter_system_prompt(system_prompt)
+    return system_prompt
 
 
 def _is_groq_token_limit_error(status_code: int, body: str) -> bool:
@@ -355,7 +383,20 @@ def reset_last_token_usage() -> None:
 def get_last_token_usage() -> dict[str, int | None]:
     """Token usage parsed from the last engine response in this thread (empty if none)."""
     value = getattr(_TOKEN_USAGE, "value", None)
-    return dict(value) if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value.get(key)
+        for key in ("prompt", "output", "total", "cache_read", "cache_write")
+        if key in value
+    }
+
+
+def get_last_token_usage_engine() -> str:
+    value = getattr(_TOKEN_USAGE, "value", None)
+    if not isinstance(value, dict):
+        return ""
+    return str(value.get("engine") or "")
 
 
 def _log_token_usage(engine: str, usage) -> None:
@@ -369,6 +410,7 @@ def _log_token_usage(engine: str, usage) -> None:
     cache_read = _usage_value(usage, "cache_read_input_tokens")
 
     _TOKEN_USAGE.value = {
+        "engine": str(engine or "").strip().lower(),
         "prompt": _optional_int_diagnostic(prompt_tokens),
         "output": _optional_int_diagnostic(output_tokens),
         "total": _optional_int_diagnostic(total_tokens),
@@ -471,7 +513,7 @@ class ClaudeEngine(TranslationEngine):
             if cfg.translation.translation_mode == "live":
                 system_content["cache_control"] = {"type": "ephemeral"}
             messages = []
-            for ko, zh in (history or []):
+            for ko, zh in _limited_primary_history(history):
                 messages.append({"role": "user", "content": f"input: {ko}"})
                 messages.append({"role": "assistant", "content": zh})
             messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
@@ -590,7 +632,7 @@ class OllamaEngine(TranslationEngine):
         import json as _json
 
         messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in (history or []):
+        for ko, zh in _limited_primary_history(history):
             messages.append({"role": "user", "content": f"input: {ko}"})
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
@@ -685,7 +727,8 @@ class NvidiaEngine(TranslationEngine):
         retry_reason = ""
         source_text_char_count = len(text or "")
         prompt_char_count = len(system_prompt or "")
-        context_item_count = len(history or [])
+        history = _limited_primary_history(history)
+        context_item_count = len(history)
         request_body_char_count: int | None = None
         message_count: int | None = None
 
@@ -736,7 +779,7 @@ class NvidiaEngine(TranslationEngine):
         import json as _json
 
         messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in (history or []):
+        for ko, zh in history:
             messages.append({"role": "user", "content": f"input: {ko}"})
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
@@ -1056,26 +1099,84 @@ class GroqTranslationEngine(TranslationEngine):
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
+        timeout_config_ms = _timeout_config_ms(self._timeout)
+        system_prompt = _groq_system_prompt(system_prompt)
+        history = _limited_groq_history(history)
+        api_attempt_count = 0
+        api_timeout_count = 0
+        api_total_start: float | None = None
+        api_final_attempt_ms: float | None = None
+        api_first_attempt_ms: float | None = None
+        api_retry_attempt_ms: float | None = None
+        api_attempt_index = 0
+        retry_sleep_ms = 0.0
+        retry_count = 0
+        retry_reason = ""
+        source_text_char_count = len(text or "")
+        prompt_char_count = len(system_prompt or "")
+        request_body_char_count: int | None = None
+        message_count: int | None = None
+
+        def record_diagnostics(
+            api_error_type: str | None = None,
+            api_error_message_class: str | None = None,
+        ) -> None:
+            _set_last_engine_diagnostics(
+                "groq",
+                retry_count,
+                retry_reason,
+                api_attempt_count=api_attempt_count,
+                api_timeout_count=api_timeout_count,
+                api_total_wall_ms=_elapsed_ms(api_total_start),
+                api_final_attempt_ms=api_final_attempt_ms,
+                api_first_attempt_ms=api_first_attempt_ms,
+                api_retry_attempt_ms=api_retry_attempt_ms,
+                retry_sleep_ms=retry_sleep_ms,
+                timeout_config_ms=timeout_config_ms,
+                api_attempt_timeout_ms=timeout_config_ms,
+                api_attempt_index=api_attempt_index,
+                source_text_char_count=source_text_char_count,
+                prompt_char_count=prompt_char_count,
+                request_body_char_count=request_body_char_count,
+                message_count=message_count,
+                context_item_count=len(history),
+                api_error_type=api_error_type,
+                api_error_message_class=api_error_message_class,
+            )
+
+        def record_attempt_duration(attempt_index: int, attempt_started_at: float) -> None:
+            nonlocal api_attempt_index, api_final_attempt_ms
+            nonlocal api_first_attempt_ms, api_retry_attempt_ms
+            elapsed_ms = _elapsed_ms(attempt_started_at)
+            api_attempt_index = attempt_index
+            api_final_attempt_ms = elapsed_ms
+            if attempt_index == 1:
+                api_first_attempt_ms = elapsed_ms
+            elif attempt_index == 2:
+                api_retry_attempt_ms = elapsed_ms
+
+        record_diagnostics()
         if not self._api_key:
             return None
         import urllib.request
         import urllib.error
         import json as _json
 
-        system_prompt = _groq_system_prompt(system_prompt)
-        history = _limited_groq_history(history)
         messages = [{"role": "system", "content": system_prompt}]
         for ko, zh in (history or []):
             messages.append({"role": "user", "content": f"input: {ko}"})
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_groq_user_message(text, incomplete)})
 
-        payload = _json.dumps({
+        payload_text = _json.dumps({
             "model": self._model,
             "messages": messages,
             "temperature": cfg.translation.temperature,
             "max_tokens": self._max_tokens,
-        }).encode()
+        })
+        request_body_char_count = len(payload_text)
+        message_count = len(messages)
+        payload = payload_text.encode()
 
         req = urllib.request.Request(
             _GROQ_BASE_URL,
@@ -1087,18 +1188,26 @@ class GroqTranslationEngine(TranslationEngine):
                 "Authorization": f"Bearer {self._api_key}",
             },
         )
+        attempt_started_at: float | None = None
         try:
-            _t0 = time.monotonic()
+            attempt_started_at = time.monotonic()
+            if api_total_start is None:
+                api_total_start = attempt_started_at
+            api_attempt_count += 1
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 data = _json.loads(r.read())
-            log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
+            record_attempt_duration(1, attempt_started_at)
+            log.info("Groq translate: %.0fms", (time.monotonic() - attempt_started_at) * 1000)
             _log_token_usage("Groq", data.get("usage"))
             content = (data["choices"][0]["message"].get("content") or "").strip()
             if self._strip_think:
                 content = _strip_think_tags(content)
             log.debug("Groq: %.30s → %s", text, content)
+            record_diagnostics()
             return content or None
         except urllib.error.HTTPError as e:
+            if attempt_started_at is not None:
+                record_attempt_duration(1, attempt_started_at)
             body = ""
             try:
                 body = e.read().decode()
@@ -1106,16 +1215,22 @@ class GroqTranslationEngine(TranslationEngine):
                 pass
             if _is_groq_token_limit_error(e.code, body) and history:
                 log.warning("Groq request exceeded token budget; retrying once without history")
+                retry_count = 1
+                retry_reason = "token_limit_without_history"
+                record_diagnostics("http_error", "token_limit")
                 messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": _build_groq_user_message(text, incomplete)},
                 ]
-                payload = _json.dumps({
+                payload_text = _json.dumps({
                     "model": self._model,
                     "messages": messages,
                     "temperature": cfg.translation.temperature,
                     "max_tokens": self._retry_max_tokens,
-                }).encode()
+                })
+                request_body_char_count = len(payload_text)
+                message_count = len(messages)
+                payload = payload_text.encode()
                 req = urllib.request.Request(
                     _GROQ_BASE_URL,
                     data=payload,
@@ -1126,24 +1241,34 @@ class GroqTranslationEngine(TranslationEngine):
                         "Authorization": f"Bearer {self._api_key}",
                     },
                 )
+                retry_started_at: float | None = None
                 try:
-                    _t0 = time.monotonic()
+                    retry_started_at = time.monotonic()
+                    if api_total_start is None:
+                        api_total_start = retry_started_at
+                    api_attempt_count += 1
                     with urllib.request.urlopen(req, timeout=self._timeout) as r:
                         data = _json.loads(r.read())
-                    log.info("Groq translate: %.0fms", (time.monotonic() - _t0) * 1000)
+                    record_attempt_duration(2, retry_started_at)
+                    log.info("Groq translate: %.0fms", (time.monotonic() - retry_started_at) * 1000)
                     _log_token_usage("Groq", data.get("usage"))
                     content = (data["choices"][0]["message"].get("content") or "").strip()
                     if self._strip_think:
                         content = _strip_think_tags(content)
                     log.debug("Groq: %.30s → %s", text, content)
+                    record_diagnostics()
                     return content or None
                 except urllib.error.HTTPError as retry_error:
+                    if retry_started_at is not None:
+                        record_attempt_duration(2, retry_started_at)
                     body = ""
                     try:
                         body = retry_error.read().decode()
                     except Exception:
                         pass
                     log.error("Groq HTTP %d: %s", retry_error.code, body or retry_error)
+                    error_type, message_class = _classify_api_error(retry_error)
+                    record_diagnostics(error_type, message_class)
                     return None
                 except Exception as retry_error:
                     # This block runs inside an except handler: an uncaught
@@ -1151,9 +1276,15 @@ class GroqTranslationEngine(TranslationEngine):
                     # the None-on-failure engine contract, skipping the rest of
                     # the fallback chain. Catch everything and fail soft.
                     if _is_timeout_exception(retry_error) or classify_error(retry_error) == "network":
+                        if _is_timeout_exception(retry_error):
+                            api_timeout_count += 1
                         log.warning("Groq retry network/timeout error: %s", retry_error)
                     else:
                         log.error("Groq retry error: %s", retry_error)
+                    if retry_started_at is not None:
+                        record_attempt_duration(2, retry_started_at)
+                    error_type, message_class = _classify_api_error(retry_error)
+                    record_diagnostics(error_type, message_class)
                     return None
             if e.code == 401:
                 log.error("Groq auth error — GROQ_API_KEY_fall_back 無效或已過期")
@@ -1161,13 +1292,21 @@ class GroqTranslationEngine(TranslationEngine):
                 log.warning("Groq rate-limit (429)")
             else:
                 log.error("Groq HTTP %d: %s", e.code, body or e)
+            error_type, message_class = _classify_api_error(e)
+            record_diagnostics(error_type, message_class)
             return None
         except Exception as e:
             kind = classify_error(e)
+            if attempt_started_at is not None:
+                record_attempt_duration(1, attempt_started_at)
             if _is_timeout_exception(e) or kind == "network":
+                if _is_timeout_exception(e):
+                    api_timeout_count += 1
                 log.warning("Groq network/timeout error: %s", e)
             else:
                 log.error("Groq error: %s", e)
+            error_type, message_class = _classify_api_error(e)
+            record_diagnostics(error_type, message_class)
             return None
 
 
@@ -1192,6 +1331,28 @@ def _make_engine(name: str) -> "TranslationEngine | None":
         return e if e.available else None
     log.warning("Unknown engine %r in engine_chain — skipping", name)
     return None
+
+
+def engine_chain_config_key() -> tuple:
+    mode = cfg.translation.translation_mode
+    backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
+    return (
+        mode,
+        backend,
+        tuple(getattr(cfg.translation, "engine_chain", ())),
+        getattr(cfg.translation, "model", ""),
+        getattr(cfg.ollama, "base_url", ""),
+        getattr(cfg.ollama, "model", ""),
+        getattr(cfg.ollama, "timeout", ""),
+        getattr(cfg.nvidia, "model", ""),
+        getattr(cfg.nvidia, "timeout", ""),
+        getattr(cfg.nvidia, "live_timeout", ""),
+        getattr(cfg.translation, "openrouter_model", ""),
+        getattr(cfg.translation, "openrouter_timeout", ""),
+        getattr(cfg.translation, "groq_translation_model", ""),
+        getattr(cfg.translation, "groq_translation_timeout", ""),
+        getattr(cfg.translation, "google_translate_lang", ""),
+    )
 
 
 def _build_engine_chain() -> "list[TranslationEngine]":

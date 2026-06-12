@@ -29,6 +29,8 @@ from modules.translator import (
     _apply_source_aware_corrections,
     _looks_like_meta_garbage_output,
     _normalize_source_before_matching,
+    _new_translation_memory,
+    _token_usage_for_outcome,
     _write_history,
     get_corrections,
     reset_corrections,
@@ -1441,6 +1443,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_cached_meta_garbage_output_is_filtered(self):
         t = _make_translator()
+        engine = t._active_engine()
         prompt_ver = t._get_prompt_version_hash()
         source = "오늘 방송 진짜 재미있었어요"
         t._memory.cache_store(
@@ -1448,6 +1451,7 @@ class TestTranslateOptimizations(unittest.TestCase):
             False,
             "（無法理解的STT亂碼，無明確語義）",
             prompt_ver,
+            engine,
         )
 
         outcome = t.translate_event(source)
@@ -1456,7 +1460,7 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(outcome.result_source, "post_policy")
         self.assertEqual(outcome.cache_status, "memory_hit")
         self.assertEqual(outcome.filter_reason, "meta_garbage_output")
-        self.assertIsNone(t._memory.cache_lookup(source, False, prompt_ver))
+        self.assertIsNone(t._memory.cache_lookup(source, False, prompt_ver, engine))
         self.assertEqual(list(t._memory.recent), [])
         for engine in t._engines:
             engine.translate.assert_not_called()
@@ -1901,6 +1905,65 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(second.target_text, "Kim Bongjun")
         self.assertEqual(t._engines[0].translate.call_count, 1)
 
+    def test_translation_memory_honors_context_window_config(self):
+        from config import cfg
+
+        original = cfg.translation.context_window
+        object.__setattr__(cfg.translation, "context_window", 10)
+        try:
+            memory = _new_translation_memory()
+        finally:
+            object.__setattr__(cfg.translation, "context_window", original)
+
+        self.assertEqual(memory.recent.maxlen, 10)
+
+    def test_prompt_version_uses_effective_engine_prompt(self):
+        from config import cfg
+
+        t = _make_translator()
+        groq = _mock_engine("groq")
+        original_compact = cfg.translation.groq_translation_compact_prompt
+        original_profile = cfg.translation.use_profile
+        object.__setattr__(cfg.translation, "groq_translation_compact_prompt", True)
+        object.__setattr__(cfg.translation, "use_profile", False)
+        try:
+            base_hash = t._prompt_version("FULL PRIMARY PROMPT")
+            groq_hash = t._prompt_version_for_engine(groq, "FULL PRIMARY PROMPT")
+        finally:
+            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
+            object.__setattr__(cfg.translation, "use_profile", original_profile)
+
+        self.assertNotEqual(base_hash, groq_hash)
+
+    def test_token_usage_is_omitted_when_usage_engine_differs_from_outcome(self):
+        from modules.translation_engines import _log_token_usage, reset_last_token_usage
+
+        reset_last_token_usage()
+        _log_token_usage("nvidia", {"prompt_tokens": 99, "completion_tokens": 1})
+        outcome = TranslationOutcome(
+            source_text="source",
+            target_text="target",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="groq",
+            model="fallback-model",
+        )
+
+        self.assertEqual(_token_usage_for_outcome(outcome), {})
+
+    def test_hot_path_rejection_reason_is_computed_once(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "你好"
+        original = t._policy.rejection_reason
+        t._policy.rejection_reason = MagicMock(side_effect=original)
+
+        outcome = t.translate_event("안녕하세요")
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(t._policy.rejection_reason.call_count, 1)
+
     def test_profile_prompt_version_changes_between_profiles(self):
         t = _make_translator()
 
@@ -1938,12 +2001,18 @@ class TestTranslateOptimizations(unittest.TestCase):
     def test_cache_evicts_when_full(self):
         from modules.translator import _CACHE_MAX_SIZE
         t = _make_translator()
+        engine = t._active_engine()
         prompt_ver = t._get_prompt_version_hash()
         for i in range(_CACHE_MAX_SIZE):
-            t._memory.cache[(f"key{i}", False, prompt_ver)] = f"val{i}"
-        t._memory.cache_store("overflow", False, "x", prompt_ver)
+            t._memory.cache[
+                (f"key{i}", False, prompt_ver, engine.engine_name, engine.model_name)
+            ] = f"val{i}"
+        t._memory.cache_store("overflow", False, "x", prompt_ver, engine)
         self.assertLessEqual(len(t._memory.cache), _CACHE_MAX_SIZE)
-        self.assertIn(("overflow", False, prompt_ver), t._memory.cache)
+        self.assertIn(
+            ("overflow", False, prompt_ver, engine.engine_name, engine.model_name),
+            t._memory.cache,
+        )
 
     def test_incomplete_lookup_skips_db(self):
         t = _make_translator()

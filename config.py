@@ -111,6 +111,7 @@ class _Splitter:
     segment_gap_split_enabled: bool = True
     segment_gap_seconds: float = 0.6
     silence_complete_enabled: bool = True
+    pending_incomplete_timeout_seconds: float = 8.0
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"

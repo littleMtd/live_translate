@@ -2,14 +2,19 @@
 import unittest
 
 from modules.translation_engines import (
+    effective_system_prompt_for_engine,
+    get_last_engine_api_diagnostics,
     _log_token_usage,
     get_last_token_usage,
+    get_last_token_usage_engine,
+    reset_last_engine_diagnostics,
     reset_last_token_usage,
 )
 
 
 class TestTokenUsageCapture(unittest.TestCase):
     def setUp(self):
+        reset_last_engine_diagnostics()
         reset_last_token_usage()
 
     def test_reset_yields_empty(self):
@@ -17,6 +22,7 @@ class TestTokenUsageCapture(unittest.TestCase):
 
     def test_openai_style_usage_captured(self):
         _log_token_usage("Groq", {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
+        self.assertEqual(get_last_token_usage_engine(), "groq")
         self.assertEqual(
             get_last_token_usage(),
             {"prompt": 12, "output": 5, "total": 17, "cache_read": None, "cache_write": None},
@@ -61,6 +67,22 @@ class TestTokenUsageCapture(unittest.TestCase):
         snapshot["prompt"] = 999
         self.assertEqual(get_last_token_usage()["prompt"], 1)
 
+    def test_effective_prompt_uses_groq_compact_prompt(self):
+        from config import cfg
+
+        original_compact = cfg.translation.groq_translation_compact_prompt
+        original_profile = cfg.translation.use_profile
+        object.__setattr__(cfg.translation, "groq_translation_compact_prompt", True)
+        object.__setattr__(cfg.translation, "use_profile", False)
+        try:
+            prompt = effective_system_prompt_for_engine("groq", "FULL PRIMARY PROMPT")
+        finally:
+            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
+            object.__setattr__(cfg.translation, "use_profile", original_profile)
+
+        self.assertNotEqual(prompt, "FULL PRIMARY PROMPT")
+        self.assertIn("Korean to Traditional Chinese", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -76,6 +98,7 @@ class TestGroqRetryExceptionContract(unittest.TestCase):
         from unittest.mock import patch
         from modules.translation_engines import GroqTranslationEngine
 
+        reset_last_engine_diagnostics()
         engine = GroqTranslationEngine.__new__(GroqTranslationEngine)
         engine._api_key = "test-key"
         engine._model = "qwen/qwen3-32b"
@@ -106,3 +129,8 @@ class TestGroqRetryExceptionContract(unittest.TestCase):
 
         self.assertIsNone(result, "retry-path timeout must fail soft (return None)")
         self.assertEqual(calls["n"], 2)
+        diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(diagnostics["engine"], "groq")
+        self.assertEqual(diagnostics["api_attempt_count"], 2)
+        self.assertEqual(diagnostics["retry_count"], 1)
+        self.assertEqual(diagnostics["retry_reason"], "token_limit_without_history")

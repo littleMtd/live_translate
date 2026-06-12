@@ -24,6 +24,8 @@ from utils.text_heuristics import (
 
 log = get_logger("translation_policy")
 
+_REJECTION_REASON_UNSET = object()
+
 
 def _word_counts(words: list[str]) -> dict[str, int]:
     counts: dict[str, int] = {}
@@ -70,10 +72,18 @@ class TranslationPolicy:
         self.last_input = last_input
         self._last_sanitize_rejection = ""
 
-    def prepare_input(self, text: str) -> str | None:
+    def prepare_input(
+        self,
+        text: str,
+        initial_rejection_reason: str | None | object = _REJECTION_REASON_UNSET,
+    ) -> str | None:
         text = text.strip()
         self._last_sanitize_rejection = ""
-        reason = self.rejection_reason(text)
+        reason = (
+            self.rejection_reason(text)
+            if initial_rejection_reason is _REJECTION_REASON_UNSET
+            else initial_rejection_reason
+        )
         if reason == "empty":
             return None
 

@@ -103,6 +103,11 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             ),
         )
         pending_incomplete: SentenceCut | None = None
+        pending_incomplete_since: float | None = None
+        pending_incomplete_timeout = _float_setting(
+            getattr(cfg.splitter, "pending_incomplete_timeout_seconds", 8.0),
+            8.0,
+        )
 
         def emit_cut(cut: SentenceCut) -> None:
             if cut.forced:
@@ -147,10 +152,36 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             put_drop_oldest(sentence_queue, event, log, "sentence_queue")
             metrics.log_summary_if_due()
 
+        def buffer_incomplete(cut: SentenceCut, now: float) -> None:
+            nonlocal pending_incomplete, pending_incomplete_since
+            pending_incomplete = cut
+            pending_incomplete_since = now
+            metrics.increment("sentence.incomplete_buffered")
+            log.info("Sentence buffered for next chunk: %s", cut.text)
+
+        def clear_pending() -> None:
+            nonlocal pending_incomplete, pending_incomplete_since
+            pending_incomplete = None
+            pending_incomplete_since = None
+
+        def flush_pending_if_timed_out(now: float) -> None:
+            nonlocal pending_incomplete, pending_incomplete_since
+            if pending_incomplete is None or pending_incomplete_timeout <= 0:
+                return
+            if pending_incomplete_since is None:
+                pending_incomplete_since = now
+                return
+            if now - pending_incomplete_since < pending_incomplete_timeout:
+                return
+            metrics.increment("sentence.incomplete_timeout")
+            log.info("Sentence pending incomplete timed out: %s", pending_incomplete.text)
+            emit_cut(pending_incomplete)
+            clear_pending()
+
         while not stop_event.is_set():
             if pause_event and pause_event.is_set():
                 buffer.reset()
-                pending_incomplete = None
+                clear_pending()
                 wait_while_paused(stop_event, pause_event)
                 # Drain tokens that accumulated while paused so they don't
                 # appear as fresh content after resume.
@@ -178,8 +209,10 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             except queue.Empty:
                 pass  # no new tokens within 100 ms — fall through to check cut
 
+            now = time.monotonic()
+            flush_pending_if_timed_out(now)
             cut = buffer.pop_ready(
-                time.monotonic(),
+                now,
                 min_wait_seconds=cfg.splitter.min_wait_seconds,
                 force_cut_seconds=cfg.splitter.force_cut_seconds,
             )
@@ -187,7 +220,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 if pending_incomplete is not None:
                     if _can_merge_cuts(pending_incomplete, cut):
                         emit_cut(_merge_cuts(pending_incomplete, cut))
-                        pending_incomplete = None
+                        clear_pending()
                     else:
                         log.info(
                             "Sentence merge skipped: sources=%d chars=%d reason=%s+%s",
@@ -199,16 +232,12 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                         metrics.increment("sentence.merge_skipped")
                         emit_cut(pending_incomplete)
                         if cut.incomplete:
-                            pending_incomplete = cut
-                            metrics.increment("sentence.incomplete_buffered")
-                            log.info("Sentence buffered for next chunk: %s", cut.text)
+                            buffer_incomplete(cut, now)
                         else:
-                            pending_incomplete = None
+                            clear_pending()
                             emit_cut(cut)
                 elif cut.incomplete:
-                    pending_incomplete = cut
-                    metrics.increment("sentence.incomplete_buffered")
-                    log.info("Sentence buffered for next chunk: %s", cut.text)
+                    buffer_incomplete(cut, now)
                 else:
                     emit_cut(cut)
 

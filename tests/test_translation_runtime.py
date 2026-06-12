@@ -11,6 +11,7 @@ from modules.translation_runtime import (
     call_with_fallback,
     probe_primary_recovery,
 )
+from modules.translation_engines import _log_token_usage, get_last_token_usage, reset_last_token_usage
 from utils.metrics import metrics
 
 
@@ -25,20 +26,59 @@ def _engine(name: str, result: str | None) -> MagicMock:
 class TestTranslationRuntimeCache(unittest.TestCase):
     def test_cache_lookup_moves_hit_to_end(self):
         cache = OrderedDict()
-        cache[("first", False, "v1")] = "一"
-        cache[("second", False, "v1")] = "二"
+        cache[("first", False, "v1", "engine", "model")] = "one"
+        cache[("second", False, "v1", "engine", "model")] = "two"
 
-        self.assertEqual(cache_lookup(cache, "first", False, "v1"), "一")
+        self.assertEqual(cache_lookup(cache, "first", False, "v1", "engine", "model"), "one")
 
-        self.assertEqual(list(cache.keys())[-1], ("first", False, "v1"))
+        self.assertEqual(list(cache.keys())[-1], ("first", False, "v1", "engine", "model"))
 
     def test_cache_store_evicts_oldest_entry(self):
         cache = OrderedDict()
-        cache_store(cache, "first", False, "一", "v1", max_size=1)
-        cache_store(cache, "second", False, "二", "v1", max_size=1)
+        cache_store(
+            cache,
+            "first",
+            False,
+            "one",
+            "v1",
+            max_size=1,
+            engine_name="engine",
+            model_name="model",
+        )
+        cache_store(
+            cache,
+            "second",
+            False,
+            "two",
+            "v1",
+            max_size=1,
+            engine_name="engine",
+            model_name="model",
+        )
 
-        self.assertNotIn(("first", False, "v1"), cache)
-        self.assertEqual(cache[("second", False, "v1")], "二")
+        self.assertNotIn(("first", False, "v1", "engine", "model"), cache)
+        self.assertEqual(cache[("second", False, "v1", "engine", "model")], "two")
+
+    def test_cache_keys_are_engine_specific(self):
+        cache = OrderedDict()
+        cache_store(
+            cache,
+            "source",
+            False,
+            "fallback",
+            "v1",
+            max_size=2,
+            engine_name="groq",
+            model_name="fallback-model",
+        )
+
+        self.assertIsNone(
+            cache_lookup(cache, "source", False, "v1", "nvidia", "primary-model")
+        )
+        self.assertEqual(
+            cache_lookup(cache, "source", False, "v1", "groq", "fallback-model"),
+            "fallback",
+        )
 
 
 class TestTranslationRuntimeFallback(unittest.TestCase):
@@ -132,15 +172,45 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             False,
             [],
             50,
-            3,  # threshold not reached → soft fallback
+            3,
             lambda result, source: False,
             logging.getLogger("test"),
         )
 
         self.assertEqual(result, "ok")
-        self.assertEqual(used_idx, 1)        # result attributed to fallback
-        self.assertEqual(state.active_idx, 0)  # active engine stays primary
+        self.assertEqual(used_idx, 1)
+        self.assertEqual(state.active_idx, 0)
         self.assertEqual(state.consecutive_primary_failures, 1)
+
+    def test_soft_fallback_clears_primary_token_usage_when_fallback_has_none(self):
+        metrics.reset()
+        reset_last_token_usage()
+        primary = _engine("primary", None)
+        fallback = _engine("fallback", "ok")
+
+        def _bad_primary(*_args):
+            _log_token_usage("primary", {"prompt_tokens": 99, "completion_tokens": 1})
+            return "bad"
+
+        primary.translate.side_effect = _bad_primary
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            [primary, fallback],
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            3,
+            lambda result, source: result == "bad",
+            logging.getLogger("test"),
+        )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(used_idx, 1)
+        self.assertEqual(get_last_token_usage(), {})
 
     def test_all_engines_failed_returns_primary_idx(self):
         metrics.reset()
@@ -148,8 +218,16 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         state = FallbackState()
 
         result, used_idx = call_with_fallback(
-            engines, state, "source", "prompt", False, [], 50, 3,
-            lambda result, source: False, logging.getLogger("test"),
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            3,
+            lambda result, source: False,
+            logging.getLogger("test"),
         )
 
         self.assertIsNone(result)

@@ -24,15 +24,18 @@ class _FakeDB:
         self.delete_calls.append(args)
 
 
-def _engine() -> MagicMock:
+def _engine(name: str = "engine", model: str = "model") -> MagicMock:
     engine = MagicMock()
-    engine.engine_name = "engine"
-    engine.model_name = "model"
+    engine.engine_name = name
+    engine.model_name = model
     return engine
 
 
 class TestTranslationMemory(unittest.TestCase):
-    def _memory(self, db: _FakeDB | None = None) -> tuple[TranslationMemory, list[tuple[str, str]], _FakeDB]:
+    def _memory(
+        self,
+        db: _FakeDB | None = None,
+    ) -> tuple[TranslationMemory, list[tuple[str, str]], _FakeDB]:
         fake_db = db or _FakeDB()
         history: list[tuple[str, str]] = []
         memory = TranslationMemory(
@@ -47,9 +50,10 @@ class TestTranslationMemory(unittest.TestCase):
     def test_lookup_existing_uses_cache_before_db(self):
         metrics.reset()
         memory, _, fake_db = self._memory()
-        memory.cache_store("source", False, "cached", "v1")
+        engine = _engine()
+        memory.cache_store("source", False, "cached", "v1", engine)
 
-        result = memory.lookup_existing("source", False, "v1", _engine())
+        result = memory.lookup_existing("source", False, "v1", engine)
 
         self.assertEqual(result, "cached")
         self.assertEqual(fake_db.lookup_calls, [])
@@ -59,11 +63,23 @@ class TestTranslationMemory(unittest.TestCase):
     def test_lookup_existing_event_reports_source(self):
         metrics.reset()
         memory, _, _ = self._memory()
-        memory.cache_store("source", False, "cached", "v1")
+        engine = _engine()
+        memory.cache_store("source", False, "cached", "v1", engine)
 
-        result = memory.lookup_existing_event("source", False, "v1", _engine())
+        result = memory.lookup_existing_event("source", False, "v1", engine)
 
         self.assertEqual(result, MemoryLookup("cached", "memory_hit"))
+
+    def test_cache_key_is_engine_specific(self):
+        memory, _, fake_db = self._memory()
+        fallback = _engine("groq", "fallback-model")
+        primary = _engine("nvidia", "primary-model")
+        memory.cache_store("source", False, "fallback result", "v1", fallback)
+
+        result = memory.lookup_existing("source", False, "v1", primary)
+
+        self.assertIsNone(result)
+        self.assertEqual(fake_db.lookup_calls, [("source", "zh-TW", "nvidia", "primary-model", "v1")])
 
     def test_lookup_existing_skips_db_for_incomplete(self):
         metrics.reset()
@@ -73,7 +89,7 @@ class TestTranslationMemory(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(fake_db.lookup_calls, [])
-        self.assertEqual(metrics.snapshot().counters["translation.cache.miss"], 1)
+        self.assertEqual(metrics.snapshot().counters["translation.cache.skipped"], 1)
         self.assertEqual(
             memory.lookup_existing_event("source", True, "v1", _engine()).source,
             "skipped",
@@ -82,14 +98,15 @@ class TestTranslationMemory(unittest.TestCase):
     def test_lookup_existing_caches_db_hit(self):
         metrics.reset()
         fake_db = _FakeDB()
-        fake_db.lookup_result = "資料庫結果"
+        fake_db.lookup_result = "done"
         memory, _, _ = self._memory(fake_db)
+        engine = _engine()
 
-        result = memory.lookup_existing("source", False, "v1", _engine())
+        result = memory.lookup_existing("source", False, "v1", engine)
 
-        self.assertEqual(result, "資料庫結果")
-        self.assertEqual(memory.cache_lookup("source", False, "v1"), "資料庫結果")
-        self.assertEqual(list(memory.recent), [("source", "資料庫結果")])
+        self.assertEqual(result, "done")
+        self.assertEqual(memory.cache_lookup("source", False, "v1", engine), "done")
+        self.assertEqual(list(memory.recent), [("source", "done")])
         self.assertEqual(metrics.snapshot().counters["translation.cache.db_hit"], 1)
 
     def test_record_success_writes_complete_translation_to_db(self):
@@ -100,7 +117,7 @@ class TestTranslationMemory(unittest.TestCase):
 
         self.assertEqual(history, [("source", "result")])
         self.assertEqual(list(memory.recent), [("source", "result")])
-        self.assertEqual(memory.cache_lookup("source", False, "v1"), "result")
+        self.assertEqual(memory.cache_lookup("source", False, "v1", engine), "result")
         self.assertEqual(len(fake_db.store_calls), 1)
 
     def test_record_success_skips_db_for_incomplete(self):
@@ -116,13 +133,13 @@ class TestTranslationMemory(unittest.TestCase):
         metrics.reset()
         memory, history, fake_db = self._memory()
         engine = _engine()
-        source = "안녕하세요 여러분 오늘 방송입니다"
+        source = "not hangul source text"
         bad_target = "I cannot translate this STT garbage"
 
         memory.record_success(source, bad_target, False, "v1", engine)
 
         self.assertEqual(history, [(source, bad_target)])
-        self.assertEqual(memory.cache_lookup(source, False, "v1"), bad_target)
+        self.assertEqual(memory.cache_lookup(source, False, "v1", engine), bad_target)
         self.assertEqual(list(memory.recent), [])
         self.assertEqual(len(fake_db.store_calls), 1)
         counters = metrics.snapshot().counters
@@ -132,11 +149,12 @@ class TestTranslationMemory(unittest.TestCase):
     def test_memory_hit_bad_quality_does_not_enter_recent(self):
         metrics.reset()
         memory, _, _ = self._memory()
-        source = "안녕하세요 여러분 오늘 방송입니다"
+        engine = _engine()
+        source = "not hangul source text"
         bad_target = "I cannot translate this STT garbage"
-        memory.cache_store(source, False, bad_target, "v1")
+        memory.cache_store(source, False, bad_target, "v1", engine)
 
-        result = memory.lookup_existing(source, False, "v1", _engine())
+        result = memory.lookup_existing(source, False, "v1", engine)
 
         self.assertEqual(result, bad_target)
         self.assertEqual(list(memory.recent), [])
@@ -147,30 +165,40 @@ class TestTranslationMemory(unittest.TestCase):
     def test_db_hit_bad_quality_is_cached_but_not_remembered_recent(self):
         metrics.reset()
         fake_db = _FakeDB()
-        source = "안녕하세요 여러분 오늘 방송입니다"
+        source = "not hangul source text"
         bad_target = "I cannot translate this STT garbage"
         fake_db.lookup_result = bad_target
         memory, _, _ = self._memory(fake_db)
+        engine = _engine()
 
-        result = memory.lookup_existing(source, False, "v1", _engine())
+        result = memory.lookup_existing(source, False, "v1", engine)
 
         self.assertEqual(result, bad_target)
-        self.assertEqual(memory.cache_lookup(source, False, "v1"), bad_target)
+        self.assertEqual(memory.cache_lookup(source, False, "v1", engine), bad_target)
         self.assertEqual(list(memory.recent), [])
         counters = metrics.snapshot().counters
         self.assertEqual(counters["translation.cache.db_hit"], 1)
         self.assertEqual(counters["translation.context_gated"], 1)
 
+    def test_recent_replaces_existing_source_instead_of_appending_duplicate(self):
+        memory, _, _ = self._memory()
+        engine = _engine()
+
+        memory.record_success("source", "first", False, "v1", engine)
+        memory.record_success("source", "second", False, "v1", engine)
+
+        self.assertEqual(list(memory.recent), [("source", "second")])
+
     def test_invalidate_removes_cache_recent_and_db_entry(self):
         memory, _, fake_db = self._memory()
         engine = _engine()
-        memory.cache_store("source", False, "poisoned", "v1")
+        memory.cache_store("source", False, "poisoned", "v1", engine)
         memory.recent.append(("source", "poisoned"))
         memory.recent.append(("other", "safe"))
 
         memory.invalidate("source", False, "v1", engine, "poisoned")
 
-        self.assertIsNone(memory.cache_lookup("source", False, "v1"))
+        self.assertIsNone(memory.cache_lookup("source", False, "v1", engine))
         self.assertEqual(list(memory.recent), [("other", "safe")])
         self.assertEqual(
             fake_db.delete_calls,
@@ -179,11 +207,12 @@ class TestTranslationMemory(unittest.TestCase):
 
     def test_invalidate_incomplete_skips_db_delete(self):
         memory, _, fake_db = self._memory()
-        memory.cache_store("source", True, "poisoned", "v1")
+        engine = _engine()
+        memory.cache_store("source", True, "poisoned", "v1", engine)
 
-        memory.invalidate("source", True, "v1", _engine(), "poisoned")
+        memory.invalidate("source", True, "v1", engine, "poisoned")
 
-        self.assertIsNone(memory.cache_lookup("source", True, "v1"))
+        self.assertIsNone(memory.cache_lookup("source", True, "v1", engine))
         self.assertEqual(fake_db.delete_calls, [])
 
 

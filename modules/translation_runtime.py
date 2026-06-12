@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 
-from modules.translation_engines import TranslationEngine
+from modules.translation_engines import TranslationEngine, reset_last_token_usage
 from utils.metrics import metrics
 
 
-CacheKey = tuple[str, bool, str]
+CacheKey = tuple[str, bool, str, str, str]
 UntranslatedCheck = Callable[[str, str], bool]
 
 
@@ -29,13 +29,31 @@ def active_engine(
     return engines[active_idx]
 
 
+def cache_key(
+    text: str,
+    incomplete: bool,
+    prompt_ver: str,
+    engine_name: str = "",
+    model_name: str = "",
+) -> CacheKey:
+    return (
+        text,
+        incomplete,
+        prompt_ver,
+        str(engine_name or ""),
+        str(model_name or ""),
+    )
+
+
 def cache_lookup(
     cache: MutableMapping[CacheKey, str],
     text: str,
     incomplete: bool,
     prompt_ver: str,
+    engine_name: str = "",
+    model_name: str = "",
 ) -> str | None:
-    key = (text, incomplete, prompt_ver)
+    key = cache_key(text, incomplete, prompt_ver, engine_name, model_name)
     if key not in cache:
         return None
     if move_to_end := getattr(cache, "move_to_end", None):
@@ -50,8 +68,10 @@ def cache_store(
     value: str,
     prompt_ver: str,
     max_size: int,
+    engine_name: str = "",
+    model_name: str = "",
 ) -> None:
-    key = (text, incomplete, prompt_ver)
+    key = cache_key(text, incomplete, prompt_ver, engine_name, model_name)
     if len(cache) >= max_size:
         cache.pop(next(iter(cache)))
     cache[key] = value
@@ -81,6 +101,7 @@ def call_with_fallback(
     primary_idx = state.active_idx
     metrics.increment("translation.fallback.attempt")
     primary = engines[primary_idx]
+    reset_last_token_usage()
     result = primary.translate(text, system_prompt, incomplete, history)
 
     if result and not looks_untranslated(result, text):
@@ -96,6 +117,7 @@ def call_with_fallback(
     # ── Try fallback engines ──────────────────────────────────────────────────
     for index in range(primary_idx + 1, len(engines)):
         metrics.increment("translation.fallback.attempt")
+        reset_last_token_usage()
         fb_result = engines[index].translate(text, system_prompt, incomplete, history)
         if fb_result and not looks_untranslated(fb_result, text):
             if hard_switch:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from config import cfg
 from modules.translation_engines import TranslationEngine
-from modules.translation_runtime import CacheKey, cache_lookup, cache_store
+from modules.translation_runtime import CacheKey, cache_key, cache_lookup, cache_store
 from utils.metrics import metrics
 from utils.runtime_events import translation_quality
 
@@ -59,20 +59,20 @@ class TranslationMemory:
         prompt_ver: str,
         active_engine: TranslationEngine | None,
     ) -> MemoryLookup:
-        cached = self.cache_lookup(text, incomplete, prompt_ver)
+        cached = self.cache_lookup(text, incomplete, prompt_ver, active_engine)
         if cached:
             metrics.increment("translation.cache.memory_hit")
             self._remember_recent(text, cached, incomplete)
             return MemoryLookup(cached, "memory_hit")
 
         if incomplete or active_engine is None:
-            metrics.increment("translation.cache.miss")
+            metrics.increment("translation.cache.skipped")
             return MemoryLookup(None, "skipped")
 
         db_result = self.db_lookup(text, active_engine, prompt_ver)
         if db_result:
             metrics.increment("translation.cache.db_hit")
-            self.cache_store(text, incomplete, db_result, prompt_ver)
+            self.cache_store(text, incomplete, db_result, prompt_ver, active_engine)
             self._remember_recent(text, db_result, incomplete)
             return MemoryLookup(db_result, "db_hit")
 
@@ -93,20 +93,31 @@ class TranslationMemory:
         self._remember_recent(text, result, incomplete)
 
     def record_success_memory(
-        self, text: str, result: str, incomplete: bool, prompt_ver: str
+        self,
+        text: str,
+        result: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None = None,
     ) -> None:
         """In-memory part of record_success; caller does history/DB I/O outside."""
-        self.cache_store(text, incomplete, result, prompt_ver)
+        self.cache_store(text, incomplete, result, prompt_ver, active_engine)
         if not incomplete:
             self._remember_recent(text, result, incomplete)
 
     def write_history(self, text: str, result: str) -> None:
         self._history_writer(text, result)
 
-    def lookup_memory_event(self, text: str, incomplete: bool, prompt_ver: str) -> MemoryLookup:
+    def lookup_memory_event(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None = None,
+    ) -> MemoryLookup:
         """Cache-only lookup (no DB). Source is "" when undecided — the caller
         is expected to consult the DB outside the lock and call record_db_hit."""
-        cached = self.cache_lookup(text, incomplete, prompt_ver)
+        cached = self.cache_lookup(text, incomplete, prompt_ver, active_engine)
         if cached:
             metrics.increment("translation.cache.memory_hit")
             self._remember_recent(text, cached, incomplete)
@@ -114,18 +125,28 @@ class TranslationMemory:
         return MemoryLookup(None, "")
 
     def record_db_hit(
-        self, text: str, incomplete: bool, prompt_ver: str, db_result: str
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        db_result: str,
+        active_engine: TranslationEngine | None = None,
     ) -> MemoryLookup:
         metrics.increment("translation.cache.db_hit")
-        self.cache_store(text, incomplete, db_result, prompt_ver)
+        self.cache_store(text, incomplete, db_result, prompt_ver, active_engine)
         self._remember_recent(text, db_result, incomplete)
         return MemoryLookup(db_result, "db_hit")
 
     def invalidate_memory(
-        self, text: str, incomplete: bool, prompt_ver: str, result: str | None = None
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None = None,
+        result: str | None = None,
     ) -> None:
         """In-memory part of invalidate; caller does the DB delete outside."""
-        self.cache.pop((text, incomplete, prompt_ver), None)
+        self.cache.pop(self._cache_key(text, incomplete, prompt_ver, active_engine), None)
         self._forget_recent(text, result)
 
     def invalidate_db(
@@ -150,7 +171,7 @@ class TranslationMemory:
         prompt_ver: str,
         active_engine: TranslationEngine | None,
     ) -> None:
-        self.cache_store(text, incomplete, result, prompt_ver)
+        self.cache_store(text, incomplete, result, prompt_ver, active_engine)
         self._history_writer(text, result)
 
         if incomplete:
@@ -160,7 +181,15 @@ class TranslationMemory:
         if active_engine is not None:
             self.db_store(text, result, active_engine, prompt_ver)
 
-    def cache_store(self, text: str, incomplete: bool, value: str, prompt_ver: str) -> None:
+    def cache_store(
+        self,
+        text: str,
+        incomplete: bool,
+        value: str,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None = None,
+    ) -> None:
+        engine_name, model_name = self._engine_cache_parts(active_engine)
         cache_store(
             self.cache,
             text,
@@ -168,10 +197,19 @@ class TranslationMemory:
             value,
             prompt_ver,
             self._max_cache_size,
+            engine_name,
+            model_name,
         )
 
-    def cache_lookup(self, text: str, incomplete: bool, prompt_ver: str) -> str | None:
-        return cache_lookup(self.cache, text, incomplete, prompt_ver)
+    def cache_lookup(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None = None,
+    ) -> str | None:
+        engine_name, model_name = self._engine_cache_parts(active_engine)
+        return cache_lookup(self.cache, text, incomplete, prompt_ver, engine_name, model_name)
 
     def invalidate(
         self,
@@ -181,7 +219,7 @@ class TranslationMemory:
         active_engine: TranslationEngine | None,
         result: str | None = None,
     ) -> None:
-        self.cache.pop((text, incomplete, prompt_ver), None)
+        self.cache.pop(self._cache_key(text, incomplete, prompt_ver, active_engine), None)
         self._forget_recent(text, result)
         if incomplete or active_engine is None:
             return
@@ -215,6 +253,22 @@ class TranslationMemory:
             prompt_ver,
         )
 
+    @staticmethod
+    def _engine_cache_parts(engine: TranslationEngine | None) -> tuple[str, str]:
+        if engine is None:
+            return "", ""
+        return str(engine.engine_name or ""), str(engine.model_name or "")
+
+    def _cache_key(
+        self,
+        text: str,
+        incomplete: bool,
+        prompt_ver: str,
+        active_engine: TranslationEngine | None,
+    ) -> CacheKey:
+        engine_name, model_name = self._engine_cache_parts(active_engine)
+        return cache_key(text, incomplete, prompt_ver, engine_name, model_name)
+
     def _remember_recent(self, text: str, result: str, incomplete: bool) -> None:
         if incomplete:
             return
@@ -223,6 +277,7 @@ class TranslationMemory:
             metrics.increment("translation.context_gated")
             metrics.increment(f"translation.context_gated.{severity}")
             return
+        self._forget_recent(text)
         self.recent.append((text, result))
 
     def _forget_recent(self, text: str, result: str | None = None) -> None:

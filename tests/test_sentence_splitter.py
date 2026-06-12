@@ -10,7 +10,11 @@ from modules.sentence_buffer import SentenceCut
 
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
-def _fast_cfg(min_wait: float = 0.3, force_cut: float = 0.8) -> MagicMock:
+def _fast_cfg(
+    min_wait: float = 0.3,
+    force_cut: float = 0.8,
+    pending_timeout: float = 8.0,
+) -> MagicMock:
     m = MagicMock()
     m.splitter.min_wait_seconds = min_wait
     m.splitter.force_cut_seconds = force_cut
@@ -19,6 +23,7 @@ def _fast_cfg(min_wait: float = 0.3, force_cut: float = 0.8) -> MagicMock:
     m.splitter.segment_gap_split_enabled = False
     m.splitter.segment_gap_seconds = 0.6
     m.splitter.silence_complete_enabled = False
+    m.splitter.pending_incomplete_timeout_seconds = pending_timeout
     return m
 
 
@@ -138,6 +143,24 @@ class TestSentenceSplitterThread(unittest.TestCase):
 
         self.assertEqual(result.text, "partial thought finished!")
         self.assertFalse(result.incomplete)
+
+    def test_pending_incomplete_times_out_without_next_chunk(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch(
+            "modules.sentence_splitter.cfg",
+            _fast_cfg(min_wait=0.1, force_cut=0.2, pending_timeout=0.35),
+        ):
+            thread = start(tq, sq, stop)
+            tq.put("partial thought")
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.text, "partial thought")
+        self.assertTrue(result.incomplete)
 
     def test_two_incomplete_cuts_emit_bounded_merge(self):
         tq: queue.Queue = queue.Queue()
