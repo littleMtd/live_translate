@@ -15,7 +15,7 @@ import unittest.mock
 import modules.translation_engines as translation_engines_module
 import modules.translator as translator_module
 from modules.translation_engines import (
-    _build_engine_chain, _build_user_message, TranslationEngine, GeminiEngine, ClaudeEngine, GoogleTranslateEngine,
+    _build_engine_chain, _build_user_message, TranslationEngine, ClaudeEngine, GoogleTranslateEngine,
     GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine,
     get_last_engine_api_diagnostics, get_last_engine_diagnostics,
 )
@@ -35,7 +35,6 @@ from modules.translator import (
     TranslationOutcome,
     Translator,
 )
-from modules.prompt_evolver import PromptEvolver
 import modules.db as _db_module
 
 
@@ -92,7 +91,6 @@ def _make_translator() -> Translator:
     from modules.translation_memory import TranslationMemory
     from config import cfg
     t = Translator.__new__(Translator)
-    t._evolver = PromptEvolver()
     t._active_idx = 0
     t._probe_counter = 0
     t._consecutive_primary_failures = 0
@@ -115,7 +113,7 @@ def _claude_resp(text: str) -> MagicMock:
 
 
 def _sys_prompt(t: "Translator") -> str:
-    return t._evolver.build_system_prompt(_BASE_PROMPT)
+    return _BASE_PROMPT
 
 
 @contextmanager
@@ -312,39 +310,6 @@ class TestClaudeEngine(unittest.TestCase):
         self.assertIsNone(e.translate("안녕하세요", "system", False))
 
 
-# ---------------------------------------------------------------------------
-# GeminiEngine unit tests
-# ---------------------------------------------------------------------------
-
-class TestGeminiEngine(unittest.TestCase):
-
-    def _make_engine(self, resp_text: str = "你好", side_effect=None) -> GeminiEngine:
-        e = GeminiEngine.__new__(GeminiEngine)
-        e._client = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.text = resp_text
-        if side_effect:
-            e._client.models.generate_content.side_effect = side_effect
-        else:
-            e._client.models.generate_content.return_value = mock_resp
-        return e
-
-    def test_returns_translated_text(self):
-        e = self._make_engine("你好")
-        self.assertEqual(e.translate("안녕하세요", _sys_prompt(_make_translator()), False), "你好")
-
-    def test_strips_whitespace(self):
-        e = self._make_engine("  你好  ")
-        self.assertEqual(e.translate("안녕하세요", _sys_prompt(_make_translator()), False), "你好")
-
-    def test_returns_none_on_exception(self):
-        e = self._make_engine(side_effect=Exception("Gemini down"))
-        self.assertIsNone(e.translate("안녕하세요", _sys_prompt(_make_translator()), False))
-
-    def test_returns_none_when_client_is_none(self):
-        e = GeminiEngine.__new__(GeminiEngine)
-        e._client = None
-        self.assertIsNone(e.translate("안녕하세요", "system", False))
 
 
 # ---------------------------------------------------------------------------
@@ -1444,7 +1409,8 @@ class TestTranslateOptimizations(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.result_source, "api")
-        self.assertEqual(outcome.cache_status, "miss")
+        # live mode default: DB cache layer disabled -> lookup reports "skipped"
+        self.assertEqual(outcome.cache_status, "skipped")
         self.assertEqual(outcome.engine, "gemini")
         self.assertEqual(outcome.model, "gemini-test-model")
         self.assertEqual(outcome.target_text, "你好")
@@ -2478,3 +2444,60 @@ class TestMalformedItemDoesNotStallEmit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# P2: DB cache layer gating by translation mode
+# ---------------------------------------------------------------------------
+
+class TestDbCacheGating(unittest.TestCase):
+    """Live mode skips the SQLite cache (0.45% measured hit rate); clip keeps it."""
+
+    def _translator_with_db_spies(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "你好"
+        t._memory.db_lookup = MagicMock(return_value=None)
+        t._memory.db_store = MagicMock()
+        return t
+
+    def _set_mode(self, mode):
+        from config import cfg
+        original = cfg.translation.translation_mode
+        object.__setattr__(cfg.translation, "translation_mode", mode)
+        return original
+
+    def test_live_mode_skips_db_lookup_and_store(self):
+        original = self._set_mode("live")
+        try:
+            t = self._translator_with_db_spies()
+            outcome = t.translate_event("안녕하세요 방송 시작합니다")
+            self.assertEqual(outcome.status, "success")
+            t._memory.db_lookup.assert_not_called()
+            t._memory.db_store.assert_not_called()
+        finally:
+            self._set_mode(original)
+
+    def test_clip_mode_uses_db_cache(self):
+        original = self._set_mode("clip")
+        try:
+            t = self._translator_with_db_spies()
+            outcome = t.translate_event("안녕하세요 방송 시작합니다")
+            self.assertEqual(outcome.status, "success")
+            t._memory.db_lookup.assert_called_once()
+            t._memory.db_store.assert_called_once()
+        finally:
+            self._set_mode(original)
+
+    def test_live_mode_flag_reenables_db_cache(self):
+        from config import cfg
+        original = self._set_mode("live")
+        original_flag = cfg.database.live_db_cache
+        object.__setattr__(cfg.database, "live_db_cache", True)
+        try:
+            t = self._translator_with_db_spies()
+            t.translate_event("안녕하세요 방송 시작합니다")
+            t._memory.db_lookup.assert_called_once()
+            t._memory.db_store.assert_called_once()
+        finally:
+            object.__setattr__(cfg.database, "live_db_cache", original_flag)
+            self._set_mode(original)

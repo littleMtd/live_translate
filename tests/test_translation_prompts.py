@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "607cb9c9d376e6e51483d1813d58159b51d7490b52b9bc65a8dfa8747b613e02"
+_TRANSLATION_PROFILE_DATA_HASH = "b82bbd3cbd38862bfb5f5c31d00c29302c5767bda3d843122c2b973424ec8d89"
 
 
 def test_translation_profile_data_snapshot_hash():

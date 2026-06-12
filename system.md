@@ -55,7 +55,6 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `modules/streamer_profiles.py`: JSON-driven streamer profiles and STT glossary builder
 - `modules/db.py`: SQLite persistent translation cache, LRU eviction, WAL mode, schema migration
 - `modules/subtitle_display.py`: tkinter subtitle window and pause/resume UI
-- `modules/prompt_evolver.py`: optional live prompt enrichment from recent successful translations
 
 ### Utilities (`utils/`)
 
@@ -124,7 +123,6 @@ The pipeline relies on each stage either making forward progress or shutting the
 
 - `audio_capture.start()` resolves the loopback device **synchronously**; a missing device raises out of `start()` so `main.py` can `sys.exit(1)` with a clear error instead of leaving a dead daemon and empty `audio_queue`. Any exception inside the daemon `run()` also sets `stop_event` before returning.
 - `STTEngine.available` is `False` when both SenseVoice and Groq failed to initialize. The STT thread checks it on entry and sets `stop_event` rather than spinning on `audio_queue` forever.
-- `PromptEvolver` auto-disables (with a warning) when `cfg.translation.evolve_enabled=True` but `GEMINI_API_KEY` is empty — prevents a repeating auth error every `evolve_every` translations.
 - `RuntimeEventWriter.emit()` normalizes non-JSON-native values (numpy scalars, NaN/Inf, custom objects) before serialization and writes a fallback record if `json.dumps` still fails. The daily log filename is derived from the injected `clock` so tests and clock-skewed hosts route events into the right file.
 
 ## Test Coverage

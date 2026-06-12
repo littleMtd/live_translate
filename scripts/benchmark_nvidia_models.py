@@ -16,7 +16,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import cfg
-from modules.prompt_evolver import PromptEvolver
 from modules.translation_engines import _build_user_message
 from modules.translation_policy import TranslationPolicy
 from modules.translation_prompts import (
@@ -26,12 +25,22 @@ from modules.translation_prompts import (
 )
 
 
-DEFAULT_MODELS = (
+# Candidate pool for model-selection runs (--candidates).
+# Default runs benchmark ONLY the production model from config (cfg.nvidia.model),
+# so this script doubles as a health/latency check for the live engine.
+CANDIDATE_MODELS = (
     "qwen/qwen3.5-122b-a10b",
     "qwen/qwen3-next-80b-a3b-instruct",
     "nvidia/riva-translate-4b-instruct-v1.1",
     "nvidia/nvidia-nemotron-nano-9b-v2",
 )
+
+
+def _default_models(include_candidates: bool) -> tuple[str, ...]:
+    models = [cfg.nvidia.model]
+    if include_candidates:
+        models += [model for model in CANDIDATE_MODELS if model != cfg.nvidia.model]
+    return tuple(models)
 
 _NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _SIMPLIFIED_HINTS = set("个们这为来对吗后过还说时会没与")
@@ -72,7 +81,7 @@ def main() -> int:
         raise SystemExit(f"No benchmarkable samples found in {event_path}")
 
     output_path = args.output or _default_output_path()
-    models = tuple(args.models or DEFAULT_MODELS)
+    models = tuple(args.models or _default_models(args.candidates))
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "event_path": str(event_path),
@@ -138,8 +147,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=list(DEFAULT_MODELS),
-        help="NVIDIA model IDs to benchmark",
+        default=None,
+        help="NVIDIA model IDs to benchmark (default: cfg.nvidia.model only)",
+    )
+    parser.add_argument(
+        "--candidates",
+        action="store_true",
+        help="Also benchmark the model-selection candidate pool",
     )
     parser.add_argument("--samples", type=int, default=20, help="Number of source samples")
     parser.add_argument(
@@ -253,7 +267,7 @@ def _has_template(text: str) -> bool:
 def _system_prompt_for_model(model: str) -> str:
     is_qwen = "qwen" in model.lower()
     base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
-    system_prompt = PromptEvolver().build_system_prompt(base_prompt)
+    system_prompt = base_prompt  # PromptEvolver removed 2026-06-12
     if not cfg.translation.use_profile:
         return system_prompt
     profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)

@@ -15,7 +15,6 @@ class _Keys:
     groq:             str = os.environ.get("GROQ_API_KEY", "")
     groq_fallback:    str = os.environ.get("GROQ_API_KEY_fall_back", "")
     openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
-    gemini:           str = os.environ.get("GEMINI_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepl:            str = os.environ.get("DEEPL_API_KEY", "")
     google_translate: str = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "")
@@ -131,7 +130,7 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 _VALID_STREAMER_PROFILES = known_profile_ids()
 _VALID_TRANSLATION_MODES = {"live", "clip"}
-_VALID_ENGINE_NAMES      = {"gemini", "claude", "google_translate", "ollama", "nvidia", "groq", "openrouter"}
+_VALID_ENGINE_NAMES      = {"claude", "google_translate", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
 
 
@@ -141,7 +140,6 @@ class _Translation:
     # Engine chain — ordered fallback list; first available engine is primary.
     #
     # Supported names (must match keys in _make_engine() in translator.py):
-    #   "gemini"           — Google Gemini        (needs GEMINI_API_KEY)
     #   "claude"           — Anthropic Claude     (needs ANTHROPIC_API_KEY)
     #   "google_translate" — Google Translate v2  (needs GOOGLE_TRANSLATE_API_KEY)
     #   "deepseek"         — DeepSeek Chat        (needs DEEPSEEK_API_KEY)   [not yet impl.]
@@ -162,8 +160,6 @@ class _Translation:
     #   "claude-haiku-4-5-20251001"  — economy mode  (cache kicks in at ≥ 4096 sys-tokens)
     model:                    str = "claude-sonnet-4-6"
     claude_timeout:           float = 5.0   # per-request timeout (seconds) for ClaudeEngine
-    # Gemini
-    gemini_model:             str = "gemini-2.5-flash"
     # Groq fallback (uses GROQ_API_KEY_fall_back)
     groq_translation_model:   str = "qwen/qwen3-32b"
     groq_translation_timeout: int = 12
@@ -211,8 +207,6 @@ class _Translation:
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
     streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
-    evolve_enabled: bool         = False
-    evolve_every:   int          = 20
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):
@@ -260,6 +254,12 @@ class _Subtitle:
 class _Database:
     db_path:           str = str(Path(__file__).resolve().parent / "logs" / "live_translate.db")
     db_cache_max_rows: int = 50_000   # LRU eviction threshold (by last_used_at)
+    # Live speech almost never repeats verbatim: 17 days of live data showed a
+    # 0.45% DB hit rate (45 reuses / ~10k rows), all trivial interjections.
+    # Disable the SQLite cache layer for live mode by default; clip mode
+    # (replayed segments genuinely repeat) keeps using it. Existing rows are
+    # kept on disk as a ko->zh corpus.
+    live_db_cache: bool = False
 
 
 @dataclass(frozen=True)

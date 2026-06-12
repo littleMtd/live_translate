@@ -36,7 +36,7 @@ def test_translation_correction_data_snapshot_counts():
 
     assert len(tables.source_aware_target_replacements) == 27
     assert {profile: len(values) for profile, values in tables.source_norm_by_profile.items()} == {
-        "stellive_hina": 5,
+        "stellive_hina": 6,
         "hades_chxxnnx": 21,
         "mwmeu": 48,
     }

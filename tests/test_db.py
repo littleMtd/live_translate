@@ -13,7 +13,6 @@ import unittest
 import unittest.mock
 
 from modules.db import TranslationDB
-from modules.prompt_evolver import PromptEvolver
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +177,6 @@ def _make_translator():
     from modules.db import _get_db
     from config import cfg
     t = Translator.__new__(Translator)
-    t._evolver = PromptEvolver()
     t._active_idx = 0
     t._probe_counter = 0
     t._consecutive_primary_failures = 0
@@ -211,8 +209,15 @@ class TestTranslatorDBIntegration(unittest.TestCase):
         db_module._db = self._db
         self._history_patch = unittest.mock.patch("modules.translator._write_history")
         self._history_patch.start()
+        # The SQLite cache layer is clip-mode-only by default (live hit rate
+        # measured at ~0.45%); these integration tests exercise the DB path.
+        from config import cfg
+        self._original_mode = cfg.translation.translation_mode
+        object.__setattr__(cfg.translation, "translation_mode", "clip")
 
     def tearDown(self):
+        from config import cfg
+        object.__setattr__(cfg.translation, "translation_mode", self._original_mode)
         self._history_patch.stop()
         self._db_module._db = self._original_db
         self._db.close()

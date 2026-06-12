@@ -32,7 +32,6 @@ _LOG_DIR = Path(__file__).parent / "logs"
 
 
 _KEY_FOR_ENGINE = {
-    "gemini":           lambda: cfg.keys.gemini,
     "claude":           lambda: cfg.keys.anthropic,
     "google_translate": lambda: cfg.keys.google_translate,
     # NOTE: only engines implemented in translation_engines._make_engine belong

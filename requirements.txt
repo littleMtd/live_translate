@@ -3,7 +3,6 @@ sounddevice
 soundfile
 numpy
 anthropic
-google-genai
 groq
 funasr
 modelscope

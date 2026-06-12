@@ -10,7 +10,6 @@ from utils.logger import get_logger
 
 log = get_logger("translation_engines")
 
-_GEMINI_HTTP_TIMEOUT_MS = 12000
 _NVIDIA_MAX_ATTEMPTS = 2
 _NVIDIA_RETRY_DELAY_SEC = 0.5
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -406,13 +405,13 @@ class TranslationEngine(ABC):
     @property
     @abstractmethod
     def engine_name(self) -> str:
-        """Short identifier stored in the DB (e.g. 'gemini', 'claude', 'deepl')."""
+        """Short identifier stored in the DB (e.g. 'nvidia', 'claude', 'openrouter')."""
         ...
 
     @property
     @abstractmethod
     def model_name(self) -> str:
-        """Model/version string for DB cache keying (e.g. 'gemini-2.5-flash')."""
+        """Model/version string for DB cache keying (e.g. 'qwen/qwen3-32b')."""
         ...
 
     @property
@@ -435,83 +434,6 @@ class TranslationEngine(ABC):
                        Direct-translation engines ignore this.
         """
         ...
-
-
-class GeminiEngine(TranslationEngine):
-    def __init__(self):
-        self._client = None
-        if not cfg.keys.gemini:
-            log.error("GEMINI_API_KEY not set")
-            return
-        try:
-            import google.genai as genai
-            from google.genai import types as genai_types
-            self._client = genai.Client(
-                api_key=cfg.keys.gemini,
-                http_options=genai_types.HttpOptions(timeout=_GEMINI_HTTP_TIMEOUT_MS),
-            )
-            log.info("GeminiEngine ready (model=%s)", cfg.translation.gemini_model)
-        except Exception as e:
-            log.error("Failed to init Gemini: %s", e)
-
-    @property
-    def engine_name(self) -> str:
-        return "gemini"
-
-    @property
-    def model_name(self) -> str:
-        return cfg.translation.gemini_model
-
-    @property
-    def available(self) -> bool:
-        return self._client is not None
-
-    def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
-        if self._client is None:
-            return None
-        try:
-            from google.genai import types as genai_types
-            contents = []
-            for ko, zh in (history or []):
-                contents.append(genai_types.Content(
-                    role="user", parts=[genai_types.Part(text=f"input: {ko}")]
-                ))
-                contents.append(genai_types.Content(
-                    role="model", parts=[genai_types.Part(text=zh)]
-                ))
-            contents.append(genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=_build_user_message(text, incomplete))],
-            ))
-            config = genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=cfg.translation.max_tokens,
-                temperature=cfg.translation.temperature,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-            )
-            _t0 = time.monotonic()
-            resp = self._client.models.generate_content(
-                model=cfg.translation.gemini_model,
-                contents=contents,
-                config=config,
-            )
-            log.info("Gemini translate: %.0fms", (time.monotonic() - _t0) * 1000)
-            _log_token_usage("Gemini", getattr(resp, "usage_metadata", None))
-            result = resp.text.strip()
-            log.debug("Gemini: %.30s → %s", text, result)
-            return result
-        except Exception as e:
-            kind = classify_error(e)
-            if kind == "auth":
-                log.error("Gemini auth error (check GEMINI_API_KEY): %s", e)
-            elif kind == "rate_limit":
-                log.warning("Gemini rate-limit: %s", e)
-            elif kind == "network":
-                log.warning("Gemini network error: %s", e)
-            else:
-                log.error("Gemini error: %s", e)
-            return None
 
 
 class ClaudeEngine(TranslationEngine):
@@ -1251,9 +1173,6 @@ class GroqTranslationEngine(TranslationEngine):
 
 def _make_engine(name: str) -> "TranslationEngine | None":
     """Instantiate an engine by name. Returns None if unavailable or unknown."""
-    if name == "gemini":
-        e = GeminiEngine()
-        return e if e.available else None
     if name == "claude":
         e = ClaudeEngine()
         return e if e.available else None

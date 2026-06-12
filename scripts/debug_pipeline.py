@@ -100,9 +100,7 @@ def run_translate(text: str, incomplete: bool = False, no_api: bool = False):
 
     if no_api:
         # 顯示會送出的內容，但不實際呼叫 API
-        from modules.prompt_evolver import PromptEvolver
-        evolver = PromptEvolver()
-        system = evolver.build_system_prompt(_BASE_PROMPT)
+        system = _BASE_PROMPT  # PromptEvolver removed 2026-06-12
         flag = "(句子不完整，請盡力翻譯)" if incomplete else ""
         user_msg = f"[待翻譯]{flag}: {text}"
 

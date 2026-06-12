@@ -16,7 +16,6 @@ from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events, translation_quality
 from modules.pipeline_events import sentence_incomplete, sentence_metadata, sentence_text
-from modules.prompt_evolver import PromptEvolver
 from modules.db import _get_db
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -149,6 +148,14 @@ _SOURCE_NORM_WITH_PROFILE_SORTED = {
     profile: _sorted_norm_items({**_SOURCE_NORM_SHARED, **profile_norm})
     for profile, profile_norm in _SOURCE_NORM_BY_PROFILE.items()
 }
+
+
+def _db_cache_enabled() -> bool:
+    """SQLite cache layer is for clip mode (replays repeat); live mode showed a
+    ~0.45% hit rate so it is disabled by default (cfg.database.live_db_cache)."""
+    if cfg.translation.translation_mode == "clip":
+        return True
+    return bool(getattr(cfg.database, "live_db_cache", False))
 
 
 def _looks_like_meta_garbage_output(result: str) -> bool:
@@ -400,7 +407,6 @@ class TranslationOutcome:
 
 @dataclass
 class _TranslatorSharedState:
-    evolver: PromptEvolver
     memory: TranslationMemory
     policy: TranslationPolicy
     fallback: FallbackState
@@ -427,7 +433,6 @@ def _new_translation_policy() -> TranslationPolicy:
 
 def _new_translator_shared_state() -> _TranslatorSharedState:
     return _TranslatorSharedState(
-        evolver=PromptEvolver(),
         memory=_new_translation_memory(),
         policy=_new_translation_policy(),
         fallback=FallbackState(),
@@ -516,7 +521,6 @@ class Translator:
         self._shared_state = shared_state or _new_translator_shared_state()
         self._state_lock = self._shared_state.lock
         self._fallback_state_obj = self._shared_state.fallback
-        self._evolver = self._shared_state.evolver
         self._engines: list[TranslationEngine] = _build_engine_chain()
         self._memory = self._shared_state.memory
         self._policy = self._shared_state.policy
@@ -695,7 +699,6 @@ class Translator:
 
         log.debug("Slang hit: %s → %s", text, slang_result)
         with self._state_guard():
-            self._evolver.record(text, slang_result)
             self._memory_state().record_direct_memory(text, slang_result, incomplete)
         # File I/O outside the shared lock (M1).
         self._memory_state().write_history(text, slang_result)
@@ -711,7 +714,7 @@ class Translator:
         if lookup.result:
             log.debug("Cache hit: %s", text[:20])
             return lookup
-        if incomplete or engine is None:
+        if incomplete or engine is None or not _db_cache_enabled():
             metrics.increment("translation.cache.miss")
             return MemoryLookup(None, "skipped")
         db_result = self._memory_state().db_lookup(text, engine, prompt_ver)
@@ -728,12 +731,11 @@ class Translator:
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str) -> None:
         with self._state_guard():
-            self._evolver.record(text, result)
             self._memory_state().record_success_memory(text, result, incomplete, prompt_ver)
             engine = self._active_engine()
         # File/DB I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
-        if not incomplete and engine is not None:
+        if not incomplete and engine is not None and _db_cache_enabled():
             self._memory_state().db_store(text, result, engine, prompt_ver)
 
     def _invalidate_cached_translation(
@@ -746,7 +748,9 @@ class Translator:
     ) -> None:
         with self._state_guard():
             self._memory_state().invalidate_memory(text, incomplete, prompt_ver, result)
-        # DB delete outside the shared lock (M1).
+        # DB delete outside the shared lock (M1). The delete is NOT gated on
+        # _db_cache_enabled(): stale rows must be purged even if the cache layer
+        # was enabled earlier in the session and disabled since.
         if not incomplete and active_engine is not None:
             self._memory_state().invalidate_db(text, active_engine, prompt_ver)
 
@@ -759,7 +763,7 @@ class Translator:
             self._qwen_log_once = True
 
     def _build_system_prompt(self) -> str:
-        return _compose_system_prompt(self._evolver, self._state_guard())
+        return _compose_system_prompt()
 
     @staticmethod
     def _prompt_version(system_prompt: str) -> str:
@@ -813,12 +817,14 @@ def _translation_max_output_delay_ms() -> float:
     return float(value) if isinstance(value, (int, float)) else 30000.0
 
 
-def _compose_system_prompt(evolver: PromptEvolver, lock_ctx) -> str:
-    """Shared between Translator._build_system_prompt and the probe thread (L5)."""
+def _compose_system_prompt() -> str:
+    """Shared between Translator._build_system_prompt and the probe thread (L5).
+
+    Pure function of config since PromptEvolver was removed (2026-06-12):
+    prompt_ver is now stable for a given base prompt + profile selection.
+    """
     is_qwen = _is_qwen_model()
-    base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
-    with lock_ctx:
-        system_prompt = evolver.build_system_prompt(base_prompt)
+    system_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
 
     if not cfg.translation.use_profile:
         return system_prompt
@@ -830,8 +836,8 @@ def _compose_system_prompt(evolver: PromptEvolver, lock_ctx) -> str:
     return system_prompt
 
 
-def _build_probe_system_prompt(shared_state: _TranslatorSharedState) -> str:
-    return _compose_system_prompt(shared_state.evolver, shared_state.lock)
+def _build_probe_system_prompt(_shared_state: _TranslatorSharedState) -> str:
+    return _compose_system_prompt()
 
 
 def _start_fallback_probe_thread(

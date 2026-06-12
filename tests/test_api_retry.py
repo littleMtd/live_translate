@@ -68,13 +68,6 @@ class TestTranslatorRetry(unittest.TestCase):
         e._client.messages.create.side_effect = side_effect
         return e
 
-    def _make_gemini(self, side_effect):
-        from modules.translation_engines import GeminiEngine
-        e = GeminiEngine.__new__(GeminiEngine)
-        e._client = MagicMock()
-        e._client.models.generate_content.side_effect = side_effect
-        return e
-
     def test_no_retry_on_plain_exception(self):
         e = self._make_claude(Exception("generic error"))
         with patch("time.sleep") as mock_sleep:
@@ -106,23 +99,6 @@ class TestTranslatorRetry(unittest.TestCase):
             result = e.translate("안녕", "system", False)
         self.assertIsNone(result)
         self.assertEqual(e._client.messages.create.call_count, 1)
-        mock_sleep.assert_not_called()
-
-    def test_gemini_network_error_returns_none_immediately(self):
-        NetErr = type("APIConnectionError", (Exception,), {})
-        e = self._make_gemini(NetErr("conn reset"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
-        self.assertEqual(e._client.models.generate_content.call_count, 1)
-        mock_sleep.assert_not_called()
-
-    def test_gemini_no_retry_on_auth_error(self):
-        AuthErr = type("AuthenticationError", (Exception,), {})
-        e = self._make_gemini(AuthErr("bad key"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
         mock_sleep.assert_not_called()
 
 

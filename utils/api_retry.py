@@ -2,7 +2,7 @@
 
 _RETRY_DELAYS: tuple[int, ...] = (1, 3, 7)  # seconds between attempts — for network errors only
 # Rate limits are NOT retried in the translator (triggers fallback immediately).
-# _RETRY_DELAYS is kept for network errors and for prompt_evolver (background, non-blocking).
+# _RETRY_DELAYS is kept for background, non-blocking network-error retries.
 
 
 def classify_error(e: Exception) -> str:

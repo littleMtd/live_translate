@@ -141,9 +141,6 @@ class TestConfig(unittest.TestCase):
         self.assertGreater(cfg.translation.max_subtitle_output_delay_ms, 0)
         self.assertLessEqual(cfg.translation.max_subtitle_output_delay_ms, 30000)
 
-    def test_evolve_every_positive(self):
-        self.assertGreater(cfg.translation.evolve_every, 0)
-
 
 class TestVadConfig(unittest.TestCase):
 
