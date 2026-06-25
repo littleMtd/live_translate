@@ -167,6 +167,36 @@
         "Minecraft"
       ],
       "aliases": []
+    },
+    {
+      "profile_id": "url",
+      "label": "UR:L",
+      "stt_terms": [
+        "UR:L",
+        "유아렐",
+        "URL",
+        "결속아이돌",
+        "결속 아이돌",
+        "모카",
+        "랑코",
+        "마냥",
+        "솜먕",
+        "오아",
+        "샌드박스네트워크",
+        "샌드박스 네트워크",
+        "Sandbox Network",
+        "Chemical Love",
+        "Again",
+        "Wish Me Love",
+        "조금 더 가까이",
+        "사계",
+        "ORIGINAL 3D SHOWCASE"
+      ],
+      "aliases": [
+        "유아렐",
+        "URL",
+        "결속아이돌"
+      ]
     }
   ]
 }

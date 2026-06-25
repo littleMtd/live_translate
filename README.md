@@ -201,6 +201,7 @@ use_profile:      bool = True
 | `"isegye_lilpa"` | 이세계아이돌 / 릴파 |
 | `"hades_chxxnnx"` | HADES / 챈나 |
 | `"mwmeu"` | MW:MEU |
+| `"url"` | UR:L（유아렐；모카、랑코、마냥、솜먕） |
 | `""` | 通用（不套用 Profile） |
 
 ### 使用本機模型（Ollama）

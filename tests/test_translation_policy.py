@@ -49,6 +49,9 @@ class TestTranslationPolicy(unittest.TestCase):
     def test_is_stt_garbage_allows_short_text(self):
         self.assertFalse(TranslationPolicy.is_stt_garbage("안녕하세요"))
 
+    def test_is_stt_garbage_allows_natural_three_word_repetition(self):
+        self.assertFalse(TranslationPolicy.is_stt_garbage("맞아 어 맞아"))
+
     def test_is_stt_garbage_allows_weak_commercial_words_in_normal_speech(self):
         self.assertFalse(
             TranslationPolicy.is_stt_garbage(
@@ -67,6 +70,17 @@ class TestTranslationPolicy(unittest.TestCase):
                 "부채 있잖아요. 주류 회사 광고용으로. 그런 부채였는데 기념품으로 둘이 가져가더라고요."
             )
         )
+
+    def test_is_stt_garbage_allows_visit_in_real_speech(self):
+        text = (
+            "\ucd2c\uc601\uc758 \uc815\uccb4\uac00 \uadf8\ub807\uc8e0 "
+            "\ub354 \uc790\uc138\ud788 \ub9d0\uc500\ub4dc\ub9ac\uba74 "
+            "\ubc29\ubb38\ud558\uc2dc\ub294 \uc774\ud30c\ub9ac \ubd84\ub4e4\uaed8 "
+            "\ud070 \uc2a4\ud3ec\uac00 \ub420 \uc218 \uc788\uc73c\ub2c8\uae4c "
+            "\uc5ec\uae30\uc11c \ub9c8\ubb34\ub9ac\ub97c \ud558\ub3c4\ub85d \ud558\uaca0\uc2b5\ub2c8\ub2e4"
+        )
+
+        self.assertFalse(TranslationPolicy.is_stt_garbage(text))
 
     def test_is_stt_garbage_still_rejects_strong_commercial_words(self):
         self.assertTrue(

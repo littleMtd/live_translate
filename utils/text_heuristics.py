@@ -85,7 +85,6 @@ STT_GARBAGE_STRONG_KEYWORDS = (
     "약사님께",
     "광고",
     "클릭",
-    "방문",
 )
 
 STT_FRAGMENTED_MARKERS = (

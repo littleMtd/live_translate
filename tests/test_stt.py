@@ -351,10 +351,36 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_count, 2)
         self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
         self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(emit.call_args_list[0].kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args_list[0].kwargs["key_role"], "primary")
+        self.assertTrue(emit.call_args_list[0].kwargs["will_retry"])
         self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
+        self.assertEqual(emit.call_args_list[1].kwargs["attempt_index"], 2)
+        self.assertEqual(emit.call_args_list[1].kwargs["key_role"], "fallback")
+        self.assertFalse(emit.call_args_list[1].kwargs["will_retry"])
         self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
         self.assertLessEqual(eng._groq_fallback_rate_limited_until, time.monotonic())
         self.assertTrue(eng._groq_prefer_fallback_key)
+
+    def test_primary_error_does_not_retry_with_fallback_key(self):
+        eng = _make_engine_groq()
+        fallback_client = MagicMock()
+        eng._groq_fallback_client = fallback_client
+        eng._groq_client.audio.transcriptions.create.side_effect = RuntimeError("connection dropped")
+
+        with self.assertLogs("stt", level="ERROR"):
+            with patch("modules.stt.runtime_events.emit") as emit:
+                result = eng._transcribe_groq(self._audio())
+
+        self.assertIsNone(result)
+        eng._groq_client.audio.transcriptions.create.assert_called_once()
+        fallback_client.audio.transcriptions.create.assert_not_called()
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.kwargs["status"], "failed")
+        self.assertEqual(emit.call_args.kwargs["reason"], "error")
+        self.assertEqual(emit.call_args.kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args.kwargs["key_role"], "primary")
+        self.assertFalse(emit.call_args.kwargs["will_retry"])
 
     def test_primary_rate_limit_switches_future_chunks_to_fallback_key(self):
         class RateLimitError(Exception):
@@ -375,13 +401,16 @@ class TestTranscribeGroq(unittest.TestCase):
             AssertionError("primary should not be retried after fallback preference is set"),
         ]
 
-        with patch("modules.stt.runtime_events.emit"):
+        with patch("modules.stt.runtime_events.emit") as emit:
             self.assertEqual(eng._transcribe_groq(self._audio()), "first fallback")
             eng._groq_rate_limited_until = 0.0
             self.assertEqual(eng._transcribe_groq(self._audio()), "second fallback")
 
         self.assertEqual(eng._groq_client.audio.transcriptions.create.call_count, 1)
         self.assertEqual(fallback_client.audio.transcriptions.create.call_count, 2)
+        self.assertEqual(emit.call_args.kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args.kwargs["key_role"], "fallback")
+        self.assertFalse(emit.call_args.kwargs["will_retry"])
 
     def test_fallback_rate_limit_switches_back_to_primary_key(self):
         class RateLimitError(Exception):
@@ -407,8 +436,46 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_count, 2)
         self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
         self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(emit.call_args_list[0].kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args_list[0].kwargs["key_role"], "fallback")
+        self.assertTrue(emit.call_args_list[0].kwargs["will_retry"])
         self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
+        self.assertEqual(emit.call_args_list[1].kwargs["attempt_index"], 2)
+        self.assertEqual(emit.call_args_list[1].kwargs["key_role"], "primary")
+        self.assertFalse(emit.call_args_list[1].kwargs["will_retry"])
         self.assertFalse(eng._groq_prefer_fallback_key)
+
+    def test_zero_cooldown_rate_limits_still_stop_after_one_cross_key_retry(self):
+        from config import cfg
+
+        class RateLimitError(Exception):
+            status_code = 429
+
+        eng = _make_engine_groq()
+        fallback_client = MagicMock()
+        eng._groq_fallback_client = fallback_client
+        eng._groq_client.audio.transcriptions.create.side_effect = RateLimitError()
+        fallback_client.audio.transcriptions.create.side_effect = RateLimitError()
+        original_cooldown = cfg.stt.groq_rate_limit_cooldown_sec
+        object.__setattr__(cfg.stt, "groq_rate_limit_cooldown_sec", 0.0)
+        try:
+            with patch("modules.stt.runtime_events.emit") as emit:
+                result = eng._transcribe_groq(self._audio())
+        finally:
+            object.__setattr__(cfg.stt, "groq_rate_limit_cooldown_sec", original_cooldown)
+
+        self.assertIsNone(result)
+        eng._groq_client.audio.transcriptions.create.assert_called_once()
+        fallback_client.audio.transcriptions.create.assert_called_once()
+        self.assertEqual(emit.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["attempt_index"] for call in emit.call_args_list],
+            [1, 2],
+        )
+        self.assertEqual(
+            [call.kwargs["will_retry"] for call in emit.call_args_list],
+            [True, False],
+        )
 
     def test_rate_limit_cooldown_skips_without_request(self):
         eng = _make_engine_groq()
@@ -422,6 +489,9 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_args.kwargs["status"], "skipped")
         self.assertEqual(emit.call_args.kwargs["reason"], "rate_limit_cooldown")
         self.assertFalse(emit.call_args.kwargs["request_sent"])
+        self.assertEqual(emit.call_args.kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args.kwargs["key_role"], "none")
+        self.assertFalse(emit.call_args.kwargs["will_retry"])
 
     def test_below_volume_emits_skipped_without_request(self):
         eng = _make_engine_groq()
@@ -433,6 +503,9 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_args.kwargs["status"], "skipped")
         self.assertEqual(emit.call_args.kwargs["reason"], "below_volume_threshold")
         self.assertFalse(emit.call_args.kwargs["request_sent"])
+        self.assertEqual(emit.call_args.kwargs["attempt_index"], 1)
+        self.assertEqual(emit.call_args.kwargs["key_role"], "none")
+        self.assertFalse(emit.call_args.kwargs["will_retry"])
         eng._groq_client.audio.transcriptions.create.assert_not_called()
 
     def test_normalizes_before_volume_skip(self):

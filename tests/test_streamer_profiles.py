@@ -139,3 +139,23 @@ def test_stt_glossary_keeps_hades_terms_profile_bound():
 
     assert "챈나" not in general_glossary
     assert "챈나" not in isegye_glossary
+
+
+def test_url_stt_glossary_contains_official_group_terms():
+    glossary = build_stt_glossary("url")
+
+    for term in (
+        "UR:L",
+        "유아렐",
+        "결속아이돌",
+        "모카",
+        "랑코",
+        "마냥",
+        "솜먕",
+        "Chemical Love",
+        "Again",
+        "Wish Me Love",
+        "조금 더 가까이",
+        "사계",
+    ):
+        assert term in glossary

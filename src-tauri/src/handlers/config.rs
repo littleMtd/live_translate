@@ -96,9 +96,8 @@ mod tests {
                 force_cut_seconds: 8,
             },
             translation: TranslationConfig {
-                engine_chain: vec!["claude".into(), "gemini".into(), "google_translate".into()],
+                engine_chain: vec!["openrouter".into(), "groq".into()],
                 model: "claude-sonnet-4-6".into(),
-                gemini_model: "gemini-2.5-flash".into(),
                 google_translate_lang: "zh-TW".into(),
                 target_lang: "zh-TW".into(),
                 max_tokens: 80,
@@ -108,8 +107,6 @@ mod tests {
                 translation_mode: "live".into(),
                 streamer_profile: "hades_chxxnnx".into(),
                 use_profile: true,
-                evolve_enabled: false,
-                evolve_every: 20,
                 slang: HashMap::new(),
             },
             subtitle: SubtitleConfig {

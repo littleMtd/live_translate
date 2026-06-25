@@ -1,6 +1,6 @@
 import os
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from dotenv import load_dotenv
@@ -205,7 +205,7 @@ class _Translation:
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
-    # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu"
+    # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu","url"
     streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
@@ -314,4 +314,69 @@ class _Config:
             )
 
 
+_DASHBOARD_CONFIG_JSON = Path(__file__).parent / "logs" / "live_translate_config.json"
+_DASHBOARD_OVERRIDE_ENV = "LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG"
+
+# Only these dashboard-editable fields (src-frontend ConfigPanel.vue) may override
+# config.py. config.py stays the single source of truth for everything else; the JSON
+# cannot reach any field outside this whitelist.
+# subtitle font is stored as a `font` tuple in config.py but flattened into
+# font_family/font_size/font_style by config_export; the override reverses that.
+_DASHBOARD_OVERRIDE_FIELDS = {
+    "audio": ("vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
+    "stt": ("primary_engine",),
+    "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang"),
+    "subtitle": ("idle_hide_ms", "alpha"),
+}
+_DASHBOARD_OVERRIDE_TOP = ("live_engine",)
+
+
+def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CONFIG_JSON) -> "_Config":
+    """Merge dashboard-edited fields from live_translate_config.json onto ``base``.
+
+    Scoped to the ConfigPanel-editable whitelist. Any read/parse/validation failure
+    falls back to the unmodified ``base`` so a stale or malformed JSON never breaks
+    startup. Applied only when the launching process opts in via the env var (the Tauri
+    "Start Python" button sets it); manual ``python main.py`` runs use pure config.py.
+    """
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return base
+    if not isinstance(data, dict):
+        return base
+
+    section_updates: dict[str, object] = {}
+    for section, fields_ in _DASHBOARD_OVERRIDE_FIELDS.items():
+        sub = data.get(section)
+        if not isinstance(sub, dict):
+            continue
+        changes = {name: sub[name] for name in fields_ if name in sub}
+        if isinstance(changes.get("engine_chain"), list):
+            changes["engine_chain"] = tuple(changes["engine_chain"])
+        if section == "subtitle" and any(
+            key in sub for key in ("font_family", "font_size", "font_style")
+        ):
+            base_font = base.subtitle.font
+            changes["font"] = (
+                sub.get("font_family", base_font[0] if len(base_font) > 0 else "Microsoft JhengHei"),
+                sub.get("font_size", base_font[1] if len(base_font) > 1 else 22),
+                sub.get("font_style", base_font[2] if len(base_font) > 2 else "bold"),
+            )
+        if changes:
+            try:
+                section_updates[section] = replace(getattr(base, section), **changes)
+            except (TypeError, ValueError):
+                return base
+    top_changes = {name: data[name] for name in _DASHBOARD_OVERRIDE_TOP if name in data}
+    if not section_updates and not top_changes:
+        return base
+    try:
+        return replace(base, **section_updates, **top_changes)
+    except (TypeError, ValueError):
+        return base
+
+
 cfg = _Config()
+if os.environ.get(_DASHBOARD_OVERRIDE_ENV):
+    cfg = _apply_dashboard_overrides(cfg)

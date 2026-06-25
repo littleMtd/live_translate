@@ -117,6 +117,23 @@ To add a new engine: see the step-by-step guide in `config.py` (`_Translation.en
 - The subtitle overlay must stay responsive even if translation fails temporarily.
 - `pause_event` should freeze the pipeline and clear queued stale output.
 
+### Runtime diagnostic field semantics
+
+These fields are observational only and must not change routing, retries, or output:
+
+- Every `translation` event carries `translation_mode` from
+  `cfg.translation.translation_mode` (`live` or `clip`). This is required when
+  comparing the live 5-second NVIDIA timeout with the 60-second clip/offline path.
+- Every Groq `stt` event carries `attempt_index`, `key_role`, and `will_retry`.
+  `attempt_index` is 1 for the first key and 2 for the one allowed immediate
+  cross-key retry of the same utterance. `key_role` is the client actually used
+  (`primary`, `fallback`, or `none` when no request can be selected).
+  `will_retry=true` means the emitted failed attempt has already selected an
+  immediate retry on the other key; it does not predict a future retry or success.
+- STT attempts for one audio chunk retain the same `utterance_id`, so attempt rows
+  can be joined to the terminal success/failure without treating attempts as
+  separate dropped subtitles.
+
 ### Pipeline health
 
 The pipeline relies on each stage either making forward progress or shutting the whole graph down — silent zombie threads are a bug. Current guarantees:

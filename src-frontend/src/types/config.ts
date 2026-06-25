@@ -12,7 +12,7 @@ export interface ConfigDto {
 }
 
 export type BackendEngine = 'anthropic' | 'ollama' | 'nvidia'
-export type TranslationEngine = 'gemini' | 'claude' | 'google_translate' | 'ollama' | 'nvidia'
+export type TranslationEngine = 'claude' | 'google_translate' | 'ollama' | 'nvidia' | 'openrouter' | 'groq'
 
 export interface AudioConfig {
   sample_rate: number
@@ -51,7 +51,6 @@ export interface SplitterConfig {
 export interface TranslationConfig {
   engine_chain: TranslationEngine[]
   model: string
-  gemini_model: string
   google_translate_lang: string
   target_lang: string
   max_tokens: number
@@ -61,8 +60,6 @@ export interface TranslationConfig {
   translation_mode: 'live' | 'clip'
   streamer_profile: string
   use_profile: boolean
-  evolve_enabled: boolean
-  evolve_every: number
   slang: Record<string, string>
 }
 

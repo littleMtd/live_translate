@@ -197,7 +197,6 @@ _QUALITY_PENALTIES = {
     "low_target_cjk": 0.4,
     "target_has_hangul": 0.4,
     "repetitive_target": 0.4,
-    "target_high_latin": 0.3,
     "very_short_target": 0.3,
     "target_has_japanese": 0.25,
     "long_target_ratio": 0.2,

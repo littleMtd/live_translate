@@ -160,6 +160,9 @@ def test_build_labeling_sample_uniform_random_and_joins_audio_and_confidence(tmp
 
     expected = random.Random(123).sample(list(range(1, 7)), 3)
     assert sample["sampling"]["method"] == "uniform_random_without_replacement"
+    assert sample["speaker_policy"] == "host-primary"
+    assert "host_only" in sample["speaker_source_options"]
+    assert any("Host-primary" in rule for rule in sample["annotation_rules"])
     assert sample["sampling"]["raw_population_size"] == 6
     assert sample["sampling"]["excluded_missing_source_id_population"] == 0
     assert sample["sampling"]["population_size"] == 6

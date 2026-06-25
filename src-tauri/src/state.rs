@@ -16,7 +16,8 @@ impl AppState {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct ConfigDto {
     pub audio: AudioConfig,
     pub stt: SttConfig,
@@ -30,7 +31,8 @@ pub struct ConfigDto {
     pub nvidia: NvidiaConfig,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct AudioConfig {
     pub sample_rate: u32,
     pub channels: u32,
@@ -45,7 +47,8 @@ pub struct AudioConfig {
     pub queue_maxsize: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct SttConfig {
     pub primary_engine: String,
     pub sensevoice_model: String,
@@ -61,17 +64,18 @@ pub struct SttConfig {
     pub max_repeat_ratio: f32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct SplitterConfig {
     pub min_wait_seconds: u32,
     pub force_cut_seconds: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct TranslationConfig {
     pub engine_chain: Vec<String>,
     pub model: String,
-    pub gemini_model: String,
     pub google_translate_lang: String,
     pub target_lang: String,
     pub max_tokens: u32,
@@ -81,12 +85,11 @@ pub struct TranslationConfig {
     pub translation_mode: String,
     pub streamer_profile: String,
     pub use_profile: bool,
-    pub evolve_enabled: bool,
-    pub evolve_every: u32,
     pub slang: HashMap<String, String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct SubtitleConfig {
     pub idle_hide_ms: u32,
     pub font_family: String,
@@ -110,20 +113,23 @@ pub struct SubtitleConfig {
     pub queue_maxsize: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct DatabaseConfig {
     pub db_path: String,
     pub db_cache_max_rows: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct OllamaConfig {
     pub base_url: String,
     pub model: String,
     pub timeout: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct NvidiaConfig {
     pub model: String,
     pub timeout: u32,
@@ -167,9 +173,8 @@ mod tests {
                 force_cut_seconds: 8,
             },
             translation: TranslationConfig {
-                engine_chain: vec!["claude".into(), "gemini".into(), "google_translate".into()],
+                engine_chain: vec!["openrouter".into(), "groq".into()],
                 model: "claude-sonnet-4-6".into(),
-                gemini_model: "gemini-2.5-flash".into(),
                 google_translate_lang: "zh-TW".into(),
                 target_lang: "zh-TW".into(),
                 max_tokens: 80,
@@ -179,8 +184,6 @@ mod tests {
                 translation_mode: "live".into(),
                 streamer_profile: "hades_chxxnnx".into(),
                 use_profile: true,
-                evolve_enabled: false,
-                evolve_every: 20,
                 slang: HashMap::from([("ㅋㅋ".into(), "哈哈".into())]),
             },
             subtitle: SubtitleConfig {
@@ -235,7 +238,7 @@ mod tests {
         let cfg = sample_config();
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("zh-TW"));
-        assert!(json.contains("gemini"));
+        assert!(json.contains("openrouter"));
     }
 
     #[test]
@@ -278,5 +281,34 @@ mod tests {
         *state.config_cache.lock().unwrap() = Some(sample_config());
         *state.config_cache.lock().unwrap() = None;
         assert!(state.config_cache.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn config_dto_tolerates_missing_fields_via_serde_default() {
+        // config.py is the single source of truth and drifts over time; a missing
+        // field (or whole section) must fall back to default, not break the dashboard.
+        // This is the regression guard for the gemini_model/evolve_* drift that made
+        // get_config fail at runtime.
+        let partial = r#"{"stt":{"primary_engine":"groq"},"subtitle":{"font_size":24}}"#;
+        let cfg: ConfigDto = serde_json::from_str(partial).unwrap();
+        assert_eq!(cfg.stt.primary_engine, "groq");
+        assert_eq!(cfg.subtitle.font_size, 24);
+        // a section absent from the JSON defaults rather than erroring
+        assert_eq!(cfg.translation.max_tokens, 0);
+        assert!(cfg.translation.engine_chain.is_empty());
+    }
+
+    #[test]
+    fn config_dto_ignores_unknown_exported_fields() {
+        // utils/config_export.py dumps every non-secret cfg field (openrouter_*,
+        // groq_translation_*, splitter.segment_gap_*, ...). Unknown fields must be
+        // ignored, not rejected.
+        let with_extra = r#"{
+            "translation": {"max_tokens": 80, "openrouter_model": "x", "groq_translation_timeout": 12},
+            "splitter": {"min_wait_seconds": 3, "force_cut_seconds": 8, "segment_gap_seconds": 0.6}
+        }"#;
+        let cfg: ConfigDto = serde_json::from_str(with_extra).unwrap();
+        assert_eq!(cfg.translation.max_tokens, 80);
+        assert_eq!(cfg.splitter.force_cut_seconds, 8);
     }
 }

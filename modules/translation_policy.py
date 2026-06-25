@@ -182,8 +182,9 @@ class TranslationPolicy:
 
         word_count = _word_counts(words)
 
-        repeat_ratio = max(word_count.values()) / len(words) if words else 0
-        if repeat_ratio > 0.6:
+        max_repeat_count = max(word_count.values()) if words else 0
+        repeat_ratio = max_repeat_count / len(words) if words else 0
+        if max_repeat_count >= 3 and repeat_ratio > 0.6:
             log.debug(
                 "STT garbage detected: excessive repetition (ratio=%.2f) in '%s'",
                 repeat_ratio,

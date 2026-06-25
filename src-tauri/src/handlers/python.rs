@@ -1,4 +1,4 @@
-use crate::paths::{main_py_path, python_exe};
+use crate::paths::{app_root, main_py_path, python_exe};
 use crate::state::AppState;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -6,7 +6,21 @@ use std::thread;
 use tauri::State;
 
 pub(crate) fn is_python_running(state: &AppState) -> bool {
-    state.python_process.lock().unwrap().is_some()
+    let mut guard = state.python_process.lock().unwrap();
+    match guard.as_mut() {
+        // Reap the child: if main.py has exited or crashed, clear the slot so the
+        // dashboard stops showing Online and Start is allowed again. Without try_wait()
+        // a dead process still reads as running.
+        Some(child) => match child.try_wait() {
+            Ok(Some(_status)) => {
+                *guard = None;
+                false
+            }
+            Ok(None) => true,
+            Err(_) => true,
+        },
+        None => false,
+    }
 }
 
 pub(crate) fn do_stop_python(state: &AppState) -> Result<String, String> {
@@ -27,9 +41,17 @@ pub fn start_python(state: State<AppState>) -> Result<String, String> {
         return Err("Python is already running".to_string());
     }
 
+    // Run from the project root so the pipeline's cwd-relative paths (logs/, data/,
+    // logs/audio_dump/, ...) resolve exactly as they do when launched manually with
+    // `cd live_translate && python main.py`. Without this the spawned process inherits
+    // Tauri's cwd (src-tauri/ in dev) and the pipeline cannot find its data dirs.
     let mut proc = Command::new(python_exe())
         .arg("-u")
         .arg(main_py_path())
+        .current_dir(app_root())
+        // Opt the pipeline into applying dashboard-saved config overrides
+        // (config.py reads logs/live_translate_config.json only when this is set).
+        .env("LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -100,5 +122,33 @@ mod tests {
         let exe = python_exe();
         // Either the venv path or the fallback "python" string
         assert!(!exe.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn reaps_exited_child_and_allows_restart() {
+        use std::process::Command;
+        let state = AppState::new();
+        // A process that exits immediately.
+        let spawned = if cfg!(windows) {
+            Command::new("cmd").args(["/C", "exit", "0"]).spawn()
+        } else {
+            Command::new("true").spawn()
+        };
+        let Ok(child) = spawned else {
+            return; // spawn unavailable in this environment; skip
+        };
+        *state.python_process.lock().unwrap() = Some(child);
+
+        // The child exits within milliseconds; is_python_running must reap it.
+        let mut reaped = false;
+        for _ in 0..50 {
+            if !is_python_running(&state) {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(reaped, "an exited child must be reaped to false");
+        assert!(state.python_process.lock().unwrap().is_none());
     }
 }

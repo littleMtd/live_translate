@@ -152,6 +152,7 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["retry_count"], 0)
         self.assertEqual(kwargs["retry_reason"], "")
         self.assertFalse(kwargs["starts_with_dependency_marker"])
+        self.assertEqual(kwargs["translation_mode"], "live")
 
     def test_translation_event_carries_corrections(self):
         sentence_q = queue.Queue()

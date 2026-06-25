@@ -405,8 +405,13 @@ class STTEngine:
             self._last_sensevoice_error = True
             return None
 
-    def _transcribe_groq(self, audio: np.ndarray) -> str | None:
+    def _transcribe_groq(self, audio: np.ndarray, *, _retrying_other_key: bool = False) -> str | None:
         started = time.monotonic()
+        # Diagnostic-only attempt metadata.  One TranscriptionEvent/utterance may
+        # make at most one immediate cross-key retry; these fields make attempts
+        # joinable without changing selection, retry, or cooldown behavior.
+        self._current_groq_attempt_index = 2 if _retrying_other_key else 1
+        self._current_groq_key_role = "none"
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
         self._last_segments = ()
@@ -482,6 +487,7 @@ class STTEngine:
             buf.name = "audio.wav"
             dynamic_prompt = self._build_groq_prompt()
 
+            self._current_groq_key_role = "fallback" if using_fallback else "primary"
             request_sent = True
             resp = active_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
@@ -600,7 +606,8 @@ class STTEngine:
                     self._groq_fallback_rate_limited_until = cooldown_end
                     self._groq_prefer_fallback_key = False
                     if (
-                        self._groq_client is not None
+                        not _retrying_other_key
+                        and self._groq_client is not None
                         and time.monotonic() >= self._groq_rate_limited_until
                     ):
                         log.warning(
@@ -614,15 +621,17 @@ class STTEngine:
                             reason=reason,
                             request_sent=request_sent,
                             audio_stats=audio_stats,
+                            will_retry=True,
                         )
-                        return self._transcribe_groq(audio)
+                        return self._transcribe_groq(audio, _retrying_other_key=True)
                     log.warning("Groq STT fallback key rate limited; dropping chunk: %s", e)
                 else:
                     self._groq_rate_limited_until = cooldown_end
                     if self._groq_fallback_client is not None:
                         self._groq_prefer_fallback_key = True
                     if (
-                        self._groq_fallback_client is not None
+                        not _retrying_other_key
+                        and self._groq_fallback_client is not None
                         and time.monotonic() >= self._groq_fallback_rate_limited_until
                     ):
                         log.warning(
@@ -636,8 +645,9 @@ class STTEngine:
                             reason=reason,
                             request_sent=request_sent,
                             audio_stats=audio_stats,
+                            will_retry=True,
                         )
-                        return self._transcribe_groq(audio)
+                        return self._transcribe_groq(audio, _retrying_other_key=True)
                     log.warning("Groq STT rate limited; dropping chunk without fallback retry: %s", e)
             else:
                 log.error("Groq STT error: %s", e)
@@ -730,6 +740,7 @@ class STTEngine:
         avg_logprob: float | None = None,
         no_speech_prob: float | None = None,
         audio_stats: dict[str, float | bool] | None = None,
+        will_retry: bool = False,
     ) -> None:
         audio_stats = audio_stats or {}
         # Prompt budget only reflects this request; on skipped paths no prompt
@@ -743,6 +754,9 @@ class STTEngine:
             status=status,
             reason=reason,
             request_sent=request_sent,
+            attempt_index=int(getattr(self, "_current_groq_attempt_index", 1)),
+            key_role=str(getattr(self, "_current_groq_key_role", "none")),
+            will_retry=bool(will_retry),
             audio_seconds=_audio_seconds(audio),
             latency_ms=round((time.monotonic() - started) * 1000, 2),
             text_len=len(text or ""),

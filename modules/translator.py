@@ -1002,7 +1002,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             # (a gap would stall the in-order emit loop forever).
             text = ""
             incomplete = False
-            metadata: dict = {}
+            translation_mode = str(
+                getattr(cfg.translation, "translation_mode", "") or ""
+            )
+            metadata: dict = {"translation_mode": translation_mode}
             try:
                 text = sentence_text(item)
                 incomplete = sentence_incomplete(item)
@@ -1015,6 +1018,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         "dependency_marker": marker,
                         "profile_id": cfg.active_streamer_profile,
                         "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
+                        # Diagnostic-only: distinguishes the 5s live timeout path
+                        # from the 60s clip/offline path in latency artifacts.
+                        "translation_mode": translation_mode,
                     }
                 )
                 worker_translator = getattr(worker_state, "translator", None)
@@ -1079,7 +1085,12 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     incomplete=False,
                 ),
                 0.0,
-                {"sequence_id": seq},
+                {
+                    "sequence_id": seq,
+                    "translation_mode": str(
+                        getattr(cfg.translation, "translation_mode", "") or ""
+                    ),
+                },
                 now,
                 now,
                 now,

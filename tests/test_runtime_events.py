@@ -134,6 +134,21 @@ def test_translation_quality_observes_target_scripts():
     assert "target_has_japanese" in result["quality_flags"]
 
 
+def test_translation_quality_target_high_latin_is_diagnostic_only():
+    result = translation_quality(
+        "\uc624\ub298 \uacf5\uac1c\ub41c \uc0c8\ub85c\uc6b4 \ub178\ub798\uc640 \uc804\uccb4 "
+        "\uc774\ubca4\ud2b8 \uc774\ub984\uc744 \ud558\ub098\uc529 \uc790\uc138\ud788 "
+        "\uc18c\uac1c\ud558\uace0 \uc788\uc2b5\ub2c8\ub2e4",
+        "\u4eca\u5929\u516c\u958b\u7684\u65b0\u6b4c\u662f Smile For You\uff0c"
+        "\u53e6\u5916\u9084\u63d0\u5230 JMT \u9019\u500b\u540d\u7a31\uff0c"
+        "\u9019\u4e9b\u5c08\u6709\u540d\u8a5e\u4fdd\u7559\u82f1\u6587\u3002",
+    )
+
+    assert "target_high_latin" in result["quality_flags"]
+    assert result["quality_score"] == 1.0
+    assert result["quality_severity"] == "ok"
+
+
 def test_translation_quality_clean_output_scores_high():
     result = translation_quality("안녕하세요 오늘 날씨 좋네요", "你好，今天天氣真好")
 

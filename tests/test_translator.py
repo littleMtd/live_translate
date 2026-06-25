@@ -2493,7 +2493,8 @@ class TestMalformedItemDoesNotStallEmit(unittest.TestCase):
         stop = threading.Event()
         engine = _mock_engine("primary", "\u4f60\u597d")
 
-        with patch.object(translator_module, "_build_engine_chain", return_value=[engine]):
+        with patch.object(translator_module, "_build_engine_chain", return_value=[engine]), \
+                patch.object(translator_module, "runtime_events") as events:
             translator_start(sentence_q, subtitle_q, stop)
             sentence_q.put(_Boom())   # seq 0 — translate_item raises on sentence_text
             sentence_q.put({"text": "\uc548\ub155\ud558\uc138\uc694 \uc624\ub298 \ubc29\uc1a1 \uc2dc\uc791\ud569\ub2c8\ub2e4", "incomplete": False})
@@ -2509,6 +2510,9 @@ class TestMalformedItemDoesNotStallEmit(unittest.TestCase):
             stop.set()
 
         self.assertEqual(result, "\u4f60\u597d", "good item after malformed item must still emit")
+        emitted = [call.kwargs for call in events.emit.call_args_list]
+        self.assertGreaterEqual(len(emitted), 2)
+        self.assertTrue(all(event["translation_mode"] == "live" for event in emitted))
 
 
 if __name__ == "__main__":

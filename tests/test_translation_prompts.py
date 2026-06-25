@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "b82bbd3cbd38862bfb5f5c31d00c29302c5767bda3d843122c2b973424ec8d89"
+_TRANSLATION_PROFILE_DATA_HASH = "eab3d93aa022b717e54c7e20be5a82a8bf7bf2ebd03edef34eb144941025d6ce"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -89,6 +89,28 @@ def test_stellive_translation_profiles_contain_official_romanization():
         assert "Yuni" in profile
         assert "楓之谷" in profile
         assert "투니버스 메들리" in profile
+
+
+def test_url_translation_profiles_contain_official_group_terms():
+    required_terms = (
+        "UR:L",
+        "유아렐",
+        "결속아이돌",
+        "모카",
+        "랑코",
+        "마냥",
+        "솜먕",
+        "Chemical Love",
+        "Again",
+        "Wish Me Love",
+        "조금 더 가까이",
+        "사계",
+    )
+
+    for qwen in (False, True):
+        profile = get_translation_profile("url", qwen=qwen)
+        for term in required_terms:
+            assert term in profile
 
 
 def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):

@@ -22,6 +22,15 @@ DEFAULT_CONTEXT_TAG_OPTIONS = [
     "unclear_audio",
     "over_attributed_chunks",
 ]
+DEFAULT_SPEAKER_SOURCE_OPTIONS = [
+    "host_only",
+    "clip_or_other_speaker",
+    "host_over_clip",
+    "multi_streamer",
+    "speaker_unclear",
+    "wrong_speaker_selected",
+    "audio_source_mismatch",
+]
 MAX_PRIOR_TRANSLATION_REFERENCES = 3
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -577,8 +586,19 @@ def build_labeling_sample(
 
     return {
         "labeling_sample_schema": 1,
-        "annotation_goal": "Classify each translation as a_translation_error, b_stt_error, both, ok, or unclear.",
+        "speaker_policy": "host-primary",
+        "annotation_goal": (
+            "Classify each translation under host-primary policy: host/main speaker has "
+            "priority; when host is silent, clear clip/game/other speech can be valid source."
+        ),
         "annotation_rules": [
+            "Host-primary: if host/main speaker is audible, judge against host speech.",
+            "If host is silent and clip/game/other speaker is the only clear speech, judge against that speech.",
+            "If the subtitle translates clip/game/other-speaker audio while host is speaking, mark a speaker/source error tag.",
+            "For host_over_clip overlap, treat the host speech as the correct source.",
+            "Host silence means no intelligible host speech in the relevant chunks; quiet words, short phrases, clear fillers, or overlap still count as host audible.",
+            "Laughter, humming, breathing, or unintelligible murmurs do not by themselves count as host speech; use speaker_unclear or unclear if unsure.",
+            "Report host-speech, clip-when-host-silent, overlap/wrong-speaker, and speaker-unclear cases separately; do not mix their rescue rates.",
             "Listen to every source_chunks[].audio_path before assigning b_stt_error.",
             "Treat source_utterance_ids as current source; evidence_source_utterance_ids preserves carry-forward evidence.",
             "Do not estimate rates from hand-picked or quality-filtered samples.",
@@ -591,6 +611,7 @@ def build_labeling_sample(
             "unclear",
         ],
         "context_tag_options": DEFAULT_CONTEXT_TAG_OPTIONS,
+        "speaker_source_options": DEFAULT_SPEAKER_SOURCE_OPTIONS,
         "sampling": {
             "method": "uniform_random_without_replacement",
             "events_path": str(events_path.resolve(strict=False)),
