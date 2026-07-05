@@ -142,19 +142,34 @@ def ocr_lines(ocr, image_path: Path, min_conf: float) -> list[tuple[str, tuple[i
         boxes.append((bbox, text))
     # group by row: boxes whose vertical centers are close belong to one line
     boxes.sort(key=lambda item: item[0][1] + item[0][3] / 2)
-    lines: list[list[tuple[tuple, str]]] = []
+    rows: list[list[tuple[tuple, str]]] = []
     for bbox, text in boxes:
         cy = bbox[1] + bbox[3] / 2
-        if lines:
-            last = lines[-1]
+        if rows:
+            last = rows[-1]
             last_cy = sum(b[1] + b[3] / 2 for b, _ in last) / len(last)
             if abs(cy - last_cy) <= max(12, bbox[3] * 0.7):
                 last.append((bbox, text))
                 continue
-        lines.append([(bbox, text)])
+        rows.append([(bbox, text)])
+    # within a row, only join boxes that are horizontally adjacent — an
+    # unbounded join merged unrelated UI (player clock + donation text,
+    # "릴파 2.3 18.4") into one garbage line in the 0705 test sessions
+    lines: list[list[tuple[tuple, str]]] = []
+    for row in rows:
+        row.sort(key=lambda item: item[0][0])
+        for bbox, text in row:
+            if lines:
+                last = lines[-1]
+                pb = last[-1][0]
+                gap = bbox[0] - (pb[0] + pb[2])
+                same_row = abs((bbox[1] + bbox[3] / 2) - (pb[1] + pb[3] / 2)) <= max(12, bbox[3] * 0.7)
+                if same_row and gap <= max(28, bbox[3] * 1.5):
+                    last.append((bbox, text))
+                    continue
+            lines.append([(bbox, text)])
     joined = []
     for line in lines:
-        line.sort(key=lambda item: item[0][0])
         text = " ".join(t for _, t in line)
         left = min(b[0] for b, _ in line)
         top = min(b[1] for b, _ in line)
@@ -169,19 +184,35 @@ def ocr_lines(ocr, image_path: Path, min_conf: float) -> list[tuple[str, tuple[i
 HANGUL_RE = re.compile(r"[가-힣]")
 JUNK_RE = re.compile(r"^[\d\s:./%°C~\-|]+$")  # clocks, dates, meters
 
+# Timecodes / dates / progress bars that OCR picks up from player chrome and
+# stream overlays and that pollute both the source and the dedup key
+# (observed 0705: "00:00:10", "0:01", "01:44:16/02:47:32", "26-06-30 01-10-03").
+_TIMECODE_RE = re.compile(
+    r"\d{1,2}:\d{2}(?::\d{2})?(?:\s*/\s*\d{1,2}:\d{2}(?::\d{2})?)?"
+    r"|\d{2,4}[-.]\d{2}[-.]\d{2}(?:[ .]\d{2}[-:]\d{2}[-:]\d{2})?"
+)
+
+
+def strip_timecodes(text: str) -> str:
+    return re.sub(r"\s{2,}", " ", _TIMECODE_RE.sub(" ", text)).strip()
+
 
 def is_candidate(text: str) -> bool:
     if len(text.replace(" ", "")) < 3:
         return False
     if JUNK_RE.match(text):
         return False
-    if not HANGUL_RE.search(text):
+    # need at least two Hangul syllables: one lone char is OCR noise
+    # ("모We're bie", "[모] Now then")
+    if len(HANGUL_RE.findall(text)) < 2:
         return False
     return True
 
 
 def norm_text(text: str) -> str:
-    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).lower()
+    # drop digits too: OCR jitter renders the same donation's numbers
+    # differently frame to frame ("100개" / "!100개" / "1007100")
+    return re.sub(r"[\s\W_\d]+", "", text, flags=re.UNICODE).lower()
 
 
 class RecencyCache:
@@ -192,15 +223,38 @@ class RecencyCache:
         self.similarity = similarity
         self.entries: list[tuple[str, float]] = []
 
-    def seen(self, norm: str, now: float) -> bool:
-        self.entries = [(n, t) for n, t in self.entries if now - t <= self.ttl_s]
-        for cached, _ in self.entries:
-            if cached == norm or SequenceMatcher(None, cached, norm).ratio() >= self.similarity:
+    @staticmethod
+    def _same(a: str, b: str, threshold: float) -> bool:
+        if a == b:
+            return True
+        if SequenceMatcher(None, a, b).ratio() >= threshold:
+            return True
+        # containment: OCR truncation yields fragments of an already-seen
+        # line ("백연호님별풍선개감" vs "호님별풍선개감") that plain ratio
+        # misses once lengths diverge
+        short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+        if len(short) >= 6:
+            match = SequenceMatcher(None, short, long_).find_longest_match(
+                0, len(short), 0, len(long_))
+            if match.size / len(short) >= 0.8:
                 return True
         return False
 
+    def seen(self, norm: str, now: float) -> bool:
+        self.entries = [(n, t) for n, t in self.entries if now - t <= self.ttl_s]
+        return any(self._same(cached, norm, self.similarity) for cached, _ in self.entries)
+
     def add(self, norm: str, now: float) -> None:
         self.entries.append((norm, now))
+
+
+# Model meta-responses that must never be shown as a translation
+# (observed 0705: qwen answering "（輸出零個字元）" to OCR garbage).
+_META_TARGET_RE = re.compile(r"^[（(][^）)]{0,30}[）)]$")
+
+
+def clean_target(target: str) -> str:
+    return "" if _META_TARGET_RE.match(target.strip()) else target
 
 
 # ---------------------------------------------------------------- worker
@@ -261,6 +315,7 @@ def worker_loop(args, ui_queue: queue.Queue, stop: threading.Event, shared: dict
                 now = time.monotonic()
                 fresh: list[tuple[int, str, tuple]] = []
                 for line, bbox in ocr_lines(ocr, tmp_png, args.min_conf):
+                    line = strip_timecodes(line)
                     if not is_candidate(line):
                         continue
                     norm = norm_text(line)
@@ -279,7 +334,7 @@ def worker_loop(args, ui_queue: queue.Queue, stop: threading.Event, shared: dict
                         target = ""
                         if translator is not None:
                             try:
-                                target = translator.translate(line) or ""
+                                target = clean_target(translator.translate(line) or "")
                             except Exception as exc:  # keep panel alive on API hiccups
                                 target = f"[翻譯失敗: {type(exc).__name__}]"
                             ui_queue.put(("update", item_id, line, target))
