@@ -1627,8 +1627,8 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_streamer_name_rendering_boundary_positive_cases(self):
         cases = (
-            ("챈나가 멤버 섭외", "快叫醒-chan", "快叫醒Chxxnnx"),
-            ("챈나님 오늘 와요", "謝謝-chan", "謝謝Chxxnnx"),
+            ("챈나가 멤버 섭외", "快叫醒-chan", "快叫醒Chaenna"),
+            ("챈나님 오늘 와요", "謝謝-chan", "謝謝Chaenna"),
             ("성태는 지금 와요", "Sungtae哥來了", "KimSungtae來了"),
             ("성태형 불러요", "Sungtae老師來了", "KimSungtae來了"),
             ("봉준이 왔어요", "Bongjun來了", "Kim Bongjun來了"),
@@ -1641,9 +1641,9 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("김띵귤 기강 잡아라", "金叮菊管管紀律", "Singgyul管管紀律"),
             ("띵귤이 왔어요", "TINGGYUL來了", "Singgyul來了"),
             ("띵띵이도 친구 많아", "Singgyul朋友很多", "띵띵이朋友很多"),
-            ("김챗나 방", "金chat的房間", "Chxxnnx的房間"),
-            ("챈나가 왔어요", "Chaenna來了", "Chxxnnx來了"),
-            ("챈나가 왔어요", "CHXXNNX來了", "Chxxnnx來了"),
+            ("김챗나 방", "金chat的房間", "Chaenna的房間"),
+            ("챈나가 왔어요", "Chxxnnx來了", "Chaenna來了"),
+            ("챈나가 왔어요", "CHXXNNX來了", "Chaenna來了"),
             ("고세구가 왔어요", "高世久來了", "Gosegu來了"),
         )
 
@@ -1654,7 +1654,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_streamer_name_rendering_hangul_self_forms(self):
         cases = (
-            ("챈나가 멤버 섭외", "챈나好可愛", "Chxxnnx好可愛"),
+            ("챈나가 멤버 섭외", "챈나好可愛", "Chaenna好可愛"),
             ("봉준이 왔어요", "봉준來了", "Kim Bongjun來了"),
             ("김봉준이 말했어요", "김봉준說了", "Kim Bongjun說了"),
             ("성태는 지금 와요", "성태來了", "KimSungtae來了"),
@@ -1731,7 +1731,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_streamer_name_rendering_is_idempotent(self):
         cases = (
-            ("챈나가 왔어요", "-chan", "Chxxnnx"),
+            ("챈나가 왔어요", "-chan", "Chaenna"),
             ("봉준이 왔어요", "Bongjun", "Kim Bongjun"),
             ("성태는 왔어요", "Sungtae哥", "KimSungtae"),
             ("키마는 왔어요", "Kima", "Kyma"),
@@ -1748,12 +1748,12 @@ class TestTranslateOptimizations(unittest.TestCase):
 
             self.assertEqual(_apply_source_aware_corrections("봉준이 왔어요", "Kim Bongjun"), "Kim Bongjun")
             self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "KimSungtae"), "KimSungtae")
-            self.assertEqual(_apply_source_aware_corrections("챈나가 왔어요", "Chxxnnx好可愛"), "Chxxnnx好可愛")
+            self.assertEqual(_apply_source_aware_corrections("챈나가 왔어요", "Chaenna好可愛"), "Chaenna好可愛")
             self.assertEqual(_apply_source_aware_corrections("키마는 왔어요", "Kyma待機中"), "Kyma待機中")
 
     def test_streamer_name_rendering_self_forms_are_idempotent(self):
         cases = (
-            ("챈나가 왔어요", "챈나好可愛", "Chxxnnx好可愛"),
+            ("챈나가 왔어요", "챈나好可愛", "Chaenna好可愛"),
             ("봉준이 왔어요", "봉준來了", "Kim Bongjun來了"),
             ("김봉준이 말했어요", "김봉준說了", "Kim Bongjun說了"),
             ("성태는 왔어요", "성태來了", "KimSungtae來了"),
@@ -1772,8 +1772,8 @@ class TestTranslateOptimizations(unittest.TestCase):
         cases = (
             (
                 "챈나가 왔어요",
-                "-chan ... Chxxnnx ... -chan",
-                "Chxxnnx ... Chxxnnx ... Chxxnnx",
+                "-chan ... Chaenna ... -chan",
+                "Chaenna ... Chaenna ... Chaenna",
                 ("-chan", "-Chan", "챈나"),
             ),
             (
@@ -1790,9 +1790,9 @@ class TestTranslateOptimizations(unittest.TestCase):
             ),
             (
                 "챈나가 왔어요",
-                "챈나 ... Chxxnnx ... 챈나",
-                "Chxxnnx ... Chxxnnx ... Chxxnnx",
-                ("챈나", "ChxxnnxChxxnnx"),
+                "챈나 ... Chaenna ... 챈나",
+                "Chaenna ... Chaenna ... Chaenna",
+                ("챈나", "ChaennaChaenna"),
             ),
         )
 
@@ -1808,7 +1808,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_streamer_name_rendering_already_canonical_only_is_stable(self):
         cases = (
-            ("챈나가 왔어요", "Chxxnnx"),
+            ("챈나가 왔어요", "Chaenna"),
             ("봉준이 왔어요", "Kim Bongjun"),
             ("성태는 왔어요", "KimSungtae"),
         )
@@ -1825,9 +1825,9 @@ class TestTranslateOptimizations(unittest.TestCase):
         cases = (
             (
                 "챈나가 왔어요",
-                "Chxxnnx好可愛",
-                "Chxxnnx好可愛",
-                ("ChxxnnxChxxnnx",),
+                "Chaenna好可愛",
+                "Chaenna好可愛",
+                ("ChaennaChaenna",),
             ),
             (
                 "봉준이 왔어요",
@@ -1867,7 +1867,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_streamer_name_rendering_mixed_forms_remain_source_and_profile_gated(self):
         with _active_translation_profile("hades_chxxnnx"):
-            target = "-chan ... Chxxnnx ... -chan"
+            target = "-chan ... Chaenna ... -chan"
             self.assertEqual(
                 _apply_source_aware_corrections("오늘 방송 재미있다", target),
                 target,

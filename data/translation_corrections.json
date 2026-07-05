@@ -725,15 +725,15 @@
         "김챔나",
         "챗나",
         "챔나",
-        "Chaenna",
-        "CHXXNNX",
         "Chxxnnx",
+        "CHXXNNX",
+        "Chaenna",
         "첸나",
         "찬나"
       ],
       "wrong_forms": [
         "챈나",
-        "Chaenna",
+        "Chxxnnx",
         "CHXXNNX",
         "-chan",
         "-Chan",
@@ -753,7 +753,7 @@
         "챔나",
         "찬나"
       ],
-      "canonical": "Chxxnnx"
+      "canonical": "Chaenna"
     },
     {
       "scope": "hades_chxxnnx",

@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "eab3d93aa022b717e54c7e20be5a82a8bf7bf2ebd03edef34eb144941025d6ce"
+_TRANSLATION_PROFILE_DATA_HASH = "a84e789c6340f60dde5a36136ff7fb014a85c61d6da3f1819d80d1d5fb111410"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -45,8 +45,8 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
 
 def test_hades_translation_profiles_contain_glossary_mappings():
     required_terms = (
-        "Chxxnnx",
         "Chaenna",
+        "Chxxnnx",
         "CHXXNNX",
         "Sompunch",
         "Yeon Chorok",
