@@ -595,7 +595,7 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
 
 
 class TestOpenRouterFallbackChain(unittest.TestCase):
-    def test_nvidia_backend_uses_openrouter_before_groq_fallback(self):
+    def test_nvidia_backend_uses_groq_before_openrouter_fallback(self):
         from config import cfg
 
         class FakeEngine:
@@ -634,7 +634,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         original_live_engine = cfg.live_engine
         try:
             object.__setattr__(cfg.translation, "translation_mode", "live")
-            object.__setattr__(cfg.translation, "engine_chain", ("openrouter", "groq"))
+            object.__setattr__(cfg.translation, "engine_chain", ("groq", "openrouter"))
             object.__setattr__(cfg, "live_engine", "nvidia")
             with patch.object(translation_engines_module, "NvidiaEngine", FakeNvidiaEngine), \
                  patch.object(translation_engines_module, "OpenRouterTranslationEngine", FakeOpenRouterEngine), \
@@ -645,7 +645,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             object.__setattr__(cfg.translation, "engine_chain", original_chain)
             object.__setattr__(cfg, "live_engine", original_live_engine)
 
-        self.assertEqual([engine.engine_name for engine in engines], ["nvidia", "openrouter", "groq"])
+        self.assertEqual([engine.engine_name for engine in engines], ["nvidia", "groq", "openrouter"])
 
 
 # ---------------------------------------------------------------------------

@@ -153,7 +153,10 @@ class _Translation:
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
     # Fallback chain when live_engine="nvidia" times out.
-    engine_chain:   tuple        = ("openrouter", "groq")
+    # groq first: runtime data (0620-0626) shows openrouter completes at
+    # p50 ~12s every day it is used — useless for live subtitles — while
+    # groq completes at ~1s. openrouter stays as the last resort.
+    engine_chain:   tuple        = ("groq", "openrouter")
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
