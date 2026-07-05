@@ -162,6 +162,9 @@ def main():
                       help="run STT + splitter only, no translation API calls")
     mode.add_argument("--listen", action="store_true",
                       help="listen mode for Korean lyrics/music: STT-only with relaxed filters")
+    parser.add_argument("--donation-ocr", action="store_true",
+                        help="also launch the donation OCR translation panel "
+                             "(donation_ocr/app.py) as a side process")
     args = parser.parse_args()
 
     stt_only = args.stt_only or args.listen
@@ -180,6 +183,16 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
 
     log.info("Starting pipeline… (stt-only=%s, listen=%s)", stt_only, args.listen)
+
+    ocr_proc = None
+    if args.donation_ocr:
+        # Side process, not a pipeline stage. It runs its own Translator in
+        # DB-less mode (no SQLite/history-file access), so it never contends
+        # with this process's translation DB writes.
+        import subprocess
+        app_path = Path(__file__).parent / "donation_ocr" / "app.py"
+        ocr_proc = subprocess.Popen([sys.executable, str(app_path)])
+        log.info("Donation OCR panel launched (pid=%s)", ocr_proc.pid)
 
     all_queues = [audio_queue, text_queue, sentence_queue, subtitle_queue]
 
@@ -210,6 +223,9 @@ def main():
         subtitle_display.start(subtitle_queue, stop_event, pause_event, all_queues)
 
     _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
+    if ocr_proc is not None and ocr_proc.poll() is None:
+        ocr_proc.terminate()
+        log.info("Donation OCR panel terminated")
     log.info("Shutdown complete")
 
 
