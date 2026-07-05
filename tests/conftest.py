@@ -54,3 +54,29 @@ def _isolate_db():
         yield
     finally:
         _db_module._db = original
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_logs(tmp_path):
+    """Redirect the runtime_events singleton and translation history writes
+    to tmp_path for every test.
+
+    Without this, test runs append mock translation/stt events into
+    ``logs/runtime_events_YYYYMMDD.jsonl`` and ``logs/translations_*.txt``,
+    polluting the production logs that quality scans read (observed: 72+
+    mock-engine events across 20260624-20260705). Tests that need a real
+    writer construct their own ``RuntimeEventWriter(log_dir=tmp_path)``
+    and are unaffected.
+    """
+    from utils.runtime_events import runtime_events
+    import modules.translator as _translator_module
+
+    original_events_dir = runtime_events._log_dir
+    original_history_dir = _translator_module._LOG_DIR
+    runtime_events._log_dir = tmp_path
+    _translator_module._LOG_DIR = tmp_path
+    try:
+        yield
+    finally:
+        runtime_events._log_dir = original_events_dir
+        _translator_module._LOG_DIR = original_history_dir
