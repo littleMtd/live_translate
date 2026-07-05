@@ -728,7 +728,8 @@
         "Chaenna",
         "CHXXNNX",
         "Chxxnnx",
-        "첸나"
+        "첸나",
+        "찬나"
       ],
       "wrong_forms": [
         "챈나",
@@ -749,7 +750,8 @@
         "채나",
         "첸나",
         "챗나",
-        "챔나"
+        "챔나",
+        "찬나"
       ],
       "canonical": "Chxxnnx"
     },
@@ -1010,6 +1012,16 @@
         "兔子"
       ],
       "canonical": "Usagi"
+    },
+    {
+      "scope": "__shared__",
+      "source_aliases": [
+        "유재석"
+      ],
+      "wrong_forms": [
+        "유재석"
+      ],
+      "canonical": "劉在錫"
     }
   ]
 }
