@@ -6,8 +6,8 @@
         <span class="status-dot" :class="{ online: pythonRunning }">
           {{ pythonRunning ? '● Online' : '● Offline' }}
         </span>
-        <button v-if="!pythonRunning" @click="startPython" class="btn-start">Start</button>
-        <button v-else @click="stopPython" class="btn-stop">Stop</button>
+        <button v-if="!pythonRunning" @click="startPython" :disabled="busy" class="btn-start">Start</button>
+        <button v-else @click="stopPython" :disabled="busy" class="btn-stop">Stop</button>
       </div>
     </header>
 
@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { client } from '../api/client'
 import ConfigPanel from './ConfigPanel.vue'
 import CacheStats from './CacheStats.vue'
@@ -56,28 +56,76 @@ const config = ref<ConfigDto | null>(null)
 const cacheStats = ref<CacheStatsType | null>(null)
 const systemStats = ref<SystemStatsType | null>(null)
 const pythonRunning = ref(false)
+const busy = ref(false)
 const errorMsg = ref<string | null>(null)
 const noticeMsg = ref<string | null>(null)
-let refreshInterval: ReturnType<typeof setInterval>
+let refreshInterval: ReturnType<typeof setInterval> | undefined
+let errorTimer: ReturnType<typeof setTimeout> | undefined
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 onMounted(async () => {
-  await Promise.all([loadConfig(), refreshCacheStats(), checkPythonStatus()])
-  refreshInterval = setInterval(async () => {
-    await refreshCacheStats()
-    await checkPythonStatus()
-  }, 5000)
+  // Cheap status + config + cache on mount; system stats are fetched lazily only
+  // while the Stats tab is open (see activeTabData).
+  await Promise.all([loadConfig(), refreshCacheStats(), pollStatus()])
+  startPolling()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
-onUnmounted(() => clearInterval(refreshInterval))
+onUnmounted(() => {
+  stopPolling()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (errorTimer) clearTimeout(errorTimer)
+  if (noticeTimer) clearTimeout(noticeTimer)
+})
+
+// Refresh the data the user is actually looking at the moment they switch tabs,
+// instead of waiting up to one polling interval.
+watch(activeTab, () => { activeTabData() })
+
+const startPolling = () => {
+  stopPolling()
+  refreshInterval = setInterval(tick, 5000)
+}
+
+const stopPolling = () => {
+  if (refreshInterval !== undefined) {
+    clearInterval(refreshInterval)
+    refreshInterval = undefined
+  }
+}
+
+// Pause polling while the window is hidden/minimised so a backgrounded dashboard
+// stops hitting the Tauri/IPC layer; resume with an immediate refresh.
+const onVisibilityChange = () => {
+  if (document.hidden) {
+    stopPolling()
+  } else {
+    tick()
+    startPolling()
+  }
+}
+
+const tick = async () => {
+  await pollStatus()
+  await activeTabData()
+}
+
+// Only poll the data the active tab renders.
+const activeTabData = async () => {
+  if (activeTab.value === 'Cache') await refreshCacheStats()
+  else if (activeTab.value === 'Stats') await refreshSystemStats()
+}
 
 const showError = (msg: string) => {
   errorMsg.value = msg
-  setTimeout(() => (errorMsg.value = null), 4000)
+  if (errorTimer) clearTimeout(errorTimer)
+  errorTimer = setTimeout(() => (errorMsg.value = null), 4000)
 }
 
 const showNotice = (msg: string) => {
   noticeMsg.value = msg
-  setTimeout(() => (noticeMsg.value = null), 5000)
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => (noticeMsg.value = null), 5000)
 }
 
 const loadConfig = async () => {
@@ -110,34 +158,50 @@ const refreshCacheStats = async () => {
   }
 }
 
-const checkPythonStatus = async () => {
+const refreshSystemStats = async () => {
+  try {
+    systemStats.value = await client.getSystemStats()
+  } catch (e) {
+    console.error('System stats error:', e)
+  }
+}
+
+const pollStatus = async () => {
   try {
     pythonRunning.value = await client.pythonStatus()
-    systemStats.value = await client.getSystemStats()
   } catch {
     pythonRunning.value = false
   }
 }
 
 const startPython = async () => {
+  if (busy.value) return
+  busy.value = true
   try {
     await client.startPython()
     // Wait for Python to initialise, then reconcile real status before loading config.
     setTimeout(async () => {
-      await checkPythonStatus()
+      await pollStatus()
       await loadConfig()
+      await activeTabData()
     }, 1500)
   } catch (e) {
     showError(`Start failed: ${e}`)
+  } finally {
+    busy.value = false
   }
 }
 
 const stopPython = async () => {
+  if (busy.value) return
+  busy.value = true
   try {
     await client.stopPython()
     pythonRunning.value = false
   } catch (e) {
     showError(`Stop failed: ${e}`)
+  } finally {
+    busy.value = false
   }
 }
 </script>
@@ -179,6 +243,7 @@ h1 { font-size: 18px; font-weight: 600; }
 }
 .btn-start { background: #4ade80; color: #1a1a1a; }
 .btn-stop  { background: #ef4444; color: white; }
+.btn-start:disabled, .btn-stop:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .tabs {
   display: flex;

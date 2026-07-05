@@ -187,4 +187,50 @@ describe('Dashboard', () => {
     expect(wrapper.findAll('.tabs button')[0].classes()).toContain('active')
     expect(wrapper.findAll('.tabs button')[1].classes()).not.toContain('active')
   })
+
+  it('fetches system stats lazily — not on mount, only when the Stats tab opens', async () => {
+    setupDefaultMocks()
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+    // Settings is the default tab; system stats must not be polled yet.
+    expect(mockInvoke).not.toHaveBeenCalledWith('get_system_stats')
+
+    await wrapper.findAll('.tabs button')[2].trigger('click')
+    await flushPromises()
+    expect(mockInvoke).toHaveBeenCalledWith('get_system_stats')
+  })
+
+  it('refreshes cache stats immediately when the Cache tab is opened', async () => {
+    setupDefaultMocks()
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+    const onMount = mockInvoke.mock.calls.filter(([cmd]) => cmd === 'get_cache_stats').length
+
+    await wrapper.findAll('.tabs button')[1].trigger('click')
+    await flushPromises()
+    const afterSwitch = mockInvoke.mock.calls.filter(([cmd]) => cmd === 'get_cache_stats').length
+    expect(afterSwitch).toBeGreaterThan(onMount)
+  })
+
+  it('disables the Start button while a start request is in flight', async () => {
+    let resolveStart: () => void = () => {}
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') return Promise.resolve(fakeConfig)
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      if (cmd === 'get_system_stats') return Promise.resolve(fakeSysStats)
+      if (cmd === 'start_python') return new Promise<void>((r) => { resolveStart = r })
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    await wrapper.find('button.btn-start').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('button.btn-start').attributes('disabled')).toBeDefined()
+
+    resolveStart()
+    await flushPromises()
+    expect(wrapper.find('button.btn-start').attributes('disabled')).toBeUndefined()
+  })
 })
