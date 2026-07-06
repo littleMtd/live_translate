@@ -308,6 +308,11 @@ class _Scene:
     min_call_gap_sec:     float = 180.0   # at most one vision call per gap
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
     change_threshold:     float = 12.0    # mean abs diff on 64x64 grayscale
+    # Capture only the livestream browser window. Full-screen capture polluted
+    # current_activity when the local coding workspace was visible.
+    capture_mode:         str   = "window"  # "window" | "primary_screen"
+    window_title_keywords: tuple = ("Google Chrome",)
+    window_fallback_fullscreen: bool = False
     # Groq OpenAI-compatible endpoint; uses cfg.keys.groq (fallback key as backup).
     vision_model:         str   = "meta-llama/llama-4-scout-17b-16e-instruct"
     vision_timeout:       float = 20.0

@@ -22,9 +22,12 @@ even without a visible change — a handful of calls per hour.
 from __future__ import annotations
 
 import base64
+import ctypes
 import io
+import sys
 import threading
 import time
+from ctypes import wintypes
 
 from config import cfg
 from utils.logger import get_logger
@@ -40,16 +43,92 @@ _QUESTION = (
 )
 
 
-def _grab_frame() -> tuple[bytes, bytes]:
-    """Returns (fingerprint_thumb_bytes, jpeg_bytes) for the primary screen."""
-    from PIL import ImageGrab
-
-    image = ImageGrab.grab()
+def _frame_bytes(image) -> tuple[bytes, bytes]:
+    """Returns (fingerprint_thumb_bytes, jpeg_bytes) for a PIL image."""
     thumb = image.convert("L").resize((64, 64)).tobytes()
     image.thumbnail((960, 960))
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, "JPEG", quality=70)
     return thumb, buffer.getvalue()
+
+
+def _grab_primary_screen() -> tuple[bytes, bytes]:
+    from PIL import ImageGrab
+
+    image = ImageGrab.grab()
+    return _frame_bytes(image)
+
+
+def _find_window_bbox(title_keywords: tuple[str, ...]) -> tuple[int, int, int, int] | None:
+    """Return the bbox of the largest visible window matching a title keyword."""
+    if sys.platform != "win32" or not title_keywords:
+        return None
+
+    keywords = tuple(keyword.lower() for keyword in title_keywords if keyword)
+    if not keywords:
+        return None
+
+    user32 = ctypes.windll.user32
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+    matches: list[tuple[int, tuple[int, int, int, int], str]] = []
+
+    def _window_text(hwnd: int) -> str:
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        return buffer.value
+
+    enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @enum_proc_type
+    def enum_proc(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
+        title = _window_text(hwnd)
+        if not title or not any(keyword in title.lower() for keyword in keywords):
+            return True
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return True
+        bbox = (rect.left, rect.top, rect.right, rect.bottom)
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if width <= 100 or height <= 100:
+            return True
+        matches.append((width * height, bbox, title))
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    if not matches:
+        return None
+    _area, bbox, title = max(matches, key=lambda item: item[0])
+    log.debug("scene capture window matched: %r bbox=%s", title, bbox)
+    return bbox
+
+
+def _grab_window_frame() -> tuple[bytes, bytes]:
+    from PIL import ImageGrab
+
+    bbox = _find_window_bbox(tuple(getattr(cfg.scene, "window_title_keywords", ())))
+    if bbox is None:
+        if getattr(cfg.scene, "window_fallback_fullscreen", False):
+            return _grab_primary_screen()
+        raise RuntimeError("scene capture target window not found")
+    image = ImageGrab.grab(bbox=bbox)
+    return _frame_bytes(image)
+
+
+def _grab_frame() -> tuple[bytes, bytes]:
+    mode = str(getattr(cfg.scene, "capture_mode", "primary_screen") or "primary_screen")
+    if mode == "window":
+        return _grab_window_frame()
+    return _grab_primary_screen()
 
 
 def _query_vision(jpeg: bytes) -> str:
