@@ -909,13 +909,21 @@ def _compose_system_prompt() -> str:
     is_qwen = _is_qwen_model()
     system_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
 
-    if not cfg.translation.use_profile:
-        return system_prompt
+    if cfg.translation.use_profile:
+        streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
+        if streamer_profile:
+            system_prompt += "\n\n" + streamer_profile
+            log.debug("Appended streamer profile: %s", cfg.active_streamer_profile)
 
-    streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
-    if streamer_profile:
-        system_prompt += "\n\n" + streamer_profile
-        log.debug("Appended streamer profile: %s", cfg.active_streamer_profile)
+    # Manual session state (orthogonal to profiles, applies even with
+    # use_profile=False): one labeled background line, never source text.
+    activity = (getattr(cfg.translation, "current_activity", "") or "").strip()
+    if activity:
+        system_prompt += (
+            "\n\n[Background] Current stream activity: " + activity
+            + "\nUse this only to disambiguate game/context-specific terms. "
+              "Never translate, mention, or copy it into the output."
+        )
     return system_prompt
 
 
@@ -1018,6 +1026,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         "dependency_marker": marker,
                         "profile_id": cfg.active_streamer_profile,
                         "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
+                        # QE must be able to check whether background context
+                        # helped or polluted; record it per event.
+                        "current_activity": getattr(cfg.translation, "current_activity", ""),
                         # Diagnostic-only: distinguishes the 5s live timeout path
                         # from the 60s clip/offline path in latency artifacts.
                         "translation_mode": translation_mode,

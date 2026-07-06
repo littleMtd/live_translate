@@ -211,6 +211,12 @@ class _Translation:
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu","url"
     streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
+    # Manual session state: what the streamer is doing right now (e.g.
+    # "StarCraft", "tier list talk"). Injected into the system prompt as one
+    # labeled background line to disambiguate game/context terms — never as
+    # text to translate. Empty = omitted. Low-frequency by design: set it by
+    # hand (config or dashboard JSON); no screen text is ever fed as context.
+    current_activity: str        = ""
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):
@@ -328,7 +334,8 @@ _DASHBOARD_OVERRIDE_ENV = "LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG"
 _DASHBOARD_OVERRIDE_FIELDS = {
     "audio": ("vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
     "stt": ("primary_engine",),
-    "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang"),
+    "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang",
+                    "current_activity"),
     "subtitle": ("idle_hide_ms", "alpha"),
 }
 _DASHBOARD_OVERRIDE_TOP = ("live_engine",)

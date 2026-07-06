@@ -143,3 +143,56 @@ def test_translation_profile_loader_rejects_non_string_values(tmp_path):
 
     with pytest.raises(ValueError, match="map strings to strings"):
         _load_translation_profiles(data_file)
+
+
+# ---------------------------------------------------------------------------
+# current_activity background line (manual session state)
+# ---------------------------------------------------------------------------
+
+from contextlib import contextmanager
+
+from config import cfg
+from modules.translator import _compose_system_prompt
+
+
+@contextmanager
+def _activity(value: str, *, use_profile: bool = True):
+    original_activity = getattr(cfg.translation, "current_activity", "")
+    original_use = cfg.translation.use_profile
+    object.__setattr__(cfg.translation, "current_activity", value)
+    object.__setattr__(cfg.translation, "use_profile", use_profile)
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg.translation, "current_activity", original_activity)
+        object.__setattr__(cfg.translation, "use_profile", original_use)
+
+
+def test_current_activity_injected_as_labeled_background_line():
+    with _activity("StarCraft"):
+        prompt = _compose_system_prompt()
+    assert "[Background] Current stream activity: StarCraft" in prompt
+    assert "Never translate" in prompt
+
+
+def test_current_activity_applies_even_without_profile():
+    with _activity("StarCraft", use_profile=False):
+        prompt = _compose_system_prompt()
+    assert "[Background] Current stream activity: StarCraft" in prompt
+
+
+def test_empty_current_activity_leaves_prompt_untouched():
+    with _activity("  "):
+        with_blank = _compose_system_prompt()
+    with _activity(""):
+        without = _compose_system_prompt()
+    assert with_blank == without
+    assert "[Background]" not in without
+
+
+def test_current_activity_changes_prompt_hence_cache_version():
+    with _activity(""):
+        base = _compose_system_prompt()
+    with _activity("StarCraft"):
+        with_activity = _compose_system_prompt()
+    assert base != with_activity  # prompt_ver derives from the prompt → cache splits correctly
