@@ -59,8 +59,8 @@ def _grab_primary_screen() -> tuple[bytes, bytes]:
     return _frame_bytes(image)
 
 
-def _find_window_bbox(title_keywords: tuple[str, ...]) -> tuple[int, int, int, int] | None:
-    """Return the bbox of the largest visible window matching a title keyword."""
+def _find_window(title_keywords: tuple[str, ...]) -> tuple[int, tuple[int, int, int, int]] | None:
+    """Return (hwnd, bbox) of the largest visible window matching a title keyword."""
     if sys.platform != "win32" or not title_keywords:
         return None
 
@@ -74,7 +74,7 @@ def _find_window_bbox(title_keywords: tuple[str, ...]) -> tuple[int, int, int, i
     except Exception:
         pass
 
-    matches: list[tuple[int, tuple[int, int, int, int], str]] = []
+    matches: list[tuple[int, int, tuple[int, int, int, int], str]] = []
 
     def _window_text(hwnd: int) -> str:
         length = user32.GetWindowTextLengthW(hwnd)
@@ -101,26 +101,83 @@ def _find_window_bbox(title_keywords: tuple[str, ...]) -> tuple[int, int, int, i
         height = bbox[3] - bbox[1]
         if width <= 100 or height <= 100:
             return True
-        matches.append((width * height, bbox, title))
+        matches.append((width * height, int(hwnd) if hwnd else 0, bbox, title))
         return True
 
     user32.EnumWindows(enum_proc, 0)
     if not matches:
         return None
-    _area, bbox, title = max(matches, key=lambda item: item[0])
+    _area, hwnd, bbox, title = max(matches, key=lambda item: item[0])
     log.debug("scene capture window matched: %r bbox=%s", title, bbox)
-    return bbox
+    return hwnd, bbox
+
+
+def _print_window_image(hwnd: int, width: int, height: int):
+    """Capture the window's OWN content via PrintWindow(PW_RENDERFULLCONTENT).
+
+    A screen-region grab of the window's bbox photographs whatever is
+    composited on top of it — with the stream behind an IDE the scene
+    detector saw the IDE and answered "coding". PrintWindow asks the window
+    itself to render, so an occluded/background stream still yields the
+    stream. Returns None when the window refuses (caller falls back)."""
+    from PIL import Image
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    hwnd_dc = user32.GetWindowDC(hwnd)
+    if not hwnd_dc:
+        return None
+    mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
+    try:
+        gdi32.SelectObject(mem_dc, bitmap)
+        PW_RENDERFULLCONTENT = 0x00000002
+        if not user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT):
+            return None
+
+        class _BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long), ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        info = _BITMAPINFOHEADER()
+        info.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+        info.biWidth = width
+        info.biHeight = -height  # top-down rows
+        info.biPlanes = 1
+        info.biBitCount = 32
+        info.biCompression = 0  # BI_RGB
+        pixels = ctypes.create_string_buffer(width * height * 4)
+        if gdi32.GetDIBits(mem_dc, bitmap, 0, height, pixels,
+                           ctypes.byref(info), 0) != height:
+            return None
+        image = Image.frombuffer("RGB", (width, height), pixels, "raw", "BGRX", 0, 1)
+        if image.convert("L").getextrema()[1] == 0:
+            return None  # some GPU surfaces render black; let caller fall back
+        return image
+    finally:
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(hwnd, hwnd_dc)
 
 
 def _grab_window_frame() -> tuple[bytes, bytes]:
-    from PIL import ImageGrab
-
-    bbox = _find_window_bbox(tuple(getattr(cfg.scene, "window_title_keywords", ())))
-    if bbox is None:
+    found = _find_window(tuple(getattr(cfg.scene, "window_title_keywords", ())))
+    if found is None:
         if getattr(cfg.scene, "window_fallback_fullscreen", False):
             return _grab_primary_screen()
         raise RuntimeError("scene capture target window not found")
-    image = ImageGrab.grab(bbox=bbox)
+    hwnd, bbox = found
+    image = _print_window_image(hwnd, bbox[2] - bbox[0], bbox[3] - bbox[1])
+    if image is None:
+        # Last resort: region grab (photographs whatever overlaps the bbox).
+        from PIL import ImageGrab
+        image = ImageGrab.grab(bbox=bbox)
     return _frame_bytes(image)
 
 

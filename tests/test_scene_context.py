@@ -151,7 +151,7 @@ def test_grab_frame_can_use_primary_screen_when_configured():
 
 def test_window_capture_does_not_fallback_to_fullscreen_by_default():
     with _scene_attr("window_fallback_fullscreen", False), \
-            patch.object(scene_context, "_find_window_bbox", return_value=None), \
+            patch.object(scene_context, "_find_window", return_value=None), \
             patch.object(scene_context, "_grab_primary_screen") as primary_grab:
         try:
             scene_context._grab_window_frame()
