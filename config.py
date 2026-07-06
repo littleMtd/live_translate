@@ -290,6 +290,26 @@ class _Nvidia:
 
 
 @dataclass(frozen=True)
+class _Scene:
+    """Automatic scene-context updater (modules/scene_context.py).
+
+    Distills the screen into cfg.translation.current_activity by asking a
+    vision model "what game/activity is this" on a sampled frame, a few times
+    per hour. Only that short conclusion ever reaches the prompt — screen
+    text (chat, donations) is never fed as context.
+    """
+    enabled:              bool  = True
+    check_interval_sec:   float = 20.0    # cheap fingerprint check cadence
+    min_call_gap_sec:     float = 180.0   # at most one vision call per gap
+    refresh_interval_sec: float = 600.0   # re-ask even without a scene change
+    change_threshold:     float = 12.0    # mean abs diff on 64x64 grayscale
+    # Groq OpenAI-compatible endpoint; uses cfg.keys.groq (fallback key as backup).
+    vision_model:         str   = "meta-llama/llama-4-scout-17b-16e-instruct"
+    vision_timeout:       float = 20.0
+    max_activity_chars:   int   = 40
+
+
+@dataclass(frozen=True)
 class _Config:
     keys:                _Keys        = field(default_factory=_Keys)
     audio:               _Audio       = field(default_factory=_Audio)
@@ -304,6 +324,7 @@ class _Config:
     clip_engine:         str          = "nvidia"
     ollama:              _Ollama      = field(default_factory=_Ollama)
     nvidia:              _Nvidia      = field(default_factory=_Nvidia)
+    scene:               _Scene       = field(default_factory=_Scene)
     thread_join_timeout: int          = 5
 
     @property

@@ -219,6 +219,9 @@ def main():
             stop_event.wait(1.0)
     else:
         threads.append(translator.start(sentence_queue, subtitle_queue, stop_event, pause_event))
+        if cfg.scene.enabled:
+            from modules import scene_context
+            threads.append(scene_context.start(stop_event, pause_event))
         log.info("All background threads started. Opening subtitle window (Ctrl+C to quit).")
         subtitle_display.start(subtitle_queue, stop_event, pause_event, all_queues)
 
