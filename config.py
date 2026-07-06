@@ -217,6 +217,11 @@ class _Translation:
     # text to translate. Empty = omitted. Low-frequency by design: set it by
     # hand (config or dashboard JSON); no screen text is ever fed as context.
     current_activity: str        = ""
+    # Act on the QE signal at runtime: when the reference-free heuristics rate
+    # an API result "bad" (Hangul leak / repetition / meta shapes), ask one
+    # different engine for a second opinion and keep whichever scores better.
+    # Detectable-bad is ~0.2% of sentences, so the retry cost is negligible.
+    quality_retry_enabled: bool  = True
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):

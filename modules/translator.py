@@ -693,6 +693,10 @@ class Translator:
                     prompt_version=prompt_ver,
                     filter_reason="meta_garbage_output",
                 )
+            result, engine, prompt_ver = self._maybe_quality_retry(
+                raw_text, text, result, system_prompt, incomplete, history,
+                engine, prompt_ver,
+            )
             self._record_success(text, result, incomplete, prompt_ver, engine)
             return TranslationOutcome(
                 source_text=raw_text,
@@ -877,6 +881,69 @@ class Translator:
                 _merge_fallback_state(fallback_state, before_state, state)
         used_engine = active_engine(self._engines, used_idx)
         return result, used_engine
+
+    _QUALITY_SEVERITY_RANK = {"ok": 0, "warn": 1, "bad": 2}
+
+    def _maybe_quality_retry(
+        self, raw_text: str, text: str, result: str, system_prompt: str,
+        incomplete: bool, history: list[tuple[str, str]] | None,
+        engine, prompt_ver: str,
+    ):
+        """Act on the QE signal at runtime instead of only logging it.
+
+        When the reference-free heuristics (the same ones the runtime event
+        will record) rate an API result "bad", ask one *different* engine for
+        a second opinion and keep whichever result scores better. Bounded to
+        a single extra call; detectable-bad is ~0.2% of sentences, so the
+        steady-state cost is negligible. Skipped for incomplete fragments —
+        they get retranslated as part of the full sentence anyway.
+        """
+        if incomplete or not getattr(cfg.translation, "quality_retry_enabled", True):
+            return result, engine, prompt_ver
+        severity = translation_quality(raw_text, result).get("quality_severity")
+        if severity != "bad":
+            return result, engine, prompt_ver
+        # Hangul in the target is an ambiguous signal: it may be a leak, but
+        # several profiles keep Korean canonicals in zh output by design
+        # (mwmeu 초은/이비, url stage names, fan names) and the heuristics
+        # cannot tell the two apart. Acting on it would replace correct
+        # profile-styled output, so only Hangul-free bad shapes (repetition,
+        # latin/meta noise) are actionable.
+        if re.search(r"[가-힣]", result):
+            return result, engine, prompt_ver
+        current_name = engine.engine_name if engine else ""
+        alternate = next(
+            (e for e in self._engines
+             if e.available and e.engine_name != current_name),
+            None,
+        )
+        if alternate is None:
+            return result, engine, prompt_ver
+        metrics.increment("translation.quality_retry.attempted")
+        try:
+            retry_raw = alternate.translate(text, system_prompt, incomplete, history)
+        except Exception as exc:  # second opinion must never break the first
+            log.debug("quality retry failed on %s: %s", alternate.engine_name, exc)
+            return result, engine, prompt_ver
+        if not retry_raw:
+            return result, engine, prompt_ver
+        retry_result = _apply_source_aware_corrections(text, retry_raw)
+        if _looks_like_meta_garbage_output(retry_result):
+            return result, engine, prompt_ver
+        retry_severity = translation_quality(raw_text, retry_result).get("quality_severity")
+        rank = self._QUALITY_SEVERITY_RANK
+        if rank.get(retry_severity, 2) < rank.get(severity, 2):
+            metrics.increment("translation.quality_retry.accepted")
+            log.info(
+                "quality retry accepted: %s(bad) -> %s(%s) for %.30s",
+                current_name, alternate.engine_name, retry_severity, raw_text,
+            )
+            return (
+                retry_result,
+                alternate,
+                self._prompt_version_for_engine(alternate, system_prompt),
+            )
+        return result, engine, prompt_ver
 
     def _get_prompt_version_hash(self) -> str:
         return self._prompt_version_for_engine(self._active_engine(), self._build_system_prompt())

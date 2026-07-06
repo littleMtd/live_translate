@@ -2574,3 +2574,122 @@ class TestDbCacheGating(unittest.TestCase):
         finally:
             object.__setattr__(cfg.database, "live_db_cache", original_flag)
             self._set_mode(original)
+
+
+class TestQualityRetry(unittest.TestCase):
+    """Runtime action on the QE signal: bad output -> one second opinion."""
+
+    _SRC = "텐나 텐나 텐나입니다"
+    _BAD = "Tennna Tennna"           # repetitive + high latin, no Hangul -> actionable bad
+    _HANGUL_BAD = "초은和Chiikawa"    # bad, but Hangul may be an intentional keep
+    _GOOD = "是Tenna，Tenna來了"
+
+    class _FakeEngine:
+        def __init__(self, name, reply):
+            self._name, self._reply, self.calls = name, reply, 0
+
+        @property
+        def engine_name(self):
+            return self._name
+
+        @property
+        def model_name(self):
+            return f"{self._name}-model"
+
+        @property
+        def available(self):
+            return True
+
+        def translate(self, text, system_prompt, incomplete, history=None):
+            self.calls += 1
+            return self._reply
+
+    def _translator_with(self, engines):
+        t = Translator()
+        t._engines = engines
+        return t
+
+    def _retry(self, t, result, *, engine, incomplete=False):
+        return t._maybe_quality_retry(
+            self._SRC, self._SRC, result, "sys", incomplete, None, engine, "pv0")
+
+    def test_precondition_bad_and_good_severities(self):
+        from utils.runtime_events import translation_quality
+        self.assertEqual(
+            translation_quality(self._SRC, self._BAD)["quality_severity"], "bad")
+        self.assertEqual(
+            translation_quality(self._SRC, self._HANGUL_BAD)["quality_severity"], "bad")
+        # acceptance only needs strictly-better-than-bad
+        self.assertIn(
+            translation_quality(self._SRC, self._GOOD)["quality_severity"],
+            ("ok", "warn"))
+
+    def test_hangul_bearing_bad_is_ambiguous_and_never_retried(self):
+        # mwmeu-style outputs keep Korean canonicals by design; the heuristics
+        # cannot tell a leak from an intentional keep, so no runtime action.
+        primary = self._FakeEngine("nvidia", self._HANGUL_BAD)
+        alt = self._FakeEngine("groq", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, _e, _pv = self._retry(t, self._HANGUL_BAD, engine=primary)
+        self.assertEqual(result, self._HANGUL_BAD)
+        self.assertEqual(alt.calls, 0)
+
+    def test_bad_result_retries_on_different_engine_and_accepts_better(self):
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = self._FakeEngine("groq", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
+        self.assertEqual(result, self._GOOD)
+        self.assertEqual(engine.engine_name, "groq")
+        self.assertEqual(alt.calls, 1)
+
+    def test_retry_rejected_when_second_opinion_is_also_bad(self):
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = self._FakeEngine("groq", self._BAD)
+        t = self._translator_with([primary, alt])
+        result, engine, pv = self._retry(t, self._BAD, engine=primary)
+        self.assertEqual(result, self._BAD)          # keep original
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(pv, "pv0")
+
+    def test_ok_result_never_triggers_retry(self):
+        primary = self._FakeEngine("nvidia", self._GOOD)
+        alt = self._FakeEngine("groq", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, _e, _pv = self._retry(t, self._GOOD, engine=primary)
+        self.assertEqual(result, self._GOOD)
+        self.assertEqual(alt.calls, 0)
+
+    def test_incomplete_fragments_are_skipped(self):
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = self._FakeEngine("groq", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, _e, _pv = self._retry(t, self._BAD, engine=primary, incomplete=True)
+        self.assertEqual(result, self._BAD)
+        self.assertEqual(alt.calls, 0)
+
+    def test_kill_switch_disables_retry(self):
+        from config import cfg
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = self._FakeEngine("groq", self._GOOD)
+        t = self._translator_with([primary, alt])
+        original = cfg.translation.quality_retry_enabled
+        object.__setattr__(cfg.translation, "quality_retry_enabled", False)
+        try:
+            result, _e, _pv = self._retry(t, self._BAD, engine=primary)
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_enabled", original)
+        self.assertEqual(result, self._BAD)
+        self.assertEqual(alt.calls, 0)
+
+    def test_alternate_engine_exception_keeps_original(self):
+        class _Boom(self._FakeEngine):
+            def translate(self, *a, **k):
+                self.calls += 1
+                raise RuntimeError("api down")
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = _Boom("groq", "")
+        t = self._translator_with([primary, alt])
+        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
+        self.assertEqual(result, self._BAD)
+        self.assertEqual(engine.engine_name, "nvidia")
