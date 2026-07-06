@@ -44,13 +44,20 @@ class TestTranslationPolicy(unittest.TestCase):
         self.assertIsNone(policy.slang_result("마크 서버"))
 
     def test_is_stt_garbage_detects_repetition(self):
-        self.assertTrue(TranslationPolicy.is_stt_garbage("하하 하하 하하 정상"))
+        self.assertTrue(TranslationPolicy.is_stt_garbage("하하 하하 하하 하하 정상"))
 
     def test_is_stt_garbage_allows_short_text(self):
         self.assertFalse(TranslationPolicy.is_stt_garbage("안녕하세요"))
 
     def test_is_stt_garbage_allows_natural_three_word_repetition(self):
         self.assertFalse(TranslationPolicy.is_stt_garbage("맞아 어 맞아"))
+
+    def test_is_stt_garbage_allows_triple_repetition_emphasis(self):
+        # Triple repetition is normal Korean emphasis (runtime false-kills
+        # observed 20260706): the repetition branch must not fire below x4.
+        self.assertFalse(TranslationPolicy.is_stt_garbage("귀여워 귀여워 아주 귀여워"))
+        self.assertFalse(TranslationPolicy.is_stt_garbage("화이팅! 화이팅! 화이팅!"))
+        self.assertFalse(TranslationPolicy.is_stt_garbage("잘했어 잘했어 잘했어"))
 
     def test_is_stt_garbage_allows_weak_commercial_words_in_normal_speech(self):
         self.assertFalse(

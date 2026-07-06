@@ -184,7 +184,12 @@ class TranslationPolicy:
 
         max_repeat_count = max(word_count.values()) if words else 0
         repeat_ratio = max_repeat_count / len(words) if words else 0
-        if max_repeat_count >= 3 and repeat_ratio > 0.6:
+        # Threshold 4, not 3: triple repetition is normal Korean emphasis, not
+        # an STT loop. A 6-week log audit of every sentence this branch would
+        # kill at >=3 found 23/25 genuine speech (잘했어x3, 감사합니다x3,
+        # 화이팅!x3, 귀여워 귀여워 아주 귀여워...), while real hallucination
+        # loops repeat 4+ times and stay caught.
+        if max_repeat_count >= 4 and repeat_ratio > 0.6:
             log.debug(
                 "STT garbage detected: excessive repetition (ratio=%.2f) in '%s'",
                 repeat_ratio,
