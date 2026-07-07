@@ -1022,6 +1022,22 @@
         "유재석"
       ],
       "canonical": "劉在錫"
+    },
+    {
+      "scope": "stellive_hina",
+      "source_aliases": [
+        "해둥이",
+        "해둥",
+        "Haedungi"
+      ],
+      "wrong_forms": [
+        "海棗",
+        "海洞",
+        "海東",
+        "海童",
+        "Haedungi"
+      ],
+      "canonical": "해둥이"
     }
   ]
 }
