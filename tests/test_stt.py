@@ -1004,13 +1004,14 @@ class TestGroqPromptBuilder(unittest.TestCase):
             mock_cfg.stt.groq_prompt = "  custom prompt words  "
             mock_cfg.stt.use_profile_glossary = True
             mock_cfg.active_streamer_profile = "isegye_lilpa"
+            mock_cfg.translation.current_activity = ""
             prompt = eng._build_groq_prompt()
 
         self.assertEqual(
             prompt,
             "custom prompt words\nprofile terms\nRecent Korean transcript context: previous line with extra spaces",
         )
-        glossary.assert_called_once_with("isegye_lilpa")
+        glossary.assert_called_once_with("isegye_lilpa", extra_terms=())
 
     def test_build_groq_prompt_can_skip_profile_glossary(self):
         eng = _make_engine_groq("ignored")

@@ -71,10 +71,14 @@ def known_profile_ids() -> frozenset[str]:
     return frozenset(_PROFILES)
 
 
-def build_stt_glossary(profile_id: str, include_common: bool = True) -> str:
+def build_stt_glossary(profile_id: str, include_common: bool = True,
+                       extra_terms: tuple[str, ...] = ()) -> str:
+    """Profile STT bias terms, optionally merged with scene-keyed hot terms
+    (modules/scene_stt_terms) so on-screen game vocabulary is heard right."""
     profile = get_profile(profile_id)
     terms = ((*_COMMON_STT_TERMS, *profile.stt_terms)
              if include_common else profile.stt_terms)
+    terms = (*terms, *extra_terms)
     unique_terms = list(dict.fromkeys(term.strip() for term in terms if term.strip()))
     if not unique_terms:
         return ""

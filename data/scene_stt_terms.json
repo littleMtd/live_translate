@@ -1,0 +1,21 @@
+{
+  "_comment": "Scene-keyed STT hot vocabulary. When cfg.translation.current_activity (set by scene_context) matches any keyword (case-insensitive substring), the terms are merged into the STT prompt glossary so the recognizer snaps to correct spellings. Terms chosen from observed 20260706-07 mishears (메가태화←메가진화, 파오젠, 픽생몬←포켓몬).",
+  "rules": [
+    {
+      "match": ["pokemon", "pocket", "포켓몬", "arceus", "roguelike"],
+      "terms": [
+        "포켓몬", "메가진화", "몬스터볼", "마스터볼", "퀵볼", "타이머볼",
+        "리자몽", "메타몽", "뮤츠", "아르세우스", "기라티나", "코스모그",
+        "자마젠타", "무한다이노", "한카리아스", "관장", "레이드", "히든런"
+      ]
+    },
+    {
+      "match": ["minecraft", "마인크래프트", "마크"],
+      "terms": ["마인크래프트", "크리퍼", "엔더맨", "네더", "곡괭이", "인챈트", "레드스톤"]
+    },
+    {
+      "match": ["starcraft", "스타크래프트"],
+      "terms": ["스타크래프트", "저그", "테란", "프로토스", "뮤탈", "히드라"]
+    }
+  ]
+}

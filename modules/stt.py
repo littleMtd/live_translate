@@ -15,6 +15,7 @@ from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events
 from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
 from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
+from modules.scene_stt_terms import terms_for_activity
 from modules.streamer_profiles import build_stt_glossary
 from modules.stt_policy import (
     build_groq_prompt_budget,
@@ -664,12 +665,18 @@ class STTEngine:
 
     def _build_groq_prompt(self) -> str | None:
         context_transcript = self._context_transcript_for_prompt()
+        # Scene-keyed hot vocabulary: current_activity (scene_context) says
+        # what game is on screen; bias the recognizer toward its terms so
+        # mishears are prevented at the source (메가태화←메가진화 class).
+        scene_terms = terms_for_activity(
+            getattr(cfg.translation, "current_activity", ""))
         budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
             use_profile_glossary=cfg.stt.use_profile_glossary,
             active_profile=cfg.active_streamer_profile,
             last_transcript=context_transcript,
-            glossary_builder=build_stt_glossary,
+            glossary_builder=lambda profile_id: build_stt_glossary(
+                profile_id, extra_terms=scene_terms),
             max_context_chars=_GROQ_CONTEXT_CHARS,
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
