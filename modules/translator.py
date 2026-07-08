@@ -59,9 +59,11 @@ _FALLBACK_PROBE_EVERY = 3    # legacy call-count probe interval; user-path probe
 _FALLBACK_PROBE_INTERVAL_SEC = 30.0
 _FALLBACK_PROBE_TEXT = "안녕하세요"
 _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
+_LIVE_FALLBACK_THRESHOLD = 1
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
+_ACTIONABLE_QUALITY_RETRY_FLAGS: set[str] = set()
 _API_EVENT_DEFAULTS = {
     "api_attempt_count": 0,
     "api_timeout_count": 0,
@@ -152,6 +154,14 @@ _SOURCE_NORM_WITH_PROFILE_SORTED = {
     profile: _sorted_norm_items({**_SOURCE_NORM_SHARED, **profile_norm})
     for profile, profile_norm in _SOURCE_NORM_BY_PROFILE.items()
 }
+
+
+def _fallback_failure_threshold() -> int:
+    # Live subtitles should stop paying primary timeout cost after the first
+    # miss; clip/offline mode keeps the more conservative retry-before-switch.
+    if cfg.translation.translation_mode == "live":
+        return _LIVE_FALLBACK_THRESHOLD
+    return _FALLBACK_THRESHOLD
 
 
 def _db_cache_enabled() -> bool:
@@ -872,7 +882,7 @@ class Translator:
             incomplete,
             history,
             _FALLBACK_PROBE_EVERY,
-            _FALLBACK_THRESHOLD,
+            _fallback_failure_threshold(),
             _looks_untranslated,
             log,
         )
@@ -900,16 +910,20 @@ class Translator:
         """
         if incomplete or not getattr(cfg.translation, "quality_retry_enabled", True):
             return result, engine, prompt_ver
-        severity = translation_quality(raw_text, result).get("quality_severity")
-        if severity != "bad":
+        quality = translation_quality(raw_text, result)
+        severity = quality.get("quality_severity")
+        flags = set(quality.get("quality_flags") or [])
+        actionable = bool(flags & _ACTIONABLE_QUALITY_RETRY_FLAGS)
+        if severity != "bad" and not actionable:
             return result, engine, prompt_ver
         # Hangul in the target is an ambiguous signal: it may be a leak, but
         # several profiles keep Korean canonicals in zh output by design
         # (mwmeu 초은/이비, url stage names, fan names) and the heuristics
         # cannot tell the two apart. Acting on it would replace correct
         # profile-styled output, so only Hangul-free bad shapes (repetition,
-        # latin/meta noise) are actionable.
-        if re.search(r"[가-힣]", result):
+        # latin/meta noise) are actionable. Numeric amount diagnostics remain
+        # log-only until their precision is high enough to justify retry cost.
+        if re.search(r"[가-힣]", result) and not actionable:
             return result, engine, prompt_ver
         current_name = engine.engine_name if engine else ""
         alternate = next(

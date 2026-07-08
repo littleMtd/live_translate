@@ -278,7 +278,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--events", nargs="+", required=True)
     parser.add_argument("--tail-quantile", type=_tail_quantile_arg, default=0.95)
     parser.add_argument("--output", type=Path,
-                        default=PROJECT_ROOT / ".analysis-tmp" / "latency_tail_20260624.json")
+                        default=PROJECT_ROOT / "scratch" / "analysis" / "latency_tail_20260624.json")
     return parser.parse_args(argv)
 
 

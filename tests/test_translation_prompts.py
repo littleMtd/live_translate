@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "a84e789c6340f60dde5a36136ff7fb014a85c61d6da3f1819d80d1d5fb111410"
+_TRANSLATION_PROFILE_DATA_HASH = "1c7551ac40335ea88cae21a4ca869da1affdae32f3f5a6a4d91c9f4cce62acad"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -73,6 +73,26 @@ def test_hades_translation_profiles_contain_glossary_mappings():
             assert term in profile
 
 
+def test_hades_translation_profile_alias_uses_canonical_profile():
+    for qwen in (False, True):
+        assert get_translation_profile("hades", qwen=qwen) == \
+            get_translation_profile("hades_chxxnnx", qwen=qwen)
+
+
+def test_hades_translation_profile_examples_follow_canonical_names():
+    forbidden_in_outputs = ("챈나", "솜펀치", "연초록", "큐마", "싱귤")
+
+    for qwen in (False, True):
+        profile = get_translation_profile("hades_chxxnnx", qwen=qwen)
+        output_lines = [
+            line for line in profile.splitlines()
+            if line.startswith("output:")
+        ]
+        for line in output_lines:
+            for forbidden in forbidden_in_outputs:
+                assert forbidden not in line
+
+
 def test_isegye_translation_profiles_contain_official_romanization():
     for qwen in (False, True):
         profile = get_translation_profile("isegye_lilpa", qwen=qwen)
@@ -95,11 +115,16 @@ def test_url_translation_profiles_contain_official_group_terms():
     required_terms = (
         "UR:L",
         "유아렐",
+        "유아엘",
+        "YOU ARE LINKED",
         "결속아이돌",
         "모카",
         "랑코",
         "마냥",
         "솜먕",
+        "오아",
+        "바밍",
+        "Fluxus",
         "Chemical Love",
         "Again",
         "Wish Me Love",

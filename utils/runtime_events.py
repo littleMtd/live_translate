@@ -231,6 +231,180 @@ def _brackets_balanced(text: str) -> bool:
     return not stack
 
 
+_KO_DIGITS = {
+    "영": 0,
+    "공": 0,
+    "일": 1,
+    "이": 2,
+    "삼": 3,
+    "사": 4,
+    "오": 5,
+    "육": 6,
+    "륙": 6,
+    "칠": 7,
+    "팔": 8,
+    "구": 9,
+}
+_ZH_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "兩": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_SMALL_UNITS_KO = {"십": 10, "백": 100, "천": 1000}
+_SMALL_UNITS_ZH = {"十": 10, "百": 100, "千": 1000}
+_LARGE_UNITS_KO = {"만": 10000, "억": 100000000}
+_LARGE_UNITS_ZH = {"萬": 10000, "万": 10000, "億": 100000000, "亿": 100000000}
+_MIN_RELIABLE_AMOUNT = 100
+_KO_AMOUNT_RE = re.compile(
+    r"(?<![가-힣])"
+    r"((?:(?:[0-9０-９,\.영공일이삼사오육륙칠팔구]*[만억])\s*)?"
+    r"[0-9０-９,\.영공일이삼사오육륙칠팔구십백천만억]+)"
+    r"\s*원"
+    r"(?=$|[^가-힣]|[은는이가을를에도만입])"
+)
+_ZH_AMOUNT_RE = re.compile(
+    r"([0-9０-９零〇一二兩两三四五六七八九十百千萬万億亿]"
+    r"[0-9０-９,\.\s零〇一二兩两三四五六七八九十百千萬万億亿]*)"
+    r"(?:\s*(?:元|塊|块|韓元|韩元|台幣|台币|NTD|TWD|HKD|KRW))?"
+)
+
+
+def _normalize_ascii_number(text: str) -> str:
+    return text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
+
+def _parse_unit_number(
+    text: str,
+    *,
+    digits: dict[str, int],
+    small_units: dict[str, int],
+    large_units: dict[str, int],
+) -> int | None:
+    compact = _normalize_ascii_number(text).replace(",", "")
+    compact = re.sub(r"\s+", "", compact)
+    if not compact:
+        return None
+
+    result = 0.0
+    section = 0.0
+    current: float | None = None
+    last_large_unit = 0
+    saw_number = False
+    index = 0
+
+    while index < len(compact):
+        number_match = re.match(r"\d+(?:\.\d+)?", compact[index:])
+        if number_match:
+            current = float(number_match.group(0))
+            saw_number = True
+            index += len(number_match.group(0))
+            continue
+
+        char = compact[index]
+        if char in digits:
+            current = float(digits[char])
+            saw_number = True
+        elif char in small_units:
+            section += (current if current is not None else 1.0) * small_units[char]
+            current = None
+            saw_number = True
+        elif char in large_units:
+            if current is not None:
+                section += current
+            if section == 0:
+                section = 1.0
+            unit = large_units[char]
+            result += section * unit
+            last_large_unit = unit
+            section = 0.0
+            current = None
+            saw_number = True
+        else:
+            return None
+        index += 1
+
+    if current is not None:
+        # Colloquial money shorthand: 一萬五 / 1萬5 means 15,000, not 10,005.
+        if result > 0 and section == 0 and 0 < current < 10 and last_large_unit >= 10000:
+            section += current * (last_large_unit / 10)
+        else:
+            section += current
+
+    value = result + section
+    if not saw_number or value <= 0:
+        return None
+    return int(round(value))
+
+
+def _source_amount_values(text: str) -> list[int]:
+    values: list[int] = []
+    for match in _KO_AMOUNT_RE.finditer(text or ""):
+        token = match.group(1)
+        compact = _normalize_ascii_number(token).replace(",", "")
+        compact = re.sub(r"\s+", "", compact)
+        has_arabic_digit = bool(re.search(r"\d", compact))
+        has_amount_unit = any(unit in compact for unit in (*_SMALL_UNITS_KO, *_LARGE_UNITS_KO))
+        if not (has_arabic_digit or has_amount_unit):
+            continue
+        value = _parse_unit_number(
+            token,
+            digits=_KO_DIGITS,
+            small_units=_SMALL_UNITS_KO,
+            large_units=_LARGE_UNITS_KO,
+        )
+        if value is not None and value >= _MIN_RELIABLE_AMOUNT:
+            values.append(value)
+    return values
+
+
+def _target_amount_values(text: str) -> list[int]:
+    values: list[int] = []
+    for match in _ZH_AMOUNT_RE.finditer(text or ""):
+        token = match.group(1)
+        normalized = _normalize_ascii_number(token)
+        # Without a currency marker, require a magnitude unit or a 3+ digit
+        # number. This catches "五千" / "15000" while ignoring "一個".
+        has_marker = bool(match.group(0)[len(match.group(1)):].strip())
+        has_magnitude = any(unit in normalized for unit in (*_SMALL_UNITS_ZH, *_LARGE_UNITS_ZH))
+        has_large_digits = any(
+            float(number.replace(",", "")) >= 100
+            for number in re.findall(r"\d+(?:\.\d+)?", normalized.replace(",", ""))
+        )
+        if not (has_marker or has_magnitude or has_large_digits):
+            continue
+        value = _parse_unit_number(
+            token,
+            digits=_ZH_DIGITS,
+            small_units=_SMALL_UNITS_ZH,
+            large_units=_LARGE_UNITS_ZH,
+        )
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _amounts_match(source_values: list[int], target_values: list[int]) -> bool:
+    if not source_values:
+        return True
+    if not target_values:
+        return False
+    unique_source_values = list(dict.fromkeys(source_values))
+    for source_value in unique_source_values:
+        if not any(abs(source_value - target_value) <= 1 for target_value in target_values):
+            return False
+    return True
+
+
 def quality_score(flags: list[str]) -> float:
     """Collapse the qualitative flags into a comparable 0.0\u20131.0 scalar."""
     penalty = sum(_QUALITY_PENALTIES.get(flag, 0.0) for flag in flags)
@@ -258,6 +432,11 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
     target_japanese_count = sum(1 for char in target if _is_japanese(char))
     len_ratio = round(target_len / max(1, source_len), 3)
     distinct_bigram_ratio = round(_distinct_bigram_ratio(target), 3)
+    source_amount_values = _source_amount_values(source)
+    target_amount_values = _target_amount_values(target) if source_amount_values else []
+    amount_mismatch_candidate = bool(
+        source_amount_values and not _amounts_match(source_amount_values, target_amount_values)
+    )
 
     flags: list[str] = []
     if not target:
@@ -283,7 +462,6 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         flags.append("target_meta_leak")
     if target and not _brackets_balanced(target):
         flags.append("unbalanced_brackets")
-
     score = quality_score(flags)
 
     return {
@@ -297,6 +475,9 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         "target_japanese_count": target_japanese_count,
         "target_source_len_ratio": len_ratio,
         "target_distinct_bigram_ratio": distinct_bigram_ratio,
+        "source_amount_values": source_amount_values,
+        "target_amount_values": target_amount_values,
+        "amount_mismatch_candidate": amount_mismatch_candidate,
         "quality_flags": flags,
         "quality_score": score,
         "quality_severity": quality_severity(score),

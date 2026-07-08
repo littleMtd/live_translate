@@ -20,9 +20,9 @@ from scripts.replay_phase0_stt_candidates import verify_audio_asset
 from scripts.routing_span_annotations import load_manifest, sha256_file
 
 
-DEFAULT_DATASET = PROJECT_ROOT / ".analysis-tmp" / "phase0_alert_shadow_dataset_20260624.json"
-DEFAULT_MANIFEST = PROJECT_ROOT / ".analysis-tmp" / "phase0_replay_manifest_20260624.json"
-DEFAULT_OUTPUT = PROJECT_ROOT / ".analysis-tmp" / "phase0_speaker_similarity_shadow_20260624.json"
+DEFAULT_DATASET = PROJECT_ROOT / "scratch" / "analysis" / "phase0_alert_shadow_dataset_20260624.json"
+DEFAULT_MANIFEST = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_speaker_similarity_shadow_20260624.json"
 MODEL_ID = "iic/speech_campplus_sv_zh-cn_16k-common"
 
 

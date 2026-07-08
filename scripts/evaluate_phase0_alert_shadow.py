@@ -11,8 +11,8 @@ import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATASET = PROJECT_ROOT / ".analysis-tmp" / "phase0_alert_shadow_dataset_20260624.json"
-DEFAULT_OUTPUT = PROJECT_ROOT / ".analysis-tmp" / "phase0_alert_shadow_evaluation_20260624.json"
+DEFAULT_DATASET = PROJECT_ROOT / "scratch" / "analysis" / "phase0_alert_shadow_dataset_20260624.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_alert_shadow_evaluation_20260624.json"
 ACOUSTIC_FEATURES = (
     "dbfs",
     "zero_crossing_rate",

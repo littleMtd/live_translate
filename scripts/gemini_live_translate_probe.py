@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 DEFAULT_SAMPLE_PATH = PROJECT_ROOT / "logs" / "labeling_sample_phase0_eval_20260613_host_primary.json"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / ".analysis-tmp"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "scratch" / "analysis"
 DEFAULT_MODEL = "gemini-3.5-live-translate-preview"
 DEFAULT_TARGET_LANGUAGE_CODE = "zh-Hant"
 PCM_RATE = 16000

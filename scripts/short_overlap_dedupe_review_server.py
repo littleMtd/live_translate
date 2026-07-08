@@ -22,8 +22,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.labeling_review_server import romanize_korean_text
 
 
-DEFAULT_SHADOW = PROJECT_ROOT / ".analysis-tmp" / "short_overlap_surgical_20260624.json"
-DEFAULT_ANNOTATIONS = PROJECT_ROOT / ".analysis-tmp" / "short_overlap_surgical_20260624.annotations.json"
+DEFAULT_SHADOW = PROJECT_ROOT / "scratch" / "analysis" / "short_overlap_surgical_20260624.json"
+DEFAULT_ANNOTATIONS = PROJECT_ROOT / "scratch" / "analysis" / "short_overlap_surgical_20260624.annotations.json"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DECISIONS = ("safe_dedupe", "intentional_repetition", "unclear")

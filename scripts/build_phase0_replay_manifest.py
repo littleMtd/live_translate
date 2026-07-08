@@ -17,7 +17,7 @@ DEFAULT_SAMPLES = [
 DEFAULT_ANNOTATIONS = (
     PROJECT_ROOT / "logs" / "labeling_sample_phase0_eval_20260613_host_primary.annotations.json"
 )
-DEFAULT_OUTPUT = PROJECT_ROOT / ".analysis-tmp" / "phase0_replay_manifest_20260624.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
 SOURCE_ROUTING_TAGS = {
     "audio_source_mismatch",
     "clip_or_other_speaker",

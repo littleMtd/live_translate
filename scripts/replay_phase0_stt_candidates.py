@@ -14,8 +14,8 @@ import soundfile as sf
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = PROJECT_ROOT / ".analysis-tmp" / "phase0_replay_manifest_20260624.json"
-DEFAULT_OUTPUT = PROJECT_ROOT / ".analysis-tmp" / "phase0_sensevoice_shadow_20260624.json"
+DEFAULT_MANIFEST = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_sensevoice_shadow_20260624.json"
 DEFAULT_GROUPS = ("clean_host_stt", "stt_unverified")
 SENSEVOICE_TAG_RE = re.compile(r"<\|[^>]*\|>")
 

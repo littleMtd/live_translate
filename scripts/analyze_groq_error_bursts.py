@@ -317,7 +317,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Catalogue Groq STT generic-error bursts.")
     parser.add_argument("--events", nargs="+", required=True)
     parser.add_argument("--output", type=Path,
-                        default=PROJECT_ROOT / ".analysis-tmp" / "groq_error_burst_20260624.json")
+                        default=PROJECT_ROOT / "scratch" / "analysis" / "groq_error_burst_20260624.json")
     return parser.parse_args(argv)
 
 

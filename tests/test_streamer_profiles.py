@@ -12,11 +12,14 @@ from modules.streamer_profiles import (
 
 
 def test_profile_data_file_is_valid_json():
-    common_terms, profiles = _load_profile_data(_PROFILE_DATA_PATH)
+    common_terms, profiles, aliases = _load_profile_data(_PROFILE_DATA_PATH)
 
     assert common_terms
     assert "" in profiles
+    assert aliases["hades"] == "hades_chxxnnx"
     assert known_profile_ids() == frozenset(profiles)
+    assert "hades" not in known_profile_ids()
+    assert "hades" in known_profile_ids(include_aliases=True)
 
 
 def test_unknown_profile_falls_back_to_general():
@@ -61,6 +64,48 @@ def test_profile_data_loader_requires_general_profile(tmp_path):
         _load_profile_data(data_file)
 
 
+def test_profile_data_loader_rejects_duplicate_aliases(tmp_path):
+    data_file = tmp_path / "streamer_profiles.json"
+    data_file.write_text(
+        json.dumps(
+            {
+                "common_stt_terms": [],
+                "profiles": [
+                    {"profile_id": "", "label": "General"},
+                    {"profile_id": "a", "label": "A", "aliases": ["same"]},
+                    {"profile_id": "b", "label": "B", "aliases": ["Same"]},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate streamer profile alias"):
+        _load_profile_data(data_file)
+
+
+def test_profile_data_loader_rejects_alias_that_conflicts_with_other_profile_id(tmp_path):
+    data_file = tmp_path / "streamer_profiles.json"
+    data_file.write_text(
+        json.dumps(
+            {
+                "common_stt_terms": [],
+                "profiles": [
+                    {"profile_id": "", "label": "General"},
+                    {"profile_id": "a", "label": "A", "aliases": ["b"]},
+                    {"profile_id": "b", "label": "B"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="alias conflicts with profile id"):
+        _load_profile_data(data_file)
+
+
 def test_build_stt_glossary_deduplicates_loaded_terms(tmp_path):
     data_file = tmp_path / "streamer_profiles.json"
     data_file.write_text(
@@ -79,7 +124,7 @@ def test_build_stt_glossary_deduplicates_loaded_terms(tmp_path):
         ),
         encoding="utf-8",
     )
-    common_terms, profiles = _load_profile_data(data_file)
+    common_terms, profiles, _aliases = _load_profile_data(data_file)
     profile_terms = (*common_terms, *profiles["custom"].stt_terms)
     unique_terms = list(dict.fromkeys(term.strip() for term in profile_terms if term.strip()))
 
@@ -111,6 +156,11 @@ def test_hades_stt_glossary_contains_profile_glossary_terms():
         "하데쮸 유치원",
     ):
         assert term in glossary
+
+
+def test_hades_alias_uses_hades_chxxnnx_terms():
+    assert get_profile("hades").profile_id == "hades_chxxnnx"
+    assert build_stt_glossary("hades") == build_stt_glossary("hades_chxxnnx")
 
 
 def test_stellive_hina_stt_glossary_contains_current_profile_terms():
@@ -147,11 +197,19 @@ def test_url_stt_glossary_contains_official_group_terms():
     for term in (
         "UR:L",
         "유아렐",
+        "유아엘",
+        "YOU ARE LINKED",
         "결속아이돌",
         "모카",
         "랑코",
         "마냥",
         "솜먕",
+        "오아",
+        "바밍",
+        "플럭서스",
+        "㈜플럭서스",
+        "Fluxus",
+        "팬카페",
         "Chemical Love",
         "Again",
         "Wish Me Love",
