@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from modules.stt_policy import dedupe_transcript_overlap
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / ".analysis-tmp" / "phase0_short_overlap_dedupe_shadow_20260624.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_short_overlap_dedupe_shadow_20260624.json"
 
 
 def load_runtime_events(paths: Iterable[Path]) -> tuple[dict[tuple[str, str], dict[str, Any]], list[dict[str, Any]]]:

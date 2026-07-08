@@ -17,6 +17,27 @@ def test_pokemon_activities_map_to_pokemon_terms():
         assert "메가진화" in terms  # the observed 메가태화 mishear target
 
 
+def test_hades_activity_reuses_hades_profile_terms():
+    terms = terms_for_activity("Hades")
+
+    assert "챈나" in terms
+    assert "하데스 오락실" in terms
+    assert terms == terms_for_activity("hades_chxxnnx")
+
+
+def test_game_scene_terms_come_before_profile_terms_for_mixed_activity():
+    terms = terms_for_activity("Hades Pocket Roguelike")
+
+    assert terms.index("메가진화") < terms.index("챈나")
+
+
+def test_broad_roguelike_activity_does_not_inject_pokemon_terms():
+    terms = terms_for_activity("Hades Roguelike")
+
+    assert "챈나" in terms
+    assert "메가진화" not in terms
+
+
 def test_unrelated_or_empty_activity_yields_no_terms():
     assert terms_for_activity("just chatting") == ()
     assert terms_for_activity("coding") == ()
@@ -42,3 +63,7 @@ def test_glossary_merges_scene_terms_and_dedupes():
 def test_glossary_without_extra_terms_is_unchanged():
     assert build_stt_glossary("stellive_hina", extra_terms=()) == \
         build_stt_glossary("stellive_hina")
+
+
+def test_hades_profile_alias_uses_canonical_stt_terms():
+    assert build_stt_glossary("hades") == build_stt_glossary("hades_chxxnnx")

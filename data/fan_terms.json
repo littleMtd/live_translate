@@ -1,0 +1,164 @@
+{
+  "fan_terms": [
+    {
+      "profile_id": "stellive_hina",
+      "group": "Stellive",
+      "streamer": "Shirayuki Hina",
+      "fandom_of": "Shirayuki Hina fans",
+      "term": "해둥이",
+      "rendering": "해둥이",
+      "aliases": ["해둥", "해동이", "Haedungi"],
+      "notes": "Keep Korean in zh-TW subtitles; do not render as 海洞/海東."
+    },
+    {
+      "profile_id": "isegye_lilpa",
+      "group": "Isegye Idol",
+      "streamer": "Lilpa",
+      "fandom_of": "Lilpa fans",
+      "term": "박쥐단",
+      "rendering": "박쥐단",
+      "aliases": [],
+      "notes": "Lilpa fan name; usually keep Korean."
+    },
+    {
+      "profile_id": "isegye_lilpa",
+      "group": "Isegye Idol",
+      "streamer": "",
+      "fandom_of": "Isegye Idol fans",
+      "term": "이파리",
+      "rendering": "이파리",
+      "aliases": [],
+      "notes": "Isegye Idol fandom; usually keep Korean."
+    },
+    {
+      "profile_id": "hades_chxxnnx",
+      "group": "HADES",
+      "streamer": "",
+      "fandom_of": "HADES fans",
+      "term": "지옥견",
+      "rendering": "지옥견",
+      "aliases": [],
+      "notes": "Common HADES fan/community term; keep Korean unless profile says otherwise."
+    },
+    {
+      "profile_id": "hades_chxxnnx",
+      "group": "HADES",
+      "streamer": "Singgyul",
+      "fandom_of": "Singgyul fans",
+      "term": "띵띵이",
+      "rendering": "띵띵이",
+      "aliases": [],
+      "notes": "Singgyul fan name; do not translate as Singgyul."
+    },
+    {
+      "profile_id": "hades_chxxnnx",
+      "group": "HADES",
+      "streamer": "Kyma",
+      "fandom_of": "Kyma fans",
+      "term": "수제비",
+      "rendering": "수제비",
+      "aliases": [],
+      "notes": "Kyma fan name; keep Korean."
+    },
+    {
+      "profile_id": "hades_chxxnnx",
+      "group": "HADES",
+      "streamer": "Chaenna",
+      "fandom_of": "Chaenna fans",
+      "term": "챈나미",
+      "rendering": "Chaenna粉",
+      "aliases": ["찬나미", "챈나미들", "찬나미들"],
+      "notes": "Chaenna fan/community term. In zh-TW, prefer Chaenna粉 over malformed -chan/Chaenna們."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "",
+      "fandom_of": "UR:L fans/supporters",
+      "term": "유아렐",
+      "rendering": "UR:L",
+      "aliases": ["UR:L", "URL", "유아엘", "YOU ARE LINKED", "결속아이돌", "결속 아이돌"],
+      "notes": "UR:L group/community reference. Preserve UR:L for the group; URL alone may also mean a web address, so disambiguate from context. No official fandom name is recorded in current project data."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "Oa",
+      "fandom_of": "UR:L project partner/reference",
+      "term": "오아",
+      "rendering": "오아",
+      "aliases": ["Oa"],
+      "notes": "Internet broadcaster who helped the UR:L/결속아이돌 project as a partner; keep Korean in zh-TW subtitles."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "",
+      "fandom_of": "UR:L agency/reference",
+      "term": "샌드박스 네트워크",
+      "rendering": "Sandbox Network",
+      "aliases": ["샌드박스네트워크", "Sandbox Network"],
+      "notes": "UR:L agency; render as Sandbox Network."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "",
+      "fandom_of": "UR:L distributor/reference",
+      "term": "플럭서스",
+      "rendering": "Fluxus",
+      "aliases": ["㈜플럭서스", "Fluxus"],
+      "notes": "UR:L distributor from the available group profile context; render as Fluxus when mentioned as the company."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "Moka",
+      "fandom_of": "UR:L member reference",
+      "term": "모카",
+      "rendering": "모카",
+      "aliases": ["Moka"],
+      "notes": "UR:L member/stage name; keep Korean in zh-TW subtitles, not 摩卡/莫卡 when referring to the member."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "Ranko",
+      "fandom_of": "UR:L member reference",
+      "term": "랑코",
+      "rendering": "랑코",
+      "aliases": ["Ranko"],
+      "notes": "UR:L member/stage name; keep Korean in zh-TW subtitles, not 蘭子/朗子/蘭科."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "Manyang",
+      "fandom_of": "UR:L member reference",
+      "term": "마냥",
+      "rendering": "마냥",
+      "aliases": ["Manyang"],
+      "notes": "UR:L member/stage name; keep Korean in zh-TW subtitles, not 馬樣."
+    },
+    {
+      "profile_id": "url",
+      "group": "UR:L",
+      "streamer": "Sommyang",
+      "fandom_of": "UR:L member reference",
+      "term": "솜먕",
+      "rendering": "솜먕",
+      "aliases": ["Sommyang", "솜명", "솜명이", "솜명은"],
+      "notes": "UR:L member/stage name; keep Korean in zh-TW subtitles. Aliases are common STT/name variants, not preferred output."
+    },
+    {
+      "profile_id": "mwmeu",
+      "group": "MW:MEU",
+      "streamer": "",
+      "fandom_of": "MW:MEU fans",
+      "term": "WENs",
+      "rendering": "WENs",
+      "aliases": ["웬즈", "wenz", "Wenz"],
+      "notes": "MW:MEU fandom; use WENs in zh-TW subtitles."
+    }
+  ]
+}

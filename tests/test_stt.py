@@ -1232,6 +1232,17 @@ class TestStreamerSttGlossary(unittest.TestCase):
         self.assertIn("\uc2a4\ud0c0\ub808\uc77c", glossary)
         self.assertNotIn("\ub9b4\ud30c", glossary)
 
+    def test_extra_stt_terms_are_prioritized_before_static_terms(self):
+        from modules.streamer_profiles import build_stt_glossary
+
+        glossary = build_stt_glossary(
+            "hades_chxxnnx",
+            extra_terms=("메가진화", "포켓몬"),
+        )
+
+        self.assertLess(glossary.index("메가진화"), glossary.index("스타레일"))
+        self.assertLess(glossary.index("포켓몬"), glossary.index("하데스"))
+
     def test_known_profile_ids_include_configured_profiles(self):
         from modules.streamer_profiles import known_profile_ids
 

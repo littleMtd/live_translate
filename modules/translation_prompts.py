@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from config import cfg
+from modules.streamer_profiles import canonical_profile_id
 
 
 _PROFILE_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "translation_profiles.json"
@@ -34,7 +35,7 @@ _STREAMER_PROFILES, _STREAMER_PROFILES_QWEN = _load_translation_profiles()
 
 def get_translation_profile(profile_id: str, qwen: bool = False) -> str:
     profiles = _STREAMER_PROFILES_QWEN if qwen else _STREAMER_PROFILES
-    return profiles.get(profile_id, "")
+    return profiles.get(canonical_profile_id(profile_id), "")
 
 
 def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
@@ -446,5 +447,4 @@ def _build_qwen_optimized_prompt() -> str:
 
 _BASE_PROMPT = _build_base_prompt()
 _QWEN_PROMPT = _build_qwen_optimized_prompt()  # Qwen 专属优化版
-
 

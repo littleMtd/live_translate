@@ -26,8 +26,8 @@ from scripts.routing_span_annotations import (
 )
 
 
-DEFAULT_MANIFEST = PROJECT_ROOT / ".analysis-tmp" / "phase0_replay_manifest_20260624.json"
-DEFAULT_ANNOTATIONS = PROJECT_ROOT / ".analysis-tmp" / "phase0_routing_spans_20260624.annotations.json"
+DEFAULT_MANIFEST = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
+DEFAULT_ANNOTATIONS = PROJECT_ROOT / "scratch" / "analysis" / "phase0_routing_spans_20260624.annotations.json"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 

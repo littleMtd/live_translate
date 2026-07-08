@@ -34,28 +34,29 @@ def _wrong_profile(profile_id: str) -> str:
 def test_translation_correction_data_snapshot_counts():
     tables = load_translation_corrections()
 
-    assert len(tables.source_aware_target_replacements) == 27
+    assert len(tables.source_aware_target_replacements) == 31
     assert {profile: len(values) for profile, values in tables.source_norm_by_profile.items()} == {
         "stellive_hina": 6,
-        "hades_chxxnnx": 22,
+        "hades_chxxnnx": 27,
         "mwmeu": 48,
+        "url": 3,
     }
     assert {
         profile: len(groups)
         for profile, groups in tables.profile_source_aware_target_replacements.items()
-    } == {"stellive_hina": 5}
-    assert len(tables.korean_name_suffixes) == 32
-    assert len(tables.name_rendering_rules) == 22
-    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 137
+    } == {"stellive_hina": 5, "hades_chxxnnx": 1, "url": 3}
+    assert len(tables.korean_name_suffixes) == 33
+    assert len(tables.name_rendering_rules) == 27
+    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 182
     assert sum(
         len(group.replacements)
         for group in tables.source_aware_target_replacements
-    ) == 62
+    ) == 73
     assert sum(
         len(group.replacements)
         for groups in tables.profile_source_aware_target_replacements.values()
         for group in groups
-    ) == 14
+    ) == 36
 
 
 def test_each_profile_source_norm_rule_triggers_and_is_gated():
@@ -69,6 +70,90 @@ def test_each_profile_source_norm_rule_triggers_and_is_gated():
 
             with _active_translation_profile(_wrong_profile(profile_id)):
                 assert _normalize_source_before_matching(noisy) == noisy
+
+
+def test_shared_source_norm_fixes_hospital_stt_mishears():
+    assert _normalize_source_before_matching("운동 사면서 나왔는데요") == "운동 삼아서 나왔는데요"
+    assert _normalize_source_before_matching("혈압 주셔야 되니까 빨리 오세요") == "혈압 재셔야 되니까 빨리 오세요"
+
+
+def test_hospital_context_target_corrections_fix_runtime_misreads():
+    cases = (
+        (
+            "반찬으로 나온 연근조림하고 밥만 먹고",
+            "配菜裡的薑絲燉肉，然後配飯吃",
+            "配菜裡的醬燒蓮藕，然後配飯吃",
+        ),
+        (
+            "내가 배고파 이렇게 하니까",
+            "我一做出餓了的樣子，媽媽就笑了",
+            "我一說我餓了，媽媽就笑了",
+        ),
+        (
+            "아프긴 한데 배고파 이러면서",
+            "痛是痛，但裝作很餓的樣子",
+            "痛是痛，但我餓了",
+        ),
+        (
+            "퇴원 전에 빨리 낳고 싶기도 하고",
+            "出院前想快點生下來",
+            "出院前想快點好起來",
+        ),
+    )
+
+    for source, target, expected in cases:
+        assert _apply_source_aware_corrections(source, target) == expected
+
+
+def test_hades_alias_uses_hades_profile_corrections():
+    with _active_translation_profile("hades"):
+        assert _normalize_source_before_matching("찬나미들 천재야") == "챈나미들 천재야"
+        assert _apply_source_aware_corrections(
+            "챈나미들 천재야",
+            "我們-chan娜們才是天才",
+        ) == "我們Chaenna粉才是天才"
+        assert _apply_source_aware_corrections(
+            "챈나미들 천재야",
+            "我們Chaenna們才是天才",
+        ) == "我們Chaenna粉才是天才"
+
+
+def test_url_profile_preserves_member_names_from_runtime_variants():
+    with _active_translation_profile("url"):
+        assert _normalize_source_before_matching("솜명이 왔어") == "솜먕이 왔어"
+        assert _normalize_source_before_matching("솜명은 어디야") == "솜먕은 어디야"
+
+        assert _apply_source_aware_corrections(
+            "마냥 랑코 아무도 못 잡을 것 같다",
+            "馬樣、蘭子都抓不到呢？",
+        ) == "마냥、랑코都抓不到呢？"
+        assert _apply_source_aware_corrections(
+            "마냥님 안 죽었네. 아이고, 모카.",
+            "馬良先生還沒死。哎呀，摩卡。",
+        ) == "마냥님還沒死。哎呀，모카。"
+        assert _apply_source_aware_corrections(
+            "오아. 오아. 마냥 랑코?",
+            "噢啊。噢啊。馬朗跟蘭可？",
+        ) == "오아。오아。마냥跟랑코？"
+        assert _apply_source_aware_corrections(
+            "마냥 언니가 개웃김",
+            "明明姐姐真的超好笑",
+        ) == "마냥姐姐真的超好笑"
+        assert _apply_source_aware_corrections(
+            "나 오아공이 두 번 살려주셨어. 모카 언니 뭐야?",
+            "我被歐亞公救了兩次。摩卡姐姐，這是什麼？",
+        ) == "我被오아공救了兩次。모카姐姐，這是什麼？"
+        assert _apply_source_aware_corrections(
+            "나 그냥 소파에 앉아있는 랑코였습니다.",
+            "我只是坐在沙發上的朗科。",
+        ) == "我只是坐在沙發上的랑코。"
+
+    with _active_translation_profile("hades_chxxnnx"):
+        assert _normalize_source_before_matching("솜명이 왔어") == "솜명이 왔어"
+        assert _apply_source_aware_corrections(
+            "마냥 랑코 아무도 못 잡을 것 같다",
+            "馬樣、蘭子都抓不到呢？",
+        ) == "馬樣、蘭子都抓不到呢？"
 
 
 def test_each_global_source_aware_rule_triggers_and_is_source_gated():

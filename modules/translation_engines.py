@@ -689,6 +689,7 @@ class NvidiaEngine(TranslationEngine):
             if cfg.translation.translation_mode == "live" and cfg.nvidia.live_timeout
             else cfg.nvidia.timeout
         )
+        self._retry_transient_errors = cfg.translation.translation_mode != "live"
         _m = self._model.lower()
         self._is_qwen3    = "qwen3" in _m or "qwen-3" in _m
         self._strip_think = self._is_qwen3 or any(x in _m for x in ("deepseek-v4", "deepseek-r1", "deepseek-v3"))
@@ -731,6 +732,7 @@ class NvidiaEngine(TranslationEngine):
         context_item_count = len(history)
         request_body_char_count: int | None = None
         message_count: int | None = None
+        retry_transient_errors = bool(getattr(self, "_retry_transient_errors", True))
 
         def record_diagnostics(
             api_error_type: str | None = None,
@@ -865,7 +867,7 @@ class NvidiaEngine(TranslationEngine):
                 record_attempt_duration(current_attempt_index, _t0)
                 if _is_timeout_exception(e):
                     api_timeout_count += 1
-                if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                if retry_transient_errors and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
                     reason = "timeout" if _is_timeout_exception(e) else "network"
                     retry_count = attempt + 1
                     retry_reason = reason
@@ -885,7 +887,11 @@ class NvidiaEngine(TranslationEngine):
                 if _is_timeout_exception(e):
                     api_timeout_count += 1
                 reason = "timeout" if _is_timeout_exception(e) else classify_error(e)
-                if reason in ("timeout", "network") and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
+                if (
+                    retry_transient_errors
+                    and reason in ("timeout", "network")
+                    and attempt + 1 < _NVIDIA_MAX_ATTEMPTS
+                ):
                     retry_count = attempt + 1
                     retry_reason = reason
                     error_type, message_class = _classify_api_error(e)

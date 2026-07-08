@@ -133,6 +133,18 @@ def _active_translation_profile(profile_id: str, use_profile: bool = True):
         object.__setattr__(cfg.translation, "use_profile", original_use_profile)
 
 
+@contextmanager
+def _translation_mode(mode: str):
+    from config import cfg
+
+    original_mode = cfg.translation.translation_mode
+    object.__setattr__(cfg.translation, "translation_mode", mode)
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg.translation, "translation_mode", original_mode)
+
+
 # ---------------------------------------------------------------------------
 # Correction recording (source normalization / target corrections)
 # ---------------------------------------------------------------------------
@@ -699,6 +711,7 @@ class TestNvidiaEngine(unittest.TestCase):
             object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
 
         self.assertEqual(engine._timeout, 7)
+        self.assertFalse(engine._retry_transient_errors)
 
     def test_live_mode_default_falls_back_to_regular_timeout(self):
         from config import cfg
@@ -720,6 +733,7 @@ class TestNvidiaEngine(unittest.TestCase):
             object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
 
         self.assertEqual(engine._timeout, 10)
+        self.assertFalse(engine._retry_transient_errors)
 
     def test_live_mode_falls_back_to_regular_timeout_when_live_timeout_none(self):
         from config import cfg
@@ -762,6 +776,7 @@ class TestNvidiaEngine(unittest.TestCase):
             object.__setattr__(cfg.nvidia, "live_timeout", orig_live_timeout)
 
         self.assertEqual(engine._timeout, 10)
+        self.assertTrue(engine._retry_transient_errors)
 
     def test_retries_once_after_empty_response(self):
         e = self._engine()
@@ -825,6 +840,33 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertIsNone(api_diagnostics["api_error_type"])
         self.assertIsNone(api_diagnostics["api_error_message_class"])
 
+    def test_live_mode_does_not_retry_timeout_error(self):
+        import urllib.error
+
+        e = self._engine()
+        e._retry_transient_errors = False
+        side_effect = [urllib.error.URLError("timed out"), self._response("你好")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
+        )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 1)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 1)
+        self.assertEqual(api_diagnostics["api_attempt_index"], 1)
+        self.assertIsNotNone(api_diagnostics["api_first_attempt_ms"])
+        self.assertIsNone(api_diagnostics["api_retry_attempt_ms"])
+        self.assertEqual(api_diagnostics["api_error_type"], "timeout")
+        self.assertEqual(api_diagnostics["api_error_message_class"], "read_timeout")
+
     def test_records_final_timeout_error_diagnostics(self):
         import urllib.error
 
@@ -869,6 +911,29 @@ class TestNvidiaEngine(unittest.TestCase):
             get_last_engine_diagnostics(),
             {"engine": "nvidia", "retry_count": 1, "retry_reason": "network"},
         )
+
+    def test_live_mode_does_not_retry_network_error(self):
+        import urllib.error
+
+        e = self._engine()
+        e._retry_transient_errors = False
+        side_effect = [urllib.error.URLError("connection reset"), self._response("你好")]
+
+        with patch("urllib.request.urlopen", side_effect=side_effect) as urlopen, \
+                patch("time.sleep") as sleep:
+            result = e.translate("안녕하세요", "system", False)
+
+        self.assertIsNone(result)
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        self.assertEqual(
+            get_last_engine_diagnostics(),
+            {"engine": "nvidia", "retry_count": 0, "retry_reason": ""},
+        )
+        api_diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(api_diagnostics["api_attempt_count"], 1)
+        self.assertEqual(api_diagnostics["api_timeout_count"], 0)
+        self.assertEqual(api_diagnostics["api_error_type"], "connection_error")
 
     def test_does_not_retry_rate_limit(self):
         import urllib.error
@@ -1294,24 +1359,38 @@ class TestFallbackProbe(unittest.TestCase):
         engines[0].translate.assert_called()
 
     def test_single_failure_uses_fallback_without_switching(self):
-        t = _make_translator()
-        t._engines[0].translate.return_value = None
-        t._engines[1].translate.return_value = "哈囉"
+        with _translation_mode("clip"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = None
+            t._engines[1].translate.return_value = "哈囉"
 
-        result = t.translate("안녕하세요")
+            result = t.translate("안녕하세요")
         self.assertEqual(result, "哈囉")
         self.assertEqual(t._active_idx, 0, "single failure should not hard-switch primary")
         self.assertEqual(t._consecutive_primary_failures, 1)
 
+    def test_live_single_failure_hard_switches_to_fallback(self):
+        with _translation_mode("live"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = None
+            t._engines[1].translate.return_value = "哈囉"
+
+            result = t.translate("안녕하세요")
+
+        self.assertEqual(result, "哈囉")
+        self.assertEqual(t._active_idx, 1, "live mode should hard-switch after one primary miss")
+        self.assertEqual(t._consecutive_primary_failures, 0)
+
     def test_hard_switch_after_threshold_failures(self):
         from modules.translator import _FALLBACK_THRESHOLD
-        t = _make_translator()
-        t._engines[0].translate.return_value = None
-        t._engines[1].translate.return_value = "哈囉"
+        with _translation_mode("clip"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = None
+            t._engines[1].translate.return_value = "哈囉"
 
-        # Use distinct inputs — duplicate-suppression policy would block identical consecutive calls
-        for i in range(_FALLBACK_THRESHOLD):
-            t.translate(f"안녕하세요 {i}")
+            # Use distinct inputs — duplicate-suppression policy would block identical consecutive calls
+            for i in range(_FALLBACK_THRESHOLD):
+                t.translate(f"안녕하세요 {i}")
 
         self.assertEqual(t._active_idx, 1, "should hard-switch after threshold consecutive failures")
         self.assertEqual(t._consecutive_primary_failures, 0, "counter resets after hard switch")
@@ -1644,6 +1723,10 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("김챗나 방", "金chat的房間", "Chaenna的房間"),
             ("챈나가 왔어요", "Chxxnnx來了", "Chaenna來了"),
             ("챈나가 왔어요", "CHXXNNX來了", "Chaenna來了"),
+            ("찬나미들 천재야", "我們-chan娜們才是天才", "我們Chaenna粉才是天才"),
+            ("찬나미들 천재야", "我們-chan娜才是天才", "我們Chaenna粉才是天才"),
+            ("찬나미들 천재야", "我們Chaenna們才是天才", "我們Chaenna粉才是天才"),
+            ("찬나미들 천재야", "我們Chaenna们才是天才", "我們Chaenna粉才是天才"),
             ("고세구가 왔어요", "高世久來了", "Gosegu來了"),
         )
 
@@ -2642,6 +2725,29 @@ class TestQualityRetry(unittest.TestCase):
         self.assertEqual(result, self._GOOD)
         self.assertEqual(engine.engine_name, "groq")
         self.assertEqual(alt.calls, 1)
+
+    def test_amount_mismatch_diagnostic_does_not_trigger_quality_retry(self):
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        good = "收到一萬五千元"
+        primary = self._FakeEngine("nvidia", bad)
+        alt = self._FakeEngine("groq", good)
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source,
+            source,
+            bad,
+            "sys",
+            False,
+            None,
+            primary,
+            "pv0",
+        )
+
+        self.assertEqual(result, bad)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
 
     def test_retry_rejected_when_second_opinion_is_also_bad(self):
         primary = self._FakeEngine("nvidia", self._BAD)

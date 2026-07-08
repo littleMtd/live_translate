@@ -367,6 +367,8 @@ class TestTranslatorThread(unittest.TestCase):
                 if text == "slow":
                     slow_started.set()
                     release_slow.wait(timeout=3)
+                    fast_finished.wait(timeout=3)
+                    time.sleep(0.05)
                 if text == "fast":
                     fast_finished.set()
                 return TranslationOutcome(

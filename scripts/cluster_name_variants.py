@@ -8,7 +8,7 @@ and 2 alike); this script groups those leaks into spelling-variant clusters
 
 It does not mutate data/. It writes a candidate table + the human-review artifacts
 the proposal's gate requires (similarity threshold used, full stop-list applied,
-cross-profile conflicts, boundary pairs near the threshold) to .analysis-tmp/.
+cross-profile conflicts, boundary pairs near the threshold) to scratch/analysis/.
 
 Leak detection is decoupled from the target_has_hangul quality flag (the proposal
 flagged flag-based measurement as circular and v1-blind). Coverage of the v2-only
@@ -413,11 +413,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.34,
                         help="normalized jamo edit-distance threshold for variant clustering")
     parser.add_argument("--output", type=Path,
-                        default=PROJECT_ROOT / ".analysis-tmp" / "name_normalization_20260624.json")
+                        default=PROJECT_ROOT / "scratch" / "analysis" / "name_normalization_20260624.json")
     parser.add_argument(
         "--review-output",
         type=Path,
-        default=PROJECT_ROOT / ".analysis-tmp" / "name_normalization_review_20260624.md",
+        default=PROJECT_ROOT / "scratch" / "analysis" / "name_normalization_review_20260624.md",
     )
     return parser.parse_args(argv)
 

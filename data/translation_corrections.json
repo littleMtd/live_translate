@@ -1,6 +1,9 @@
 {
   "source_norm": {
-    "shared": {},
+    "shared": {
+      "운동 사면서": "운동 삼아서",
+      "혈압 주셔야": "혈압 재셔야"
+    },
     "profiles": {
       "stellive_hina": {
         "히나유키 히나": "시라유키 히나",
@@ -21,6 +24,10 @@
         "챔나": "챈나",
         "채엔나": "챈나",
         "차엔나": "챈나",
+        "찬나미들": "챈나미들",
+        "찬나미": "챈나미",
+        "찬나님": "챈나님",
+        "찬나": "챈나",
         "주먹 언니": "솜펀치 언니",
         "주먹이": "솜펀치",
         "주먹아": "솜펀치",
@@ -28,6 +35,7 @@
         "천사채나": "천사챈나",
         "채나룬": "챈나룬",
         "채나롱": "챈나롱",
+        "채나룽": "챈나룽",
         "채나로": "챈나로",
         "채나님": "챈나님",
         "채나야": "챈나야",
@@ -83,6 +91,11 @@
         "하치와래": "하치와레",
         "하츠와 아래": "하치와레",
         "하츠와": "하치와레"
+      },
+      "url": {
+        "솜명이": "솜먕이",
+        "솜명은": "솜먕은",
+        "솜명": "솜먕"
       }
     }
   },
@@ -540,6 +553,82 @@
           "right": "神力更強"
         }
       ]
+    },
+    {
+      "source_terms": [
+        "연근조림"
+      ],
+      "replacements": [
+        {
+          "wrong": "薑絲燉肉",
+          "right": "醬燒蓮藕"
+        },
+        {
+          "wrong": "薑絲燉菜",
+          "right": "醬燒蓮藕"
+        },
+        {
+          "wrong": "蓮根燉菜",
+          "right": "醬燒蓮藕"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "배고파 이렇게"
+      ],
+      "replacements": [
+        {
+          "wrong": "做出餓了的樣子",
+          "right": "說我餓了"
+        },
+        {
+          "wrong": "裝作很餓",
+          "right": "說我餓了"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "아프긴 한데",
+        "배고파"
+      ],
+      "match": "all",
+      "replacements": [
+        {
+          "wrong": "痛是痛，但裝作很餓的樣子",
+          "right": "痛是痛，但我餓了"
+        },
+        {
+          "wrong": "痛是痛，但裝作很餓",
+          "right": "痛是痛，但我餓了"
+        }
+      ]
+    },
+    {
+      "source_terms": [
+        "퇴원",
+        "낳고 싶"
+      ],
+      "match": "all",
+      "replacements": [
+        {
+          "wrong": "想快點生下來",
+          "right": "想快點好起來"
+        },
+        {
+          "wrong": "快點生下來",
+          "right": "快點好起來"
+        },
+        {
+          "wrong": "想快點生出來",
+          "right": "想快點好起來"
+        },
+        {
+          "wrong": "快點生出來",
+          "right": "快點好起來"
+        }
+      ]
     }
   ],
   "profile_source_aware_target_replacements": {
@@ -642,6 +731,127 @@
           }
         ]
       }
+    ],
+    "hades_chxxnnx": [
+      {
+        "source_terms": [
+          "챈나미",
+          "찬나미"
+        ],
+        "replacements": [
+          {
+            "wrong": "-chan娜們",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-Chan娜們",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-chan娜们",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-Chan娜们",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-chan娜",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-Chan娜",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-channa",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-Channa",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-chan-na",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "-Chan-na",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "Chaenna們",
+            "right": "Chaenna粉"
+          },
+          {
+            "wrong": "Chaenna们",
+            "right": "Chaenna粉"
+          }
+        ]
+      }
+    ],
+    "url": [
+      {
+        "source_terms": [
+          "마냥님"
+        ],
+        "replacements": [
+          {
+            "wrong": "馬良先生",
+            "right": "마냥님"
+          },
+          {
+            "wrong": "马良先生",
+            "right": "마냥님"
+          },
+          {
+            "wrong": "馬樣先生",
+            "right": "마냥님"
+          },
+          {
+            "wrong": "马样先生",
+            "right": "마냥님"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "마냥"
+        ],
+        "replacements": [
+          {
+            "wrong": "我明明躲得很好吧",
+            "right": "마냥藏得很好吧"
+          },
+          {
+            "wrong": "明明姐姐",
+            "right": "마냥姐姐"
+          },
+          {
+            "wrong": "明明姊姊",
+            "right": "마냥姊姊"
+          },
+          {
+            "wrong": "明明姐",
+            "right": "마냥姐"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "오아공"
+        ],
+        "replacements": [
+          {
+            "wrong": "歐亞公",
+            "right": "오아공"
+          },
+          {
+            "wrong": "欧亚公",
+            "right": "오아공"
+          }
+        ]
+      }
     ]
   },
   "korean_name_suffixes": [
@@ -662,6 +872,7 @@
     "만",
     "보다",
     "입니다",
+    "였습니다",
     "이랑",
     "가",
     "의",
@@ -679,6 +890,97 @@
     "님"
   ],
   "name_rendering_rules": [
+    {
+      "scope": "url",
+      "source_aliases": [
+        "랑코",
+        "김랑코",
+        "Ranko"
+      ],
+      "wrong_forms": [
+        "랑코",
+        "金朗考",
+        "蘭子",
+        "兰子",
+        "朗子",
+        "蘭科",
+        "兰科",
+        "朗科",
+        "蘭可",
+        "兰可",
+        "朗可",
+        "朗考"
+      ],
+      "canonical": "랑코"
+    },
+    {
+      "scope": "url",
+      "source_aliases": [
+        "모카",
+        "Moka"
+      ],
+      "wrong_forms": [
+        "모카",
+        "摩卡",
+        "莫卡",
+        "模卡"
+      ],
+      "canonical": "모카"
+    },
+    {
+      "scope": "url",
+      "source_aliases": [
+        "마냥",
+        "Manyang"
+      ],
+      "wrong_forms": [
+        "마냥",
+        "馬樣",
+        "马样",
+        "馬良",
+        "马良",
+        "馬朗",
+        "马朗"
+      ],
+      "canonical": "마냥"
+    },
+    {
+      "scope": "url",
+      "source_aliases": [
+        "솜먕",
+        "솜명",
+        "Sommyang"
+      ],
+      "wrong_forms": [
+        "솜먕",
+        "솜명",
+        "綿明",
+        "绵明",
+        "棉明",
+        "宋明"
+      ],
+      "canonical": "솜먕"
+    },
+    {
+      "scope": "url",
+      "source_aliases": [
+        "오아",
+        "Oa"
+      ],
+      "wrong_forms": [
+        "오아",
+        "噢啊",
+        "歐亞",
+        "欧亚",
+        "奧亞",
+        "奥亚",
+        "奧啊",
+        "奥啊",
+        "奧峰",
+        "奥峰"
+      ],
+      "canonical": "오아"
+    },
     {
       "scope": "stellive_hina",
       "source_aliases": [
@@ -721,6 +1023,13 @@
       "scope": "hades_chxxnnx",
       "source_aliases": [
         "챈나",
+        "챈나미",
+        "찬나미",
+        "찬나미들",
+        "챈나롱",
+        "챈나룽",
+        "챈나룬",
+        "챈나로",
         "김챗나",
         "김챔나",
         "챗나",
@@ -737,6 +1046,12 @@
         "CHXXNNX",
         "-chan",
         "-Chan",
+        "-chan娜",
+        "-Chan娜",
+        "-channa",
+        "-Channa",
+        "-chan-na",
+        "-Chan-na",
         "－chan",
         "－Chan",
         "–chan",

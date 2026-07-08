@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from dotenv import load_dotenv
-from modules.streamer_profiles import known_profile_ids
+from modules.streamer_profiles import canonical_profile_id, known_profile_ids
 
 load_dotenv()
 
@@ -129,7 +129,7 @@ def _load_default_slang(path: Path = _DEFAULT_SLANG_PATH) -> MappingProxyType:
 _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 
-_VALID_STREAMER_PROFILES = known_profile_ids()
+_VALID_STREAMER_PROFILES = known_profile_ids(include_aliases=True)
 _VALID_TRANSLATION_MODES = {"live", "clip"}
 _VALID_ENGINE_NAMES      = {"claude", "google_translate", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
@@ -209,7 +209,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu","url"
-    streamer_profile: str        = "hades_chxxnnx"
+    streamer_profile: str        = "isegye_lilpa"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     # Manual session state: what the streamer is doing right now (e.g.
     # "StarCraft", "tier list talk"). Injected into the system prompt as one
@@ -230,7 +230,8 @@ class _Translation:
                 f"cfg.translation.translation_mode invalid: {self.translation_mode!r} "
                 f"(must be one of {_VALID_TRANSLATION_MODES})"
             )
-        if self.streamer_profile not in _VALID_STREAMER_PROFILES:
+        canonical_streamer_profile = canonical_profile_id(self.streamer_profile)
+        if self.streamer_profile and not canonical_streamer_profile:
             raise ValueError(
                 f"cfg.translation.streamer_profile invalid: {self.streamer_profile!r} "
                 f"(must be one of {_VALID_STREAMER_PROFILES})"
@@ -339,7 +340,7 @@ class _Config:
 
     @property
     def active_streamer_profile(self) -> str:
-        return self.translation.streamer_profile
+        return canonical_profile_id(self.translation.streamer_profile)
 
     def __post_init__(self):
         if self.live_engine not in _VALID_BACKEND_MODES:

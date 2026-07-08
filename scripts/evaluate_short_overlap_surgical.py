@@ -226,7 +226,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--events", nargs="+", required=True)
     parser.add_argument("--cps", type=float, default=DEFAULT_CHARS_PER_SECOND)
     parser.add_argument("--output", type=Path,
-                        default=PROJECT_ROOT / ".analysis-tmp" / "short_overlap_surgical_20260624.json")
+                        default=PROJECT_ROOT / "scratch" / "analysis" / "short_overlap_surgical_20260624.json")
     return parser.parse_args(argv)
 
 

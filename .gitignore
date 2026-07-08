@@ -16,6 +16,15 @@ logs/
 audio/
 *.log
 
+# Local generated analysis/test artifacts
+scratch/
+.analysis-tmp/
+.pytest-tmp*/
+.coverage
+coverage.xml
+htmlcov/
+pytest-report.xml
+
 # IDE and test tooling
 .pytest_cache/
 .vscode/

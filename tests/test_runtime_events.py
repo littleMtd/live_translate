@@ -192,6 +192,65 @@ def test_translation_quality_flags_unbalanced_brackets():
     assert "unbalanced_brackets" in result["quality_flags"]
 
 
+def test_translation_quality_flags_amount_mismatch_for_lost_man_unit():
+    result = translation_quality("만 5천원 받았어", "收到五千")
+
+    assert result["source_amount_values"] == [15000]
+    assert result["target_amount_values"] == [5000]
+    assert result["amount_mismatch_candidate"] is True
+    assert "amount_mismatch" not in result["quality_flags"]
+    assert result["quality_severity"] == "ok"
+
+
+def test_translation_quality_accepts_matching_mixed_amount_units():
+    result = translation_quality("만 5천원 받았어", "收到一萬五千元")
+
+    assert result["source_amount_values"] == [15000]
+    assert result["target_amount_values"] == [15000]
+    assert result["amount_mismatch_candidate"] is False
+    assert "amount_mismatch" not in result["quality_flags"]
+
+
+def test_translation_quality_does_not_treat_months_as_amounts():
+    result = translation_quality("10월에 한다네", "10月舉行")
+
+    assert result["source_amount_values"] == []
+    assert result["target_amount_values"] == []
+    assert result["amount_mismatch_candidate"] is False
+    assert "amount_mismatch" not in result["quality_flags"]
+
+
+def test_translation_quality_does_not_treat_won_words_as_amounts():
+    for source in ("원래 그랬어", "원인 몰라", "구원 투수 왔어"):
+        result = translation_quality(source, "這不是金額")
+
+        assert result["source_amount_values"] == []
+        assert result["amount_mismatch_candidate"] is False
+
+
+def test_translation_quality_does_not_merge_subject_particle_into_amount():
+    result = translation_quality("이 천원은 너무 싸다", "這一千元太便宜")
+
+    assert result["source_amount_values"] == [1000]
+    assert result["target_amount_values"] == [1000]
+    assert result["amount_mismatch_candidate"] is False
+
+
+def test_translation_quality_repeated_same_amount_can_be_translated_once():
+    result = translation_quality("만원 만원 만원 받았어", "收到一萬元")
+
+    assert result["source_amount_values"] == [10000, 10000, 10000]
+    assert result["target_amount_values"] == [10000]
+    assert result["amount_mismatch_candidate"] is False
+
+
+def test_translation_quality_price_range_does_not_concatenate_digits():
+    result = translation_quality("2, 3만원 정도야", "大概兩三萬元")
+
+    assert 230000 not in result["source_amount_values"]
+    assert result["amount_mismatch_candidate"] is False
+
+
 def test_translation_quality_empty_target_scores_zero():
     result = translation_quality("안녕하세요", None)
 

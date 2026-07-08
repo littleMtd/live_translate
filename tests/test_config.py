@@ -38,10 +38,31 @@ class TestConfig(unittest.TestCase):
         from config import _VALID_STREAMER_PROFILES
         from modules.streamer_profiles import known_profile_ids
 
-        self.assertEqual(_VALID_STREAMER_PROFILES, known_profile_ids())
+        self.assertEqual(_VALID_STREAMER_PROFILES, known_profile_ids(include_aliases=True))
 
     def test_active_streamer_profile_matches_translation_profile(self):
         self.assertEqual(cfg.active_streamer_profile, cfg.translation.streamer_profile)
+
+    def test_streamer_profile_alias_is_accepted_and_canonicalized(self):
+        from config import _Config, _Translation
+
+        custom = _Config(translation=_Translation(streamer_profile="hades"))
+
+        self.assertEqual(custom.translation.streamer_profile, "hades")
+        self.assertEqual(custom.active_streamer_profile, "hades_chxxnnx")
+
+    def test_streamer_profile_alias_validation_is_case_insensitive(self):
+        from config import _Config, _Translation
+
+        custom = _Config(translation=_Translation(streamer_profile="HADES"))
+
+        self.assertEqual(custom.active_streamer_profile, "hades_chxxnnx")
+
+    def test_unknown_streamer_profile_is_rejected(self):
+        from config import _Config, _Translation
+
+        with self.assertRaisesRegex(ValueError, "streamer_profile invalid"):
+            _Config(translation=_Translation(streamer_profile="typo_profile"))
 
     def test_translation_slang_is_dict(self):
         from collections.abc import Mapping
