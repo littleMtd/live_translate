@@ -138,6 +138,19 @@ def test_url_translation_profiles_contain_official_group_terms():
             assert term in profile
 
 
+def test_live_path_uses_qwen_prompt():
+    """_BASE_PROMPT is benchmark-only: the 2026-07 fixes (number units,
+    name-rule tightening, anti-echo) live only in _QWEN_PROMPT. If this
+    fails, the live engine is no longer a qwen model — port those fixes to
+    _BASE_PROMPT before switching."""
+    from modules.translation_prompts import _is_qwen_model
+
+    assert _is_qwen_model(), (
+        "live path no longer selects _QWEN_PROMPT; _BASE_PROMPT is stale "
+        "(missing the 2026-07 prompt fixes) — port them before switching engines"
+    )
+
+
 def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():
     """standard/qwen are two hand-written renderings of the same facts.
 

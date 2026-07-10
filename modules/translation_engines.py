@@ -36,20 +36,16 @@ _COMPACT_INVARIANTS = (
     "unsure write the amount in digits. "
     "(4) Output Traditional Chinese (zh-TW) only, never Simplified."
 )
-_GROQ_COMPACT_SYSTEM_PROMPT = (
-    "You are a Korean to Traditional Chinese live subtitle translator. "
-    "Translate only the provided Korean input into natural zh-TW. "
-    "Output only the translation, with no labels or explanations. "
-    "If the input is empty, noise, or unreadable, output an empty string. "
-    "Keep uncertain names and brands as names; do not invent facts. "
-    + _COMPACT_INVARIANTS
-)
-_OPENROUTER_COMPACT_SYSTEM_PROMPT = (
+# One preamble for every compact engine: the groq/openrouter versions used to
+# be two hand-written near-copies that drifted apart for no reason (same
+# disease as the standard/qwen profile split). This merges the stronger
+# phrasing of each.
+_COMPACT_SYSTEM_PROMPT = (
     "You are a Korean to Traditional Chinese live subtitle translator. "
     "Translate only the provided Korean livestream speech into natural zh-TW. "
     "Output only the translation, with no labels, explanations, romanization, or source text. "
-    "Preserve gaming/anime terms and uncertain person names as names; do not force Chinese phonetic names. "
     "If the input is empty, noise, or unreadable, output an empty string. "
+    "Preserve gaming/anime terms and uncertain names and brands as names; do not invent facts. "
     "If the source is uncertain, prefer a short conservative translation over invented detail. "
     + _COMPACT_INVARIANTS
 )
@@ -382,10 +378,10 @@ def _groq_system_prompt(system_prompt: str) -> str:
     profile_id = getattr(cfg, "active_streamer_profile", "")
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         return (
-            f"{_GROQ_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+            f"{_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
             f"{_compact_profile_digest(profile_id)}"
         )
-    return _GROQ_COMPACT_SYSTEM_PROMPT
+    return _COMPACT_SYSTEM_PROMPT
 
 
 def _openrouter_system_prompt(system_prompt: str) -> str:
@@ -394,10 +390,10 @@ def _openrouter_system_prompt(system_prompt: str) -> str:
     profile_id = getattr(cfg, "active_streamer_profile", "")
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         return (
-            f"{_OPENROUTER_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+            f"{_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
             f"{_compact_profile_digest(profile_id)}"
         )
-    return _OPENROUTER_COMPACT_SYSTEM_PROMPT
+    return _COMPACT_SYSTEM_PROMPT
 
 
 def effective_system_prompt_for_engine(

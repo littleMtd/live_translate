@@ -52,7 +52,12 @@ def _is_qwen_model() -> bool:
 
 
 def _build_base_prompt() -> str:
-    """生成通用 system prompt（兼容所有引擎）"""
+    """生成通用 system prompt——目前僅供 benchmark 非 qwen 模型時使用。
+
+    Live 路徑三個引擎全是 qwen(nvidia 走 _QWEN_PROMPT、groq/openrouter 走
+    compact prompt),因此 2026-07 起的 prompt 修正(數字與金額、人名規則收緊、
+    防複誦)只維護在 _QWEN_PROMPT。若要把 live 引擎換成非 qwen 模型,先把那些
+    修正移植過來——tests/test_translation_prompts.py 的守門測試會擋住你。"""
     slang_lines = "\n".join(f"  {k} → {v}" for k, v in cfg.translation.slang.items())
     slang_part = (
         f"\n【常用詞彙對照】（以下詞彙出現於句子中時，請依此翻譯）\n{slang_lines}"
