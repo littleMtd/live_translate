@@ -2,9 +2,11 @@ import socket
 import threading
 import time
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from urllib.error import URLError
 
 from config import cfg
+from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
 from utils.api_retry import classify_error
 from utils.logger import get_logger
 
@@ -340,12 +342,49 @@ def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[t
     return _limited_history(history, config_prefix="openrouter")
 
 
+_DIGEST_MAX_RULES = 15
+
+
+@lru_cache(maxsize=8)
+def _compact_profile_digest(profile_id: str) -> str:
+    """Per-profile name table for the compact prompts (~60-90 tokens).
+
+    The compact prompts drop the full profile for TPM budget, which left the
+    fallback engines blind to streamer-specific names. This digest is derived
+    from name_rendering_rules (translation_corrections.json) so there is no
+    third hand-written copy to drift; corrections data is load-once, so the
+    cache never sees stale rules within a run."""
+    if not profile_id:
+        return ""
+    try:
+        rules = load_translation_corrections().name_rendering_rules
+    except Exception:
+        log.warning("compact profile digest unavailable", exc_info=True)
+        return ""
+    parts = []
+    for rule in rules:
+        if rule.scope not in (profile_id, SHARED_NAME_SCOPE):
+            continue
+        aliases = "/".join(dict.fromkeys(rule.source_aliases[:2]))
+        parts.append(f"{aliases}→{rule.canonical}")
+    if not parts:
+        return ""
+    return (
+        " Fixed name renderings (source→exact output): "
+        + "; ".join(parts[:_DIGEST_MAX_RULES])
+        + "."
+    )
+
+
 def _groq_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
         return system_prompt
     profile_id = getattr(cfg, "active_streamer_profile", "")
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
-        return f"{_GROQ_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+        return (
+            f"{_GROQ_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+            f"{_compact_profile_digest(profile_id)}"
+        )
     return _GROQ_COMPACT_SYSTEM_PROMPT
 
 
@@ -354,7 +393,10 @@ def _openrouter_system_prompt(system_prompt: str) -> str:
         return system_prompt
     profile_id = getattr(cfg, "active_streamer_profile", "")
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
-        return f"{_OPENROUTER_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+        return (
+            f"{_OPENROUTER_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+            f"{_compact_profile_digest(profile_id)}"
+        )
     return _OPENROUTER_COMPACT_SYSTEM_PROMPT
 
 

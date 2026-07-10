@@ -84,6 +84,65 @@ class TestTokenUsageCapture(unittest.TestCase):
         self.assertIn("Korean to Traditional Chinese", prompt)
 
 
+class TestCompactProfileDigest(unittest.TestCase):
+    """The compact prompts must carry the active profile's name digest —
+    and only the active profile's."""
+
+    @staticmethod
+    def _compact_prompt(engine: str, profile: str, use_profile: bool) -> str:
+        from config import cfg
+
+        compact_field = (
+            "groq_translation_compact_prompt" if engine == "groq" else "openrouter_compact_prompt"
+        )
+        original = {
+            "compact": getattr(cfg.translation, compact_field),
+            "profile": cfg.translation.streamer_profile,
+            "use_profile": cfg.translation.use_profile,
+        }
+        object.__setattr__(cfg.translation, compact_field, True)
+        object.__setattr__(cfg.translation, "streamer_profile", profile)
+        object.__setattr__(cfg.translation, "use_profile", use_profile)
+        try:
+            return effective_system_prompt_for_engine(engine, "FULL PRIMARY PROMPT")
+        finally:
+            object.__setattr__(cfg.translation, compact_field, original["compact"])
+            object.__setattr__(cfg.translation, "streamer_profile", original["profile"])
+            object.__setattr__(cfg.translation, "use_profile", original["use_profile"])
+
+    def test_digest_lists_profile_and_shared_names(self):
+        for engine in ("groq", "openrouter"):
+            prompt = self._compact_prompt(engine, "url", use_profile=True)
+            self.assertIn("Fixed name renderings", prompt)
+            self.assertIn("랑코", prompt)
+            self.assertIn("솜먕", prompt)
+            self.assertIn("유재석→劉在錫", prompt)  # shared scope rides along
+
+    def test_wrong_profile_names_do_not_leak(self):
+        # 랑코 can't be the probe: it appears in _COMPACT_INVARIANTS itself.
+        prompt = self._compact_prompt("groq", "hades_chxxnnx", use_profile=True)
+        self.assertIn("Chaenna", prompt)
+        self.assertNotIn("솜먕", prompt)
+        self.assertNotIn("모카", prompt)
+
+    def test_profile_alias_resolves_to_canonical_digest(self):
+        prompt = self._compact_prompt("groq", "hades", use_profile=True)
+        self.assertIn("Chaenna", prompt)
+
+    def test_no_digest_without_use_profile(self):
+        prompt = self._compact_prompt("groq", "url", use_profile=False)
+        self.assertNotIn("Fixed name renderings", prompt)
+        self.assertNotIn("솜먕", prompt)
+
+    def test_digest_stays_within_compact_token_budget(self):
+        from modules.translation_engines import _compact_profile_digest
+
+        for profile in ("url", "hades_chxxnnx", "mwmeu", "stellive_hina", "isegye_lilpa"):
+            digest = _compact_profile_digest(profile)
+            # ~4 chars/token upper bound: keep the digest under ~150 tokens.
+            self.assertLess(len(digest), 600, f"{profile} digest too large: {len(digest)}")
+
+
 if __name__ == "__main__":
     unittest.main()
 

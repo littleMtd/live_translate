@@ -13,7 +13,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "1c7551ac40335ea88cae21a4ca869da1affdae32f3f5a6a4d91c9f4cce62acad"
+_TRANSLATION_PROFILE_DATA_HASH = "03d1662dde319bc584f159828b48733c16b031010d0c28c044c3461d4fa0ce84"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -136,6 +136,37 @@ def test_url_translation_profiles_contain_official_group_terms():
         profile = get_translation_profile("url", qwen=qwen)
         for term in required_terms:
             assert term in profile
+
+
+def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():
+    """standard/qwen are two hand-written renderings of the same facts.
+
+    Nothing else guarantees they teach the same proper nouns, so compare the
+    Hangul terms on glossary/mapping lines (before the first example) and
+    require exact agreement. Example sentences may differ freely."""
+    import re
+
+    standard_profiles, qwen_profiles = _load_translation_profiles(_PROFILE_DATA_PATH)
+    example_marker = re.compile(r"^(例\s?\d|\d+\.\s)")
+    hangul_term = re.compile(r"[가-힣]{2,}")
+
+    def glossary_hangul_terms(text: str) -> set[str]:
+        terms: set[str] = set()
+        for line in text.splitlines():
+            if example_marker.match(line.strip()):
+                break
+            low = line.lower()
+            if "->" in line or "=" in line or "keep" in low or "renderings" in low or "names:" in low:
+                terms.update(hangul_term.findall(line))
+        return terms
+
+    for profile_id, standard_text in standard_profiles.items():
+        standard_terms = glossary_hangul_terms(standard_text)
+        qwen_terms = glossary_hangul_terms(qwen_profiles[profile_id])
+        assert standard_terms == qwen_terms, (
+            f"{profile_id} glossary drift — only standard: "
+            f"{sorted(standard_terms - qwen_terms)}, only qwen: {sorted(qwen_terms - standard_terms)}"
+        )
 
 
 def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):

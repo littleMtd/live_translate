@@ -8,6 +8,9 @@ _CORRECTIONS_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "translation_corrections.json"
 )
 
+# Scope value meaning "applies to every profile" in name_rendering_rules.
+SHARED_NAME_SCOPE = "__shared__"
+
 
 @dataclass(frozen=True)
 class ReplacementGroup:

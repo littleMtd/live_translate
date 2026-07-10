@@ -123,7 +123,7 @@ _META_GARBAGE_MARKERS = (
     "省略",
 )
 
-_SHARED_NAME_SCOPE = "__shared__"
+from modules.translation_corrections import SHARED_NAME_SCOPE as _SHARED_NAME_SCOPE
 _STELLIVE_HINA_PROFILE_ID = "stellive_hina"
 _HADES_PROFILE_ID = "hades_chxxnnx"
 _MWMEU_PROFILE_ID = "mwmeu"
