@@ -46,8 +46,8 @@ def test_translation_correction_data_snapshot_counts():
         for profile, groups in tables.profile_source_aware_target_replacements.items()
     } == {"stellive_hina": 5, "hades_chxxnnx": 1, "url": 3}
     assert len(tables.korean_name_suffixes) == 33
-    assert len(tables.name_rendering_rules) == 27
-    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 183
+    assert len(tables.name_rendering_rules) == 28
+    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 186
     assert sum(
         len(group.replacements)
         for group in tables.source_aware_target_replacements

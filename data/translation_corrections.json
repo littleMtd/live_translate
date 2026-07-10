@@ -1354,6 +1354,18 @@
         "海棟"
       ],
       "canonical": "해둥이"
+    },
+    {
+      "scope": "stellive_hina",
+      "source_aliases": [
+        "리제"
+      ],
+      "wrong_forms": [
+        "利潔",
+        "莉潔",
+        "Lize"
+      ],
+      "canonical": "리제"
     }
   ]
 }
