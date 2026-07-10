@@ -44,7 +44,7 @@ def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
 
 
 def _is_qwen_model() -> bool:
-    """检查当前后端是否为 Qwen 模型"""
+    """檢查當前後端是否為 Qwen 模型"""
     if cfg.live_engine == "nvidia":
         model = cfg.nvidia.model.lower()
         return "qwen" in model
@@ -239,7 +239,6 @@ def _build_base_prompt() -> str:
         "input: 나 VVIP 맞네\n"
         "output: 我確實是VVIP呢\n"
     )
-    base += "\n\n---\nTranslate the next input. Output the translation only."
     return base
 
 
@@ -252,7 +251,7 @@ def _build_qwen_optimized_prompt() -> str:
     )
 
     stt_section = (
-        "[STT 原始字符串錯誤 - Qwen 必讀]\n"
+        "[STT 原始字串錯誤 - Qwen 必讀]\n"
         "輸入來自語音識別(STT)，是**原始、未經編輯**的文本。\n"
         "STT 常見問題：\n"
         "· 幻覺詞彙 - 捏造不存在的詞（如'비맥스로''제트로''내미쉬'）\n"
@@ -265,7 +264,7 @@ def _build_qwen_optimized_prompt() -> str:
         "· 多個無關韓文詞彙拼接無邏輯（'풀리지 않는 피로의 비맥스로...제트로' ← 完全亂序）\n"
         "· 同一詞重複≥2次且占比>50%（'21개월...21개월' ← 單純重複）\n"
         "· 商業廣告/網站促銷混入（'설명은 약사님께 풀도 지금 사이트 들어가보세요' ← STT 幻覺）\n"
-        "· 混亂數字+破碎詞彙（'45로...45키로...자꾸 막 한' ← 數字混乱+句式破碎）\n"
+        "· 混亂數字+破碎詞彙（'45로...45키로...자꾸 막 한' ← 數字混亂+句式破碎）\n"
         "· 外語+韓文無邏輯混雜（'비맥스 제트' ← 無實詞，瞎編）\n"
         "→ 這些情況回覆完全留空（長度 0），不要試圖翻譯，也不要輸出任何說明文字\n\n"
         
@@ -279,7 +278,7 @@ def _build_qwen_optimized_prompt() -> str:
         f"你是專業韓文→繁體中文直播字幕翻譯器。目標語言：{cfg.translation.target_lang}。\n"
         "你的任務是精準、自然地將韓文直播內容翻譯成繁體中文字幕，保留原意和情感。\n\n"
         
-        "⚠️ 重要：輸入是語音識別(STT)的**原始字符串**，可能包含大量錯誤、雜訊、幻覺詞彙。\n"
+        "⚠️ 重要：輸入是語音辨識(STT)的**原始字串**，可能包含大量錯誤、雜訊、幻覺詞彙。\n"
         "你的首要責任是**識別和過濾垃圾**，而非試圖補全或推測原意。\n\n"
 
         "[核心翻譯原則]\n"
@@ -300,7 +299,7 @@ def _build_qwen_optimized_prompt() -> str:
         "   · 複合例：'풀리지 않는 피로의 비맥스로...' → 只翻譯有意義的部分，未知詞保留或省略，完全無邏輯則回覆留空\n"
         "   ⚠️ **絕不要猜測或補充 3+ 字未知詞的意義**（這會放大 STT 幻覺）\n\n"
         "7. ⚠️ **禁止補充、推論、擴展原文沒有的內容**\n"
-        "   因為輸入是 STT 原始字符串，補充只會讓幻覺更嚴重\n"
+        "   因為輸入是 STT 原始字串，補充只會讓幻覺更嚴重\n"
         "   例如輸入'비맥스로...'是 STT 垃圾，不要補充'非最大級別''詳細說明'等\n"
         "   例如輸入'풀도 사이트 들어가보세요'包含廣告，不要補充'諮詢藥師'\n"
         "   例如輸入'45로...45키로...자꾸 막 한'是 STT 混亂，不要補充'恢復體重''繁忙'等推測\n"
@@ -452,11 +451,15 @@ def _build_qwen_optimized_prompt() -> str:
         "例44 - KO: 오래 방송했더니 목소리가 이상해졌어요 ㅋㅋ | ZH: 播了太久聲音都變了哈哈\n"
     )
     
-    # Qwen 専用 prompt 使用 Qwen 専用档案
-    base += "\n\n---\n只輸出翻譯。無任何其他文字。"
     return base
 
 
+# Final output rules must be the LAST thing the model reads, so they are not
+# baked into the prompt bodies: _compose_system_prompt() appends the matching
+# tail after any streamer profile / [Background] activity sections.
+_BASE_PROMPT_TAIL = "\n\n---\nTranslate the next input. Output the translation only."
+_QWEN_PROMPT_TAIL = "\n\n---\n只輸出翻譯。無任何其他文字。"
+
 _BASE_PROMPT = _build_base_prompt()
-_QWEN_PROMPT = _build_qwen_optimized_prompt()  # Qwen 专属优化版
+_QWEN_PROMPT = _build_qwen_optimized_prompt()  # Qwen 專屬優化版
 

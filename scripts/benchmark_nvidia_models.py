@@ -20,7 +20,9 @@ from modules.translation_engines import _build_user_message
 from modules.translation_policy import TranslationPolicy
 from modules.translation_prompts import (
     _BASE_PROMPT,
+    _BASE_PROMPT_TAIL,
     _QWEN_PROMPT,
+    _QWEN_PROMPT_TAIL,
     get_translation_profile,
 )
 
@@ -267,18 +269,20 @@ def _has_template(text: str) -> bool:
 def _system_prompt_for_model(model: str) -> str:
     is_qwen = "qwen" in model.lower()
     base_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
+    tail = _QWEN_PROMPT_TAIL if is_qwen else _BASE_PROMPT_TAIL
     system_prompt = base_prompt  # PromptEvolver removed 2026-06-12
     if not cfg.translation.use_profile:
-        return system_prompt
+        return system_prompt + tail
     profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
     if not profile:
-        return system_prompt
+        return system_prompt + tail
     return (
         f"{system_prompt}\n\n"
         "[Streamer Profile]\n"
         f"{profile}\n\n"
         "Apply this profile only when relevant to the input. "
         "Do not invent references that are not present."
+        f"{tail}"
     )
 
 

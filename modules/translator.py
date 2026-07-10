@@ -19,7 +19,9 @@ from modules.pipeline_events import sentence_incomplete, sentence_metadata, sent
 from modules.db import _get_db
 from modules.translation_prompts import (
     _BASE_PROMPT,
+    _BASE_PROMPT_TAIL,
     _QWEN_PROMPT,
+    _QWEN_PROMPT_TAIL,
     _is_qwen_model,
     get_translation_profile,
 )
@@ -1005,6 +1007,10 @@ def _compose_system_prompt() -> str:
             + "\nUse this only to disambiguate game/context-specific terms. "
               "Never translate, mention, or copy it into the output."
         )
+
+    # Output rules go last so profile/background sections never sit after the
+    # final instruction the model is supposed to obey.
+    system_prompt += _QWEN_PROMPT_TAIL if is_qwen else _BASE_PROMPT_TAIL
     return system_prompt
 
 

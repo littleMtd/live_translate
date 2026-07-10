@@ -96,11 +96,11 @@ def run_translate(text: str, incomplete: bool = False, no_api: bool = False):
     """翻譯單一句子，並顯示 prompt 與結果。"""
     _print_divider("STAGE: translator")
 
-    from modules.translator import Translator, _BASE_PROMPT
+    from modules.translator import Translator, _compose_system_prompt
 
     if no_api:
-        # 顯示會送出的內容，但不實際呼叫 API
-        system = _BASE_PROMPT  # PromptEvolver removed 2026-06-12
+        # 顯示會送出的內容，但不實際呼叫 API（與 runtime 同一組裝路徑）
+        system = _compose_system_prompt()
         flag = "(句子不完整，請盡力翻譯)" if incomplete else ""
         user_msg = f"[待翻譯]{flag}: {text}"
 
