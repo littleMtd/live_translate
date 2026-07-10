@@ -16,12 +16,31 @@ _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_USER_AGENT = "live_translate/1.0"
+# Shared invariants for the compact (TPM-budget) prompts. These engines now
+# carry most traffic on nvidia-degradation days, so the systematic error
+# classes observed in runtime logs must be covered even without the full
+# prompt: invented Chinese phonetic names (랑코→朗子/Lanco), Japanese kana
+# escapes (지노와아→ジノワァ), and Korean number-unit drops (만 5천원→五千).
+_COMPACT_INVARIANTS = (
+    "Rules: "
+    "(1) Names: keep streamer/fan/nickname Korean names in Hangul exactly as "
+    "written (e.g. 랑코 stays 랑코) while still translating the rest of the sentence normally; never invent Chinese phonetic renderings "
+    "or romanizations; only nationally famous people keep conventional "
+    "Chinese names. "
+    "(2) Never output Japanese kana; unknown Korean sound-words stay in "
+    "Hangul. "
+    "(3) Korean number units are exact: 만=10,000 and 억=100,000,000 — "
+    "만 5천원 is 15,000元 (never 五千), 10만원 is 10萬元 (never 一萬); when "
+    "unsure write the amount in digits. "
+    "(4) Output Traditional Chinese (zh-TW) only, never Simplified."
+)
 _GROQ_COMPACT_SYSTEM_PROMPT = (
     "You are a Korean to Traditional Chinese live subtitle translator. "
     "Translate only the provided Korean input into natural zh-TW. "
     "Output only the translation, with no labels or explanations. "
     "If the input is empty, noise, or unreadable, output an empty string. "
-    "Keep uncertain names and brands as names; do not invent facts."
+    "Keep uncertain names and brands as names; do not invent facts. "
+    + _COMPACT_INVARIANTS
 )
 _OPENROUTER_COMPACT_SYSTEM_PROMPT = (
     "You are a Korean to Traditional Chinese live subtitle translator. "
@@ -29,7 +48,8 @@ _OPENROUTER_COMPACT_SYSTEM_PROMPT = (
     "Output only the translation, with no labels, explanations, romanization, or source text. "
     "Preserve gaming/anime terms and uncertain person names as names; do not force Chinese phonetic names. "
     "If the input is empty, noise, or unreadable, output an empty string. "
-    "If the source is uncertain, prefer a short conservative translation over invented detail."
+    "If the source is uncertain, prefer a short conservative translation over invented detail. "
+    + _COMPACT_INVARIANTS
 )
 _ENGINE_DIAGNOSTICS = threading.local()
 _TOKEN_USAGE = threading.local()
