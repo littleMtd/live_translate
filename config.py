@@ -310,9 +310,15 @@ class _Scene:
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
     change_threshold:     float = 12.0    # mean abs diff on 64x64 grayscale
     # Capture only the livestream browser window. Full-screen capture polluted
-    # current_activity when the local coding workspace was visible.
+    # current_activity when the local coding workspace was visible; matching
+    # "Google Chrome" then failed the same way once the stream shared a window
+    # with other tabs — a Chrome window's title IS its active tab's title, so
+    # browsing ChatGPT/Sheets in that window relabeled the scene (20260707-08:
+    # ChatGPT x175, "Google Sheets", "selling a product page"). Match the
+    # stream platform in the tab title instead, and keep the stream in its own
+    # window. No match → scene keeps the previous label (no fullscreen fallback).
     capture_mode:         str   = "window"  # "window" | "primary_screen"
-    window_title_keywords: tuple = ("Google Chrome",)
+    window_title_keywords: tuple = ("SOOP", "치지직", "CHZZK")
     window_fallback_fullscreen: bool = False
     # Groq OpenAI-compatible endpoint; uses cfg.keys.groq (fallback key as backup).
     vision_model:         str   = "meta-llama/llama-4-scout-17b-16e-instruct"
