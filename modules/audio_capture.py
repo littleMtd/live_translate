@@ -472,7 +472,16 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                             "chunks",
                         )
 
-            worker = start_daemon_thread("AudioVadWorker", process_frames)
+            def guarded_process_frames():
+                try:
+                    process_frames()
+                except Exception as exc:
+                    # The frame worker is a separate daemon thread, so its
+                    # exception cannot reach this enclosing try/except.
+                    log.error("Audio frame worker aborted: %s", exc, exc_info=True)
+                    stop_event.set()
+
+            worker = start_daemon_thread("AudioVadWorker", guarded_process_frames)
 
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
             capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)
@@ -551,4 +560,4 @@ if __name__ == "__main__":
         chunks.append(q.get())
     print(f"Captured {len(chunks)} chunks")
     for i, c in enumerate(chunks):
-        print(f"  [{i+1}] {len(c)/cfg.audio.sample_rate:.2f}s  rms={_rms(c):.4f}")
+        print(f"  [{i+1}] {len(c.audio)/cfg.audio.sample_rate:.2f}s  rms={_rms(c.audio):.4f}")

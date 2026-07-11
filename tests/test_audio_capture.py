@@ -469,6 +469,55 @@ class TestCallbackOffloadsToWorker(unittest.TestCase):
         self.assertEqual(chunk.vad_cut_reason, "fixed")
         self.assertEqual(len(chunk.audio), 100)
 
+    def test_worker_exception_stops_pipeline(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        cfg_mock = MagicMock()
+        cfg_mock.audio.sample_rate = 100
+        cfg_mock.audio.chunk_seconds = 1
+        cfg_mock.audio.volume_threshold = 0.01
+        cfg_mock.audio.vad_enabled = True
+        cfg_mock.audio.capture_channels = 1
+        cfg_mock.audio.channels = 1
+        cfg_mock.audio.device_name = ""
+
+        captured = {}
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        class _ExplodingVad:
+            def __init__(self, *_args):
+                pass
+            def push(self, _frame):
+                raise RuntimeError("VAD inference failed")
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", cfg_mock), \
+                patch.object(ac, "_find_loopback_device", return_value=0), \
+                patch.object(ac.sd, "InputStream", _FakeStream), \
+                patch.object(ac, "_load_silero", return_value=None), \
+                patch.object(ac, "_VadState", _ExplodingVad):
+            thread = ac.start(queue.Queue(), stop)
+            deadline = time.monotonic() + 2.0
+            while "callback" not in captured and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("callback", captured)
+            captured["callback"](np.ones((10, 1), dtype=np.float32), 10, None, None)
+            deadline = time.monotonic() + 2.0
+            while not stop.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            thread.join(timeout=2.0)
+
+        self.assertTrue(stop.is_set(), "worker failure must stop the pipeline")
+
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
 class TestVadEarlyDiscardAtSilenceGate(unittest.TestCase):

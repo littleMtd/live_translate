@@ -125,7 +125,13 @@ class TestSentenceBuffer(unittest.TestCase):
     def test_segment_gap_boundary_requires_space_at_boundary(self):
         self.assertEqual(
             _split_prefix_with_reason("abcdef ghij", (3, 6)),
-            ("abcdef", "ghij", "forced_gap_prefix", 6),
+            ("abcdef", "ghij", "forced_gap_prefix", 7),
+        )
+
+    def test_segment_gap_boundary_accounts_for_all_stripped_whitespace(self):
+        self.assertEqual(
+            _split_prefix_with_reason("abcdef   ghij", (3, 6)),
+            ("abcdef", "ghij", "forced_gap_prefix", 9),
         )
 
     def test_metadata_tracks_latest_transcription_event(self):

@@ -59,3 +59,12 @@ def test_toggle_pause_uses_persistent_pause_indicator_and_resume_flashes():
     assert drawn[-1] == "\u25b6"
     assert window._hide_job == "job-1"
     assert root.after_calls[0][1] == 1500
+
+
+def test_toggle_discards_subtitle_held_for_reading_speed_guard():
+    window, _root, _drawn = _window_with_fake_root()
+    window._pending_text = "stale subtitle"
+
+    window._toggle_translation()
+
+    assert window._pending_text is None

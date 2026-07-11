@@ -74,8 +74,13 @@ def _split_prefix_with_reason(
 
     if reason == "forced_gap_prefix":
         prefix = text[:last].strip()
-        residual = text[last:].strip()
-        return prefix, residual, reason, last
+        # ``last`` points at the separating whitespace.  Rebase later gap
+        # offsets after every leading whitespace character removed from the
+        # carried residual, not just the boundary's first space.
+        raw_residual = text[last + 1:]
+        residual = raw_residual.lstrip()
+        shift = last + 1 + (len(raw_residual) - len(residual))
+        return prefix, residual, reason, shift
     prefix = text[: last + 1].strip()
     residual = text[last + 1 :].strip()
     return prefix, residual, reason, last + 1

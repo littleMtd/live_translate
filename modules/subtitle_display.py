@@ -79,6 +79,9 @@ class SubtitleWindow:
 
     def _toggle_translation(self):
         self._translating = not self._translating
+        # Queue draining does not remove a line already held for the
+        # reading-speed guard. It is stale after any pause-state change.
+        self._pending_text = None
         if self._translating:
             self._drain_all_queues()
             if self._pause:
