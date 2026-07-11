@@ -2,19 +2,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(serde::Serialize)]
 pub struct SystemStats {
-    pub uptime_seconds: u64,
+    pub unix_timestamp_seconds: u64,
     pub platform: String,
     pub arch: String,
 }
 
 pub(crate) fn build_system_stats() -> SystemStats {
-    let uptime_seconds = SystemTime::now()
+    let unix_timestamp_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
     SystemStats {
-        uptime_seconds,
+        unix_timestamp_seconds,
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     }
@@ -42,9 +42,9 @@ mod tests {
     }
 
     #[test]
-    fn uptime_seconds_is_positive() {
+    fn unix_timestamp_seconds_is_positive() {
         let stats = build_system_stats();
-        assert!(stats.uptime_seconds > 0);
+        assert!(stats.unix_timestamp_seconds > 0);
     }
 
     #[test]

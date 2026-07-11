@@ -32,7 +32,7 @@ const fakeConfig = {
 }
 
 const fakeStats = { total_entries: 0, hit_count_sum: 0, last_used: 'Never', db_size_mb: 0 }
-const fakeSysStats = { uptime_seconds: 1000, platform: 'windows', arch: 'x86_64' }
+const fakeSysStats = { unix_timestamp_seconds: 1000, platform: 'windows', arch: 'x86_64' }
 
 function setupDefaultMocks() {
   mockInvoke.mockImplementation((cmd: string) => {

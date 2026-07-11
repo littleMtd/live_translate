@@ -110,7 +110,7 @@ export interface CacheStats {
 }
 
 export interface SystemStats {
-  uptime_seconds: number
+  unix_timestamp_seconds: number
   platform: string
   arch: string
 }

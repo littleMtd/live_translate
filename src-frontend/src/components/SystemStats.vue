@@ -13,7 +13,7 @@
       </div>
       <div class="info-row">
         <span class="label">Unix timestamp</span>
-        <span class="value">{{ stats.uptime_seconds.toLocaleString() }}s</span>
+        <span class="value">{{ stats.unix_timestamp_seconds.toLocaleString() }}s</span>
       </div>
       <div class="info-row">
         <span class="label">App version</span>

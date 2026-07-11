@@ -51,7 +51,7 @@ describe('TauriClient', () => {
   })
 
   it('getSystemStats calls get_system_stats command', async () => {
-    const stats = { uptime_seconds: 1234, platform: 'windows', arch: 'x86_64' }
+    const stats = { unix_timestamp_seconds: 1234, platform: 'windows', arch: 'x86_64' }
     mockInvoke.mockResolvedValueOnce(stats)
     const result = await client.getSystemStats()
     expect(mockInvoke).toHaveBeenCalledWith('get_system_stats')

@@ -4,7 +4,7 @@ import SystemStats from '../components/SystemStats.vue'
 import type { SystemStats as SystemStatsType } from '../types/config'
 
 const sampleStats: SystemStatsType = {
-  uptime_seconds: 1_700_000_000,
+  unix_timestamp_seconds: 1_700_000_000,
   platform: 'windows',
   arch: 'x86_64',
 }
@@ -36,7 +36,7 @@ describe('SystemStats', () => {
     expect(wrapper.html()).toContain('x86_64')
   })
 
-  it('displays formatted uptime_seconds', () => {
+  it('displays formatted unix timestamp', () => {
     const wrapper = mount(SystemStats, { props: { stats: sampleStats } })
     // toLocaleString formats with commas/periods depending on locale
     expect(wrapper.html()).toContain('1')  // contains digits of the large number
