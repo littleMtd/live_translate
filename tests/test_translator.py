@@ -3028,3 +3028,166 @@ class TestQualityRetry(unittest.TestCase):
         result, engine, _pv = self._retry(t, self._BAD, engine=primary)
         self.assertEqual(result, self._BAD)
         self.assertEqual(engine.engine_name, "nvidia")
+
+
+class TestJapaneseShadowPrecedence(unittest.TestCase):
+    """§17 contract: with mode=shadow, Japanese-flagged outputs are absolutely
+    record-only — the generic bad_output path must not replace them, or the
+    Phase B dataset loses exactly its highest-risk (Japanese+bad) samples."""
+
+    _SRC = "야하다 야하다 진짜야"
+    # Japanese + repetitive + low CJK => severity bad, no Hangul (so the
+    # generic bad_output trigger also fires — the composite case).
+    _JP_BAD = "ヤダヤダヤダヤダヤダヤダ"
+    _JP_BAD_ALT = "ラララララララララララ"
+    _LATIN_BAD = "Light Light Light Light Light Light"
+    _GOOD = "真的很有趣"
+
+    _FakeEngine = TestQualityRetry._FakeEngine
+
+    def _translator_with(self, engines):
+        t = Translator()
+        t._engines = engines
+        return t
+
+    def _retry_with_mode(self, t, result, *, engine, mode):
+        from config import cfg
+        from modules.translator import reset_quality_retry_trace
+
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", mode)
+        reset_quality_retry_trace()
+        try:
+            return t._maybe_quality_retry(
+                self._SRC, self._SRC, result, "sys", False, None, engine, "pv0")
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+    def test_precondition_composite_output_is_japanese_and_bad(self):
+        from utils.runtime_events import translation_quality
+
+        quality = translation_quality(self._SRC, self._JP_BAD)
+        self.assertEqual(quality["quality_severity"], "bad")
+        self.assertIn("target_has_japanese", quality["quality_flags"])
+        latin = translation_quality(self._SRC, self._LATIN_BAD)
+        self.assertEqual(latin["quality_severity"], "bad")
+        self.assertNotIn("target_has_japanese", latin["quality_flags"])
+
+    def test_1_composite_with_improving_candidate_stays_record_only(self):
+        from modules.translator import get_quality_retry_trace
+
+        primary = self._FakeEngine("nvidia", self._JP_BAD)
+        alt = self._FakeEngine("deepl", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, engine, pv = self._retry_with_mode(
+            t, self._JP_BAD, engine=primary, mode="shadow")
+
+        trace = get_quality_retry_trace()
+        self.assertEqual(result, self._JP_BAD)          # original ships
+        self.assertEqual(engine.engine_name, "nvidia")  # engine unchanged
+        self.assertEqual(pv, "pv0")
+        self.assertEqual(alt.calls, 1)                  # candidate still recorded
+        self.assertTrue(trace["would_replace"])         # counterfactual kept
+        self.assertFalse(trace["applied"])
+        self.assertEqual(trace["reason"], "shadow_only")
+        self.assertEqual(trace["trigger"], "target_has_japanese")
+        self.assertIn("bad_output", trace["co_triggers"])
+
+    def test_2_composite_with_non_improving_candidate(self):
+        from modules.translator import get_quality_retry_trace
+
+        primary = self._FakeEngine("nvidia", self._JP_BAD)
+        alt = self._FakeEngine("deepl", self._JP_BAD_ALT)
+        t = self._translator_with([primary, alt])
+        result, engine, _pv = self._retry_with_mode(
+            t, self._JP_BAD, engine=primary, mode="shadow")
+
+        trace = get_quality_retry_trace()
+        self.assertEqual(result, self._JP_BAD)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertFalse(trace["would_replace"])
+        self.assertFalse(trace["applied"])
+        self.assertEqual(trace["reason"], "shadow_only")
+
+    def test_3_generic_bad_without_japanese_still_replaces(self):
+        from modules.translator import get_quality_retry_trace
+
+        primary = self._FakeEngine("nvidia", self._LATIN_BAD)
+        alt = self._FakeEngine("deepl", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, engine, _pv = self._retry_with_mode(
+            t, self._LATIN_BAD, engine=primary, mode="shadow")
+
+        trace = get_quality_retry_trace()
+        self.assertEqual(result, self._GOOD)            # existing behavior intact
+        self.assertEqual(engine.engine_name, "deepl")
+        self.assertTrue(trace["applied"])
+        self.assertEqual(trace["trigger"], "bad_output")
+
+    def test_4_active_mode_composite_can_still_replace(self):
+        from modules.translator import get_quality_retry_trace
+
+        primary = self._FakeEngine("nvidia", self._JP_BAD)
+        alt = self._FakeEngine("deepl", self._GOOD)
+        t = self._translator_with([primary, alt])
+        result, engine, _pv = self._retry_with_mode(
+            t, self._JP_BAD, engine=primary, mode="active")
+
+        self.assertEqual(result, self._GOOD)            # Phase C not locked out
+        self.assertEqual(engine.engine_name, "deepl")
+        self.assertTrue(get_quality_retry_trace()["applied"])
+
+    def test_5_placeholder_suppression_not_bypassed_by_shadow(self):
+        from config import cfg
+
+        t = _make_translator()
+        t._engines[0].translate.return_value = "（留空）"
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
+        try:
+            outcome = t.translate_event("Another word")
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        self.assertIsNone(outcome.target_text)
+
+    def test_6_shadow_candidate_attempt_chain_and_token_attribution(self):
+        from modules.translation_engines import (
+            _log_token_usage,
+            get_last_token_usage,
+            get_translation_attempts,
+            record_translation_attempt,
+            reset_translation_call_trace,
+            select_translation_attempt,
+        )
+
+        class _TokenEngine(self._FakeEngine):
+            def translate(self, *args, **kwargs):
+                self.calls += 1
+                _log_token_usage(self.engine_name, {"prompt_tokens": 20, "completion_tokens": 2})
+                return self._reply
+
+        primary = self._FakeEngine("nvidia", self._JP_BAD)
+        alt = _TokenEngine("deepl", self._GOOD)
+        t = self._translator_with([primary, alt])
+        reset_translation_call_trace()
+        _log_token_usage("nvidia", {"prompt_tokens": 10, "completion_tokens": 1})
+        primary_attempt = record_translation_attempt(
+            primary, phase="fallback_chain", result=self._JP_BAD)
+        select_translation_attempt(primary_attempt)
+
+        result, _engine, _pv = self._retry_with_mode(
+            t, self._JP_BAD, engine=primary, mode="shadow")
+
+        self.assertEqual(result, self._JP_BAD)
+        attempts = get_translation_attempts()
+        self.assertEqual(len(attempts), 2)
+        by_phase = {a["phase"]: a for a in attempts}
+        self.assertTrue(by_phase["fallback_chain"]["selected_for_output"])
+        self.assertFalse(by_phase["quality_retry"]["selected_for_output"])
+        self.assertEqual(by_phase["quality_retry"]["engine"], "deepl")
+        # Candidate cost stays visible in the chain; selected attribution
+        # remains the primary's.
+        self.assertEqual(by_phase["quality_retry"].get("token_prompt"), 20)

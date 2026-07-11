@@ -964,7 +964,8 @@ class Translator:
         japanese_mode = str(
             getattr(cfg.translation, "quality_retry_japanese_mode", "off") or "off"
         ).lower()
-        japanese_trigger = "target_has_japanese" in flags and japanese_mode in {
+        japanese_flagged = "target_has_japanese" in flags
+        japanese_trigger = japanese_flagged and japanese_mode in {
             "shadow",
             "active",
         }
@@ -979,10 +980,30 @@ class Translator:
         # profile-styled output, so only Hangul-free bad shapes (repetition,
         # latin/meta noise) are actionable. Numeric amount diagnostics remain
         # log-only until their precision is high enough to justify retry cost.
+        #
+        # §17 precedence: while collecting the Phase B dataset
+        # (japanese_mode=shadow), ANY Japanese-flagged output is absolutely
+        # record-only — the generic bad_output path must not replace it, or
+        # the semantic-regression gate systematically loses its highest-risk
+        # (Japanese+bad) samples. Deterministic placeholder/meta filters run
+        # upstream in translate_event and are not affected by this rule.
+        shadow_locked = japanese_flagged and japanese_mode == "shadow"
         current_name = engine.engine_name if engine else ""
+        co_triggers = []
+        if bad_trigger:
+            co_triggers.append("bad_output")
+        if japanese_trigger:
+            co_triggers.append("target_has_japanese")
+        if shadow_locked:
+            primary_trigger = "target_has_japanese"
+            trace_mode = "shadow"
+        else:
+            primary_trigger = "bad_output" if bad_trigger else "target_has_japanese"
+            trace_mode = "active" if bad_trigger else japanese_mode
         trace = {
-            "trigger": "bad_output" if bad_trigger else "target_has_japanese",
-            "mode": "active" if bad_trigger else japanese_mode,
+            "trigger": primary_trigger,
+            "co_triggers": co_triggers,
+            "mode": trace_mode,
             "original_engine": current_name,
             "original_output": result,
             "original_severity": severity,
@@ -1043,7 +1064,11 @@ class Translator:
         rank = self._QUALITY_SEVERITY_RANK
         improved = rank.get(retry_severity, 2) < rank.get(severity, 2)
         trace["would_replace"] = improved
-        should_apply = improved and (bad_trigger or japanese_mode == "active")
+        should_apply = (
+            improved
+            and not shadow_locked
+            and (bad_trigger or japanese_mode == "active")
+        )
         if should_apply:
             select_translation_attempt(retry_attempt)
             trace["applied"] = True
@@ -1058,9 +1083,9 @@ class Translator:
                 alternate,
                 self._prompt_version_for_engine(alternate, system_prompt),
             )
-        trace["reason"] = (
-            "shadow_only" if improved and japanese_mode == "shadow" else "not_improved"
-        )
+        # shadow_locked keeps "shadow_only" regardless of the counterfactual;
+        # would_replace already answers "would the generic policy have swapped".
+        trace["reason"] = "shadow_only" if shadow_locked else "not_improved"
         return result, engine, prompt_ver
 
     def _get_prompt_version_hash(self) -> str:
