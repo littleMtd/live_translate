@@ -212,7 +212,9 @@ def is_candidate(text: str) -> bool:
 def norm_text(text: str) -> str:
     # drop digits too: OCR jitter renders the same donation's numbers
     # differently frame to frame ("100개" / "!100개" / "1007100")
-    return re.sub(r"[\s\W_\d]+", "", text, flags=re.UNICODE).lower()
+    # Amount changes make a donation distinct. Preserve digits while still
+    # ignoring OCR's whitespace and punctuation jitter.
+    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).lower()
 
 
 class RecencyCache:
@@ -227,6 +229,12 @@ class RecencyCache:
     def _same(a: str, b: str, threshold: float) -> bool:
         if a == b:
             return True
+        # Similar text with different amounts is a new donation, not an OCR
+        # variant of the old one. Check this before fuzzy/containment matching.
+        numbers_a = re.findall(r"\d+", a)
+        numbers_b = re.findall(r"\d+", b)
+        if numbers_a and numbers_b and numbers_a != numbers_b:
+            return False
         if SequenceMatcher(None, a, b).ratio() >= threshold:
             return True
         # containment: OCR truncation yields fragments of an already-seen
@@ -268,15 +276,15 @@ def worker_loop(args, ui_queue: queue.Queue, stop: threading.Event, shared: dict
         sys.path.insert(0, str(REPO_ROOT))
         from config import cfg  # noqa: deferred so --help/--dry-run stay light
 
-        if args.profile:
+        if args.profile is not None:
             try:
                 cfg.translation.streamer_profile = args.profile
             except Exception:
                 object.__setattr__(cfg.translation, "streamer_profile", args.profile)
             try:
-                cfg.translation.use_profile = True
+                cfg.translation.use_profile = bool(args.profile)
             except Exception:
-                object.__setattr__(cfg.translation, "use_profile", True)
+                object.__setattr__(cfg.translation, "use_profile", bool(args.profile))
         from modules import translator as translator_mod
 
         # 本面板是獨立行程:主管線同時在跑時(說話和斗內本來就同時發生),
@@ -598,8 +606,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="選區框的初始 x,y,w,h(僅第一次;之後記住上次位置)")
     parser.add_argument("--interval", type=float, default=2.5, help="擷取間隔秒")
     parser.add_argument("--min-conf", type=float, default=70.0)
-    parser.add_argument("--profile", default="isegye_lilpa",
-                        help="streamer profile;空字串=沿用 config 現值")
+    parser.add_argument("--profile", default=None,
+                        help="streamer profile; an empty value disables profile rules")
     parser.add_argument("--dry-run", action="store_true",
                         help="只 OCR 不翻譯(不 import translator、不打 API)")
     parser.add_argument("--paddle-lang", default="korean")
