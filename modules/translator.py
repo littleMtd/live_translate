@@ -179,10 +179,42 @@ def _db_cache_enabled() -> bool:
     return bool(getattr(cfg.database, "live_db_cache", False))
 
 
+# Deterministic guard for instruction-echo placeholders (audit §15.4): the
+# model sometimes writes the *word* for "reply empty" instead of an empty
+# reply (2026-07-11 run: 17x "（留空）", 15 shipped to screen). Bracketed
+# forms are never legitimate translations. Bare 留空/空白 CAN be real output
+# (비워 둬 → 留空, 공백 → 空白), so bare matching is restricted to phrases
+# that cannot be a genuine translation of anything.
+_PLACEHOLDER_BRACKETED_RE = re.compile(
+    r"^[（(\[【\s]+(?:留空|空白|無輸出|无输出|無內容|无内容|空字串|空字符串|"
+    r"零個字元|零个字符|沒有輸出|没有输出|無翻譯|无翻译|無輸出內容)"
+    r"[）)\]】\s。.!…]*$"
+)
+_PLACEHOLDER_BARE = frozenset({
+    "無輸出", "无输出", "空字串", "空字符串", "零個字元", "零个字符",
+    "沒有輸出", "没有输出", "無翻譯", "无翻译",
+})
+
+
+def _looks_like_placeholder_output(result: str) -> bool:
+    normalized = " ".join((result or "").split())
+    if not normalized:
+        return False
+    if _PLACEHOLDER_BRACKETED_RE.match(normalized):
+        return True
+    return normalized.rstrip("。.!…") in _PLACEHOLDER_BARE
+
+
 def _looks_like_meta_garbage_output(result: str) -> bool:
     normalized = result.strip()
     if not normalized:
         return False
+    # Placeholder echo is filtered with the same semantics as meta garbage:
+    # no subtitle, no cache/history write, and deliberately NO fallback call —
+    # the sources are overwhelmingly noise the model was right to refuse, so
+    # a fallback engine would just subtitle the noise literally.
+    if _looks_like_placeholder_output(normalized):
+        return True
     if "STT" in normalized.upper() and any(marker in normalized for marker in _META_GARBAGE_MARKERS):
         return True
     if normalized.startswith(("(", "（", "[", "【")) and any(

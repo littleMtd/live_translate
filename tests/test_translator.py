@@ -2144,6 +2144,40 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertTrue(_looks_like_meta_garbage_output("（無意義詞，省略）"))
         self.assertFalse(_looks_like_meta_garbage_output("這句我無法理解你的心情。"))
 
+    def test_placeholder_echo_is_meta_garbage(self):
+        # Audit §15.4: 17x "（留空）" shipped as subtitles on 2026-07-11.
+        for output in (
+            "（留空）", "(留空)", "（留空）。", "[留空]", "（空白）",
+            "（無輸出）", "（无输出）", "（零個字元）", "無輸出", "无输出。",
+            "空字串", "沒有輸出", "（無翻譯）",
+        ):
+            self.assertTrue(_looks_like_meta_garbage_output(output), output)
+
+    def test_legitimate_uses_of_placeholder_words_pass(self):
+        # Bare 留空/空白 can be real translations (비워 둬 → 留空, 공백 → 空白),
+        # and sentences merely containing the words are never placeholders.
+        for output in (
+            "留空", "空白",
+            "請把名字欄留空",
+            "畫面一片空白",
+            "這裡沒有輸出孔",
+        ):
+            self.assertFalse(_looks_like_meta_garbage_output(output), output)
+
+    def test_placeholder_engine_output_is_filtered_not_cached(self):
+        t = _make_translator()
+        t._engines[0].translate.return_value = "（留空）"
+
+        outcome = t.translate_event("Another word")
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
+        self.assertIsNone(outcome.target_text)
+        # A later identical input must not resurrect the placeholder from cache.
+        t._engines[0].translate.return_value = "另一個詞"
+        second = t.translate_event("Another word 2")
+        self.assertEqual(second.target_text, "另一個詞")
+
     def test_single_word_explanatory_output_is_filtered(self):
         t = _make_translator()
         t._engines[0].translate.return_value = "（無意義詞，省略）"

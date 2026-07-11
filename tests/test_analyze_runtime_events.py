@@ -37,6 +37,30 @@ def test_analyzer_defaults_to_live_and_can_include_all_run_kinds(tmp_path):
     assert {run["run_kind"] for run in all_report["runs"]} == {"live", "test"}
 
 
+def test_run_id_filter_pins_report_to_one_run(tmp_path):
+    path = tmp_path / "runtime_events_20260711.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(schema_version=3, run_id="20260711T010000Z-1", run_kind="live"),
+            _translation_event(schema_version=3, run_id="20260711T020000Z-2", run_kind="live"),
+            _translation_event(schema_version=2, run_id="20260710T230000Z-0"),
+        ],
+    )
+
+    pinned = analyze_runtime_events(path, run_id="20260711T010000Z-1")
+    latest = analyze_runtime_events(path, run_id="latest")
+
+    assert pinned["run_id_filter"] == "20260711T010000Z-1"
+    assert pinned["translation_events"] == 1
+    assert pinned["run_ids"] == ["20260711T010000Z-1"]
+    # "latest" resolves to the newest run after the run-kind filter.
+    assert latest["run_id_filter"] == "20260711T020000Z-2"
+    assert latest["translation_events"] == 1
+    # No filter keeps the day aggregate (legacy counts as live).
+    assert analyze_runtime_events(path)["translation_events"] == 3
+
+
 def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(

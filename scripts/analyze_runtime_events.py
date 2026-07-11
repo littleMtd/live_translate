@@ -54,6 +54,7 @@ def analyze_runtime_events(
     top_n: int = 10,
     labels_path: Path | None = None,
     run_kind: str = "live",
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     event_path = path or latest_event_file(DEFAULT_LOG_DIR)
     if event_path is None or not event_path.exists():
@@ -72,6 +73,21 @@ def analyze_runtime_events(
         for event in all_events
         if normalized_run_kind == "all" or _effective_run_kind(event) == normalized_run_kind
     ]
+    # Single-run acceptance boundary (audit §15.6-2): a daily file can hold
+    # many runs, and pre-v3 records count as legacy-live, so day totals mix
+    # sessions. --run-id pins the report to exactly one run; "latest" resolves
+    # to the newest run present after the run-kind filter (run ids are
+    # timestamp-prefixed, so lexicographic max is newest).
+    resolved_run_id = str(run_id or "").strip()
+    if resolved_run_id:
+        if resolved_run_id.lower() == "latest":
+            candidate_ids = {str(event.get("run_id") or "") for event in events}
+            candidate_ids.discard("")
+            resolved_run_id = max(candidate_ids) if candidate_ids else ""
+        events = [
+            event for event in events
+            if str(event.get("run_id") or "") == resolved_run_id
+        ]
     translation_events = [event for event in events if event.get("event_type") == "translation"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
     audio_events = [event for event in events if event.get("event_type") == "audio"]
@@ -91,6 +107,7 @@ def analyze_runtime_events(
         "event_path": str(event_path),
         "available": True,
         "run_kind_filter": normalized_run_kind,
+        "run_id_filter": resolved_run_id or None,
         "unfiltered_total_events": len(all_events),
         "by_run_kind": _count_by(
             [{"run_kind": _effective_run_kind(event)} for event in all_events],
@@ -628,6 +645,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(
         f"Run-kind filter: {report['run_kind_filter']} | "
+        f"run-id filter: {report.get('run_id_filter') or '(all runs)'} | "
         f"unfiltered={report['unfiltered_total_events']} | "
         f"by_kind={report['by_run_kind']}"
     )
@@ -695,6 +713,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--labels", type=Path, default=None, help="Optional JSON map of run_id to labels/notes.")
     parser.add_argument("--top", type=int, default=10, help="Number of sample rows per report section.")
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Analyze only this run_id; 'latest' resolves to the newest run after the run-kind filter.",
+    )
+    parser.add_argument(
         "--run-kind",
         choices=("live", "test", "replay", "benchmark", "all"),
         default="live",
@@ -706,7 +729,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    report = analyze_runtime_events(args.events, args.top, args.labels, args.run_kind)
+    report = analyze_runtime_events(args.events, args.top, args.labels, args.run_kind, args.run_id)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
