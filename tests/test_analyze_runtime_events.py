@@ -16,6 +16,27 @@ def test_analyze_runtime_events_returns_unavailable_for_missing_file(tmp_path):
     assert report["available"] is False
 
 
+def test_analyzer_defaults_to_live_and_can_include_all_run_kinds(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(schema_version=3, run_id="live-run", run_kind="live"),
+            _translation_event(schema_version=3, run_id="test-run", run_kind="test"),
+            _translation_event(schema_version=2, run_id="legacy-run"),
+        ],
+    )
+
+    live_report = analyze_runtime_events(path)
+    all_report = analyze_runtime_events(path, run_kind="all")
+
+    assert live_report["translation_events"] == 2
+    assert live_report["run_ids"] == ["legacy-run", "live-run"]
+    assert live_report["unfiltered_total_events"] == 3
+    assert all_report["translation_events"] == 3
+    assert {run["run_kind"] for run in all_report["runs"]} == {"live", "test"}
+
+
 def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(
@@ -310,6 +331,22 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 request_body_char_count=2600,
                 message_count=4,
                 context_item_count=1,
+                attempts=[
+                    {
+                        "phase": "fallback_chain",
+                        "engine": "nvidia",
+                        "status": "empty",
+                        "api_timeout_count": 1,
+                        "selected_for_output": False,
+                    },
+                    {
+                        "phase": "fallback_chain",
+                        "engine": "groq",
+                        "status": "success",
+                        "api_timeout_count": 0,
+                        "selected_for_output": True,
+                    },
+                ],
                 starts_with_dependency_marker=True,
                 dependency_marker="그래서",
             ),
@@ -360,6 +397,15 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
     assert report["api_diagnostics"]["fields"]["api_attempt_index"]["max"] == 2
     assert report["api_diagnostics"]["fields"]["prompt_char_count"]["p50"] == 2000
     assert report["api_diagnostics"]["fields"]["request_body_char_count"]["max"] == 2600
+    chain = report["api_diagnostics"]["attempt_chain"]
+    assert chain["events_with_chain"] == 1
+    assert chain["total_attempts"] == 2
+    assert chain["fallback_chain_attempts"] == 2
+    assert chain["selected_attempts"] == 1
+    assert chain["by_engine"] == [
+        {"value": "nvidia", "count": 1},
+        {"value": "groq", "count": 1},
+    ]
     assert report["dependency_markers"]["marker_events"] == 1
     assert report["dependency_markers"]["marker_ratio"] == 0.5
     assert report["dependency_markers"]["by_marker"] == [{"value": "그래서", "count": 1}]

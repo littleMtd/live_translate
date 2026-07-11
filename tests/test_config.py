@@ -64,6 +64,12 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "streamer_profile invalid"):
             _Config(translation=_Translation(streamer_profile="typo_profile"))
 
+    def test_unknown_japanese_retry_mode_is_rejected(self):
+        from config import _Translation
+
+        with self.assertRaisesRegex(ValueError, "quality_retry_japanese_mode invalid"):
+            _Translation(quality_retry_japanese_mode="replace-everything")
+
     def test_translation_slang_is_dict(self):
         from collections.abc import Mapping
         self.assertIsInstance(cfg.translation.slang, Mapping)

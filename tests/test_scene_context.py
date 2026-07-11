@@ -160,3 +160,99 @@ def test_window_capture_does_not_fallback_to_fullscreen_by_default():
         else:
             raise AssertionError("missing target window should skip scene capture")
         primary_grab.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# chrome_window mode — session lock behavior
+# ---------------------------------------------------------------------------
+
+_BBOX = (0, 0, 800, 600)
+
+
+@contextmanager
+def _chrome_lock(hwnd=None):
+    original = scene_context._CHROME_LOCK.get("hwnd")
+    scene_context._CHROME_LOCK["hwnd"] = hwnd
+    try:
+        yield
+    finally:
+        scene_context._CHROME_LOCK["hwnd"] = original
+
+
+def test_grab_frame_uses_chrome_window_when_configured():
+    with _scene_attr("capture_mode", "chrome_window"), \
+            patch.object(scene_context, "_grab_chrome_frame", return_value=(b"c", b"j")) as chrome_grab, \
+            patch.object(scene_context, "_grab_window_frame") as window_grab, \
+            patch.object(scene_context, "_grab_primary_screen") as primary_grab:
+        assert scene_context._grab_frame() == (b"c", b"j")
+        chrome_grab.assert_called_once_with()
+        window_grab.assert_not_called()
+        primary_grab.assert_not_called()
+
+
+def test_chrome_lock_prefers_stream_keyword_window():
+    candidates = [
+        (11, "ChatGPT - Google Chrome", _BBOX),
+        (22, "LILPA - CHZZK - Google Chrome", _BBOX),
+    ]
+    with _chrome_lock(None), \
+            patch.object(scene_context, "_enum_chrome_candidates", return_value=candidates):
+        assert scene_context._locked_chrome_window() == (22, _BBOX)
+        assert scene_context._CHROME_LOCK["hwnd"] == 22
+
+
+def test_chrome_lock_takes_topmost_window_without_keyword_match():
+    candidates = [
+        (11, "ChatGPT - Google Chrome", _BBOX),
+        (22, "Google Sheets - Google Chrome", _BBOX),
+    ]
+    with _chrome_lock(None), \
+            patch.object(scene_context, "_enum_chrome_candidates", return_value=candidates):
+        assert scene_context._locked_chrome_window() == (11, _BBOX)
+
+
+def test_chrome_lock_sticks_to_hwnd_when_tab_title_changes():
+    # Once locked, enumeration must not run again: the hwnd wins even though
+    # the window's title (its active tab) no longer matches any keyword.
+    with _chrome_lock(22), \
+            patch.object(scene_context, "_locked_window_status", return_value=("ok", _BBOX)), \
+            patch.object(scene_context, "_enum_chrome_candidates") as enum_mock:
+        assert scene_context._locked_chrome_window() == (22, _BBOX)
+        enum_mock.assert_not_called()
+
+
+def test_chrome_lock_holds_while_minimized():
+    with _chrome_lock(22), \
+            patch.object(scene_context, "_locked_window_status", return_value=("hidden", None)), \
+            patch.object(scene_context, "_enum_chrome_candidates") as enum_mock:
+        try:
+            scene_context._locked_chrome_window()
+        except RuntimeError as exc:
+            assert "minimized" in str(exc)
+        else:
+            raise AssertionError("minimized locked window must not be captured")
+        assert scene_context._CHROME_LOCK["hwnd"] == 22  # lock survives
+        enum_mock.assert_not_called()
+
+
+def test_chrome_lock_relocks_after_window_closed():
+    candidates = [(33, "SOOP - Google Chrome", _BBOX)]
+    with _chrome_lock(22), \
+            patch.object(scene_context, "_locked_window_status", return_value=("gone", None)), \
+            patch.object(scene_context, "_enum_chrome_candidates", return_value=candidates):
+        assert scene_context._locked_chrome_window() == (33, _BBOX)
+        assert scene_context._CHROME_LOCK["hwnd"] == 33
+
+
+def test_chrome_frame_does_not_fallback_to_fullscreen_by_default():
+    with _scene_attr("window_fallback_fullscreen", False), \
+            _chrome_lock(None), \
+            patch.object(scene_context, "_enum_chrome_candidates", return_value=[]), \
+            patch.object(scene_context, "_grab_primary_screen") as primary_grab:
+        try:
+            scene_context._grab_chrome_frame()
+        except RuntimeError as exc:
+            assert "chrome window not found" in str(exc)
+        else:
+            raise AssertionError("missing chrome window should skip scene capture")
+        primary_grab.assert_not_called()

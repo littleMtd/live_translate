@@ -42,7 +42,7 @@ API_DIAGNOSTIC_FIELDS = (
 ANALYZER_OUTPUT_NOTES = [
     "predecessor_stall_ms includes up to _TRANSLATION_LOOP_POLL_SEC of translator poll-gap noise.",
     "duplicate-suppressed translations still include ordering delay; output_delay_ms is pipeline delay, not user-visible subtitle delay.",
-    "per-worker Translator instances keep separate recent/context/cache state; cache_status and engine_latency comparisons have that known confound.",
+    "translation workers share recent/context/cache/fallback state; worker-local diagnostics remain isolated per call.",
 ]
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -53,6 +53,7 @@ def analyze_runtime_events(
     path: Path | None = None,
     top_n: int = 10,
     labels_path: Path | None = None,
+    run_kind: str = "live",
 ) -> dict[str, Any]:
     event_path = path or latest_event_file(DEFAULT_LOG_DIR)
     if event_path is None or not event_path.exists():
@@ -62,7 +63,15 @@ def analyze_runtime_events(
             "reason": "runtime event file does not exist",
         }
 
-    events = list(_read_events(event_path))
+    all_events = list(_read_events(event_path))
+    normalized_run_kind = str(run_kind or "live").strip().lower()
+    if normalized_run_kind not in {"live", "test", "replay", "benchmark", "all"}:
+        raise ValueError("run_kind must be live, test, replay, benchmark, or all")
+    events = [
+        event
+        for event in all_events
+        if normalized_run_kind == "all" or _effective_run_kind(event) == normalized_run_kind
+    ]
     translation_events = [event for event in events if event.get("event_type") == "translation"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
     audio_events = [event for event in events if event.get("event_type") == "audio"]
@@ -81,6 +90,12 @@ def analyze_runtime_events(
     return {
         "event_path": str(event_path),
         "available": True,
+        "run_kind_filter": normalized_run_kind,
+        "unfiltered_total_events": len(all_events),
+        "by_run_kind": _count_by(
+            [{"run_kind": _effective_run_kind(event)} for event in all_events],
+            "run_kind",
+        ),
         "total_events": len(events),
         "translation_events": len(translation_events),
         "stt_events": len(stt_events),
@@ -118,6 +133,14 @@ def analyze_runtime_events(
 def latest_event_file(log_dir: Path = DEFAULT_LOG_DIR) -> Path | None:
     files = sorted(log_dir.glob("runtime_events_*.jsonl"), key=lambda path: path.stat().st_mtime)
     return files[-1] if files else None
+
+
+def _effective_run_kind(event: Mapping[str, Any]) -> str:
+    """Treat pre-v3 records as legacy live data; v3+ must identify its kind."""
+    value = str(event.get("run_kind") or "").strip().lower()
+    if value:
+        return value
+    return "live" if int(event.get("schema_version") or 0) < 3 else "unknown"
 
 
 def _read_events(path: Path):
@@ -191,6 +214,9 @@ def _run_summaries(
         summaries.append(
             {
                 "run_id": run_id,
+                "run_kind": _effective_run_kind(run_events[0]),
+                "git_sha": str(run_events[0].get("git_sha") or ""),
+                "git_dirty": run_events[0].get("git_dirty"),
                 "label": label.get("label", ""),
                 "note": label.get("note", ""),
                 **_time_summary(run_events),
@@ -339,6 +365,27 @@ def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    attempt_chains = [
+        event.get("attempts")
+        for event in events
+        if isinstance(event.get("attempts"), list) and event.get("attempts")
+    ]
+    attempts = [
+        attempt
+        for chain in attempt_chains
+        for attempt in chain
+        if isinstance(attempt, dict)
+    ]
+    hidden_timeout_events = sum(
+        1
+        for event in events
+        if not (_float_or_none(event.get("api_timeout_count")) or 0)
+        and any(
+            (_float_or_none(attempt.get("api_timeout_count")) or 0) > 0
+            for attempt in (event.get("attempts") or [])
+            if isinstance(attempt, dict)
+        )
+    )
     api_events = [
         event
         for event in events
@@ -385,6 +432,22 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             [event for event in api_events if event.get("api_error_message_class")],
             "api_error_message_class",
         ),
+        "attempt_chain": {
+            "events_with_chain": len(attempt_chains),
+            "total_attempts": len(attempts),
+            "fallback_chain_attempts": sum(
+                attempt.get("phase") == "fallback_chain" for attempt in attempts
+            ),
+            "quality_retry_attempts": sum(
+                attempt.get("phase") == "quality_retry" for attempt in attempts
+            ),
+            "selected_attempts": sum(
+                bool(attempt.get("selected_for_output")) for attempt in attempts
+            ),
+            "hidden_timeout_events": hidden_timeout_events,
+            "by_engine": _count_by(attempts, "engine"),
+            "by_status": _count_by(attempts, "status"),
+        },
         "fields": {
             field: _latency_summary(
                 [
@@ -563,6 +626,11 @@ def _print_report(report: dict[str, Any]) -> None:
         f"Audio: {report.get('audio_events', 0)}"
     )
     print(f"Run IDs: {', '.join(report['run_ids'])}")
+    print(
+        f"Run-kind filter: {report['run_kind_filter']} | "
+        f"unfiltered={report['unfiltered_total_events']} | "
+        f"by_kind={report['by_run_kind']}"
+    )
     print(f"Status breakdown: {report['status_breakdown']}")
     print(f"Latency ms: {report['latency_ms']}")
     print(f"Queue latency ms: {report['queue_latency_ms']}")
@@ -626,13 +694,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--events", type=Path, default=None, help="Path to runtime_events_YYYYMMDD.jsonl.")
     parser.add_argument("--labels", type=Path, default=None, help="Optional JSON map of run_id to labels/notes.")
     parser.add_argument("--top", type=int, default=10, help="Number of sample rows per report section.")
+    parser.add_argument(
+        "--run-kind",
+        choices=("live", "test", "replay", "benchmark", "all"),
+        default="live",
+        help="Analyze only this run kind (pre-v3 records are treated as legacy live).",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    report = analyze_runtime_events(args.events, args.top, args.labels)
+    report = analyze_runtime_events(args.events, args.top, args.labels, args.run_kind)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

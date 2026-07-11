@@ -16,7 +16,7 @@ import modules.translation_engines as translation_engines_module
 import modules.translator as translator_module
 from modules.translation_engines import (
     _build_engine_chain, _build_user_message, TranslationEngine, ClaudeEngine, GoogleTranslateEngine,
-    GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine,
+    DeepLEngine, GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine, _deepl_base_url,
     get_last_engine_api_diagnostics, get_last_engine_diagnostics,
 )
 from modules.translation_prompts import (
@@ -371,6 +371,62 @@ class TestGoogleTranslateEngine(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# DeepLEngine unit tests
+# ---------------------------------------------------------------------------
+
+class TestDeepLEngine(unittest.TestCase):
+
+    def _engine(self, api_key: str = "fake-key:fx") -> DeepLEngine:
+        e = DeepLEngine.__new__(DeepLEngine)
+        e._api_key = api_key
+        e._target_lang = "ZH-HANT"
+        e._timeout = 4.0
+        e._base_url = _deepl_base_url(api_key)
+        return e
+
+    @staticmethod
+    def _response(text: str):
+        import json
+
+        response = MagicMock()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        response.read.return_value = json.dumps({
+            "translations": [{"text": text, "billed_characters": 8}],
+        }).encode()
+        return response
+
+    def test_free_key_uses_free_endpoint_and_short_context(self):
+        import json
+
+        engine = self._engine()
+        with patch("urllib.request.urlopen", return_value=self._response("大家好")) as urlopen:
+            result = engine.translate("안녕하세요", "ignored system prompt", False,
+                                      [("방송 시작", "直播開始")])
+
+        self.assertEqual(result, "大家好")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api-free.deepl.com/v2/translate")
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.assertEqual(headers["authorization"], "DeepL-Auth-Key fake-key:fx")
+        self.assertEqual(headers["accept"], "application/json")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["source_lang"], "KO")
+        self.assertEqual(payload["target_lang"], "ZH-HANT")
+        self.assertIn("Recent subtitle: 방송 시작 -> 直播開始.", payload["context"])
+        self.assertNotIn("custom_instructions", payload)
+
+    def test_pro_key_uses_pro_endpoint(self):
+        self.assertEqual(_deepl_base_url("fake-key"), "https://api.deepl.com/v2")
+
+    def test_returns_none_without_key(self):
+        engine = self._engine("")
+        with patch("urllib.request.urlopen") as urlopen:
+            self.assertIsNone(engine.translate("안녕하세요", "system", False))
+        urlopen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # GroqTranslationEngine unit tests
 # ---------------------------------------------------------------------------
 
@@ -409,6 +465,32 @@ class TestGroqTranslationEngine(unittest.TestCase):
         self.assertEqual(headers["accept"], "application/json")
         self.assertEqual(headers["user-agent"], "live_translate/1.0")
         self.assertEqual(headers["authorization"], "Bearer fake-key")
+
+    def test_gpt_oss_request_uses_low_reasoning_effort(self):
+        import json
+
+        e = self._engine()
+        e._model = "openai/gpt-oss-120b"
+        e._strip_think = False
+
+        with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+            result = e.translate("hello", "system", False)
+
+        self.assertEqual(result, "ok")
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        self.assertEqual(payload["reasoning_effort"], "low")
+
+    def test_non_gpt_oss_request_omits_reasoning_effort(self):
+        import json
+
+        e = self._engine()
+
+        with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
+            result = e.translate("hello", "system", False)
+
+        self.assertEqual(result, "ok")
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        self.assertNotIn("reasoning_effort", payload)
 
     def test_uses_compact_prompt_by_default(self):
         import json
@@ -2758,6 +2840,44 @@ class TestQualityRetry(unittest.TestCase):
         self.assertEqual(engine.engine_name, "nvidia")
         self.assertEqual(pv, "pv0")
 
+    def test_rejected_retry_keeps_primary_token_attribution(self):
+        from modules.translation_engines import (
+            _log_token_usage,
+            record_translation_attempt,
+            reset_translation_call_trace,
+            select_translation_attempt,
+        )
+
+        class _TokenEngine(self._FakeEngine):
+            def translate(self, *args, **kwargs):
+                self.calls += 1
+                _log_token_usage(self.engine_name, {"prompt_tokens": 20, "completion_tokens": 2})
+                return self._reply
+
+        primary = self._FakeEngine("nvidia", self._BAD)
+        alt = _TokenEngine("groq", self._BAD)
+        t = self._translator_with([primary, alt])
+        reset_translation_call_trace()
+        _log_token_usage("nvidia", {"prompt_tokens": 10, "completion_tokens": 1})
+        primary_attempt = record_translation_attempt(
+            primary, phase="fallback_chain", result=self._BAD
+        )
+        select_translation_attempt(primary_attempt)
+
+        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
+        outcome = TranslationOutcome(
+            source_text=self._SRC,
+            target_text=result,
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine=engine.engine_name,
+            model=engine.model_name,
+        )
+
+        self.assertEqual(_token_usage_for_outcome(outcome)["prompt"], 10)
+
     def test_ok_result_never_triggers_retry(self):
         primary = self._FakeEngine("nvidia", self._GOOD)
         alt = self._FakeEngine("groq", self._GOOD)
@@ -2787,6 +2907,81 @@ class TestQualityRetry(unittest.TestCase):
             object.__setattr__(cfg.translation, "quality_retry_enabled", original)
         self.assertEqual(result, self._BAD)
         self.assertEqual(alt.calls, 0)
+
+    def test_japanese_retry_default_mode_never_replaces_output(self):
+        # Phase B (audit §10.1): default is "shadow" — candidates may be
+        # generated for the gate dataset, but the shipped subtitle must stay
+        # the original. "active" must never become the default without the
+        # Phase C gate.
+        from config import cfg
+
+        source = "오늘 방송은 정말 재미있어요"
+        original = "今天直播很好です"
+        candidate = "今天的直播真的很有趣"
+        primary = self._FakeEngine("nvidia", original)
+        alt = self._FakeEngine("groq", candidate)
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, original, "sys", False, None, primary, "pv0"
+        )
+
+        self.assertIn(cfg.translation.quality_retry_japanese_mode, ("off", "shadow"))
+        self.assertNotEqual(cfg.translation.quality_retry_japanese_mode, "active")
+        self.assertEqual(result, original)
+        self.assertEqual(engine.engine_name, "nvidia")
+
+    def test_japanese_shadow_records_better_candidate_without_replacing(self):
+        from config import cfg
+        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
+
+        source = "오늘 방송은 정말 재미있어요"
+        original = "今天直播很好です"
+        candidate = "今天的直播真的很有趣"
+        primary = self._FakeEngine("nvidia", original)
+        alt = self._FakeEngine("groq", candidate)
+        t = self._translator_with([primary, alt])
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
+        reset_quality_retry_trace()
+        try:
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, original, "sys", False, None, primary, "pv0"
+            )
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        trace = get_quality_retry_trace()
+        self.assertEqual(result, original)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
+        self.assertTrue(trace["would_replace"])
+        self.assertFalse(trace["applied"])
+        self.assertEqual(trace["reason"], "shadow_only")
+
+    def test_japanese_active_replaces_only_on_strict_improvement(self):
+        from config import cfg
+        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
+
+        source = "오늘 방송은 정말 재미있어요"
+        original = "今天直播很好です"
+        candidate = "今天的直播真的很有趣"
+        primary = self._FakeEngine("nvidia", original)
+        alt = self._FakeEngine("groq", candidate)
+        t = self._translator_with([primary, alt])
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "active")
+        reset_quality_retry_trace()
+        try:
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, original, "sys", False, None, primary, "pv0"
+            )
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        self.assertEqual(result, candidate)
+        self.assertEqual(engine.engine_name, "groq")
+        self.assertTrue(get_quality_retry_trace()["applied"])
 
     def test_alternate_engine_exception_keeps_original(self):
         class _Boom(self._FakeEngine):

@@ -4,6 +4,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import sys
 import threading
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
@@ -16,11 +18,11 @@ log = get_logger("runtime_events")
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
-# Bumped to 2 when the event schema gained the fields added for STT-vs-translation
-# error attribution (utterance_id, source_utterance_ids, sentence events, prompt
-# budget, corrections, token usage, quality_score). Filter `schema_version == 2`
-# to get only records with the full modern schema and ignore older mixed data.
-_SCHEMA_VERSION = 2
+# Version 3 adds run-kind and Git provenance. The fields are additive, while the
+# version lets offline tooling distinguish records written before provenance was
+# available.
+_SCHEMA_VERSION = 3
+_RUN_KINDS = frozenset({"live", "test", "replay", "benchmark"})
 
 # Types that are safe to pass straight to json.dumps without coercion.
 _JSON_NATIVE_TYPES = (str, bool, int, float, type(None))
@@ -33,6 +35,49 @@ def _utc_now_iso() -> str:
 def _default_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{timestamp}-{os.getpid()}"
+
+
+def _default_run_kind() -> str:
+    requested = os.getenv("LIVE_TRANSLATE_RUN_KIND", "").strip().lower()
+    if requested in _RUN_KINDS:
+        return requested
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return "test"
+    return "live"
+
+
+_GIT_PROVENANCE_LOCK = threading.Lock()
+_GIT_PROVENANCE: tuple[str, bool | None] | None = None
+
+
+def _git_provenance() -> tuple[str, bool | None]:
+    """Resolve repository state once; event emission must never wait on Git."""
+    global _GIT_PROVENANCE
+    with _GIT_PROVENANCE_LOCK:
+        if _GIT_PROVENANCE is not None:
+            return _GIT_PROVENANCE
+        root = Path(__file__).resolve().parents[1]
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=2,
+            ).stdout.strip()
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=2,
+            ).stdout
+            _GIT_PROVENANCE = (sha, bool(status.strip()))
+        except (OSError, subprocess.SubprocessError):
+            _GIT_PROVENANCE = ("", None)
+        return _GIT_PROVENANCE
 
 
 def _date_from_clock(clock_value: str, filename_timezone: tzinfo | None = None) -> str:
@@ -89,11 +134,21 @@ class RuntimeEventWriter:
         run_id: str | None = None,
         clock=_utc_now_iso,
         filename_timezone: tzinfo | None = None,
+        run_kind: str | None = None,
+        git_sha: str | None = None,
+        git_dirty: bool | None = None,
     ):
         self._log_dir = Path(log_dir)
         self.run_id = run_id or _default_run_id()
         self._clock = clock
         self._filename_timezone = filename_timezone
+        resolved_kind = (run_kind or _default_run_kind()).strip().lower()
+        if resolved_kind not in _RUN_KINDS:
+            raise ValueError(f"run_kind must be one of {sorted(_RUN_KINDS)}")
+        detected_sha, detected_dirty = _git_provenance()
+        self.run_kind = resolved_kind
+        self.git_sha = detected_sha if git_sha is None else str(git_sha)
+        self.git_dirty = detected_dirty if git_dirty is None else bool(git_dirty)
         self._lock = threading.Lock()
         self._warned = False
 
@@ -110,6 +165,9 @@ class RuntimeEventWriter:
             "run_id": self.run_id,
             "created_at": self._clock(),
             **normalized_fields,
+            "run_kind": self.run_kind,
+            "git_sha": self.git_sha,
+            "git_dirty": self.git_dirty,
         }
         try:
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
@@ -121,6 +179,9 @@ class RuntimeEventWriter:
                 "event_type": event_type,
                 "run_id": self.run_id,
                 "created_at": self._clock(),
+                "run_kind": self.run_kind,
+                "git_sha": self.git_sha,
+                "git_dirty": self.git_dirty,
                 "serialization_error": repr(exc),
                 "field_names": sorted(fields.keys()),
             }

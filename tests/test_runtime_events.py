@@ -17,6 +17,9 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
         run_id="test-run",
         clock=lambda: "2026-05-14T00:00:00+00:00",
         filename_timezone=timezone.utc,
+        run_kind="benchmark",
+        git_sha="abc123",
+        git_dirty=True,
     )
 
     writer.emit("translation", source_text="안녕하세요", target_text="你好")
@@ -25,9 +28,12 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
     assert len(files) == 1
     assert files[0].name == "runtime_events_20260514.jsonl"
     record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["schema_version"] == 2
+    assert record["schema_version"] == 3
     assert record["event_type"] == "translation"
     assert record["run_id"] == "test-run"
+    assert record["run_kind"] == "benchmark"
+    assert record["git_sha"] == "abc123"
+    assert record["git_dirty"] is True
     assert record["source_text"] == "안녕하세요"
     assert record["target_text"] == "你好"
 
@@ -44,6 +50,30 @@ def test_runtime_event_writer_filename_follows_injected_clock(tmp_path):
 
     files = sorted(p.name for p in tmp_path.glob("runtime_events_*.jsonl"))
     assert files == ["runtime_events_20300102.jsonl"]
+
+
+def test_runtime_event_writer_provenance_fields_cannot_be_overridden(tmp_path):
+    writer = RuntimeEventWriter(
+        log_dir=tmp_path,
+        run_id="test-run",
+        clock=lambda: "2026-05-14T00:00:00+00:00",
+        filename_timezone=timezone.utc,
+        run_kind="test",
+        git_sha="trusted",
+        git_dirty=False,
+    )
+
+    writer.emit(
+        "translation",
+        run_kind="live",
+        git_sha="spoofed",
+        git_dirty=True,
+    )
+
+    record = json.loads((tmp_path / "runtime_events_20260514.jsonl").read_text(encoding="utf-8"))
+    assert record["run_kind"] == "test"
+    assert record["git_sha"] == "trusted"
+    assert record["git_dirty"] is False
 
 
 def test_runtime_event_writer_filename_can_use_local_date(tmp_path):

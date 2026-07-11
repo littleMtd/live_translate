@@ -16,6 +16,7 @@ from pathlib import Path
 from config import cfg
 from utils.logger import get_logger
 from modules import audio_capture, stt, sentence_splitter, translator, subtitle_display
+from modules.translation_engines import engine_is_configured
 
 log = get_logger("main")
 
@@ -31,18 +32,6 @@ pause_event = threading.Event()   # set = pipeline paused
 _LOG_DIR = Path(__file__).parent / "logs"
 
 
-_KEY_FOR_ENGINE = {
-    "claude":           lambda: cfg.keys.anthropic,
-    "google_translate": lambda: cfg.keys.google_translate,
-    # NOTE: only engines implemented in translation_engines._make_engine belong
-    # here; config._VALID_ENGINE_NAMES already rejects anything else (L11).
-    "groq":             lambda: cfg.keys.groq_fallback,
-    "openrouter":       lambda: cfg.keys.openrouter,
-    "nvidia":           lambda: cfg.keys.nvidia,
-    "ollama":           lambda: True,
-}
-
-
 def _selected_translation_backend() -> str:
     if cfg.translation.translation_mode == "clip":
         return cfg.clip_engine
@@ -51,7 +40,7 @@ def _selected_translation_backend() -> str:
 
 def _warn_missing_engine_chain_keys() -> list[str]:
     available = [name for name in cfg.translation.engine_chain
-                 if _KEY_FOR_ENGINE.get(name, lambda: True)()]
+                 if engine_is_configured(name)]
     missing = [name for name in cfg.translation.engine_chain if name not in available]
     for name in missing:
         log.warning("Engine %r skipped - API key not set", name)
@@ -63,7 +52,7 @@ def _validate_config(stt_only: bool):
         return
     backend = _selected_translation_backend()
     if backend != "anthropic":
-        if not _KEY_FOR_ENGINE.get(backend, lambda: True)():
+        if not engine_is_configured(backend):
             log.error("Startup error: no API key set for translation backend %r", backend)
             sys.exit(1)
         if backend == "nvidia":
@@ -75,6 +64,11 @@ def _validate_config(stt_only: bool):
         log.error("Startup error: no API key set for any engine in engine_chain %s",
                   cfg.translation.engine_chain)
         sys.exit(1)
+
+
+def _donation_ocr_command(app_path: Path) -> list[str]:
+    profile = cfg.active_streamer_profile if cfg.translation.use_profile else ""
+    return [sys.executable, str(app_path), "--profile", profile]
 
 
 def _handle_signal(sig, frame):
@@ -191,7 +185,7 @@ def main():
         # with this process's translation DB writes.
         import subprocess
         app_path = Path(__file__).parent / "donation_ocr" / "app.py"
-        ocr_proc = subprocess.Popen([sys.executable, str(app_path)])
+        ocr_proc = subprocess.Popen(_donation_ocr_command(app_path))
         log.info("Donation OCR panel launched (pid=%s)", ocr_proc.pid)
 
     all_queues = [audio_queue, text_queue, sentence_queue, subtitle_queue]

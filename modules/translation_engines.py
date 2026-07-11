@@ -2,7 +2,10 @@ import socket
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from functools import lru_cache
+from types import MappingProxyType
+from typing import Any, Callable
 from urllib.error import URLError
 
 from config import cfg
@@ -18,6 +21,9 @@ _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_USER_AGENT = "live_translate/1.0"
+_DEEPL_FREE_BASE_URL = "https://api-free.deepl.com/v2"
+_DEEPL_PRO_BASE_URL = "https://api.deepl.com/v2"
+_DEEPL_USER_AGENT = "live_translate/1.0"
 # Shared invariants for the compact (TPM-budget) prompts. These engines now
 # carry most traffic on nvidia-degradation days, so the systematic error
 # classes observed in runtime logs must be covered even without the full
@@ -30,11 +36,12 @@ _COMPACT_INVARIANTS = (
     "or romanizations; only nationally famous people keep conventional "
     "Chinese names. "
     "(2) Never output Japanese kana; unknown Korean sound-words stay in "
-    "Hangul. "
+    "Hangul exactly as written (지노와아 stays 지노와아, never ジノワァ). "
     "(3) Korean number units are exact: 만=10,000 and 억=100,000,000 — "
     "만 5천원 is 15,000元 (never 五千), 10만원 is 10萬元 (never 一萬); when "
     "unsure write the amount in digits. "
-    "(4) Output Traditional Chinese (zh-TW) only, never Simplified."
+    "(4) Output Traditional Chinese (zh-TW) only, never Simplified; when a "
+    "character form is uncertain, prefer Taiwan lexicon (影片, 遊戲, 網路, 品質)."
 )
 # One preamble for every compact engine: the groq/openrouter versions used to
 # be two hand-written near-copies that drifted apart for no reason (same
@@ -51,6 +58,7 @@ _COMPACT_SYSTEM_PROMPT = (
 )
 _ENGINE_DIAGNOSTICS = threading.local()
 _TOKEN_USAGE = threading.local()
+_TRANSLATION_CALL_TRACE = threading.local()
 _NVIDIA_INFLIGHT_LOCK = threading.Lock()
 _NVIDIA_INFLIGHT_COUNT = 0
 
@@ -192,6 +200,89 @@ def reset_last_engine_diagnostics() -> None:
     _ENGINE_DIAGNOSTICS.value = {}
 
 
+def reset_translation_call_trace() -> None:
+    """Clear per-translation engine attempts and selected token attribution."""
+    _TRANSLATION_CALL_TRACE.attempts = []
+    _TRANSLATION_CALL_TRACE.selected_attempt_index = None
+
+
+def record_translation_attempt(
+    engine: "TranslationEngine",
+    *,
+    phase: str,
+    result: str | None = None,
+    rejected_output: bool = False,
+    exception: BaseException | None = None,
+) -> dict[str, Any]:
+    """Snapshot one engine call before another call overwrites thread-local state."""
+    attempts = getattr(_TRANSLATION_CALL_TRACE, "attempts", None)
+    if not isinstance(attempts, list):
+        attempts = []
+        _TRANSLATION_CALL_TRACE.attempts = attempts
+    diagnostics = get_last_engine_api_diagnostics()
+    usage = get_last_token_usage()
+    if exception is not None:
+        status = "exception"
+    elif not result:
+        status = "empty"
+    elif rejected_output:
+        status = "rejected_output"
+    else:
+        status = "success"
+    entry: dict[str, Any] = {
+        "chain_attempt_index": len(attempts) + 1,
+        "phase": str(phase or "fallback_chain"),
+        "engine": str(getattr(engine, "engine_name", "") or ""),
+        "model": str(getattr(engine, "model_name", "") or ""),
+        "status": status,
+        "selected_for_output": False,
+        **{key: value for key, value in diagnostics.items() if key != "engine"},
+    }
+    if exception is not None:
+        entry["exception_type"] = type(exception).__name__
+    for key, value in usage.items():
+        if value is not None:
+            entry[f"token_{key}"] = value
+    attempts.append(entry)
+    return entry
+
+
+def select_translation_attempt(entry: dict[str, Any]) -> None:
+    attempts = getattr(_TRANSLATION_CALL_TRACE, "attempts", None)
+    if not isinstance(attempts, list) or entry not in attempts:
+        return
+    for attempt in attempts:
+        attempt["selected_for_output"] = False
+    entry["selected_for_output"] = True
+    _TRANSLATION_CALL_TRACE.selected_attempt_index = attempts.index(entry)
+
+
+def get_translation_attempts() -> list[dict[str, Any]]:
+    attempts = getattr(_TRANSLATION_CALL_TRACE, "attempts", None)
+    if not isinstance(attempts, list):
+        return []
+    return [dict(attempt) for attempt in attempts]
+
+
+def get_selected_translation_attempt() -> dict[str, Any]:
+    attempts = getattr(_TRANSLATION_CALL_TRACE, "attempts", None)
+    index = getattr(_TRANSLATION_CALL_TRACE, "selected_attempt_index", None)
+    if not isinstance(attempts, list) or not isinstance(index, int):
+        return {}
+    if index < 0 or index >= len(attempts):
+        return {}
+    return dict(attempts[index])
+
+
+def get_selected_token_usage() -> dict[str, int | None]:
+    attempt = get_selected_translation_attempt()
+    return {
+        key: attempt[f"token_{key}"]
+        for key in ("prompt", "output", "total", "cache_read", "cache_write")
+        if f"token_{key}" in attempt
+    }
+
+
 def _is_timeout_exception(exc: BaseException) -> bool:
     if isinstance(exc, (socket.timeout, TimeoutError)):
         return True
@@ -272,6 +363,19 @@ def _build_groq_user_message(text: str, incomplete: bool) -> str:
     return "/no_think\n" + _build_user_message(text, incomplete)
 
 
+def _groq_model_options(model: str) -> dict[str, str]:
+    """Return request options that are supported by the selected Groq model."""
+    if not (model or "").lower().startswith("openai/gpt-oss-"):
+        return {}
+    effort = str(
+        getattr(cfg.translation, "groq_translation_reasoning_effort", "low")
+    ).strip().lower()
+    if effort in {"low", "medium", "high"}:
+        return {"reasoning_effort": effort}
+    log.warning("Invalid Groq GPT-OSS reasoning effort %r; using low", effort)
+    return {"reasoning_effort": "low"}
+
+
 def _clamp_int(value, default: int, minimum: int = 0) -> int:
     try:
         parsed = int(value)
@@ -338,6 +442,32 @@ def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[t
     return _limited_history(history, config_prefix="openrouter")
 
 
+def _deepl_base_url(api_key: str) -> str:
+    """Select DeepL's API endpoint from the documented Free-key suffix."""
+    return _DEEPL_FREE_BASE_URL if (api_key or "").strip().endswith(":fx") else _DEEPL_PRO_BASE_URL
+
+
+def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
+    """Build the small, non-billed context supported by DeepL's text API."""
+    parts = ["Korean livestream subtitles for a Taiwan audience."]
+    activity = str(getattr(cfg.translation, "current_activity", "") or "").strip()
+    if activity:
+        parts.append(f"Current stream activity: {activity}.")
+    profile_id = str(getattr(cfg, "active_streamer_profile", "") or "").strip()
+    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
+        digest = _compact_profile_digest(profile_id)
+        if digest:
+            parts.append(digest.strip())
+
+    limited_history = _limited_history(history, config_prefix="deepl")
+    for source, target in limited_history:
+        parts.append(f"Recent subtitle: {source} -> {target}.")
+    max_chars = _clamp_int(
+        getattr(cfg.translation, "deepl_context_max_chars", 1400), 1400
+    )
+    return _truncate_for_groq(" ".join(parts), max_chars), len(limited_history)
+
+
 _DIGEST_MAX_RULES = 15
 
 
@@ -396,6 +526,28 @@ def _openrouter_system_prompt(system_prompt: str) -> str:
     return _COMPACT_SYSTEM_PROMPT
 
 
+def _deepl_prompt_signature() -> str:
+    """Stable cache identity for DeepL results (review P1).
+
+    DeepL ignores the LLM system prompt, so hashing that prompt both under-
+    and over-rotates its cache: changing deepl_target_lang or the context
+    budget kept hitting stale rows, while unrelated qwen-prompt edits
+    needlessly invalidated DeepL entries. Build the identity from what
+    actually shapes a DeepL response: target language, the per-call history
+    budget, and the non-history context (preamble + activity + profile
+    digest, already truncated the same way real requests are).
+    """
+    context, _ = _deepl_context(None)
+    return "|".join((
+        "deepl-v1",
+        str(getattr(cfg.translation, "deepl_target_lang", "")),
+        str(_clamp_int(getattr(cfg.translation, "deepl_context_window", 2), 2)),
+        str(_clamp_int(getattr(cfg.translation, "deepl_history_source_chars", 160), 160)),
+        str(_clamp_int(getattr(cfg.translation, "deepl_history_target_chars", 220), 220)),
+        context,
+    ))
+
+
 def effective_system_prompt_for_engine(
     engine: "TranslationEngine | str | None",
     system_prompt: str,
@@ -405,6 +557,12 @@ def effective_system_prompt_for_engine(
         return _groq_system_prompt(system_prompt)
     if engine_name == "openrouter":
         return _openrouter_system_prompt(system_prompt)
+    if engine_name == "deepl":
+        # Not a prompt — DeepL never sees it. It is the engine's cache
+        # signature: translator hashes this into prompt_ver, which keys both
+        # the in-memory cache and the DB prompt_version column, so every
+        # setting above rotates the cache and nothing else does.
+        return _deepl_prompt_signature()
     return system_prompt
 
 
@@ -659,6 +817,116 @@ class GoogleTranslateEngine(TranslationEngine):
                 log.warning("GoogleTranslate network error: %s", safe)
             else:
                 log.error("GoogleTranslate error: %s", safe)
+            return None
+
+
+class DeepLEngine(TranslationEngine):
+    """DeepL Text API v2 direct translation fallback.
+
+    DeepL does not accept a system prompt for this endpoint. Its short
+    ``context`` field is deliberately used instead: it improves continuity
+    without adding billable source characters or carrying the tested-worse
+    global custom instruction.
+    """
+
+    def __init__(self):
+        self._api_key = cfg.keys.deepl
+        self._target_lang = cfg.translation.deepl_target_lang
+        self._timeout = cfg.translation.deepl_timeout
+        self._base_url = _deepl_base_url(self._api_key)
+        if not self._api_key:
+            log.error("DEEPL_API_KEY not set")
+
+    @property
+    def engine_name(self) -> str:
+        return "deepl"
+
+    @property
+    def model_name(self) -> str:
+        return "deepl-api-v2"
+
+    @property
+    def available(self) -> bool:
+        return bool(self._api_key)
+
+    def translate(self, text: str, _system_prompt: str, _incomplete: bool,
+                  history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
+        if not self._api_key:
+            return None
+
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        context, context_item_count = _deepl_context(history)
+        body: dict[str, object] = {
+            "text": [text],
+            "source_lang": "KO",
+            "target_lang": self._target_lang,
+        }
+        if context:
+            body["context"] = context
+        payload = _json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}/translate",
+            data=payload,
+            headers={
+                "Authorization": f"DeepL-Auth-Key {self._api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": _DEEPL_USER_AGENT,
+            },
+        )
+        started_at = time.monotonic()
+
+        def record(error: BaseException | None = None) -> None:
+            error_type, message_class = (
+                _classify_api_error(error) if error is not None else (None, None)
+            )
+            _set_last_engine_diagnostics(
+                "deepl",
+                api_attempt_count=1,
+                api_timeout_count=1 if error is not None and _is_timeout_exception(error) else 0,
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                api_first_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=_timeout_config_ms(self._timeout),
+                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
+                api_attempt_index=1,
+                source_text_char_count=len(text),
+                request_body_char_count=len(payload),
+                message_count=1,
+                context_item_count=context_item_count,
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+            )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as response:
+                data = _json.loads(response.read())
+            result = data["translations"][0]["text"].strip()
+            record()
+            log.info("DeepL translate: %.0fms", (time.monotonic() - started_at) * 1000)
+            log.debug("DeepL: %.30s -> %s", text, result)
+            return result
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                log.error("DeepL auth error (check DEEPL_API_KEY)")
+            elif error.code == 429:
+                log.warning("DeepL rate-limit (429)")
+            elif error.code == 456:
+                log.warning("DeepL character quota exhausted (456)")
+            else:
+                log.error("DeepL HTTP %d", error.code)
+            record(error)
+            return None
+        except Exception as error:
+            kind = classify_error(error)
+            if _is_timeout_exception(error) or kind == "network":
+                log.warning("DeepL network/timeout error: %s", error)
+            else:
+                log.error("DeepL error: %s", error)
+            record(error)
             return None
 
 
@@ -1232,12 +1500,14 @@ class GroqTranslationEngine(TranslationEngine):
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_groq_user_message(text, incomplete)})
 
-        payload_text = _json.dumps({
+        payload_data = {
             "model": self._model,
             "messages": messages,
             "temperature": cfg.translation.temperature,
             "max_tokens": self._max_tokens,
-        })
+        }
+        payload_data.update(_groq_model_options(self._model))
+        payload_text = _json.dumps(payload_data)
         request_body_char_count = len(payload_text)
         message_count = len(messages)
         payload = payload_text.encode()
@@ -1286,12 +1556,14 @@ class GroqTranslationEngine(TranslationEngine):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": _build_groq_user_message(text, incomplete)},
                 ]
-                payload_text = _json.dumps({
+                payload_data = {
                     "model": self._model,
                     "messages": messages,
                     "temperature": cfg.translation.temperature,
                     "max_tokens": self._retry_max_tokens,
-                })
+                }
+                payload_data.update(_groq_model_options(self._model))
+                payload_text = _json.dumps(payload_data)
                 request_body_char_count = len(payload_text)
                 message_count = len(messages)
                 payload = payload_text.encode()
@@ -1374,27 +1646,49 @@ class GroqTranslationEngine(TranslationEngine):
             return None
 
 
+@dataclass(frozen=True)
+class EngineSpec:
+    """One source of truth for construction and configured availability."""
+
+    factory: Callable[[], TranslationEngine]
+    is_configured: Callable[[], bool]
+
+
+_ENGINE_REGISTRY = MappingProxyType({
+    "claude": EngineSpec(ClaudeEngine, lambda: bool(cfg.keys.anthropic)),
+    "google_translate": EngineSpec(
+        GoogleTranslateEngine, lambda: bool(cfg.keys.google_translate)
+    ),
+    "deepl": EngineSpec(DeepLEngine, lambda: bool(cfg.keys.deepl)),
+    "ollama": EngineSpec(OllamaEngine, lambda: True),
+    "nvidia": EngineSpec(NvidiaEngine, lambda: bool(cfg.keys.nvidia)),
+    "openrouter": EngineSpec(
+        OpenRouterTranslationEngine, lambda: bool(cfg.keys.openrouter)
+    ),
+    "groq": EngineSpec(GroqTranslationEngine, lambda: bool(cfg.keys.groq_fallback)),
+})
+
+
+def engine_registry() -> MappingProxyType:
+    """Read-only engine registry shared by startup validation and construction."""
+    return _ENGINE_REGISTRY
+
+
+def engine_is_configured(name: str) -> bool:
+    spec = _ENGINE_REGISTRY.get(str(name or ""))
+    return bool(spec and spec.is_configured())
+
+
 def _make_engine(name: str) -> "TranslationEngine | None":
     """Instantiate an engine by name. Returns None if unavailable or unknown."""
-    if name == "claude":
-        e = ClaudeEngine()
-        return e if e.available else None
-    if name == "google_translate":
-        e = GoogleTranslateEngine()
-        return e if e.available else None
-    if name == "ollama":
-        return OllamaEngine()
-    if name == "nvidia":
-        e = NvidiaEngine()
-        return e if e.available else None
-    if name == "openrouter":
-        e = OpenRouterTranslationEngine()
-        return e if e.available else None
-    if name == "groq":
-        e = GroqTranslationEngine()
-        return e if e.available else None
-    log.warning("Unknown engine %r in engine_chain — skipping", name)
-    return None
+    spec = _ENGINE_REGISTRY.get(name)
+    if spec is None:
+        log.warning("Unknown engine %r in engine_chain — skipping", name)
+        return None
+    if not spec.is_configured():
+        return None
+    engine = spec.factory()
+    return engine if engine.available else None
 
 
 def engine_chain_config_key() -> tuple:
@@ -1414,8 +1708,15 @@ def engine_chain_config_key() -> tuple:
         getattr(cfg.translation, "openrouter_model", ""),
         getattr(cfg.translation, "openrouter_timeout", ""),
         getattr(cfg.translation, "groq_translation_model", ""),
+        getattr(cfg.translation, "groq_translation_reasoning_effort", ""),
         getattr(cfg.translation, "groq_translation_timeout", ""),
         getattr(cfg.translation, "google_translate_lang", ""),
+        getattr(cfg.translation, "deepl_target_lang", ""),
+        getattr(cfg.translation, "deepl_timeout", ""),
+        getattr(cfg.translation, "deepl_context_window", ""),
+        getattr(cfg.translation, "deepl_history_source_chars", ""),
+        getattr(cfg.translation, "deepl_history_target_chars", ""),
+        getattr(cfg.translation, "deepl_context_max_chars", ""),
     )
 
 
@@ -1431,10 +1732,11 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine
     log.info("Engine selection: mode=%s → engine=%s", mode, engine_name)
     if engine_name == "ollama":
-        return [OllamaEngine()]
+        engine = _make_engine("ollama")
+        return [engine] if engine is not None else []
     if engine_name == "nvidia":
-        e = NvidiaEngine()
-        if not e.available:
+        e = _make_engine("nvidia")
+        if e is None:
             log.error("NvidiaEngine unavailable — check NVIDIA_API_KEY")
             return []
         fallbacks = [fb for name in cfg.translation.engine_chain

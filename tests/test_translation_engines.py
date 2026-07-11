@@ -1,8 +1,10 @@
 """Unit tests for engine-level diagnostics helpers (token usage capture)."""
 import unittest
+from dataclasses import replace
 
 from modules.translation_engines import (
     effective_system_prompt_for_engine,
+    engine_registry,
     get_last_engine_api_diagnostics,
     _log_token_usage,
     get_last_token_usage,
@@ -193,3 +195,87 @@ class TestGroqRetryExceptionContract(unittest.TestCase):
         self.assertEqual(diagnostics["api_attempt_count"], 2)
         self.assertEqual(diagnostics["retry_count"], 1)
         self.assertEqual(diagnostics["retry_reason"], "token_limit_without_history")
+
+
+class TestDeepLCacheSignature(unittest.TestCase):
+    """DeepL ignores the system prompt, so its cache identity (review P1) must
+    come from the settings that actually shape a DeepL response — and must NOT
+    follow the LLM prompt text."""
+
+    @staticmethod
+    def _signature(**overrides) -> str:
+        from config import cfg
+
+        fields = (
+            "deepl_target_lang", "deepl_context_window",
+            "deepl_history_source_chars", "deepl_history_target_chars",
+            "current_activity",
+        )
+        original = {name: getattr(cfg.translation, name) for name in fields}
+        try:
+            for name, value in overrides.items():
+                object.__setattr__(cfg.translation, name, value)
+            return effective_system_prompt_for_engine("deepl", "FULL PRIMARY PROMPT")
+        finally:
+            for name, value in original.items():
+                object.__setattr__(cfg.translation, name, value)
+
+    def test_signature_is_not_the_system_prompt(self):
+        self.assertNotIn(
+            "FULL PRIMARY PROMPT",
+            self._signature(),
+            "DeepL never sees the LLM prompt; hashing it over-rotates the cache",
+        )
+
+    def test_llm_prompt_text_does_not_change_signature(self):
+        self.assertEqual(
+            effective_system_prompt_for_engine("deepl", "PROMPT A"),
+            effective_system_prompt_for_engine("deepl", "PROMPT B"),
+        )
+
+    def test_target_lang_changes_signature(self):
+        self.assertNotEqual(
+            self._signature(deepl_target_lang="ZH-HANT"),
+            self._signature(deepl_target_lang="EN"),
+        )
+
+    def test_context_budget_changes_signature(self):
+        self.assertNotEqual(
+            self._signature(deepl_context_window=2),
+            self._signature(deepl_context_window=0),
+        )
+
+    def test_current_activity_changes_signature(self):
+        self.assertNotEqual(
+            self._signature(current_activity="StarCraft"),
+            self._signature(current_activity="Hades"),
+        )
+
+    def test_other_engines_keep_prompt_passthrough_semantics(self):
+        self.assertEqual(
+            effective_system_prompt_for_engine("nvidia", "FULL PRIMARY PROMPT"),
+            "FULL PRIMARY PROMPT",
+        )
+
+
+class TestEngineRegistry(unittest.TestCase):
+    def test_registry_availability_matches_factory_contract(self):
+        from config import cfg
+
+        original_keys = cfg.keys
+        empty_keys = replace(
+            original_keys,
+            anthropic="",
+            google_translate="",
+            deepl="",
+            nvidia="",
+            openrouter="",
+            groq_fallback="",
+        )
+        object.__setattr__(cfg, "keys", empty_keys)
+        try:
+            for name, spec in engine_registry().items():
+                with self.subTest(engine=name):
+                    self.assertEqual(spec.is_configured(), spec.factory().available)
+        finally:
+            object.__setattr__(cfg, "keys", original_keys)

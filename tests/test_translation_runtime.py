@@ -11,7 +11,14 @@ from modules.translation_runtime import (
     call_with_fallback,
     probe_primary_recovery,
 )
-from modules.translation_engines import _log_token_usage, get_last_token_usage, reset_last_token_usage
+from modules.translation_engines import (
+    _log_token_usage,
+    get_last_token_usage,
+    get_selected_translation_attempt,
+    get_translation_attempts,
+    reset_last_token_usage,
+    reset_translation_call_trace,
+)
 from utils.metrics import metrics
 
 
@@ -82,6 +89,9 @@ class TestTranslationRuntimeCache(unittest.TestCase):
 
 
 class TestTranslationRuntimeFallback(unittest.TestCase):
+    def setUp(self):
+        reset_translation_call_trace()
+
     def test_active_engine_returns_none_for_invalid_state(self):
         self.assertIsNone(active_engine([], 0))
         self.assertIsNone(active_engine([_engine("primary", "ok")], 9))
@@ -182,6 +192,13 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(state.active_idx, 0)
         self.assertEqual(state.consecutive_primary_failures, 1)
 
+        attempts = get_translation_attempts()
+        self.assertEqual(
+            [(item["engine"], item["status"], item["selected_for_output"]) for item in attempts],
+            [("primary", "empty", False), ("fallback", "success", True)],
+        )
+        self.assertEqual(get_selected_translation_attempt()["engine"], "fallback")
+
     def test_soft_fallback_clears_primary_token_usage_when_fallback_has_none(self):
         metrics.reset()
         reset_last_token_usage()
@@ -211,6 +228,9 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(used_idx, 1)
         self.assertEqual(get_last_token_usage(), {})
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["token_prompt"], 99)
+        self.assertNotIn("token_prompt", attempts[1])
 
     def test_all_engines_failed_returns_primary_idx(self):
         metrics.reset()

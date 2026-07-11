@@ -27,7 +27,7 @@ def test_validate_config_accepts_nvidia_backend_without_engine_chain(monkeypatch
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "fake-key")
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
 
     main_module._validate_config(stt_only=False)
 
@@ -38,8 +38,7 @@ def test_validate_config_warns_for_missing_nvidia_fallback_key(monkeypatch):
     warnings = []
     original_chain = main_module.cfg.translation.engine_chain
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "fake-key")
-    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "groq", lambda: "")
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
     monkeypatch.setattr(
         main_module.log,
         "warning",
@@ -59,7 +58,7 @@ def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setitem(main_module._KEY_FOR_ENGINE, "nvidia", lambda: "")
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda _name: False)
 
     try:
         main_module._validate_config(stt_only=False)
@@ -67,6 +66,27 @@ def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
         assert exc.code == 1
     else:
         raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
+
+
+def test_validate_config_warns_when_deepl_key_is_missing(monkeypatch):
+    import main as main_module
+
+    warnings = []
+    original_chain = main_module.cfg.translation.engine_chain
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
+    monkeypatch.setattr(
+        main_module.log,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
+    try:
+        object.__setattr__(main_module.cfg.translation, "engine_chain", ("deepl",))
+        main_module._validate_config(stt_only=False)
+    finally:
+        object.__setattr__(main_module.cfg.translation, "engine_chain", original_chain)
+
+    assert warnings == ["Engine 'deepl' skipped - API key not set"]
 
 
 def test_apply_listen_mode_config_relaxes_stt_filters():
@@ -92,6 +112,21 @@ def test_apply_listen_mode_config_relaxes_stt_filters():
         assert main_module.cfg.stt.avg_logprob_threshold == -2.0
     finally:
         object.__setattr__(main_module.cfg, "stt", original_stt)
+
+
+def test_donation_ocr_command_respects_profile_enablement():
+    import main as main_module
+
+    original = main_module.cfg.translation.use_profile
+    app_path = main_module.Path("donation_ocr/app.py")
+    try:
+        object.__setattr__(main_module.cfg.translation, "use_profile", False)
+        assert main_module._donation_ocr_command(app_path)[-1] == ""
+
+        object.__setattr__(main_module.cfg.translation, "use_profile", True)
+        assert main_module._donation_ocr_command(app_path)[-1] == main_module.cfg.active_streamer_profile
+    finally:
+        object.__setattr__(main_module.cfg.translation, "use_profile", original)
 
 
 def _wait_until(predicate, timeout: float, interval: float = 0.02) -> bool:

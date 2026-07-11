@@ -175,7 +175,11 @@ def evaluate_case(case: EvalCase, output: str) -> CaseEvaluation:
 
 
 def evaluate_cases(cases: list[EvalCase], outputs: dict[str, str] | None = None) -> list[CaseEvaluation]:
-    selected_outputs = outputs or {case.case_id: case.reference_output for case in cases}
+    selected_outputs = (
+        {case.case_id: case.reference_output for case in cases}
+        if outputs is None
+        else outputs
+    )
     results: list[CaseEvaluation] = []
     for case in cases:
         output = selected_outputs.get(case.case_id)

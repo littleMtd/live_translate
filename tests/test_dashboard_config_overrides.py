@@ -68,6 +68,24 @@ def test_invalid_override_value_falls_back_to_base(tmp_path):
     assert config_mod._apply_dashboard_overrides(base, json_path) is base
 
 
+def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp_path):
+    base = config_mod._Config()
+    json_path = tmp_path / "invalid-fields.json"
+    _write(json_path, {
+        "audio": {"vad_enabled": "no", "vad_max_speech_sec": 12.0},
+        "subtitle": {"alpha": "opaque", "idle_hide_ms": 12000},
+        "stt": {"primary_engine": "not-an-engine"},
+    })
+
+    merged = config_mod._apply_dashboard_overrides(base, json_path)
+
+    assert merged.audio.vad_enabled is base.audio.vad_enabled
+    assert merged.audio.vad_max_speech_sec == 12.0
+    assert merged.subtitle.alpha == base.subtitle.alpha
+    assert merged.subtitle.idle_hide_ms == 12000
+    assert merged.stt.primary_engine == base.stt.primary_engine
+
+
 def test_no_whitelisted_changes_returns_base(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "c.json"

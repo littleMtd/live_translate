@@ -1,5 +1,6 @@
 import os
 import json
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -131,7 +132,8 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 _VALID_STREAMER_PROFILES = known_profile_ids(include_aliases=True)
 _VALID_TRANSLATION_MODES = {"live", "clip"}
-_VALID_ENGINE_NAMES      = {"claude", "google_translate", "ollama", "nvidia", "groq", "openrouter"}
+_VALID_JAPANESE_RETRY_MODES = {"off", "shadow", "active"}
+_VALID_ENGINE_NAMES      = {"claude", "google_translate", "deepl", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
 
 
@@ -144,7 +146,7 @@ class _Translation:
     #   "claude"           — Anthropic Claude     (needs ANTHROPIC_API_KEY)
     #   "google_translate" — Google Translate v2  (needs GOOGLE_TRANSLATE_API_KEY)
     #   "deepseek"         — DeepSeek Chat        (needs DEEPSEEK_API_KEY)   [not yet impl.]
-    #   "deepl"            — DeepL                (needs DEEPL_API_KEY)       [not yet impl.]
+    #   "deepl"            — DeepL API v2         (needs DEEPL_API_KEY)
     #
     # To add a new engine:
     #   1. Add its name to engine_chain below.
@@ -152,11 +154,11 @@ class _Translation:
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    # Fallback chain when live_engine="nvidia" times out.
-    # groq first: runtime data (0620-0626) shows openrouter completes at
-    # p50 ~12s every day it is used — useless for live subtitles — while
-    # groq completes at ~1s. openrouter stays as the last resort.
-    engine_chain:   tuple        = ("groq", "openrouter")
+    # Fallback chain when live_engine="nvidia" times out. DeepL is a fast,
+    # non-LLM cross-provider fallback; it uses a short translation context
+    # instead of the tested-worse global custom instruction. Groq and
+    # OpenRouter remain behind it.
+    engine_chain:   tuple        = ("deepl", "groq", "openrouter")
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -164,8 +166,12 @@ class _Translation:
     #   "claude-haiku-4-5-20251001"  — economy mode  (cache kicks in at ≥ 4096 sys-tokens)
     model:                    str = "claude-sonnet-4-6"
     claude_timeout:           float = 5.0   # per-request timeout (seconds) for ClaudeEngine
-    # Groq fallback (uses GROQ_API_KEY_fall_back)
-    groq_translation_model:   str = "qwen/qwen3-32b"
+    # Groq fallback (uses GROQ_API_KEY_fall_back). Qwen3-32B is scheduled
+    # for removal by Groq; use the production GPT-OSS model instead.
+    groq_translation_model:   str = "openai/gpt-oss-120b"
+    # GPT-OSS supports low / medium / high reasoning effort. Live subtitles
+    # use low to avoid spending latency on hidden reasoning.
+    groq_translation_reasoning_effort: str = "low"
     groq_translation_timeout: int = 12
     # Keep Groq fallback below on-demand TPM limits. NVIDIA remains the quality path.
     groq_translation_compact_prompt: bool = True
@@ -190,7 +196,15 @@ class _Translation:
     # DeepSeek  (uncomment when DeepSeekEngine is implemented)
     # deepseek_model: str        = "deepseek-chat"
     # DeepL     (target lang uses a different code from target_lang below)
-    # deepl_target_lang: str     = "ZH"   # DeepL uses "ZH" not "zh-TW"
+    # DeepL API v2. Traditional Chinese must be requested as ZH-HANT.
+    # Free keys (ending in :fx) use api-free.deepl.com automatically; all
+    # other keys use the Pro endpoint.
+    deepl_target_lang: str = "ZH-HANT"
+    deepl_timeout: float = 4.0
+    deepl_context_window: int = 2
+    deepl_history_source_chars: int = 160
+    deepl_history_target_chars: int = 220
+    deepl_context_max_chars: int = 1400
 
     # --- Shared translation settings -----------------------------------------
     target_lang:    str          = "zh-TW"
@@ -209,7 +223,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu","url"
-    streamer_profile: str        = "isegye_lilpa"
+    streamer_profile: str        = "hades_chxxnnx"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     # Manual session state: what the streamer is doing right now (e.g.
     # "StarCraft", "tier list talk"). Injected into the system prompt as one
@@ -222,6 +236,14 @@ class _Translation:
     # different engine for a second opinion and keep whichever scores better.
     # Detectable-bad is ~0.2% of sentences, so the retry cost is negligible.
     quality_retry_enabled: bool  = True
+    # Japanese residue is ambiguous. "shadow" pays for a second opinion but
+    # never changes subtitles; "active" may replace only on a strict severity
+    # improvement. Keep off until offline + live-shadow evidence passes.
+    # Phase B data collection (audit §10.1/§11.3): record-only — the candidate
+    # retry is generated and logged but the original subtitle always ships.
+    # Flip to "active" only after the Phase C gate passes (≥30 shadow events,
+    # ≥30 semantic labels, zero observed false corrections).
+    quality_retry_japanese_mode: str = "shadow"
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):
@@ -229,6 +251,12 @@ class _Translation:
             raise ValueError(
                 f"cfg.translation.translation_mode invalid: {self.translation_mode!r} "
                 f"(must be one of {_VALID_TRANSLATION_MODES})"
+            )
+        if self.quality_retry_japanese_mode not in _VALID_JAPANESE_RETRY_MODES:
+            raise ValueError(
+                "cfg.translation.quality_retry_japanese_mode invalid: "
+                f"{self.quality_retry_japanese_mode!r} "
+                f"(must be one of {_VALID_JAPANESE_RETRY_MODES})"
             )
         canonical_streamer_profile = canonical_profile_id(self.streamer_profile)
         if self.streamer_profile and not canonical_streamer_profile:
@@ -304,7 +332,9 @@ class _Scene:
     per hour. Only that short conclusion ever reaches the prompt — screen
     text (chat, donations) is never fed as context.
     """
-    enabled:              bool  = True
+    # Groq's current vision default (Llama 4 Scout) is scheduled for removal.
+    # Keep scene context off until a production-stable vision backend is chosen.
+    enabled:              bool  = False
     check_interval_sec:   float = 20.0    # cheap fingerprint check cadence
     min_call_gap_sec:     float = 180.0   # at most one vision call per gap
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
@@ -314,11 +344,26 @@ class _Scene:
     # "Google Chrome" then failed the same way once the stream shared a window
     # with other tabs — a Chrome window's title IS its active tab's title, so
     # browsing ChatGPT/Sheets in that window relabeled the scene (20260707-08:
-    # ChatGPT x175, "Google Sheets", "selling a product page"). Match the
-    # stream platform in the tab title instead, and keep the stream in its own
-    # window. No match → scene keeps the previous label (no fullscreen fallback).
-    capture_mode:         str   = "window"  # "window" | "primary_screen"
+    # ChatGPT x175, "Google Sheets", "selling a product page").
+    #
+    # capture_mode options:
+    #   "chrome_window"  — lock onto ONE Chrome window at first scan (prefer a
+    #                      title matching window_title_keywords, else the
+    #                      top-most Chrome window) and keep scanning that hwnd
+    #                      for the whole session, even as its tab title
+    #                      changes. Windows renders a window, not a tab, so a
+    #                      tab-level lock is impossible: keep the stream in
+    #                      its own Chrome window; browsing in OTHER Chrome
+    #                      windows never touches the scene. Re-locks only if
+    #                      the locked window is closed.
+    #   "window"         — legacy title-keyword match per scan (stream
+    #                      platform name must stay in the active tab title).
+    #   "primary_screen" — full-screen grab (pollution-prone, debug only).
+    capture_mode:         str   = "chrome_window"
     window_title_keywords: tuple = ("SOOP", "치지직", "CHZZK")
+    # Chrome/Edge/Brave share the "Chrome_WidgetWin_1" window class; require
+    # this title substring so chrome_window mode never locks onto Edge etc.
+    chrome_title_marker:  str   = "google chrome"
     window_fallback_fullscreen: bool = False
     # Groq OpenAI-compatible endpoint; uses cfg.keys.groq (fallback key as backup).
     vision_model:         str   = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -379,6 +424,69 @@ _DASHBOARD_OVERRIDE_FIELDS = {
 _DASHBOARD_OVERRIDE_TOP = ("live_engine",)
 
 
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _dashboard_value_is_valid(
+    section: str,
+    name: str,
+    value: object,
+    base: "_Config",
+) -> bool:
+    """Validate the JSON values that bypass dataclass type annotations.
+
+    Tauri validates normal UI submissions, but this file is persisted between
+    runs and may also be edited manually.  Keep malformed overrides from
+    creating a config that only fails after a pipeline thread has started.
+    """
+    if section == "audio":
+        if name == "vad_enabled":
+            return isinstance(value, bool)
+        if name == "vad_silence_sec":
+            return _is_finite_number(value) and 0.0 < float(value) <= 5.0
+        if name == "vad_max_speech_sec":
+            return _is_finite_number(value) and base.audio.vad_min_speech_sec < float(value) <= 30.0
+    if section == "stt" and name == "primary_engine":
+        return value in {"groq", "sensevoice"}
+    if section == "translation":
+        if name == "engine_chain":
+            return (
+                isinstance(value, list)
+                and bool(value)
+                and all(isinstance(engine, str) and engine in _VALID_ENGINE_NAMES for engine in value)
+            )
+        if name == "translation_mode":
+            return value in _VALID_TRANSLATION_MODES
+        if name == "max_tokens":
+            return isinstance(value, int) and not isinstance(value, bool) and 10 <= value <= 500
+        if name == "target_lang":
+            return isinstance(value, str) and bool(value.strip()) and len(value) <= 50
+        if name == "current_activity":
+            return isinstance(value, str) and len(value) <= 200
+    if section == "subtitle":
+        if name == "idle_hide_ms":
+            return isinstance(value, int) and not isinstance(value, bool) and 1000 <= value <= 120000
+        if name == "alpha":
+            return _is_finite_number(value) and 0.1 <= float(value) <= 1.0
+    return False
+
+
+def _dashboard_font_is_valid(sub: dict[str, object], base_font: tuple) -> bool:
+    family = sub.get("font_family", base_font[0] if len(base_font) > 0 else "Microsoft JhengHei")
+    size = sub.get("font_size", base_font[1] if len(base_font) > 1 else 22)
+    style = sub.get("font_style", base_font[2] if len(base_font) > 2 else "bold")
+    return (
+        isinstance(family, str) and bool(family.strip()) and len(family) <= 100
+        and isinstance(size, int) and not isinstance(size, bool) and 8 <= size <= 48
+        and isinstance(style, str) and bool(style.strip()) and len(style) <= 50
+    )
+
+
 def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CONFIG_JSON) -> "_Config":
     """Merge dashboard-edited fields from live_translate_config.json onto ``base``.
 
@@ -399,12 +507,16 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
         sub = data.get(section)
         if not isinstance(sub, dict):
             continue
-        changes = {name: sub[name] for name in fields_ if name in sub}
+        changes = {
+            name: sub[name]
+            for name in fields_
+            if name in sub and _dashboard_value_is_valid(section, name, sub[name], base)
+        }
         if isinstance(changes.get("engine_chain"), list):
             changes["engine_chain"] = tuple(changes["engine_chain"])
         if section == "subtitle" and any(
             key in sub for key in ("font_family", "font_size", "font_style")
-        ):
+        ) and _dashboard_font_is_valid(sub, base.subtitle.font):
             base_font = base.subtitle.font
             changes["font"] = (
                 sub.get("font_family", base_font[0] if len(base_font) > 0 else "Microsoft JhengHei"),
@@ -416,7 +528,11 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
                 section_updates[section] = replace(getattr(base, section), **changes)
             except (TypeError, ValueError):
                 return base
-    top_changes = {name: data[name] for name in _DASHBOARD_OVERRIDE_TOP if name in data}
+    top_changes = {
+        name: data[name]
+        for name in _DASHBOARD_OVERRIDE_TOP
+        if name in data and data[name] in _VALID_BACKEND_MODES
+    }
     if not section_updates and not top_changes:
         return base
     try:

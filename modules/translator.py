@@ -32,10 +32,14 @@ from modules.translation_engines import (
     engine_chain_config_key,
     get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
-    get_last_token_usage,
-    get_last_token_usage_engine,
+    get_selected_token_usage,
+    get_selected_translation_attempt,
+    get_translation_attempts,
+    record_translation_attempt,
     reset_last_engine_diagnostics,
     reset_last_token_usage,
+    reset_translation_call_trace,
+    select_translation_attempt,
 )
 from modules.translation_runtime import (
     FallbackState,
@@ -66,6 +70,7 @@ _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
 _ACTIONABLE_QUALITY_RETRY_FLAGS: set[str] = set()
+_QUALITY_RETRY_TRACE = threading.local()
 _API_EVENT_DEFAULTS = {
     "api_attempt_count": 0,
     "api_timeout_count": 0,
@@ -524,11 +529,19 @@ def _retry_diagnostics_apply(outcome: TranslationOutcome, diagnostics: dict[str,
 def _token_usage_for_outcome(outcome: TranslationOutcome) -> dict[str, int | None]:
     if not _outcome_used_api(outcome):
         return {}
-    usage_engine = get_last_token_usage_engine()
-    outcome_engine = str(outcome.engine or "").strip().lower()
-    if usage_engine and usage_engine != outcome_engine:
+    selected = get_selected_translation_attempt()
+    if str(selected.get("engine") or "").strip().lower() != str(outcome.engine or "").strip().lower():
         return {}
-    return get_last_token_usage()
+    return get_selected_token_usage()
+
+
+def reset_quality_retry_trace() -> None:
+    _QUALITY_RETRY_TRACE.value = {}
+
+
+def get_quality_retry_trace() -> dict:
+    value = getattr(_QUALITY_RETRY_TRACE, "value", None)
+    return dict(value) if isinstance(value, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -916,7 +929,16 @@ class Translator:
         severity = quality.get("quality_severity")
         flags = set(quality.get("quality_flags") or [])
         actionable = bool(flags & _ACTIONABLE_QUALITY_RETRY_FLAGS)
-        if severity != "bad" and not actionable:
+        japanese_mode = str(
+            getattr(cfg.translation, "quality_retry_japanese_mode", "off") or "off"
+        ).lower()
+        japanese_trigger = "target_has_japanese" in flags and japanese_mode in {
+            "shadow",
+            "active",
+        }
+        ambiguous_hangul = bool(re.search(r"[가-힣]", result)) and not actionable
+        bad_trigger = (severity == "bad" or actionable) and not ambiguous_hangul
+        if not bad_trigger and not japanese_trigger:
             return result, engine, prompt_ver
         # Hangul in the target is an ambiguous signal: it may be a leak, but
         # several profiles keep Korean canonicals in zh output by design
@@ -925,30 +947,75 @@ class Translator:
         # profile-styled output, so only Hangul-free bad shapes (repetition,
         # latin/meta noise) are actionable. Numeric amount diagnostics remain
         # log-only until their precision is high enough to justify retry cost.
-        if re.search(r"[가-힣]", result) and not actionable:
-            return result, engine, prompt_ver
         current_name = engine.engine_name if engine else ""
+        trace = {
+            "trigger": "bad_output" if bad_trigger else "target_has_japanese",
+            "mode": "active" if bad_trigger else japanese_mode,
+            "original_engine": current_name,
+            "original_output": result,
+            "original_severity": severity,
+            "original_flags": sorted(flags),
+            "candidate_engine": "",
+            "candidate_output": "",
+            "candidate_severity": "",
+            "candidate_flags": [],
+            "would_replace": False,
+            "applied": False,
+            "reason": "",
+        }
+        _QUALITY_RETRY_TRACE.value = trace
         alternate = next(
             (e for e in self._engines
              if e.available and e.engine_name != current_name),
             None,
         )
         if alternate is None:
+            trace["reason"] = "no_alternate_engine"
             return result, engine, prompt_ver
+        trace["candidate_engine"] = alternate.engine_name
         metrics.increment("translation.quality_retry.attempted")
+        reset_last_engine_diagnostics()
+        reset_last_token_usage()
         try:
             retry_raw = alternate.translate(text, system_prompt, incomplete, history)
         except Exception as exc:  # second opinion must never break the first
+            record_translation_attempt(alternate, phase="quality_retry", exception=exc)
+            trace["reason"] = "alternate_exception"
+            trace["exception_type"] = type(exc).__name__
             log.debug("quality retry failed on %s: %s", alternate.engine_name, exc)
             return result, engine, prompt_ver
         if not retry_raw:
+            record_translation_attempt(alternate, phase="quality_retry", result=None)
+            trace["reason"] = "empty_candidate"
             return result, engine, prompt_ver
         retry_result = _apply_source_aware_corrections(text, retry_raw)
+        trace["candidate_output"] = retry_result
         if _looks_like_meta_garbage_output(retry_result):
+            record_translation_attempt(
+                alternate,
+                phase="quality_retry",
+                result=retry_result,
+                rejected_output=True,
+            )
+            trace["reason"] = "candidate_meta_garbage"
             return result, engine, prompt_ver
-        retry_severity = translation_quality(raw_text, retry_result).get("quality_severity")
+        retry_attempt = record_translation_attempt(
+            alternate,
+            phase="quality_retry",
+            result=retry_result,
+        )
+        retry_quality = translation_quality(raw_text, retry_result)
+        retry_severity = retry_quality.get("quality_severity")
+        trace["candidate_severity"] = retry_severity
+        trace["candidate_flags"] = retry_quality.get("quality_flags") or []
         rank = self._QUALITY_SEVERITY_RANK
-        if rank.get(retry_severity, 2) < rank.get(severity, 2):
+        improved = rank.get(retry_severity, 2) < rank.get(severity, 2)
+        trace["would_replace"] = improved
+        should_apply = improved and (bad_trigger or japanese_mode == "active")
+        if should_apply:
+            select_translation_attempt(retry_attempt)
+            trace["applied"] = True
+            trace["reason"] = "strict_severity_improvement"
             metrics.increment("translation.quality_retry.accepted")
             log.info(
                 "quality retry accepted: %s(bad) -> %s(%s) for %.30s",
@@ -959,6 +1026,9 @@ class Translator:
                 alternate,
                 self._prompt_version_for_engine(alternate, system_prompt),
             )
+        trace["reason"] = (
+            "shadow_only" if improved and japanese_mode == "shadow" else "not_improved"
+        )
         return result, engine, prompt_ver
 
     def _get_prompt_version_hash(self) -> str:
@@ -1091,6 +1161,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             # engine) don't inherit the previous call's token usage / corrections.
             reset_last_engine_diagnostics()
             reset_last_token_usage()
+            reset_translation_call_trace()
+            reset_quality_retry_trace()
             reset_corrections()
             # Everything that touches `item` runs inside the try: a malformed item
             # must yield a synthetic failed outcome, never a lost sequence number
@@ -1139,8 +1211,15 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 )
             completed_at = time.monotonic()
             elapsed = completed_at - started
-            diagnostics = get_last_engine_diagnostics()
-            api_diagnostics = get_last_engine_api_diagnostics()
+            selected_attempt = get_selected_translation_attempt()
+            diagnostics = selected_attempt or get_last_engine_diagnostics()
+            api_diagnostics = selected_attempt or get_last_engine_api_diagnostics()
+            attempts = get_translation_attempts()
+            if attempts:
+                metadata["attempts"] = attempts
+            quality_retry = get_quality_retry_trace()
+            if quality_retry:
+                metadata["quality_retry"] = quality_retry
             for usage_key, usage_value in _token_usage_for_outcome(outcome).items():
                 if usage_value is not None:
                     metadata[f"token_{usage_key}"] = usage_value

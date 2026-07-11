@@ -129,8 +129,9 @@ def _print_window_image(hwnd: int, width: int, height: int):
         return None
     mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
     bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
+    previous_bitmap = None
     try:
-        gdi32.SelectObject(mem_dc, bitmap)
+        previous_bitmap = gdi32.SelectObject(mem_dc, bitmap)
         PW_RENDERFULLCONTENT = 0x00000002
         if not user32.PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT):
             return None
@@ -161,6 +162,10 @@ def _print_window_image(hwnd: int, width: int, height: int):
             return None  # some GPU surfaces render black; let caller fall back
         return image
     finally:
+        # A bitmap selected into a DC cannot be deleted. Restore the previous
+        # object first so each scene capture releases its GDI handle.
+        if previous_bitmap:
+            gdi32.SelectObject(mem_dc, previous_bitmap)
         gdi32.DeleteObject(bitmap)
         gdi32.DeleteDC(mem_dc)
         user32.ReleaseDC(hwnd, hwnd_dc)
@@ -181,8 +186,143 @@ def _grab_window_frame() -> tuple[bytes, bytes]:
     return _frame_bytes(image)
 
 
+# ---------------------------------------------------------------------------
+# chrome_window mode — lock onto one Chrome window for the whole session
+# ---------------------------------------------------------------------------
+
+_CHROME_WINDOW_CLASS = "Chrome_WidgetWin_1"
+# Session lock: hwnd of the Chrome window being scanned. A Chrome window's
+# title tracks its ACTIVE TAB, so per-scan title matching relabels the scene
+# whenever another tab gains focus (see config._Scene history). Pinning the
+# hwnd scans the same window no matter what its title becomes.
+_CHROME_LOCK: dict = {"hwnd": None}
+
+
+def _user32():
+    user32 = ctypes.windll.user32
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+    return user32
+
+
+def _locked_window_status(hwnd: int) -> tuple[str, tuple[int, int, int, int] | None]:
+    """("ok", bbox) when capturable, ("hidden", None) when minimized/degenerate
+    (keep the lock), ("gone", None) when the window no longer exists."""
+    user32 = _user32()
+    if not user32.IsWindow(hwnd):
+        return "gone", None
+    if user32.IsIconic(hwnd) or not user32.IsWindowVisible(hwnd):
+        return "hidden", None
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return "gone", None
+    bbox = (rect.left, rect.top, rect.right, rect.bottom)
+    if bbox[2] - bbox[0] <= 100 or bbox[3] - bbox[1] <= 100:
+        return "hidden", None
+    return "ok", bbox
+
+
+def _enum_chrome_candidates() -> list[tuple[int, str, tuple[int, int, int, int]]]:
+    """Visible, capturable Chrome windows in z-order (top-most first)."""
+    if sys.platform != "win32":
+        return []
+    user32 = _user32()
+    marker = str(getattr(cfg.scene, "chrome_title_marker", "google chrome") or "").lower()
+    results: list[tuple[int, str, tuple[int, int, int, int]]] = []
+    class_buffer = ctypes.create_unicode_buffer(64)
+
+    enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @enum_proc_type
+    def enum_proc(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
+        if not user32.GetClassNameW(hwnd, class_buffer, 64):
+            return True
+        if class_buffer.value != _CHROME_WINDOW_CLASS:
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        title_buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, title_buffer, length + 1)
+        title = title_buffer.value
+        # Edge/Brave reuse Chrome's window class; the marker keeps them out.
+        if marker and marker not in title.lower():
+            return True
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return True
+        bbox = (rect.left, rect.top, rect.right, rect.bottom)
+        if bbox[2] - bbox[0] <= 100 or bbox[3] - bbox[1] <= 100:
+            return True
+        results.append((int(hwnd) if hwnd else 0, title, bbox))
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    return results
+
+
+def _locked_chrome_window() -> tuple[int, tuple[int, int, int, int]] | None:
+    """Return (hwnd, bbox) of the session's locked Chrome window.
+
+    First call locks a window: prefer a title matching the stream platform
+    keywords, else the top-most Chrome window. Later calls reuse the same
+    hwnd even as its tab title changes. A minimized window keeps the lock
+    but is not capturable this tick; only a closed window triggers re-lock.
+    """
+    locked = _CHROME_LOCK.get("hwnd")
+    if locked:
+        status, bbox = _locked_window_status(locked)
+        if status == "ok":
+            return locked, bbox
+        if status == "hidden":
+            raise RuntimeError("locked chrome window is minimized/hidden")
+        _CHROME_LOCK["hwnd"] = None
+        log.info("scene chrome lock lost (window closed) — re-locking")
+
+    candidates = _enum_chrome_candidates()
+    if not candidates:
+        return None
+    keywords = tuple(
+        keyword.lower()
+        for keyword in getattr(cfg.scene, "window_title_keywords", ())
+        if keyword
+    )
+    chosen = next(
+        (
+            candidate for candidate in candidates
+            if any(keyword in candidate[1].lower() for keyword in keywords)
+        ),
+        candidates[0],
+    )
+    hwnd, title, bbox = chosen
+    _CHROME_LOCK["hwnd"] = hwnd
+    log.info("scene locked to Chrome window %r (hwnd=%s)", title, hwnd)
+    return hwnd, bbox
+
+
+def _grab_chrome_frame() -> tuple[bytes, bytes]:
+    found = _locked_chrome_window()
+    if found is None:
+        if getattr(cfg.scene, "window_fallback_fullscreen", False):
+            return _grab_primary_screen()
+        raise RuntimeError("scene capture chrome window not found")
+    hwnd, bbox = found
+    image = _print_window_image(hwnd, bbox[2] - bbox[0], bbox[3] - bbox[1])
+    if image is None:
+        # Last resort: region grab (photographs whatever overlaps the bbox).
+        from PIL import ImageGrab
+        image = ImageGrab.grab(bbox=bbox)
+    return _frame_bytes(image)
+
+
 def _grab_frame() -> tuple[bytes, bytes]:
     mode = str(getattr(cfg.scene, "capture_mode", "primary_screen") or "primary_screen")
+    if mode == "chrome_window":
+        return _grab_chrome_frame()
     if mode == "window":
         return _grab_window_frame()
     return _grab_primary_screen()

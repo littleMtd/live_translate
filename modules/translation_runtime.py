@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 
-from modules.translation_engines import TranslationEngine, reset_last_token_usage
+from modules.translation_engines import (
+    TranslationEngine,
+    record_translation_attempt,
+    reset_last_engine_diagnostics,
+    reset_last_token_usage,
+    select_translation_attempt,
+)
 from utils.metrics import metrics
 
 
@@ -101,11 +107,24 @@ def call_with_fallback(
     primary_idx = state.active_idx
     metrics.increment("translation.fallback.attempt")
     primary = engines[primary_idx]
+    reset_last_engine_diagnostics()
     reset_last_token_usage()
-    result = primary.translate(text, system_prompt, incomplete, history)
+    try:
+        result = primary.translate(text, system_prompt, incomplete, history)
+    except Exception as exc:
+        record_translation_attempt(primary, phase="fallback_chain", exception=exc)
+        raise
+    primary_bad = bool(result and looks_untranslated(result, text))
+    primary_attempt = record_translation_attempt(
+        primary,
+        phase="fallback_chain",
+        result=result,
+        rejected_output=primary_bad,
+    )
 
-    if result and not looks_untranslated(result, text):
+    if result and not primary_bad:
         state.consecutive_primary_failures = 0
+        select_translation_attempt(primary_attempt)
         return result, primary_idx
 
     if result:
@@ -117,9 +136,22 @@ def call_with_fallback(
     # ── Try fallback engines ──────────────────────────────────────────────────
     for index in range(primary_idx + 1, len(engines)):
         metrics.increment("translation.fallback.attempt")
+        reset_last_engine_diagnostics()
         reset_last_token_usage()
-        fb_result = engines[index].translate(text, system_prompt, incomplete, history)
-        if fb_result and not looks_untranslated(fb_result, text):
+        fallback = engines[index]
+        try:
+            fb_result = fallback.translate(text, system_prompt, incomplete, history)
+        except Exception as exc:
+            record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
+            raise
+        fallback_bad = bool(fb_result and looks_untranslated(fb_result, text))
+        fallback_attempt = record_translation_attempt(
+            fallback,
+            phase="fallback_chain",
+            result=fb_result,
+            rejected_output=fallback_bad,
+        )
+        if fb_result and not fallback_bad:
             if hard_switch:
                 # N consecutive failures — commit to this engine until probe recovers primary
                 metrics.increment("translation.fallback.success")
@@ -127,7 +159,7 @@ def call_with_fallback(
                     "Engine %s failed %d consecutive times; switching to %s",
                     primary.engine_name,
                     state.consecutive_primary_failures,
-                    engines[index].engine_name,
+                    fallback.engine_name,
                 )
                 state.active_idx = index
                 state.consecutive_primary_failures = 0
@@ -139,8 +171,9 @@ def call_with_fallback(
                     primary.engine_name,
                     state.consecutive_primary_failures,
                     failure_threshold - 1,
-                    engines[index].engine_name,
+                    fallback.engine_name,
                 )
+            select_translation_attempt(fallback_attempt)
             return fb_result, index
         if fb_result:
             metrics.increment("translation.bad_output")

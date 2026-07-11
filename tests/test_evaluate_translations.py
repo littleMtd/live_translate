@@ -78,6 +78,13 @@ def test_evaluate_case_checks_expected_and_forbidden_terms():
     assert "forbidden_term:마인크래프트" in result.failures
 
 
+def test_evaluate_cases_treats_an_empty_result_set_as_missing_outputs():
+    result = evaluate_cases([_case()], {})[0]
+
+    assert not result.passed
+    assert result.failures == ("missing_output",)
+
+
 def test_load_outputs_supports_dict_and_list_formats(tmp_path):
     dict_file = tmp_path / "dict.json"
     list_file = tmp_path / "list.json"
