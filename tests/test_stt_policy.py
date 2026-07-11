@@ -26,6 +26,15 @@ class TestSttPolicy(unittest.TestCase):
     def test_is_hallucinated_rejects_repetition_loop(self):
         self.assertTrue(is_hallucinated("one two three one two three", max_japanese_chars=2))
 
+    def test_is_hallucinated_honors_repeat_ratio_setting(self):
+        text = "one two three one two three tail tail"
+        self.assertTrue(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.7))
+        self.assertFalse(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.8))
+
+    def test_is_hallucinated_allows_short_repeated_emphasis(self):
+        text = "okay okay okay okay"
+        self.assertFalse(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.7))
+
     def test_is_hallucinated_allows_normal_korean(self):
         self.assertFalse(is_hallucinated("안녕하세요 반갑습니다", max_japanese_chars=2))
 

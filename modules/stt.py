@@ -50,7 +50,12 @@ def _is_groq_rate_limit_error(exc: Exception) -> bool:
 
 
 def _is_hallucinated(text: str) -> bool:
-    return is_hallucinated(text, cfg.stt.max_japanese_chars, log)
+    return is_hallucinated(
+        text,
+        cfg.stt.max_japanese_chars,
+        log,
+        max_repeat_ratio=cfg.stt.max_repeat_ratio,
+    )
 
 
 def _normalize_prompt_text(text: str, max_chars: int | None = None) -> str:

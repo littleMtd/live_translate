@@ -67,7 +67,13 @@ def dedupe_transcript_overlap(
     return current
 
 
-def is_hallucinated(text: str, max_japanese_chars: int, logger=log) -> bool:
+def is_hallucinated(
+    text: str,
+    max_japanese_chars: int,
+    logger=log,
+    *,
+    max_repeat_ratio: float = 0.7,
+) -> bool:
     chars = [char for char in text if not char.isspace()]
     if not chars:
         return True
@@ -78,11 +84,23 @@ def is_hallucinated(text: str, max_japanese_chars: int, logger=log) -> bool:
         return True
 
     words = text.split()
+    try:
+        repeat_ratio = float(max_repeat_ratio)
+    except (TypeError, ValueError):
+        repeat_ratio = 0.7
+    repeat_ratio = min(1.0, max(0.0, repeat_ratio))
+    # Four-word repetitions are common in natural livestream emphasis. Keep
+    # the old six-word floor, then let max_repeat_ratio tune longer loops.
     if len(words) >= 6:
-        half = words[:len(words) // 2]
-        if " ".join(half) in text[len(" ".join(half)):]:
-            logger.debug("STT rejected (repetition loop): %s", text[:40])
-            return True
+        for phrase_len in range(2, len(words) // 2 + 1):
+            for start in range(0, len(words) - 2 * phrase_len + 1):
+                phrase = words[start:start + phrase_len]
+                for repeat_start in range(start + phrase_len, len(words) - phrase_len + 1):
+                    if phrase != words[repeat_start:repeat_start + phrase_len]:
+                        continue
+                    if (phrase_len * 2) / len(words) >= repeat_ratio:
+                        logger.debug("STT rejected (repetition loop): %s", text[:40])
+                        return True
 
     return False
 
