@@ -731,18 +731,6 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             def translate(self, text, system_prompt, incomplete, history=None):
                 return "ok"
 
-        class FakeNvidiaEngine(FakeEngine):
-            def __init__(self):
-                super().__init__("nvidia")
-
-        class FakeOpenRouterEngine(FakeEngine):
-            def __init__(self):
-                super().__init__("openrouter")
-
-        class FakeGroqEngine(FakeEngine):
-            def __init__(self):
-                super().__init__("groq")
-
         original_mode = cfg.translation.translation_mode
         original_chain = cfg.translation.engine_chain
         original_live_engine = cfg.live_engine
@@ -750,9 +738,15 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             object.__setattr__(cfg.translation, "translation_mode", "live")
             object.__setattr__(cfg.translation, "engine_chain", ("groq", "openrouter"))
             object.__setattr__(cfg, "live_engine", "nvidia")
-            with patch.object(translation_engines_module, "NvidiaEngine", FakeNvidiaEngine), \
-                 patch.object(translation_engines_module, "OpenRouterTranslationEngine", FakeOpenRouterEngine), \
-                 patch.object(translation_engines_module, "GroqTranslationEngine", FakeGroqEngine):
+            # Patch the registry boundary actually used by _build_engine_chain.
+            # Patching class names is ineffective because EngineSpec factories
+            # are captured when translation_engines is imported; it also made
+            # this test accidentally depend on local API keys.
+            with patch.object(
+                translation_engines_module,
+                "_make_engine",
+                side_effect=lambda name: FakeEngine(name),
+            ):
                 engines = _build_engine_chain()
         finally:
             object.__setattr__(cfg.translation, "translation_mode", original_mode)

@@ -29,7 +29,7 @@ def test_evaluator_accepts_required_terms_and_rejects_placeholder():
 
 
 def test_url_legacy_profile_is_a_frozen_full_snapshot():
-    profile = _legacy_profile_snapshot()
+    profile = _legacy_profile_snapshot("url")
 
     assert "Four-member virtual idol group" in profile
     assert profile.count("input:") == 7

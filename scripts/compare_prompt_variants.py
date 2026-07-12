@@ -122,10 +122,11 @@ CASES: tuple[dict[str, Any], ...] = (
 )
 
 
-def _legacy_profile_snapshot() -> str:
+def _legacy_profile_snapshot(profile_id: str | None = None) -> str:
+    profile_id = profile_id or cfg.active_streamer_profile
     return _LEGACY_PROFILE_SNAPSHOTS.get(
-        cfg.active_streamer_profile,
-        get_translation_profile(cfg.active_streamer_profile, qwen=True),
+        profile_id,
+        get_translation_profile(profile_id, qwen=True),
     )
 
 
@@ -133,7 +134,7 @@ def _composed_prompt(builder: Callable[[], str], *, legacy_profile: bool = False
     prompt = builder()
     if cfg.translation.use_profile:
         profile = (
-            _legacy_profile_snapshot()
+            _legacy_profile_snapshot(cfg.active_streamer_profile)
             if legacy_profile
             else get_translation_profile(cfg.active_streamer_profile, qwen=True)
         )
