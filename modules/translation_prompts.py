@@ -38,6 +38,17 @@ def get_translation_profile(profile_id: str, qwen: bool = False) -> str:
     return profiles.get(canonical_profile_id(profile_id), "")
 
 
+def get_translation_profile_facts(profile_id: str) -> str:
+    """Return the compact glossary block shared with fallback contexts.
+
+    Profile files put exact mappings before the first blank line and examples
+    afterwards. Reusing that block keeps DeepL/Groq/OpenRouter aligned with the
+    live Qwen profile without introducing another hand-maintained fact table.
+    """
+    profile = get_translation_profile(profile_id, qwen=True).strip()
+    return profile.split("\n\n", 1)[0].strip() if profile else ""
+
+
 def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
     profiles = _STREAMER_PROFILES_QWEN if qwen else _STREAMER_PROFILES
     return frozenset(profiles)
@@ -247,7 +258,7 @@ def _build_base_prompt() -> str:
     return base
 
 
-def _build_qwen_optimized_prompt() -> str:
+def _build_qwen_legacy_prompt() -> str:
     """Qwen 系列模型專屬優化 prompt（目前 nvidia/qwen3-next 等走此版本）"""
     slang_lines = "\n".join(f"  {k} → {v}" for k, v in cfg.translation.slang.items())
     slang_part = (
@@ -463,6 +474,87 @@ def _build_qwen_optimized_prompt() -> str:
     return base
 
 
+def _build_qwen_optimized_prompt() -> str:
+    """Compact live contract for Qwen.
+
+    The legacy prompt grew to 358 lines and repeated several mutually
+    incompatible choices (unknown terms: omit *or* preserve; foreign speech:
+    discard *or* translate). Keep one ordered decision policy and only the
+    examples that guard observed production failures. Deterministic policy and
+    output sanitizers remain the final safety boundary.
+    """
+    slang_lines = "\n".join(f"{source} → {target}" for source, target in cfg.translation.slang.items())
+    slang_section = (
+        "\n[Approved glossary]\n"
+        "When a source term below appears, use its exact target rendering.\n"
+        + slang_lines
+        + "\n"
+        if slang_lines
+        else ""
+    )
+    mode_rule = (
+        "The source may be an incomplete live STT segment. Translate only the meaning "
+        "that is actually present; never complete a missing clause."
+        if cfg.translation.translation_mode == "live"
+        else
+        "The source is a clip transcript. Preserve its complete structure and nuance; "
+        "omit content only when it is clearly acoustic noise."
+    )
+
+    return (
+        f"You translate livestream speech into natural Traditional Chinese ({cfg.translation.target_lang}).\n"
+        "Return translation text only: no label, quotation wrapper, explanation, refusal, "
+        "or description of what you did. If the entire source has no coherent meaning, "
+        "return no content.\n\n"
+
+        "[Ordered decision policy]\n"
+        "Apply these rules in order; do not choose freely between preserving and omitting.\n"
+        "1. Exact glossary/profile match → use the specified rendering.\n"
+        "2. Recognizable person, streamer, brand, game, work, song, or product → preserve "
+        "its official name. Korean streamer/fan/nickname forms without an approved Chinese "
+        "name stay in Hangul; never invent Chinese phonetic characters or romanization.\n"
+        "3. Unknown token inside an otherwise coherent sentence → preserve that token and "
+        "translate the rest. Do not guess what the token means.\n"
+        "4. Broken foreign-sounding syllables that form no phrase → omit only those syllables.\n"
+        "5. Entire source without a coherent clause → return no content.\n\n"
+
+        "[Language policy]\n"
+        "Translate coherent Korean, English, or Japanese speech into Traditional Chinese. "
+        "A different source language is not noise. Preserve official names and titles in "
+        "their official spelling. Never convert an unknown Korean sound-word into Japanese kana.\n"
+        "Output uses Taiwan forms such as 影片、遊戲、螢幕、網路、留言、品質、按讚. "
+        "Japanese script may remain only when it is an explicitly recognized official name "
+        "or title; ordinary Japanese sentences must be translated.\n\n"
+
+        "[STT boundary]\n"
+        f"{mode_rule}\n"
+        "Silently remove acoustic repetitions or isolated noise, but preserve intentional "
+        "repetition, emotion, hesitation, slang, profanity, and sentence fragments. "
+        "Never reconstruct words or facts that were not captured by STT.\n\n"
+
+        "[Numbers and style]\n"
+        "Keep every amount, count, score, date, level, and unit exact. Korean 만=10,000 and "
+        "억=100,000,000: 만 5천원 means 15,000元; 10만원 means 10萬元. "
+        "When uncertain, copy the digits rather than changing their value.\n"
+        "Use concise Taiwan livestream language. Preserve the speaker's tone and intensity; "
+        "do not formalize, soften, summarize, or add background information.\n\n"
+
+        "[Critical examples]\n"
+        "input: 진짜 대박이다 ㅋㅋㅋ\noutput: 真的太狂了哈哈哈\n"
+        "input: 근데 난 약간... 약간 그...\noutput: 不過我有點……那個……\n"
+        "input: 서버에서 띠부시레 아이템을 찾았어\noutput: 在伺服器找到띠부시레道具了\n"
+        "input: 지노와아!\noutput: 지노와아！\n"
+        "input: 만 5천원 후원 감사합니다\noutput: 感謝15,000元的贊助\n"
+        "input: I am Iron Man.\noutput: 我是鋼鐵人。\n"
+        "input: Today was really fun, thank you everyone.\noutput: 今天真的很開心，謝謝大家。\n"
+        "input: 今日はとても楽しかったです\noutput: 今天真的很開心。\n"
+        "input: Chemical Love 신곡 들었어\noutput: 聽過新歌《Chemical Love》了嗎？\n"
+        "input: 랑코가 새 게임을 시작했어\noutput: 랑코開始玩新遊戲了。\n"
+        "input: 지금 게임 하고\noutput: 現在在玩遊戲\n"
+        + slang_section
+    )
+
+
 # Final output rules must be the LAST thing the model reads, so they are not
 # baked into the prompt bodies: _compose_system_prompt() appends the matching
 # tail after any streamer profile / [Background] activity sections.
@@ -471,4 +563,3 @@ _QWEN_PROMPT_TAIL = "\n\n---\n只輸出翻譯。無任何其他文字。"
 
 _BASE_PROMPT = _build_base_prompt()
 _QWEN_PROMPT = _build_qwen_optimized_prompt()  # Qwen 專屬優化版
-

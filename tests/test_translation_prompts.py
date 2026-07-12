@@ -6,14 +6,16 @@ from modules.streamer_profiles import known_profile_ids
 from modules.translation_prompts import (
     _PROFILE_DATA_PATH,
     _build_qwen_optimized_prompt,
+    _build_qwen_legacy_prompt,
     _load_translation_profiles,
     get_translation_profile,
+    get_translation_profile_facts,
     translation_profile_ids,
 )
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "260f68c6766d15b8b91da9ddaab6774bc8add187b98ce451aa1b6affcb9756c4"
+_TRANSLATION_PROFILE_DATA_HASH = "8a80528dd2eb2d7c6d91b609939c86c73fc8e7efeb2ed85142f5c4ad10222696"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -41,6 +43,34 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
     assert "[UNK:" not in prompt
     assert "空字串" not in prompt
     assert "無法理解" not in prompt
+
+
+def test_qwen_prompt_v2_is_compact_and_has_one_ordered_policy():
+    prompt = _build_qwen_optimized_prompt()
+    legacy = _build_qwen_legacy_prompt()
+
+    assert len(prompt) < len(legacy) * 0.7
+    assert "[Ordered decision policy]" in prompt
+    assert "Translate coherent Korean, English, or Japanese speech" in prompt
+    assert "Unknown token inside an otherwise coherent sentence" in prompt
+    assert "Never reconstruct words or facts" in prompt
+
+
+def test_url_qwen_profile_is_compact_but_keeps_core_facts():
+    profile = get_translation_profile("url", qwen=True)
+
+    assert len(profile) < 900
+    assert profile.count("\ninput:") == 2
+    for term in ("UR:L", "유아렐", "URL", "모카", "솜먕", "Wish Me Love", "사계"):
+        assert term in profile
+
+
+def test_compact_profile_facts_exclude_examples():
+    facts = get_translation_profile_facts("url")
+
+    assert "유아렐" in facts
+    assert "Wish Me Love" in facts
+    assert "input:" not in facts
 
 
 def test_hades_translation_profiles_contain_glossary_mappings():

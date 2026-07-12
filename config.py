@@ -211,7 +211,19 @@ class _Translation:
     max_tokens:     int          = 200
     temperature:    float        = 0.1
     queue_maxsize:  int          = 8
-    context_window: int          = 10  # recent translations passed as context to LLM
+    context_window: int          = 10  # retained recent translations; adaptive windows stay <= this
+    adaptive_history_enabled: bool = True
+    adaptive_history_base_window: int = 5
+    adaptive_history_dependency_window: int = 10
+    adaptive_history_dependency_markers: tuple = (
+        "근데", "그런데", "그래서", "그러니까", "그리고", "아니", "맞아",
+        "그러면", "그럼", "그게", "그러네", "그렇지",
+    )
+    # Latent multilingual policy. Production Groq STT currently pins
+    # language="ko", so Japanese detection cannot be reached honestly yet.
+    # Keep disabled until the separate KO-vs-auto-detect replay gate passes;
+    # confidence/repetition filtering remains mandatory if later enabled.
+    translate_coherent_foreign_speech: bool = False
     # Safety cap on per-input length. Oversized inputs are almost always STT
     # hallucinations (repeated phrases, chunk-boundary glitches). Rejecting them
     # at the policy layer prevents a single bad input from burning a day's

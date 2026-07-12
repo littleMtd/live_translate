@@ -83,7 +83,10 @@ class TestTokenUsageCapture(unittest.TestCase):
             object.__setattr__(cfg.translation, "use_profile", original_profile)
 
         self.assertNotEqual(prompt, "FULL PRIMARY PROMPT")
-        self.assertIn("Korean to Traditional Chinese", prompt)
+        self.assertIn("Traditional Chinese live subtitle translator", prompt)
+        self.assertIn("Korean, English, or Japanese", prompt)
+        self.assertIn("Never convert unknown Korean sound-words", prompt)
+        self.assertIn("official name or title", prompt)
 
 
 class TestCompactProfileDigest(unittest.TestCase):
@@ -119,6 +122,8 @@ class TestCompactProfileDigest(unittest.TestCase):
             self.assertIn("랑코", prompt)
             self.assertIn("솜먕", prompt)
             self.assertIn("유재석→劉在錫", prompt)  # shared scope rides along
+            self.assertIn("유아렐/유아엘=UR:L", prompt)
+            self.assertIn("Wish Me Love", prompt)
 
     def test_wrong_profile_names_do_not_leak(self):
         # 랑코 can't be the probe: it appears in _COMPACT_INVARIANTS itself.
@@ -209,7 +214,7 @@ class TestDeepLCacheSignature(unittest.TestCase):
         fields = (
             "deepl_target_lang", "deepl_context_window",
             "deepl_history_source_chars", "deepl_history_target_chars",
-            "current_activity",
+            "current_activity", "streamer_profile", "use_profile",
         )
         original = {name: getattr(cfg.translation, name) for name in fields}
         try:
@@ -250,6 +255,66 @@ class TestDeepLCacheSignature(unittest.TestCase):
             self._signature(current_activity="StarCraft"),
             self._signature(current_activity="Hades"),
         )
+
+    def test_profile_facts_change_signature(self):
+        self.assertNotEqual(
+            self._signature(streamer_profile="url", use_profile=True),
+            self._signature(streamer_profile="isegye_lilpa", use_profile=True),
+        )
+
+    def test_deepl_context_contains_url_core_facts_and_two_history_items(self):
+        from config import cfg
+        from modules.translation_engines import _deepl_context
+
+        original_profile = cfg.translation.streamer_profile
+        original_use = cfg.translation.use_profile
+        object.__setattr__(cfg.translation, "streamer_profile", "url")
+        object.__setattr__(cfg.translation, "use_profile", True)
+        try:
+            context, count = _deepl_context([
+                ("old", "舊"),
+                ("유아렐 신곡", "UR:L新歌"),
+                ("URL 링크", "URL網址"),
+            ])
+        finally:
+            object.__setattr__(cfg.translation, "streamer_profile", original_profile)
+            object.__setattr__(cfg.translation, "use_profile", original_use)
+
+        self.assertEqual(count, 2)
+        self.assertIn("유아렐/유아엘=UR:L", context)
+        self.assertIn("Wish Me Love", context)
+        self.assertNotIn("Recent subtitle: old", context)
+
+
+class TestAdaptivePrimaryHistory(unittest.TestCase):
+    def test_base_and_dependency_windows(self):
+        from config import cfg
+        from modules.translation_engines import _limited_primary_history
+
+        history = [(f"source-{index}", f"target-{index}") for index in range(12)]
+        fields = (
+            "context_window", "adaptive_history_enabled",
+            "adaptive_history_base_window", "adaptive_history_dependency_window",
+        )
+        original = {name: getattr(cfg.translation, name) for name in fields}
+        object.__setattr__(cfg.translation, "context_window", 10)
+        object.__setattr__(cfg.translation, "adaptive_history_enabled", True)
+        object.__setattr__(cfg.translation, "adaptive_history_base_window", 5)
+        object.__setattr__(cfg.translation, "adaptive_history_dependency_window", 10)
+        try:
+            base = _limited_primary_history(history, "오늘 방송 재미있었어")
+            dependent = _limited_primary_history(history, "근데 그건 아니야")
+            false_prefix = _limited_primary_history(history, "근데기계가 있어")
+            object.__setattr__(cfg.translation, "adaptive_history_enabled", False)
+            disabled = _limited_primary_history(history, "오늘 방송 재미있었어")
+        finally:
+            for name, value in original.items():
+                object.__setattr__(cfg.translation, name, value)
+
+        self.assertEqual(len(base), 5)
+        self.assertEqual(len(dependent), 10)
+        self.assertEqual(len(false_prefix), 5)
+        self.assertEqual(len(disabled), 10)
 
     def test_other_engines_keep_prompt_passthrough_semantics(self):
         self.assertEqual(

@@ -10,6 +10,7 @@ from urllib.error import URLError
 
 from config import cfg
 from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
+from modules.translation_prompts import get_translation_profile_facts
 from utils.api_retry import classify_error
 from utils.logger import get_logger
 
@@ -35,8 +36,10 @@ _COMPACT_INVARIANTS = (
     "written (e.g. 랑코 stays 랑코) while still translating the rest of the sentence normally; never invent Chinese phonetic renderings "
     "or romanizations; only nationally famous people keep conventional "
     "Chinese names. "
-    "(2) Never output Japanese kana; unknown Korean sound-words stay in "
-    "Hangul exactly as written (지노와아 stays 지노와아, never ジノワァ). "
+    "(2) Never convert unknown Korean sound-words into Japanese kana; keep "
+    "them in Hangul exactly as written (지노와아 stays 지노와아, never ジノワァ). "
+    "Japanese script may remain only for a recognized official name or title; "
+    "translate ordinary coherent Japanese speech. "
     "(3) Korean number units are exact: 만=10,000 and 억=100,000,000 — "
     "만 5천원 is 15,000元 (never 五千), 10만원 is 10萬元 (never 一萬); when "
     "unsure write the amount in digits. "
@@ -48,11 +51,12 @@ _COMPACT_INVARIANTS = (
 # disease as the standard/qwen profile split). This merges the stronger
 # phrasing of each.
 _COMPACT_SYSTEM_PROMPT = (
-    "You are a Korean to Traditional Chinese live subtitle translator. "
-    "Translate only the provided Korean livestream speech into natural zh-TW. "
+    "You are a Traditional Chinese live subtitle translator. "
+    "Translate coherent Korean, English, or Japanese livestream speech into natural zh-TW. "
     "Output only the translation, with no labels, explanations, romanization, or source text. "
     "If the input is empty, noise, or unreadable, output an empty string. "
-    "Preserve gaming/anime terms and uncertain names and brands as names; do not invent facts. "
+    "Preserve official names, brands, games, and song titles; translate the rest. "
+    "Omit only broken foreign-sounding fragments, not coherent foreign speech. "
     "If the source is uncertain, prefer a short conservative translation over invented detail. "
     + _COMPACT_INVARIANTS
 )
@@ -423,12 +427,39 @@ def _limited_history(
     return limited
 
 
-def _primary_context_window() -> int:
-    return _clamp_int(getattr(cfg.translation, "context_window", 0), 0)
+def _starts_with_history_dependency_marker(text: str) -> bool:
+    stripped = str(text or "").strip()
+    markers = tuple(
+        getattr(cfg.translation, "adaptive_history_dependency_markers", ()) or ()
+    )
+    boundaries = " \t\r\n.,!?~…。？！,，、:;；"
+    for marker in markers:
+        marker = str(marker or "")
+        if not marker or not stripped.startswith(marker):
+            continue
+        if len(stripped) == len(marker) or stripped[len(marker)] in boundaries:
+            return True
+    return False
 
 
-def _limited_primary_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
-    limit = _primary_context_window()
+def _primary_context_window(text: str = "") -> int:
+    maximum = _clamp_int(getattr(cfg.translation, "context_window", 0), 0)
+    if not bool(getattr(cfg.translation, "adaptive_history_enabled", False)):
+        return maximum
+    setting = (
+        "adaptive_history_dependency_window"
+        if _starts_with_history_dependency_marker(text)
+        else "adaptive_history_base_window"
+    )
+    requested = _clamp_int(getattr(cfg.translation, setting, maximum), maximum)
+    return min(maximum, requested)
+
+
+def _limited_primary_history(
+    history: list[tuple[str, str]] | None,
+    text: str = "",
+) -> list[tuple[str, str]]:
+    limit = _primary_context_window(text)
     if limit <= 0:
         return []
     return list(history or [])[-limit:]
@@ -447,9 +478,31 @@ def _deepl_base_url(api_key: str) -> str:
     return _DEEPL_FREE_BASE_URL if (api_key or "").strip().endswith(":fx") else _DEEPL_PRO_BASE_URL
 
 
+def _direct_translation_source_lang(text: str) -> str:
+    """Infer the source code for direct APIs after STT admits foreign speech.
+
+    Korean wins for mixed sentences. Japanese requires kana (not CJK alone),
+    and Latin-only speech is treated as English. This deliberately stays
+    conservative because names and game terms commonly contain Latin text.
+    """
+    text = text or ""
+    if any("\uac00" <= char <= "\ud7a3" for char in text):
+        return "KO"
+    kana_count = sum(
+        1 for char in text
+        if "\u3040" <= char <= "\u309f" or "\u30a0" <= char <= "\u30ff"
+    )
+    if kana_count >= 2:
+        return "JA"
+    latin_count = sum(char.isascii() and char.isalpha() for char in text)
+    if latin_count >= 3:
+        return "EN"
+    return "KO"
+
+
 def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
     """Build the small, non-billed context supported by DeepL's text API."""
-    parts = ["Korean livestream subtitles for a Taiwan audience."]
+    parts = ["Livestream subtitles for a Taiwan audience."]
     activity = str(getattr(cfg.translation, "current_activity", "") or "").strip()
     if activity:
         parts.append(f"Current stream activity: {activity}.")
@@ -487,19 +540,27 @@ def _compact_profile_digest(profile_id: str) -> str:
     except Exception:
         log.warning("compact profile digest unavailable", exc_info=True)
         return ""
+    facts = get_translation_profile_facts(profile_id)
     parts = []
     for rule in rules:
         if rule.scope not in (profile_id, SHARED_NAME_SCOPE):
             continue
         aliases = "/".join(dict.fromkeys(rule.source_aliases[:2]))
+        if facts and any(alias and alias in facts for alias in rule.source_aliases):
+            continue
         parts.append(f"{aliases}→{rule.canonical}")
-    if not parts:
+    if not facts and not parts:
         return ""
-    return (
-        " Fixed name renderings (source→exact output): "
-        + "; ".join(parts[:_DIGEST_MAX_RULES])
-        + "."
-    )
+    sections = []
+    if facts:
+        sections.append(" Profile facts: " + " ".join(facts.split()))
+    if parts:
+        sections.append(
+            " Fixed name renderings (source→exact output): "
+            + "; ".join(parts[:_DIGEST_MAX_RULES])
+            + "."
+        )
+    return "".join(sections)
 
 
 def _groq_system_prompt(system_prompt: str) -> str:
@@ -729,7 +790,7 @@ class ClaudeEngine(TranslationEngine):
             if cfg.translation.translation_mode == "live":
                 system_content["cache_control"] = {"type": "ephemeral"}
             messages = []
-            for ko, zh in _limited_primary_history(history):
+            for ko, zh in _limited_primary_history(history, text):
                 messages.append({"role": "user", "content": f"input: {ko}"})
                 messages.append({"role": "assistant", "content": zh})
             messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
@@ -792,7 +853,7 @@ class GoogleTranslateEngine(TranslationEngine):
             import json as _json
             payload = _json.dumps({
                 "q": text,
-                "source": "ko",
+                "source": _direct_translation_source_lang(text).lower(),
                 "target": self._target_lang,
                 "format": "text",
             }).encode()
@@ -861,7 +922,7 @@ class DeepLEngine(TranslationEngine):
         context, context_item_count = _deepl_context(history)
         body: dict[str, object] = {
             "text": [text],
-            "source_lang": "KO",
+            "source_lang": _direct_translation_source_lang(text),
             "target_lang": self._target_lang,
         }
         if context:
@@ -958,7 +1019,7 @@ class OllamaEngine(TranslationEngine):
         import json as _json
 
         messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in _limited_primary_history(history):
+        for ko, zh in _limited_primary_history(history, text):
             messages.append({"role": "user", "content": f"input: {ko}"})
             messages.append({"role": "assistant", "content": zh})
         messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
@@ -1054,7 +1115,7 @@ class NvidiaEngine(TranslationEngine):
         retry_reason = ""
         source_text_char_count = len(text or "")
         prompt_char_count = len(system_prompt or "")
-        history = _limited_primary_history(history)
+        history = _limited_primary_history(history, text)
         context_item_count = len(history)
         request_body_char_count: int | None = None
         message_count: int | None = None

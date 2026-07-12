@@ -419,6 +419,24 @@ class TestDeepLEngine(unittest.TestCase):
     def test_pro_key_uses_pro_endpoint(self):
         self.assertEqual(_deepl_base_url("fake-key"), "https://api.deepl.com/v2")
 
+    def test_selects_direct_api_source_language_from_text(self):
+        import json
+
+        engine = self._engine()
+        cases = (
+            ("오늘은 즐거웠어요", "KO"),
+            ("Today was really fun", "EN"),
+            ("今日はとても楽しかったです", "JA"),
+            ("URL 멤버", "KO"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source), patch(
+                "urllib.request.urlopen", return_value=self._response("翻譯")
+            ) as urlopen:
+                self.assertEqual(engine.translate(source, "system", False), "翻譯")
+                payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+                self.assertEqual(payload["source_lang"], expected)
+
     def test_returns_none_without_key(self):
         engine = self._engine("")
         with patch("urllib.request.urlopen") as urlopen:
@@ -505,7 +523,8 @@ class TestGroqTranslationEngine(unittest.TestCase):
         req = urlopen.call_args.args[0]
         payload = json.loads(req.data.decode())
         system_message = payload["messages"][0]["content"]
-        self.assertIn("Korean to Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("Korean, English, or Japanese", system_message)
         self.assertNotIn("full quality prompt", system_message)
 
     def test_strips_closed_and_unclosed_think_blocks(self):
@@ -644,7 +663,8 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         self.assertEqual(payload["reasoning"], {"exclude": True})
         self.assertEqual(payload["max_tokens"], 200)
         system_message = payload["messages"][0]["content"]
-        self.assertIn("Korean to Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("Korean, English, or Japanese", system_message)
         self.assertIn("Active streamer profile:", system_message)
         self.assertNotIn("full quality prompt", system_message)
 
@@ -2150,6 +2170,10 @@ class TestTranslateOptimizations(unittest.TestCase):
             "（留空）", "(留空)", "（留空）。", "[留空]", "（空白）",
             "（無輸出）", "（无输出）", "（零個字元）", "無輸出", "无输出。",
             "空字串", "沒有輸出", "（無翻譯）",
+            "（輸出零個字元）",
+            "（語義破碎，無法連貫翻譯，輸出零個字元）",
+            "（商業廣告混入，直接輸出零個字元）",
+            "啊，這句完全破碎，無法理解，輸出零個字元",
         ):
             self.assertTrue(_looks_like_meta_garbage_output(output), output)
 
@@ -2161,6 +2185,7 @@ class TestTranslateOptimizations(unittest.TestCase):
             "請把名字欄留空",
             "畫面一片空白",
             "這裡沒有輸出孔",
+            "這個函式會輸出零個字元",
         ):
             self.assertFalse(_looks_like_meta_garbage_output(output), output)
 

@@ -94,20 +94,6 @@ _API_EVENT_DEFAULTS = {
 _CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
-_DEPENDENCY_MARKERS = (
-    "그러니까",
-    "그런데",
-    "그러면",
-    "그러네",
-    "그렇지",
-    "그래서",
-    "근데",
-    "아니",
-    "맞아",
-    "그게",
-    "그럼",
-    "그리고",
-)
 _DEPENDENCY_MARKER_BOUNDARY_RE = re.compile(r"^[\s\.,!?~…。？！,，、:;；]|$")
 
 
@@ -194,6 +180,12 @@ _PLACEHOLDER_BARE = frozenset({
     "無輸出", "无输出", "空字串", "空字符串", "零個字元", "零个字符",
     "沒有輸出", "没有输出", "無翻譯", "无翻译",
 })
+_ZERO_OUTPUT_DIRECTIVES = (
+    "輸出零個字元",
+    "输出零个字符",
+    "輸出 0 個字元",
+    "输出 0 个字符",
+)
 
 
 def _looks_like_placeholder_output(result: str) -> bool:
@@ -214,6 +206,19 @@ def _looks_like_meta_garbage_output(result: str) -> bool:
     # the sources are overwhelmingly noise the model was right to refuse, so
     # a fallback engine would just subtitle the noise literally.
     if _looks_like_placeholder_output(normalized):
+        return True
+    has_zero_output_directive = any(
+        marker in normalized for marker in _ZERO_OUTPUT_DIRECTIVES
+    )
+    # Older models sometimes wrapped the empty-output directive in a longer
+    # explanation instead of returning only the short placeholder. Catch the
+    # bracketed form, plus unbracketed forms that also carry a known meta
+    # explanation marker. A legitimate technical sentence such as
+    # "這個函式會輸出零個字元" remains allowed.
+    if has_zero_output_directive and (
+        normalized.startswith(("(", "（", "[", "【"))
+        or any(marker in normalized for marker in _META_GARBAGE_MARKERS)
+    ):
         return True
     if "STT" in normalized.upper() and any(marker in normalized for marker in _META_GARBAGE_MARKERS):
         return True
@@ -379,7 +384,9 @@ def _dependency_marker(text: str) -> str:
     stripped = (text or "").strip()
     if not stripped:
         return ""
-    for marker in _DEPENDENCY_MARKERS:
+    for marker in tuple(
+        getattr(cfg.translation, "adaptive_history_dependency_markers", ()) or ()
+    ):
         if not stripped.startswith(marker):
             continue
         suffix = stripped[len(marker):]

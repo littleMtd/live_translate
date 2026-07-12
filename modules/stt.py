@@ -49,12 +49,13 @@ def _is_groq_rate_limit_error(exc: Exception) -> bool:
     return "rate_limit_exceeded" in message
 
 
-def _is_hallucinated(text: str) -> bool:
+def _is_hallucinated(text: str, *, allow_japanese: bool = False) -> bool:
     return is_hallucinated(
         text,
         cfg.stt.max_japanese_chars,
         log,
         max_repeat_ratio=cfg.stt.max_repeat_ratio,
+        allow_japanese=allow_japanese,
     )
 
 
@@ -238,6 +239,8 @@ class STTEngine:
         self._current_overlap_seconds = 0.0
         self._current_vad_cut_reason = ""
         self._last_prompt_budget = None
+        self._last_detected_language = ""
+        self._last_foreign_speech_allowed = False
         if self._use_groq:
             self._init_groq()
             self._init_groq_fallback()
@@ -423,6 +426,8 @@ class STTEngine:
         self._last_segments = ()
         self._last_timestamp_deduped_segments = 0
         self._last_timestamp_deduped_chars = 0
+        self._last_detected_language = ""
+        self._last_foreign_speech_allowed = False
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
             self._groq_fallback_client is not None
@@ -506,6 +511,12 @@ class STTEngine:
 
             # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
             detected_lang = getattr(resp, "language", None)
+            self._last_detected_language = str(detected_lang or "")
+            allow_detected_japanese = (
+                bool(getattr(cfg.translation, "translate_coherent_foreign_speech", False))
+                and self._last_detected_language.lower() in ("ja", "japanese")
+            )
+            self._last_foreign_speech_allowed = allow_detected_japanese
             text = (getattr(resp, "text", "") or "").strip()
             segments = getattr(resp, "segments", None) or []
             if _cfg_stt_bool("dedupe_by_timestamp", True):
@@ -516,7 +527,12 @@ class STTEngine:
                 )
                 self._last_timestamp_deduped_segments = dropped_segments
                 self._last_timestamp_deduped_chars = dropped_chars
-            if should_reject_language(detected_lang, text, log):
+            if should_reject_language(
+                detected_lang,
+                text,
+                log,
+                allow_japanese=allow_detected_japanese,
+            ):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
                 self._clear_context_transcript("filtered_language")
@@ -571,7 +587,10 @@ class STTEngine:
                     audio_stats=audio_stats,
                 )
                 return None
-            if _is_hallucinated(text):
+            # A response explicitly detected as Japanese may contain kana and
+            # is still subject to the segment confidence/repetition filters.
+            # Kana in a Korean-detected response remains a hallucination.
+            if _is_hallucinated(text, allow_japanese=allow_detected_japanese):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
                 self._clear_context_transcript("filtered_hallucinated")
@@ -794,6 +813,8 @@ class STTEngine:
             context_included=budget.context_included if budget else None,
             context_gated=bool(getattr(self, "_last_prompt_context_gated", False)) if request_sent else False,
             context_gate_reason=getattr(self, "_last_prompt_context_gate_reason", "") if request_sent else "",
+            detected_language=str(getattr(self, "_last_detected_language", "")) if request_sent else "",
+            foreign_speech_allowed=bool(getattr(self, "_last_foreign_speech_allowed", False)) if request_sent else False,
         )
 
 

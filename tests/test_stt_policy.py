@@ -23,6 +23,20 @@ class TestSttPolicy(unittest.TestCase):
     def test_is_hallucinated_rejects_japanese_kana_over_threshold(self):
         self.assertTrue(is_hallucinated("こんにちは", max_japanese_chars=2))
 
+    def test_is_hallucinated_allows_explicitly_detected_japanese(self):
+        self.assertFalse(
+            is_hallucinated("今日は楽しかったです", max_japanese_chars=2, allow_japanese=True)
+        )
+
+    def test_japanese_allowance_does_not_disable_repetition_filter(self):
+        self.assertTrue(
+            is_hallucinated(
+                "今日は とても 楽しい 今日は とても 楽しい",
+                max_japanese_chars=2,
+                allow_japanese=True,
+            )
+        )
+
     def test_is_hallucinated_rejects_repetition_loop(self):
         self.assertTrue(is_hallucinated("one two three one two three", max_japanese_chars=2))
 
@@ -40,6 +54,13 @@ class TestSttPolicy(unittest.TestCase):
 
     def test_should_reject_language_rejects_japanese(self):
         self.assertTrue(should_reject_language("ja", "こんにちは", logging.getLogger("test")))
+
+    def test_should_reject_language_allows_japanese_when_policy_enabled(self):
+        self.assertFalse(
+            should_reject_language(
+                "ja", "こんにちは", logging.getLogger("test"), allow_japanese=True
+            )
+        )
 
     def test_should_reject_language_allows_unexpected_non_japanese(self):
         self.assertFalse(should_reject_language("en", "hello", logging.getLogger("test")))

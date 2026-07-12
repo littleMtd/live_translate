@@ -266,6 +266,39 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertEqual(emit.call_args.kwargs["status"], "success")
         self.assertTrue(emit.call_args.kwargs["request_sent"])
         self.assertEqual(emit.call_args.kwargs["text_len"], 5)
+        request = eng._groq_client.audio.transcriptions.create.call_args.kwargs
+        self.assertEqual(request["language"], "ko")
+
+    def test_filter_layer_admits_explicit_japanese_when_latent_policy_enabled(self):
+        from config import cfg
+
+        eng = _make_engine_groq()
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "今日はとても楽しかったです", language="ja"
+        )
+        original = cfg.translation.translate_coherent_foreign_speech
+        object.__setattr__(cfg.translation, "translate_coherent_foreign_speech", True)
+        try:
+            with patch("modules.stt.runtime_events.emit") as emit:
+                result = eng._transcribe_groq(self._audio())
+        finally:
+            object.__setattr__(cfg.translation, "translate_coherent_foreign_speech", original)
+
+        self.assertEqual(result, "今日はとても楽しかったです")
+        self.assertEqual(emit.call_args.kwargs["detected_language"], "ja")
+        self.assertTrue(emit.call_args.kwargs["foreign_speech_allowed"])
+
+    def test_japanese_detection_is_rejected_by_default_while_policy_is_latent(self):
+        eng = _make_engine_groq()
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "今日はとても楽しかったです", language="ja"
+        )
+        with patch("modules.stt.runtime_events.emit") as emit:
+            result = eng._transcribe_groq(self._audio())
+
+        self.assertIsNone(result)
+        self.assertEqual(emit.call_args.kwargs["reason"], "language")
+        self.assertFalse(emit.call_args.kwargs["foreign_speech_allowed"])
 
     def test_success_event_includes_prompt_budget(self):
         eng = _make_engine_groq("안녕하세요")

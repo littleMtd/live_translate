@@ -73,13 +73,14 @@ def is_hallucinated(
     logger=log,
     *,
     max_repeat_ratio: float = 0.7,
+    allow_japanese: bool = False,
 ) -> bool:
     chars = [char for char in text if not char.isspace()]
     if not chars:
         return True
 
     japanese = sum(1 for char in chars if "\u3040" <= char <= "\u309f" or "\u30a0" <= char <= "\u30ff")
-    if japanese > max_japanese_chars:
+    if not allow_japanese and japanese > max_japanese_chars:
         logger.debug("STT rejected (Japanese kana=%d): %s", japanese, text[:40])
         return True
 
@@ -105,12 +106,21 @@ def is_hallucinated(
     return False
 
 
-def should_reject_language(detected_lang: str | None, text: str, logger=log) -> bool:
+def should_reject_language(
+    detected_lang: str | None,
+    text: str,
+    logger=log,
+    *,
+    allow_japanese: bool = False,
+) -> bool:
     if not detected_lang:
         return False
 
     lang_lower = detected_lang.lower()
     if lang_lower in ("ja", "japanese"):
+        if allow_japanese:
+            logger.info("Groq STT accepted coherent foreign speech (lang=%s)", detected_lang)
+            return False
         logger.warning("Groq STT rejected (lang=%s): %s", detected_lang, text[:40])
         return True
 
