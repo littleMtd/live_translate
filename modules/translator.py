@@ -48,7 +48,7 @@ from modules.translation_runtime import (
     probe_primary_recovery,
 )
 from modules.translation_memory import MemoryLookup, TranslationMemory
-from modules.translation_policy import TranslationPolicy
+from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 from modules.translation_corrections import (
     NameRenderingRule as _NameRenderingRule,
     load_translation_corrections,
@@ -492,6 +492,11 @@ def _new_translation_policy() -> TranslationPolicy:
         slang=cfg.translation.slang,
         min_translate_chars=_MIN_TRANSLATE_CHARS,
         max_translate_chars=cfg.translation.max_translate_chars,
+        repetition_confidence_exempt_enabled=(
+            cfg.translation.repetition_confidence_exempt_enabled
+        ),
+        repetition_avg_logprob_threshold=cfg.stt.context_avg_logprob_threshold,
+        repetition_no_speech_threshold=cfg.stt.context_no_speech_threshold,
     )
 
 
@@ -662,15 +667,38 @@ class Translator:
     def translate(self, text: str, incomplete: bool = False) -> str | None:
         return self.translate_event(text, incomplete).target_text
 
-    def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+    def translate_event(
+        self,
+        text: str,
+        incomplete: bool = False,
+        *,
+        repetition_evidence: RepetitionEvidence | None = None,
+    ) -> TranslationOutcome:
         raw_text = (text or "").strip()
+        if repetition_evidence is not None:
+            # The call argument is authoritative.  A stale/malformed evidence
+            # object must never relabel an incomplete sentence as complete.
+            repetition_evidence = RepetitionEvidence(
+                min_avg_logprob=repetition_evidence.min_avg_logprob,
+                max_no_speech_prob=repetition_evidence.max_no_speech_prob,
+                cut_reason=repetition_evidence.cut_reason,
+                forced=repetition_evidence.forced,
+                incomplete=incomplete,
+            )
         policy = self._policy_state()
         # L1: rejection_reason, prepare_input and the sanitize-rejection read
         # must share one lock section — the policy instance is shared across
         # workers, so split reads raced and produced wrong filter_reason values.
         with self._state_guard():
-            filter_reason = policy.rejection_reason(raw_text)
-            text = policy.prepare_input(raw_text, initial_rejection_reason=filter_reason)
+            filter_reason = policy.rejection_reason(
+                raw_text,
+                repetition_evidence=repetition_evidence,
+            )
+            text = policy.prepare_input(
+                raw_text,
+                initial_rejection_reason=filter_reason,
+                repetition_evidence=repetition_evidence,
+            )
             self._last_input = policy.last_input
             sanitize_rejection = policy._last_sanitize_rejection
         if text is None:
@@ -1261,7 +1289,18 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 if worker_translator is None:
                     worker_translator = Translator(shared_state=shared_state)
                     worker_state.translator = worker_translator
-                outcome = worker_translator.translate_event(text, incomplete)
+                repetition_evidence = RepetitionEvidence(
+                    min_avg_logprob=metadata.get("min_avg_logprob"),
+                    max_no_speech_prob=metadata.get("max_no_speech_prob"),
+                    cut_reason=str(metadata.get("cut_reason") or ""),
+                    forced=bool(metadata.get("forced", False)),
+                    incomplete=incomplete,
+                )
+                outcome = worker_translator.translate_event(
+                    text,
+                    incomplete,
+                    repetition_evidence=repetition_evidence,
+                )
             except Exception:
                 log.exception("Translation worker failed for: %.40s", text)
                 metadata.setdefault("sequence_id", seq)

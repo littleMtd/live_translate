@@ -25,6 +25,7 @@ from modules.translation_prompts import (
     get_translation_profile,
     translation_profile_ids,
 )
+from modules.translation_policy import RepetitionEvidence
 from modules.translator import (
     _apply_source_aware_corrections,
     _looks_like_meta_garbage_output,
@@ -98,7 +99,15 @@ def _make_translator() -> Translator:
     t._consecutive_primary_failures = 0
     t._last_input = ""
     t._engines = [_mock_engine(name) for name in ("gemini", "claude")]
-    t._policy = TranslationPolicy(slang=cfg.translation.slang, min_translate_chars=2)
+    t._policy = TranslationPolicy(
+        slang=cfg.translation.slang,
+        min_translate_chars=2,
+        repetition_confidence_exempt_enabled=(
+            cfg.translation.repetition_confidence_exempt_enabled
+        ),
+        repetition_avg_logprob_threshold=cfg.stt.context_avg_logprob_threshold,
+        repetition_no_speech_threshold=cfg.stt.context_no_speech_threshold,
+    )
     t._memory = TranslationMemory(
         recent_window=3,
         max_cache_size=_CACHE_MAX_SIZE,
@@ -1104,7 +1113,9 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
             def __init__(self, shared_state=None):
                 pass
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 return outcome
 
         stale_diagnostics = {
@@ -1151,7 +1162,9 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
                 with self.__class__.lock:
                     self.__class__.instances.append(self)
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 with self.__class__.lock:
                     self.__class__.calls.append(text)
                 if text == "first":
@@ -1205,7 +1218,9 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
             def __init__(self, shared_state=None):
                 pass
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 time.sleep(0.05)
                 return TranslationOutcome(
                     source_text=text,
@@ -1600,6 +1615,46 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(outcome.status, "filtered")
         self.assertEqual(outcome.result_source, "policy")
         self.assertEqual(outcome.filter_reason, "too_short")
+        for engine in t._engines:
+            engine.translate.assert_not_called()
+
+    def test_translate_event_uses_repetition_evidence_to_allow_emotional_speech(self):
+        t = _make_translator()
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        outcome = t.translate_event(
+            text,
+            repetition_evidence=RepetitionEvidence(
+                min_avg_logprob=-0.455,
+                max_no_speech_prob=0.013,
+                cut_reason="silence_complete",
+                forced=False,
+                incomplete=False,
+            ),
+        )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "你好")
+        t._engines[0].translate.assert_called_once()
+
+    def test_translate_event_incomplete_argument_overrides_stale_repetition_evidence(self):
+        t = _make_translator()
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        outcome = t.translate_event(
+            text,
+            incomplete=True,
+            repetition_evidence=RepetitionEvidence(
+                min_avg_logprob=-0.455,
+                max_no_speech_prob=0.013,
+                cut_reason="silence_complete",
+                forced=False,
+                incomplete=False,
+            ),
+        )
+
+        self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.filter_reason, "stt_garbage")
         for engine in t._engines:
             engine.translate.assert_not_called()
 

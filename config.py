@@ -229,6 +229,10 @@ class _Translation:
     # at the policy layer prevents a single bad input from burning a day's
     # token budget. Counted in characters, not tokens.
     max_translate_chars: int     = 500
+    # Let high-confidence, naturally completed multi-syllable emotional
+    # repetition bypass only the excessive-repetition STT garbage branch.
+    # Missing confidence, forced cuts and short/Jamo loops remain fail-closed.
+    repetition_confidence_exempt_enabled: bool = True
     max_subtitle_output_delay_ms: int = 30000
     # Translation mode — controls the STT correction section in the system prompt.
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)

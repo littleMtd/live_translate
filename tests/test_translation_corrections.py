@@ -47,7 +47,7 @@ def test_translation_correction_data_snapshot_counts():
     } == {"stellive_hina": 5, "hades_chxxnnx": 1, "url": 3}
     assert len(tables.korean_name_suffixes) == 33
     assert len(tables.name_rendering_rules) == 28
-    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 186
+    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 189
     assert sum(
         len(group.replacements)
         for group in tables.source_aware_target_replacements
@@ -147,6 +147,26 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
             "나 그냥 소파에 앉아있는 랑코였습니다.",
             "我只是坐在沙發上的朗科。",
         ) == "我只是坐在沙發上的랑코。"
+        assert _apply_source_aware_corrections(
+            "랑코야, 언니한테 말이 너무 심하다.",
+            "啦可呀，你對姊姊講話太過分了。",
+        ) == "랑코呀，你對姊姊講話太過分了。"
+        assert _apply_source_aware_corrections(
+            "랑코 착하지 착한데 그래.",
+            "啦科其實很善良，對啊。",
+        ) == "랑코其實很善良，對啊。"
+        assert _apply_source_aware_corrections(
+            "마냥씨 왜요?",
+            "馬尼亞小姐怎麼了？",
+        ) == "마냥小姐怎麼了？"
+        assert _apply_source_aware_corrections(
+            "마냥 고양이처럼 따라다녔어.",
+            "只是像貓一樣一直跟著。",
+        ) == "只是像貓一樣一直跟著。"
+        assert _apply_source_aware_corrections(
+            "마냥아 오늘 7시에 뭐해?",
+            "今天7點在幹嘛？",
+        ) == "今天7點在幹嘛？"
 
     with _active_translation_profile("hades_chxxnnx"):
         assert _normalize_source_before_matching("솜명이 왔어") == "솜명이 왔어"
@@ -154,6 +174,12 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
             "마냥 랑코 아무도 못 잡을 것 같다",
             "馬樣、蘭子都抓不到呢？",
         ) == "馬樣、蘭子都抓不到呢？"
+        assert _apply_source_aware_corrections("랑코야", "啦可呀") == "啦可呀"
+        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "馬尼亞小姐"
+
+    with _active_translation_profile("url", use_profile=False):
+        assert _apply_source_aware_corrections("랑코야", "啦科呀") == "啦科呀"
+        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "馬尼亞小姐"
 
 
 def test_each_global_source_aware_rule_triggers_and_is_source_gated():

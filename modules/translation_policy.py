@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from utils.logger import get_logger
 from utils.text_heuristics import (
@@ -25,6 +27,18 @@ from utils.text_heuristics import (
 log = get_logger("translation_policy")
 
 _REJECTION_REASON_UNSET = object()
+_COMPLETE_REPETITION_CUT_REASONS = frozenset({"natural", "silence_complete"})
+
+
+@dataclass(frozen=True)
+class RepetitionEvidence:
+    """Minimal sentence evidence used by the repetition false-positive guard."""
+
+    min_avg_logprob: float | None = None
+    max_no_speech_prob: float | None = None
+    cut_reason: str = ""
+    forced: bool = False
+    incomplete: bool = False
 
 
 def _word_counts(words: list[str]) -> dict[str, int]:
@@ -32,6 +46,33 @@ def _word_counts(words: list[str]) -> dict[str, int]:
     for word in words:
         counts[word] = counts.get(word, 0) + 1
     return counts
+
+
+def _repetition_stats(text: str) -> tuple[int, float, tuple[str, ...]]:
+    words = text.split()
+    if not words:
+        return 0, 0.0, ()
+    word_count = _word_counts(words)
+    max_repeat_count = max(word_count.values())
+    repeat_ratio = max_repeat_count / len(words)
+    dominant_units = tuple(
+        word for word, count in word_count.items() if count == max_repeat_count
+    )
+    return max_repeat_count, repeat_ratio, dominant_units
+
+
+def _hangul_syllable_count(text: str) -> int:
+    return sum(1 for char in text if "\uac00" <= char <= "\ud7a3")
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed is not None and math.isfinite(parsed) else None
 
 
 def _has_strong_garbage_keyword(text: str) -> bool:
@@ -65,22 +106,31 @@ class TranslationPolicy:
         min_translate_chars: int = 2,
         max_translate_chars: int = 500,
         last_input: str = "",
+        repetition_confidence_exempt_enabled: bool = False,
+        repetition_avg_logprob_threshold: float = -0.7,
+        repetition_no_speech_threshold: float = 0.3,
     ):
         self._slang = slang
         self._min_translate_chars = min_translate_chars
         self._max_translate_chars = max_translate_chars
         self.last_input = last_input
         self._last_sanitize_rejection = ""
+        self._repetition_confidence_exempt_enabled = bool(
+            repetition_confidence_exempt_enabled
+        )
+        self._repetition_avg_logprob_threshold = float(repetition_avg_logprob_threshold)
+        self._repetition_no_speech_threshold = float(repetition_no_speech_threshold)
 
     def prepare_input(
         self,
         text: str,
         initial_rejection_reason: str | None | object = _REJECTION_REASON_UNSET,
+        repetition_evidence: RepetitionEvidence | None = None,
     ) -> str | None:
         text = text.strip()
         self._last_sanitize_rejection = ""
         reason = (
-            self.rejection_reason(text)
+            self.rejection_reason(text, repetition_evidence=repetition_evidence)
             if initial_rejection_reason is _REJECTION_REASON_UNSET
             else initial_rejection_reason
         )
@@ -148,7 +198,12 @@ class TranslationPolicy:
 
         return sanitized
 
-    def rejection_reason(self, text: str) -> str | None:
+    def rejection_reason(
+        self,
+        text: str,
+        *,
+        repetition_evidence: RepetitionEvidence | None = None,
+    ) -> str | None:
         text = text.strip()
         if not text:
             return "empty"
@@ -158,7 +213,14 @@ class TranslationPolicy:
             return "too_short"
         if len(text) > self._max_translate_chars:
             return "too_long"
-        if self.is_stt_garbage(text):
+        repetition_exempt = self._can_exempt_excessive_repetition(
+            text,
+            repetition_evidence,
+        )
+        if self.is_stt_garbage(
+            text,
+            exempt_excessive_repetition=repetition_exempt,
+        ):
             return "stt_garbage"
         if self.is_stt_template_garbage(text):
             return "stt_template_garbage"
@@ -174,22 +236,56 @@ class TranslationPolicy:
     def slang_result(self, text: str) -> str | None:
         return self._slang.get(text)
 
+    def _can_exempt_excessive_repetition(
+        self,
+        text: str,
+        evidence: RepetitionEvidence | None,
+    ) -> bool:
+        if not self._repetition_confidence_exempt_enabled or evidence is None:
+            return False
+        if evidence.forced or evidence.incomplete:
+            return False
+        if str(evidence.cut_reason or "") not in _COMPLETE_REPETITION_CUT_REASONS:
+            return False
+
+        min_avg_logprob = _optional_float(evidence.min_avg_logprob)
+        max_no_speech_prob = _optional_float(evidence.max_no_speech_prob)
+        if min_avg_logprob is None or max_no_speech_prob is None:
+            return False
+        if min_avg_logprob < self._repetition_avg_logprob_threshold:
+            return False
+        if max_no_speech_prob > self._repetition_no_speech_threshold:
+            return False
+
+        max_repeat_count, repeat_ratio, dominant_units = _repetition_stats(text)
+        if max_repeat_count < 4 or repeat_ratio <= 0.6 or not dominant_units:
+            return False
+        # `살려줘` is one whitespace token but three meaningful Hangul
+        # syllables.  Jamo laughter (`ㅋ`/`ㅋㅋ`), emoji and punctuation contain
+        # no Hangul syllables and therefore stay suppressed.
+        return all(_hangul_syllable_count(unit) >= 2 for unit in dominant_units)
+
     @staticmethod
-    def is_stt_garbage(text: str) -> bool:
+    def is_stt_garbage(
+        text: str,
+        *,
+        exempt_excessive_repetition: bool = False,
+    ) -> bool:
         words = text.split()
         if len(words) < 3:
             return False
 
-        word_count = _word_counts(words)
-
-        max_repeat_count = max(word_count.values()) if words else 0
-        repeat_ratio = max_repeat_count / len(words) if words else 0
+        max_repeat_count, repeat_ratio, _ = _repetition_stats(text)
         # Threshold 4, not 3: triple repetition is normal Korean emphasis, not
         # an STT loop. A 6-week log audit of every sentence this branch would
         # kill at >=3 found 23/25 genuine speech (잘했어x3, 감사합니다x3,
         # 화이팅!x3, 귀여워 귀여워 아주 귀여워...), while real hallucination
         # loops repeat 4+ times and stay caught.
-        if max_repeat_count >= 4 and repeat_ratio > 0.6:
+        if (
+            not exempt_excessive_repetition
+            and max_repeat_count >= 4
+            and repeat_ratio > 0.6
+        ):
             log.debug(
                 "STT garbage detected: excessive repetition (ratio=%.2f) in '%s'",
                 repeat_ratio,

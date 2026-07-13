@@ -250,6 +250,32 @@ class TestTranslatorThread(unittest.TestCase):
         self.assertEqual(kwargs["chunk_count"], 3)
         self.assertEqual(kwargs["audio_seconds"], 4.5)
 
+    def test_translation_worker_passes_confidence_evidence_to_repetition_policy(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        source = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        with _mock_primary("救救我！"), patch("modules.translator.runtime_events") as events:
+            thread = translator.start(sentence_q, subtitle_q, stop)
+            sentence_q.put({
+                "text": source,
+                "incomplete": False,
+                "source_utterance_ids": ["utt-repeat"],
+                "source_avg_logprobs": [-0.455],
+                "source_no_speech_probs": [0.013],
+                "cut_reason": "silence_complete",
+                "forced": False,
+            })
+            self.assertEqual(subtitle_q.get(timeout=5), "救救我！")
+            stop.set()
+            thread.join(timeout=2)
+
+        kwargs = events.emit.call_args.kwargs
+        self.assertEqual(kwargs["status"], "success")
+        self.assertEqual(kwargs["min_avg_logprob"], -0.455)
+        self.assertEqual(kwargs["max_no_speech_prob"], 0.013)
+
     def test_translation_event_pads_missing_source_confidence_for_legacy_items(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
@@ -363,7 +389,9 @@ class TestTranslatorThread(unittest.TestCase):
             def __init__(self, shared_state=None):
                 pass
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 if text == "slow":
                     slow_started.set()
                     release_slow.wait(timeout=3)
@@ -414,7 +442,9 @@ class TestTranslatorThread(unittest.TestCase):
             def __init__(self, shared_state=None):
                 pass
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 return TranslationOutcome(
                     source_text=text,
                     target_text=f"zh-{text}",
@@ -452,7 +482,9 @@ class TestTranslatorThread(unittest.TestCase):
             def __init__(self, shared_state=None):
                 pass
 
-            def translate_event(self, text: str, incomplete: bool = False) -> TranslationOutcome:
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
                 if text == "first":
                     first_started.set()
                     release_workers.wait(timeout=3)

@@ -1,10 +1,31 @@
 import unittest
 
 from config import cfg
-from modules.translation_policy import TranslationPolicy
+from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 
 
 class TestTranslationPolicy(unittest.TestCase):
+    @staticmethod
+    def _repetition_policy(*, enabled: bool = True) -> TranslationPolicy:
+        return TranslationPolicy(
+            slang={},
+            repetition_confidence_exempt_enabled=enabled,
+            repetition_avg_logprob_threshold=-0.7,
+            repetition_no_speech_threshold=0.3,
+        )
+
+    @staticmethod
+    def _repetition_evidence(**overrides) -> RepetitionEvidence:
+        values = {
+            "min_avg_logprob": -0.455,
+            "max_no_speech_prob": 0.013,
+            "cut_reason": "silence_complete",
+            "forced": False,
+            "incomplete": False,
+        }
+        values.update(overrides)
+        return RepetitionEvidence(**values)
+
     def test_prepare_input_strips_text(self):
         policy = TranslationPolicy(slang={})
 
@@ -58,6 +79,91 @@ class TestTranslationPolicy(unittest.TestCase):
         self.assertFalse(TranslationPolicy.is_stt_garbage("귀여워 귀여워 아주 귀여워"))
         self.assertFalse(TranslationPolicy.is_stt_garbage("화이팅! 화이팅! 화이팅!"))
         self.assertFalse(TranslationPolicy.is_stt_garbage("잘했어 잘했어 잘했어"))
+
+    def test_high_confidence_complete_emotional_repetition_is_exempt(self):
+        policy = self._repetition_policy()
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        self.assertIsNone(
+            policy.rejection_reason(
+                text,
+                repetition_evidence=self._repetition_evidence(),
+            )
+        )
+
+    def test_repetition_exemption_fails_closed_on_evidence_or_cut_risk(self):
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+        risky_evidence = (
+            None,
+            self._repetition_evidence(min_avg_logprob=None),
+            self._repetition_evidence(max_no_speech_prob=None),
+            self._repetition_evidence(min_avg_logprob=float("nan")),
+            self._repetition_evidence(max_no_speech_prob=float("inf")),
+            self._repetition_evidence(min_avg_logprob=-0.701),
+            self._repetition_evidence(max_no_speech_prob=0.301),
+            self._repetition_evidence(forced=True),
+            self._repetition_evidence(incomplete=True),
+            self._repetition_evidence(cut_reason="forced_blob"),
+            self._repetition_evidence(cut_reason="merged:forced_blob+natural"),
+            self._repetition_evidence(cut_reason=""),
+        )
+
+        for evidence in risky_evidence:
+            with self.subTest(evidence=evidence):
+                self.assertEqual(
+                    self._repetition_policy().rejection_reason(
+                        text,
+                        repetition_evidence=evidence,
+                    ),
+                    "stt_garbage",
+                )
+
+    def test_repetition_exemption_uses_worst_source_confidence(self):
+        policy = self._repetition_policy()
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        self.assertEqual(
+            policy.rejection_reason(
+                text,
+                repetition_evidence=self._repetition_evidence(min_avg_logprob=-0.8),
+            ),
+            "stt_garbage",
+        )
+        self.assertEqual(
+            policy.rejection_reason(
+                text,
+                repetition_evidence=self._repetition_evidence(max_no_speech_prob=0.7),
+            ),
+            "stt_garbage",
+        )
+
+    def test_short_jamo_symbol_and_emoji_loops_are_not_exempt(self):
+        policy = self._repetition_policy()
+        evidence = self._repetition_evidence(cut_reason="natural")
+
+        for text in (
+            "어 ㅋ ㅋ ㅋ ㅋ ㅋ",
+            "어 가 가 가 가 가",
+            "어 !!! !!! !!! !!! !!!",
+            "어 😂 😂 😂 😂 😂",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    policy.rejection_reason(text, repetition_evidence=evidence),
+                    "stt_garbage",
+                )
+
+    def test_repetition_exemption_kill_switch_restores_old_behavior(self):
+        policy = self._repetition_policy(enabled=False)
+        text = "어? 살려줘. 살려줘. 살려줘. 살려줘. 살려줘."
+
+        self.assertEqual(
+            policy.rejection_reason(
+                text,
+                repetition_evidence=self._repetition_evidence(),
+            ),
+            "stt_garbage",
+        )
 
     def test_is_stt_garbage_allows_weak_commercial_words_in_normal_speech(self):
         self.assertFalse(
