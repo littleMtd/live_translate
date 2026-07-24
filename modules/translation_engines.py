@@ -317,6 +317,8 @@ def _timeout_message_class(exc: BaseException) -> str:
 
 
 def _http_message_class(status_code: int) -> str:
+    if status_code == 429:
+        return "rate_limit"
     if 400 <= status_code < 500:
         return "http_4xx"
     if 500 <= status_code < 600:
@@ -344,8 +346,10 @@ def _classify_api_error(exc: BaseException) -> tuple[str, str]:
     kind = classify_error(exc)
     if kind == "network":
         return "connection_error", "connection_error"
-    if kind in ("auth", "rate_limit"):
-        return "api_error", "unknown"
+    if kind == "rate_limit":
+        return "api_error", "rate_limit"
+    if kind == "auth":
+        return "api_error", "auth_error"
     return "unknown", "unknown"
 
 

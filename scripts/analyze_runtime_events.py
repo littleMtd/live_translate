@@ -534,6 +534,9 @@ def _fallback_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     failed_probes = [
         event for event in probe_events if event.get("action") == "probe_failed"
     ]
+    circuit_open_events = [
+        event for event in events if event.get("action") == "circuit_opened"
+    ]
     return {
         "total": len(events),
         "by_action": _count_by(events, "action"),
@@ -543,6 +546,18 @@ def _fallback_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "circuits_opened": sum(
             event.get("action") == "circuit_opened" for event in events
+        ),
+        "circuit_open_by_failure_scope": _count_by(
+            circuit_open_events,
+            "failure_scope",
+        ),
+        "circuit_open_by_error_type": _count_by(
+            circuit_open_events,
+            "api_error_type",
+        ),
+        "circuit_open_by_error_message_class": _count_by(
+            circuit_open_events,
+            "api_error_message_class",
         ),
         "fallback_advances": sum(
             event.get("action") == "fallback_advanced" for event in events

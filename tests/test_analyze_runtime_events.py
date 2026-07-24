@@ -190,6 +190,9 @@ def test_fallback_summary_reports_circuit_and_probe_transitions(tmp_path):
                 run_id="run-circuit",
                 action="circuit_opened",
                 probe_status="",
+                failure_scope="provider",
+                api_error_type="timeout",
+                api_error_message_class="read_timeout",
             ),
             _fallback_event(
                 run_id="run-circuit",
@@ -224,6 +227,15 @@ def test_fallback_summary_reports_circuit_and_probe_transitions(tmp_path):
     self_summary = report["translation_fallback"]
     assert report["translation_fallback_events"] == 6
     assert self_summary["circuits_opened"] == 1
+    assert self_summary["circuit_open_by_failure_scope"] == [
+        {"value": "provider", "count": 1}
+    ]
+    assert self_summary["circuit_open_by_error_type"] == [
+        {"value": "timeout", "count": 1}
+    ]
+    assert self_summary["circuit_open_by_error_message_class"] == [
+        {"value": "read_timeout", "count": 1}
+    ]
     assert self_summary["circuits_closed"] == 1
     assert self_summary["probe_attempts"] == 3
     assert self_summary["successful_probes"] == 2

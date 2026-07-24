@@ -87,6 +87,24 @@ def _mock_engine(name: str, return_value: str = "你好") -> MagicMock:
     return engine
 
 
+def _set_provider_failure(
+    engine: MagicMock,
+    *,
+    error_type: str = "timeout",
+    message_class: str = "read_timeout",
+) -> None:
+    def fail(*_args):
+        translation_engines_module._set_last_engine_diagnostics(
+            str(engine.engine_name),
+            api_attempt_count=1,
+            api_error_type=error_type,
+            api_error_message_class=message_class,
+        )
+        return None
+
+    engine.translate.side_effect = fail
+
+
 def _make_translator() -> Translator:
     """Build a Translator backed by mock engines — no real API clients."""
     from modules.translator import _CACHE_MAX_SIZE
@@ -1067,7 +1085,7 @@ class TestNvidiaEngine(unittest.TestCase):
         self.assertEqual(api_diagnostics["api_attempt_count"], 1)
         self.assertEqual(api_diagnostics["api_timeout_count"], 0)
         self.assertEqual(api_diagnostics["api_error_type"], "api_error")
-        self.assertEqual(api_diagnostics["api_error_message_class"], "http_4xx")
+        self.assertEqual(api_diagnostics["api_error_message_class"], "rate_limit")
 
     def test_does_not_retry_http_server_error(self):
         import urllib.error
@@ -1528,6 +1546,8 @@ class TestFallbackProbe(unittest.TestCase):
         )
         engines = [_mock_engine("nvidia", None), _mock_engine("deepl", "哈囉")]
 
+        _set_provider_failure(engines[0])
+
         with _translation_mode("live"), patch.object(
             translator_module,
             "_build_engine_chain",
@@ -1545,7 +1565,32 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(event["from_engine"], "nvidia")
         self.assertEqual(event["active_engine"], "deepl")
         self.assertEqual(event["failure_status"], "empty")
+        self.assertEqual(event["failure_scope"], "provider")
+        self.assertEqual(event["api_error_type"], "timeout")
+        self.assertEqual(event["api_error_message_class"], "read_timeout")
         self.assertGreater(event["cooldown_remaining_ms"], 0)
+
+    def test_live_content_rejection_does_not_emit_circuit_open_event(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        engines = [_mock_engine("nvidia", "source"), _mock_engine("deepl", "fallback")]
+
+        with _translation_mode("live"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ):
+            translator = Translator(shared_state=shared)
+            result = translator.translate("source")
+
+        self.assertEqual(result, "fallback")
+        self.assertEqual(shared.fallback.active_idx, 0)
+        self.assertEqual(shared.fallback.consecutive_primary_failures, 0)
+        self.assertEqual(fallback_events, [])
 
     def test_runtime_fallback_event_uses_dedicated_event_type(self):
         with patch.object(translator_module.runtime_events, "emit") as emit:
@@ -1575,7 +1620,7 @@ class TestFallbackProbe(unittest.TestCase):
     def test_live_single_failure_hard_switches_to_fallback(self):
         with _translation_mode("live"):
             t = _make_translator()
-            t._engines[0].translate.return_value = None
+            _set_provider_failure(t._engines[0])
             t._engines[1].translate.return_value = "哈囉"
 
             result = t.translate("안녕하세요")
@@ -1651,6 +1696,29 @@ class TestFallbackProbe(unittest.TestCase):
 
         self.assertEqual(shared.active_idx, 1)
         self.assertEqual(shared.consecutive_primary_failures, 0)
+
+    def test_stale_worker_cannot_advance_past_newer_shared_engine(self):
+        shared = translator_module.FallbackState(
+            active_idx=1,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+        before = translator_module.FallbackState(
+            active_idx=0,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+        )
+        after = translator_module.FallbackState(
+            active_idx=2,
+            probe_counter=0,
+            consecutive_primary_failures=0,
+            primary_cooldown_until=time.monotonic() + 60.0,
+        )
+
+        translator_module._merge_fallback_state(shared, before, after)
+
+        self.assertEqual(shared.active_idx, 1)
+        self.assertEqual(shared.primary_cooldown_until, 0.0)
 
 
 # ---------------------------------------------------------------------------

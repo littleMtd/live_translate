@@ -13,6 +13,7 @@ from modules.translation_runtime import (
 )
 from modules.translation_engines import (
     _log_token_usage,
+    _set_last_engine_diagnostics,
     get_last_token_usage,
     get_selected_translation_attempt,
     get_translation_attempts,
@@ -27,6 +28,27 @@ def _engine(name: str, result: str | None) -> MagicMock:
     engine.engine_name = name
     engine.model_name = f"{name}-model"
     engine.translate.return_value = result
+    return engine
+
+
+def _failed_engine(
+    name: str,
+    *,
+    error_type: str | None,
+    message_class: str | None,
+) -> MagicMock:
+    engine = _engine(name, None)
+
+    def fail(*_args):
+        _set_last_engine_diagnostics(
+            name,
+            api_attempt_count=1,
+            api_error_type=error_type,
+            api_error_message_class=message_class,
+        )
+        return None
+
+    engine.translate.side_effect = fail
     return engine
 
 
@@ -170,7 +192,14 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(snapshot.counters["translation.fallback.primary_recovered"], 1)
 
     def test_hard_switch_arms_primary_recovery_cooldown(self):
-        engines = [_engine("primary", None), _engine("fallback", "ok")]
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type="timeout",
+                message_class="read_timeout",
+            ),
+            _engine("fallback", "ok"),
+        ]
         state = FallbackState()
 
         result, used_idx = call_with_fallback(
@@ -193,6 +222,322 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(state.active_idx, 1)
         self.assertEqual(state.primary_cooldown_until, 160.0)
         self.assertEqual(state.consecutive_probe_successes, 0)
+
+    def test_content_rejection_soft_fallback_does_not_open_circuit(self):
+        engines = [_engine("primary", "copied source"), _engine("fallback", "ok")]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: result == "copied source",
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            clock=lambda: 100.0,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertEqual(state.active_idx, 0)
+        self.assertEqual(state.consecutive_primary_failures, 0)
+        self.assertEqual(state.primary_cooldown_until, 0.0)
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(attempts[0]["failure_scope"], "content")
+
+    def test_content_rejection_on_intermediate_fallback_does_not_skip_it(self):
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type="timeout",
+                message_class="read_timeout",
+            ),
+            _engine("fallback-one", "copied source"),
+            _engine("fallback-two", "ok"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: result == "copied source",
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 2))
+        self.assertEqual(
+            state.active_idx,
+            1,
+            "Only the primary provider failure is proven; the responsive "
+            "content-rejected fallback must remain the next active engine",
+        )
+        attempts = get_translation_attempts()
+        self.assertEqual(
+            [attempt["failure_scope"] for attempt in attempts],
+            ["provider", "content", "none"],
+        )
+
+    def test_contiguous_provider_failures_can_advance_multiple_hops(self):
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type="timeout",
+                message_class="read_timeout",
+            ),
+            _failed_engine(
+                "fallback-one",
+                error_type="connection_error",
+                message_class="connection_error",
+            ),
+            _engine("fallback-two", "ok"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 2))
+        self.assertEqual(state.active_idx, 2)
+
+    def test_non_circuit_legacy_switches_to_the_successful_fallback(self):
+        engines = [
+            _engine("primary", None),
+            _engine("fallback-one", "copied source"),
+            _engine("fallback-two", "ok"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: result == "copied source",
+            logging.getLogger("test"),
+            circuit_breaker_enabled=False,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 2))
+        self.assertEqual(state.active_idx, 2)
+
+    def test_unknown_empty_soft_fallback_does_not_open_circuit(self):
+        engines = [_engine("primary", None), _engine("fallback", "ok")]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertEqual(state.active_idx, 0)
+        self.assertEqual(state.consecutive_primary_failures, 0)
+        self.assertEqual(get_translation_attempts()[0]["failure_scope"], "unknown")
+
+    def test_provider_timeout_opens_circuit(self):
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type="timeout",
+                message_class="read_timeout",
+            ),
+            _engine("fallback", "ok"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(get_translation_attempts()[0]["failure_scope"], "provider")
+
+    def test_empty_content_after_api_attempt_opens_circuit(self):
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type=None,
+                message_class=None,
+            ),
+            _engine("fallback", "ok"),
+        ]
+        state = FallbackState()
+
+        call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(get_translation_attempts()[0]["failure_scope"], "provider")
+
+    def test_rate_limit_and_http_5xx_are_provider_failures(self):
+        for message_class in ("rate_limit", "http_5xx"):
+            with self.subTest(message_class=message_class):
+                reset_translation_call_trace()
+                engines = [
+                    _failed_engine(
+                        "primary",
+                        error_type="api_error",
+                        message_class=message_class,
+                    ),
+                    _engine("fallback", "ok"),
+                ]
+                state = FallbackState()
+
+                call_with_fallback(
+                    engines,
+                    state,
+                    "source",
+                    "prompt",
+                    False,
+                    [],
+                    50,
+                    1,
+                    lambda result, source: False,
+                    logging.getLogger("test"),
+                    circuit_breaker_enabled=True,
+                )
+
+                self.assertEqual(state.active_idx, 1)
+                self.assertEqual(
+                    get_translation_attempts()[0]["failure_scope"],
+                    "provider",
+                )
+
+    def test_transport_parse_and_explicit_empty_are_provider_failures(self):
+        cases = (
+            ("connection_error", "connection_error"),
+            ("parse_error", "json_parse_error"),
+            ("api_error", "empty_response"),
+        )
+        for error_type, message_class in cases:
+            with self.subTest(
+                error_type=error_type,
+                message_class=message_class,
+            ):
+                reset_translation_call_trace()
+                engines = [
+                    _failed_engine(
+                        "primary",
+                        error_type=error_type,
+                        message_class=message_class,
+                    ),
+                    _engine("fallback", "ok"),
+                ]
+                state = FallbackState()
+
+                call_with_fallback(
+                    engines,
+                    state,
+                    "source",
+                    "prompt",
+                    False,
+                    [],
+                    50,
+                    1,
+                    lambda result, source: False,
+                    logging.getLogger("test"),
+                    circuit_breaker_enabled=True,
+                )
+
+                self.assertEqual(state.active_idx, 1)
+                self.assertEqual(
+                    get_translation_attempts()[0]["failure_scope"],
+                    "provider",
+                )
+
+    def test_auth_and_other_http_4xx_do_not_open_circuit(self):
+        for message_class in ("auth_error", "http_4xx"):
+            with self.subTest(message_class=message_class):
+                reset_translation_call_trace()
+                engines = [
+                    _failed_engine(
+                        "primary",
+                        error_type="api_error",
+                        message_class=message_class,
+                    ),
+                    _engine("fallback", "ok"),
+                ]
+                state = FallbackState()
+
+                result, used_idx = call_with_fallback(
+                    engines,
+                    state,
+                    "source",
+                    "prompt",
+                    False,
+                    [],
+                    50,
+                    1,
+                    lambda result, source: False,
+                    logging.getLogger("test"),
+                    circuit_breaker_enabled=True,
+                )
+
+                self.assertEqual((result, used_idx), ("ok", 1))
+                self.assertEqual(state.active_idx, 0)
+                self.assertEqual(
+                    get_translation_attempts()[0]["failure_scope"],
+                    "unknown",
+                )
 
     def test_recovery_probe_skips_primary_during_cooldown(self):
         metrics.reset()

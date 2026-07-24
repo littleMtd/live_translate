@@ -614,7 +614,11 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
         shared.consecutive_probe_successes = 0
         return
 
-    if after.active_idx > before.active_idx and after.active_idx >= shared.active_idx:
+    if (
+        shared.active_idx == before.active_idx
+        and after.active_idx > before.active_idx
+        and after.active_idx >= shared.active_idx
+    ):
         previous_cooldown_until = shared.primary_cooldown_until
         shared.active_idx = after.active_idx
         shared.probe_counter = after.probe_counter
@@ -1081,14 +1085,14 @@ class Translator:
             from_engine = active_engine(self._engines, committed_before.active_idx)
             to_engine = active_engine(self._engines, committed_after.active_idx)
             attempts = get_translation_attempts()
-            failed_status = next(
+            failed_attempt = next(
                 (
-                    str(attempt.get("status") or "")
-                    for attempt in attempts
+                    attempt
+                    for attempt in reversed(attempts)
                     if str(attempt.get("engine") or "").lower()
                     == str(getattr(from_engine, "engine_name", "") or "").lower()
                 ),
-                "",
+                {},
             )
             _send_fallback_event(
                 getattr(self, "_shared_state", None),
@@ -1098,7 +1102,10 @@ class Translator:
                 active_engine=str(getattr(to_engine, "engine_name", "") or ""),
                 from_active_idx=committed_before.active_idx,
                 active_idx=committed_after.active_idx,
-                failure_status=failed_status,
+                failure_status=str(failed_attempt.get("status") or ""),
+                failure_scope=str(failed_attempt.get("failure_scope") or ""),
+                api_error_type=failed_attempt.get("api_error_type"),
+                api_error_message_class=failed_attempt.get("api_error_message_class"),
                 cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
                 cooldown_remaining_ms=round(
                     max(0.0, committed_after.primary_cooldown_until - time.monotonic()) * 1000,

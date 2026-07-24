@@ -18,6 +18,17 @@ CacheKey = tuple[str, bool, str, str, str]
 UntranslatedCheck = Callable[[str, str], bool]
 ProbeObservationSink = Callable[[dict[str, object]], None]
 
+_PROVIDER_FAILURE_ERROR_TYPES = frozenset({
+    "timeout",
+    "connection_error",
+    "parse_error",
+})
+_PROVIDER_FAILURE_MESSAGE_CLASSES = frozenset({
+    "empty_response",
+    "http_5xx",
+    "rate_limit",
+})
+
 
 @dataclass
 class FallbackState:
@@ -51,6 +62,39 @@ def active_engine(
     if active_idx < 0 or active_idx >= len(engines):
         return None
     return engines[active_idx]
+
+
+def _attempt_failure_scope(attempt: dict[str, object]) -> str:
+    """Classify whether an unsuccessful attempt proves provider degradation.
+
+    Content rejection proves that the provider responded, so it must not open
+    the live circuit and route later user sentences to a fallback. Unknown
+    empty outcomes also fail closed: without provider diagnostics they may
+    soft-fallback the current sentence but do not affect circuit state.
+    """
+    status = str(attempt.get("status") or "")
+    if status == "rejected_output":
+        return "content"
+    if status not in {"empty", "exception"}:
+        return "none"
+
+    error_type = str(attempt.get("api_error_type") or "")
+    message_class = str(attempt.get("api_error_message_class") or "")
+    if (
+        error_type in _PROVIDER_FAILURE_ERROR_TYPES
+        or message_class in _PROVIDER_FAILURE_MESSAGE_CLASSES
+    ):
+        return "provider"
+    if (
+        status == "empty"
+        and int(attempt.get("api_attempt_count") or 0) > 0
+        and not error_type
+        and not message_class
+    ):
+        # Some adapters report a successful HTTP attempt with empty content
+        # without attaching an explicit empty_response message class.
+        return "provider"
+    return "unknown"
 
 
 def cache_key(
@@ -143,6 +187,8 @@ def call_with_fallback(
         result=result,
         rejected_output=primary_bad,
     )
+    primary_failure_scope = _attempt_failure_scope(primary_attempt)
+    primary_attempt["failure_scope"] = primary_failure_scope
 
     if result and not primary_bad:
         state.consecutive_primary_failures = 0
@@ -155,8 +201,27 @@ def call_with_fallback(
     if result:
         metrics.increment("translation.bad_output")
 
-    state.consecutive_primary_failures += 1
-    hard_switch = state.consecutive_primary_failures >= failure_threshold
+    counts_toward_switch = (
+        not circuit_breaker_enabled or primary_failure_scope == "provider"
+    )
+    if counts_toward_switch:
+        state.consecutive_primary_failures += 1
+    else:
+        # A content response proves the provider is reachable. Unknown failures
+        # do not provide enough evidence to carry a provider-failure streak.
+        state.consecutive_primary_failures = 0
+    metrics.increment(
+        f"translation.fallback.primary_failure.{primary_failure_scope}"
+    )
+    hard_switch = (
+        counts_toward_switch
+        and state.consecutive_primary_failures >= failure_threshold
+    )
+    persistent_switch_idx = (
+        primary_idx + 1
+        if hard_switch and primary_idx + 1 < len(engines)
+        else primary_idx
+    )
 
     # ── Try fallback engines ──────────────────────────────────────────────────
     for index in range(primary_idx + 1, len(engines)):
@@ -176,17 +241,26 @@ def call_with_fallback(
             result=fb_result,
             rejected_output=fallback_bad,
         )
+        fallback_attempt["failure_scope"] = _attempt_failure_scope(fallback_attempt)
         if fb_result and not fallback_bad:
             if hard_switch:
-                # N consecutive failures — commit to this engine until probe recovers primary
+                committed_idx = (
+                    persistent_switch_idx
+                    if circuit_breaker_enabled
+                    else index
+                )
+                persistent_engine = engines[committed_idx]
+                # Persist only across contiguous provider failures. A later
+                # engine may supply this sentence after an intermediate
+                # content rejection without becoming the new active engine.
                 metrics.increment("translation.fallback.success")
                 log.warning(
                     "Engine %s failed %d consecutive times; switching to %s",
                     primary.engine_name,
                     state.consecutive_primary_failures,
-                    fallback.engine_name,
+                    persistent_engine.engine_name,
                 )
-                state.active_idx = index
+                state.active_idx = committed_idx
                 state.consecutive_primary_failures = 0
                 state.probe_counter = 0
                 state.consecutive_probe_successes = 0
@@ -208,6 +282,14 @@ def call_with_fallback(
             return fb_result, index
         if fb_result:
             metrics.increment("translation.bad_output")
+        if (
+            circuit_breaker_enabled
+            and hard_switch
+            and index == persistent_switch_idx
+            and fallback_attempt["failure_scope"] == "provider"
+            and index + 1 < len(engines)
+        ):
+            persistent_switch_idx = index + 1
 
     log.error("All engines failed for: %.40s", text)
     return None, primary_idx
