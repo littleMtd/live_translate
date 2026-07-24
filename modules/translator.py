@@ -72,8 +72,37 @@ _LIVE_FALLBACK_THRESHOLD = 1
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
-_ACTIONABLE_QUALITY_RETRY_FLAGS: set[str] = set()
 _QUALITY_RETRY_TRACE = threading.local()
+_QUALITY_RETRY_REFUSAL_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:translation|output|target|번역|출력|译文|譯文)\s*[:：]"
+    r"|(?:(?:i(?:'m| am)\s+)?sorry[,;:]?\s*(?:but\s+)?)?"
+    r"i\s+(?:cannot|can't|can\s+not)\s+"
+    r"(?:translate|provide\s+(?:a\s+)?translation)\b"
+    r"|i\s+am\s+unable\s+to\s+"
+    r"(?:translate|provide\s+(?:a\s+)?translation)\b"
+    r"|as\s+an\s+ai\b"
+    r"|unable\s+to\s+translate\b"
+    r")",
+    re.IGNORECASE,
+)
+_QUALITY_RETRY_MIN_SOURCE_CHARS = 24
+_QUALITY_RETRY_MIN_SOURCE_HANGUL = 12
+_QUALITY_RETRY_MIN_SOURCE_BIGRAM_RATIO = 0.65
+_QUALITY_RETRY_PROVABLE_AMOUNT_RE = re.compile(
+    r"(?<![0-9가-힣])"
+    r"(?P<leading_man>만)\s*(?P<thousands>[1-9])\s*천\s*원?"
+    r"|(?<![0-9])"
+    r"(?P<number>\d+)\s*(?P<unit>천|만|억)\s*원"
+)
+_QUALITY_RETRY_AMOUNT_UNITS = {
+    "천": 1_000,
+    "만": 10_000,
+    "억": 100_000_000,
+}
+_QUALITY_RETRY_AMOUNT_PREFIX_RE = re.compile(
+    r"[0-9일이삼사오육칠팔구십백천만억]\s+$"
+)
 _API_EVENT_DEFAULTS = {
     "api_attempt_count": 0,
     "api_timeout_count": 0,
@@ -281,6 +310,92 @@ def _looks_like_meta_garbage_output(result: str) -> bool:
     ):
         return True
     return False
+
+
+def _looks_like_model_refusal(result: str) -> bool:
+    return bool(_QUALITY_RETRY_REFUSAL_RE.search((result or "").strip()))
+
+
+def _clearly_translatable_complete_source(source: str) -> bool:
+    compact = re.sub(r"\s+", "", source or "")
+    hangul_count = sum(1 for char in compact if _is_hangul_syllable(char))
+    bigrams = [
+        compact[index : index + 2]
+        for index in range(max(0, len(compact) - 1))
+    ]
+    distinct_bigram_ratio = len(set(bigrams)) / max(1, len(bigrams))
+    return (
+        len(compact) >= _QUALITY_RETRY_MIN_SOURCE_CHARS
+        and hangul_count >= _QUALITY_RETRY_MIN_SOURCE_HANGUL
+        and hangul_count / max(1, len(compact)) >= 0.35
+        and distinct_bigram_ratio >= _QUALITY_RETRY_MIN_SOURCE_BIGRAM_RATIO
+    )
+
+
+def _selective_quality_retry_trigger(
+    source: str,
+    target: str,
+    quality: dict,
+) -> str:
+    """Return one fail-closed T05 trigger, or an empty string."""
+    if _looks_like_placeholder_output(target):
+        return (
+            "placeholder_reduction"
+            if _clearly_translatable_complete_source(source)
+            else ""
+        )
+    if _looks_like_meta_garbage_output(target) or _looks_like_model_refusal(target):
+        return "meta_or_refusal"
+    if _has_provable_amount_mismatch(source, quality):
+        return "amount_mismatch"
+    return ""
+
+
+def _has_provable_amount_mismatch(source: str, quality: dict) -> bool:
+    """Promote only parser candidates backed by a narrow source shape."""
+    if not bool(quality.get("amount_mismatch_candidate")):
+        return False
+    provable_source_values: set[int] = set()
+    for match in _QUALITY_RETRY_PROVABLE_AMOUNT_RE.finditer(source or ""):
+        if _QUALITY_RETRY_AMOUNT_PREFIX_RE.search((source or "")[:match.start()]):
+            continue
+        provable_source_values.add(
+            10_000 + int(match.group("thousands")) * 1_000
+            if match.group("leading_man")
+            else int(match.group("number"))
+            * _QUALITY_RETRY_AMOUNT_UNITS[match.group("unit")]
+        )
+    if not provable_source_values:
+        return False
+    target_values = {
+        int(value)
+        for value in quality.get("target_amount_values") or []
+    }
+    for source_value in provable_source_values:
+        if not target_values:
+            return True
+        nearest_delta = min(
+            abs(source_value - target_value)
+            for target_value in target_values
+        )
+        if nearest_delta >= max(100, source_value * 0.1):
+            return True
+    return False
+
+
+def _missing_approved_terms(
+    original: str,
+    candidate: str,
+    approved_terms: frozenset[str],
+) -> list[str]:
+    original_folded = (original or "").casefold()
+    candidate_folded = (candidate or "").casefold()
+    return sorted(
+        term
+        for term in approved_terms
+        if term.casefold() in original_folded
+        and term.casefold() not in candidate_folded
+    )
 
 
 def _is_hangul_syllable(char: str) -> bool:
@@ -934,7 +1049,10 @@ class Translator:
         lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver, engine)
         if lookup.result:
             target_text = _apply_source_aware_corrections(text, lookup.result)
-            if _looks_like_meta_garbage_output(target_text):
+            if (
+                _looks_like_meta_garbage_output(target_text)
+                or _looks_like_model_refusal(target_text)
+            ):
                 self._invalidate_cached_translation(text, incomplete, prompt_ver, engine, lookup.result)
                 return TranslationOutcome(
                     source_text=raw_text,
@@ -971,7 +1089,14 @@ class Translator:
         prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
         if result:
             result = _apply_source_aware_corrections(text, result)
-            if _looks_like_meta_garbage_output(result):
+            result, engine, prompt_ver = self._maybe_quality_retry(
+                raw_text, text, result, system_prompt, incomplete, history,
+                engine, prompt_ver,
+            )
+            if (
+                _looks_like_meta_garbage_output(result)
+                or _looks_like_model_refusal(result)
+            ):
                 log.debug("Filtering meta garbage translation output: %.40s -> %.40s", text, result)
                 return TranslationOutcome(
                     source_text=raw_text,
@@ -985,10 +1110,6 @@ class Translator:
                     prompt_version=prompt_ver,
                     filter_reason="meta_garbage_output",
                 )
-            result, engine, prompt_ver = self._maybe_quality_retry(
-                raw_text, text, result, system_prompt, incomplete, history,
-                engine, prompt_ver,
-            )
             self._record_success(text, result, incomplete, prompt_ver, engine)
             return TranslationOutcome(
                 source_text=raw_text,
@@ -1219,19 +1340,30 @@ class Translator:
     ):
         """Act on the QE signal at runtime instead of only logging it.
 
-        When the reference-free heuristics (the same ones the runtime event
-        will record) rate an API result "bad", ask one *different* engine for
-        a second opinion and keep whichever result scores better. Bounded to
-        a single extra call; detectable-bad is ~0.2% of sentences, so the
-        steady-state cost is negligible. Skipped for incomplete fragments —
-        they get retranslated as part of the full sentence anyway.
+        Only a small fail-closed set of defects may ask one untried engine for
+        a second opinion. Generic severity, high Latin, repetition, and low-CJK
+        ratios are telemetry only. Incomplete fragments are skipped because
+        they are translated again with the completed sentence.
         """
         if incomplete or not getattr(cfg.translation, "quality_retry_enabled", True):
             return result, engine, prompt_ver
-        quality = translation_quality(raw_text, result)
+        approved_terms = _quality_approved_terms(
+            cfg.active_streamer_profile
+            if bool(getattr(cfg.translation, "use_profile", False))
+            else ""
+        )
+        quality = translation_quality(
+            raw_text,
+            result,
+            approved_terms=approved_terms,
+        )
         severity = quality.get("quality_severity")
         flags = set(quality.get("quality_flags") or [])
-        actionable = bool(flags & _ACTIONABLE_QUALITY_RETRY_FLAGS)
+        selective_trigger = _selective_quality_retry_trigger(
+            raw_text,
+            result,
+            quality,
+        )
         japanese_mode = str(
             getattr(cfg.translation, "quality_retry_japanese_mode", "off") or "off"
         ).lower()
@@ -1240,37 +1372,26 @@ class Translator:
             "shadow",
             "active",
         }
-        ambiguous_hangul = bool(re.search(r"[가-힣]", result)) and not actionable
-        bad_trigger = (severity == "bad" or actionable) and not ambiguous_hangul
-        if not bad_trigger and not japanese_trigger:
+        if not selective_trigger and not japanese_trigger:
             return result, engine, prompt_ver
-        # Hangul in the target is an ambiguous signal: it may be a leak, but
-        # several profiles keep Korean canonicals in zh output by design
-        # (mwmeu 초은/이비, url stage names, fan names) and the heuristics
-        # cannot tell the two apart. Acting on it would replace correct
-        # profile-styled output, so only Hangul-free bad shapes (repetition,
-        # latin/meta noise) are actionable. Numeric amount diagnostics remain
-        # log-only until their precision is high enough to justify retry cost.
-        #
         # §17 precedence: while collecting the Phase B dataset
         # (japanese_mode=shadow), ANY Japanese-flagged output is absolutely
-        # record-only — the generic bad_output path must not replace it, or
+        # record-only even when a selective trigger also matches, or
         # the semantic-regression gate systematically loses its highest-risk
-        # (Japanese+bad) samples. Deterministic placeholder/meta filters run
-        # upstream in translate_event and are not affected by this rule.
+        # composite samples.
         shadow_locked = japanese_flagged and japanese_mode == "shadow"
         current_name = engine.engine_name if engine else ""
         co_triggers = []
-        if bad_trigger:
-            co_triggers.append("bad_output")
+        if selective_trigger:
+            co_triggers.append(selective_trigger)
         if japanese_trigger:
             co_triggers.append("target_has_japanese")
         if shadow_locked:
             primary_trigger = "target_has_japanese"
             trace_mode = "shadow"
         else:
-            primary_trigger = "bad_output" if bad_trigger else "target_has_japanese"
-            trace_mode = "active" if bad_trigger else japanese_mode
+            primary_trigger = selective_trigger or "target_has_japanese"
+            trace_mode = "active" if selective_trigger else japanese_mode
         trace = {
             "trigger": primary_trigger,
             "co_triggers": co_triggers,
@@ -1288,13 +1409,25 @@ class Translator:
             "reason": "",
         }
         _QUALITY_RETRY_TRACE.value = trace
+        attempted_engines = {
+            str(attempt.get("engine") or "")
+            for attempt in get_translation_attempts()
+        }
         alternate = next(
             (e for e in self._engines
-             if e.available and e.engine_name != current_name),
+             if (
+                 e.available
+                 and e.engine_name != current_name
+                 and e.engine_name not in attempted_engines
+             )),
             None,
         )
         if alternate is None:
-            trace["reason"] = "no_alternate_engine"
+            trace["reason"] = (
+                "no_untried_alternate_engine"
+                if attempted_engines
+                else "no_alternate_engine"
+            )
             return result, engine, prompt_ver
         trace["candidate_engine"] = alternate.engine_name
         metrics.increment("translation.quality_retry.attempted")
@@ -1314,7 +1447,10 @@ class Translator:
             return result, engine, prompt_ver
         retry_result = _apply_source_aware_corrections(text, retry_raw)
         trace["candidate_output"] = retry_result
-        if _looks_like_meta_garbage_output(retry_result):
+        if (
+            _looks_like_meta_garbage_output(retry_result)
+            or _looks_like_model_refusal(retry_result)
+        ):
             record_translation_attempt(
                 alternate,
                 phase="quality_retry",
@@ -1328,26 +1464,72 @@ class Translator:
             phase="quality_retry",
             result=retry_result,
         )
-        retry_quality = translation_quality(raw_text, retry_result)
+        retry_quality = translation_quality(
+            raw_text,
+            retry_result,
+            approved_terms=approved_terms,
+        )
         retry_severity = retry_quality.get("quality_severity")
+        candidate_trigger = _selective_quality_retry_trigger(
+            raw_text,
+            retry_result,
+            retry_quality,
+        )
         trace["candidate_severity"] = retry_severity
         trace["candidate_flags"] = retry_quality.get("quality_flags") or []
+        trace["candidate_trigger"] = candidate_trigger
+        missing_approved_terms = _missing_approved_terms(
+            f"{raw_text}\n{result}",
+            retry_result,
+            approved_terms,
+        )
+        trace["candidate_missing_approved_terms"] = missing_approved_terms
         rank = self._QUALITY_SEVERITY_RANK
-        improved = rank.get(retry_severity, 2) < rank.get(severity, 2)
+        candidate_is_clean = (
+            not candidate_trigger
+            and "target_has_japanese"
+            not in set(retry_quality.get("quality_flags") or [])
+            and not missing_approved_terms
+        )
+        if selective_trigger:
+            if selective_trigger == "amount_mismatch":
+                improved = (
+                    candidate_is_clean
+                    and rank.get(retry_severity, 2) <= rank.get(severity, 2)
+                )
+            else:
+                improved = (
+                    candidate_is_clean
+                    and rank.get(retry_severity, 2) < rank.get(severity, 2)
+                )
+        else:
+            improved = (
+                candidate_is_clean
+                and rank.get(retry_severity, 2) < rank.get(severity, 2)
+            )
         trace["would_replace"] = improved
         should_apply = (
             improved
             and not shadow_locked
-            and (bad_trigger or japanese_mode == "active")
+            and (bool(selective_trigger) or japanese_mode == "active")
         )
         if should_apply:
             select_translation_attempt(retry_attempt)
             trace["applied"] = True
-            trace["reason"] = "strict_severity_improvement"
+            trace["reason"] = (
+                "selective_trigger_resolved"
+                if selective_trigger
+                else "strict_severity_improvement"
+            )
             metrics.increment("translation.quality_retry.accepted")
             log.info(
-                "quality retry accepted: %s(bad) -> %s(%s) for %.30s",
-                current_name, alternate.engine_name, retry_severity, raw_text,
+                "quality retry accepted: %s(%s/%s) -> %s(%s) for %.30s",
+                current_name,
+                selective_trigger or "target_has_japanese",
+                severity,
+                alternate.engine_name,
+                retry_severity,
+                raw_text,
             )
             return (
                 retry_result,

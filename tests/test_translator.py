@@ -3289,6 +3289,9 @@ class TestQualityRetry(unittest.TestCase):
             return self._reply
 
     def _translator_with(self, engines):
+        from modules.translation_engines import reset_translation_call_trace
+
+        reset_translation_call_trace()
         t = Translator()
         t._engines = engines
         return t
@@ -3318,16 +3321,16 @@ class TestQualityRetry(unittest.TestCase):
         self.assertEqual(result, self._HANGUL_BAD)
         self.assertEqual(alt.calls, 0)
 
-    def test_bad_result_retries_on_different_engine_and_accepts_better(self):
+    def test_generic_bad_result_does_not_trigger_retry(self):
         primary = self._FakeEngine("nvidia", self._BAD)
         alt = self._FakeEngine("groq", self._GOOD)
         t = self._translator_with([primary, alt])
         result, engine, _pv = self._retry(t, self._BAD, engine=primary)
-        self.assertEqual(result, self._GOOD)
-        self.assertEqual(engine.engine_name, "groq")
-        self.assertEqual(alt.calls, 1)
+        self.assertEqual(result, self._BAD)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
 
-    def test_amount_mismatch_diagnostic_does_not_trigger_quality_retry(self):
+    def test_amount_mismatch_triggers_quality_retry(self):
         source = "만 5천원 받았어"
         bad = "收到五千"
         good = "收到一萬五千元"
@@ -3346,18 +3349,265 @@ class TestQualityRetry(unittest.TestCase):
             "pv0",
         )
 
-        self.assertEqual(result, bad)
+        self.assertEqual(result, good)
+        self.assertEqual(engine.engine_name, "groq")
+        self.assertEqual(alt.calls, 1)
+
+    def test_model_refusal_variants_trigger_one_retry(self):
+        source = "오늘 방송에서 새 노래를 소개할게요"
+        good = "今天直播要介紹新歌"
+        for refusal in (
+            "I'm sorry, I cannot translate this",
+            "Sorry, I cannot translate this",
+            "Sorry, but I cannot translate this",
+            "I'm sorry, but I cannot translate this",
+            "I cannot provide a translation",
+        ):
+            with self.subTest(refusal=refusal):
+                primary = self._FakeEngine("nvidia", refusal)
+                alt = self._FakeEngine("groq", good)
+                t = self._translator_with([primary, alt])
+
+                result, engine, _pv = t._maybe_quality_retry(
+                    source, source, refusal, "sys", False, None, primary, "pv0")
+
+                self.assertEqual(result, good)
+                self.assertEqual(engine.engine_name, "groq")
+                self.assertEqual(alt.calls, 1)
+
+    def test_amount_parser_candidates_without_strong_proof_do_not_retry(self):
+        cases = (
+            (
+                "보니까 5만 9천 9백원이라고 했어요",
+                "價格是五萬九千九百元",
+            ),
+            (
+                "백만 원에 한 마리 뽑았대",
+                "花了一百萬抽到一隻",
+            ),
+            (
+                "보니까 5만 9천 9백원이고 10만원도 있어",
+                "價格是五萬九千九百元，也有十萬元",
+            ),
+            (
+                "만 5천원과 5만 9천 9백원이야",
+                "是一萬五千元和五萬九千九百元",
+            ),
+            (
+                "백만 5천원 받았어",
+                "收到一百萬五千元",
+            ),
+        )
+        for source, target in cases:
+            with self.subTest(source=source):
+                primary = self._FakeEngine("nvidia", target)
+                alt = self._FakeEngine("groq", "不應呼叫")
+                t = self._translator_with([primary, alt])
+
+                result, engine, _pv = t._maybe_quality_retry(
+                    source, source, target, "sys", False, None, primary, "pv0")
+
+                self.assertEqual(result, target)
+                self.assertEqual(engine.engine_name, "nvidia")
+                self.assertEqual(alt.calls, 0)
+
+    def test_quoted_i_cant_breathe_is_not_a_refusal_trigger(self):
+        source = "그 부분은 I can't breathe라고 불러요"
+        target = "那個部分唱的是「I can't breathe」"
+        primary = self._FakeEngine("nvidia", target)
+        alt = self._FakeEngine("groq", "不應呼叫")
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, target, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, target)
         self.assertEqual(engine.engine_name, "nvidia")
         self.assertEqual(alt.calls, 0)
 
-    def test_retry_rejected_when_second_opinion_is_also_bad(self):
-        primary = self._FakeEngine("nvidia", self._BAD)
-        alt = self._FakeEngine("groq", self._BAD)
+    def test_long_complete_source_reduced_to_placeholder_retries(self):
+        source = "오늘 방송에서 준비한 새로운 노래를 여러분께 자세히 소개해 드릴게요"
+        placeholder = "無輸出"
+        good = "今天直播要向大家介紹新歌"
+        primary = self._FakeEngine("nvidia", placeholder)
+        alt = self._FakeEngine("groq", good)
         t = self._translator_with([primary, alt])
-        result, engine, pv = self._retry(t, self._BAD, engine=primary)
-        self.assertEqual(result, self._BAD)          # keep original
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, placeholder, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, good)
+        self.assertEqual(engine.engine_name, "groq")
+        self.assertEqual(alt.calls, 1)
+
+    def test_unlisted_hangul_remains_record_only_without_leakage_proof(self):
+        source = "오늘 방송에서 새로운 노래를 소개할게요"
+        leaked = "안녕하세요반갑습니다"
+        good = "今天直播要介紹新歌"
+        primary = self._FakeEngine("nvidia", leaked)
+        alt = self._FakeEngine("groq", good)
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, leaked, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, leaked)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+
+    def test_repetitive_hangul_noise_does_not_make_placeholder_retryable(self):
+        source = "등등등등등등등등등등등등등등등등등등등등등등등등"
+        placeholder = "無輸出"
+        primary = self._FakeEngine("nvidia", placeholder)
+        alt = self._FakeEngine("groq", "等等等等")
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, placeholder, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, placeholder)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+
+    def test_profile_approved_hangul_does_not_retry(self):
+        source = "모카랑 랑코랑 마냥이랑 솜먕이 같이 왔어"
+        preserved = "모카、랑코、마냥、솜먕都來了"
+        primary = self._FakeEngine("nvidia", preserved)
+        alt = self._FakeEngine("groq", "大家都來了")
+        t = self._translator_with([primary, alt])
+
+        with _active_translation_profile("url"):
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, preserved, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, preserved)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+
+    def test_quality_retry_does_not_recall_an_engine_tried_by_fallback(self):
+        from modules.translation_engines import (
+            get_translation_attempts,
+            record_translation_attempt,
+            select_translation_attempt,
+        )
+        from modules.translator import get_quality_retry_trace
+
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        primary = self._FakeEngine("nvidia", None)
+        fallback = self._FakeEngine("deepl", bad)
+        t = self._translator_with([primary, fallback])
+        record_translation_attempt(primary, phase="fallback_chain", result=None)
+        fallback_attempt = record_translation_attempt(
+            fallback, phase="fallback_chain", result=bad)
+        select_translation_attempt(fallback_attempt)
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, bad, "sys", False, None, fallback, "pv0")
+
+        self.assertEqual(result, bad)
+        self.assertEqual(engine.engine_name, "deepl")
+        self.assertEqual(len(get_translation_attempts()), 2)
+        self.assertEqual(
+            get_quality_retry_trace()["reason"],
+            "no_untried_alternate_engine",
+        )
+
+    def test_retry_rejected_when_second_opinion_is_also_bad(self):
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        primary = self._FakeEngine("nvidia", bad)
+        alt = self._FakeEngine("groq", bad)
+        t = self._translator_with([primary, alt])
+        result, engine, pv = t._maybe_quality_retry(
+            source, source, bad, "sys", False, None, primary, "pv0")
+        self.assertEqual(result, bad)          # keep original
         self.assertEqual(engine.engine_name, "nvidia")
         self.assertEqual(pv, "pv0")
+        self.assertEqual(alt.calls, 1)
+
+    def test_selective_retry_rejects_japanese_candidate(self):
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        japanese_candidate = "收到一萬五千です"
+        primary = self._FakeEngine("nvidia", bad)
+        alt = self._FakeEngine("groq", japanese_candidate)
+        t = self._translator_with([primary, alt])
+
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, bad, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, bad)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
+
+    def test_japanese_only_retry_rejects_japanese_candidate(self):
+        from config import cfg
+
+        source = "오늘 방송은 정말 재미있어요"
+        original = "ヤダヤダヤダヤダヤダヤダ"
+        japanese_candidate = "今天直播有です"
+        primary = self._FakeEngine("nvidia", original)
+        alt = self._FakeEngine("groq", japanese_candidate)
+        t = self._translator_with([primary, alt])
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "active")
+        try:
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, original, "sys", False, None, primary, "pv0")
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        self.assertEqual(result, original)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
+
+    def test_retry_candidate_must_preserve_profile_approved_term(self):
+        source = "모카가 만 5천원 받았어"
+        original = "莫卡收到五千"
+        candidate = "Moka收到一萬五千元"
+        primary = self._FakeEngine("nvidia", original)
+        alt = self._FakeEngine("groq", candidate)
+        t = self._translator_with([primary, alt])
+
+        with _active_translation_profile("url"):
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, original, "sys", False, None, primary, "pv0")
+
+        self.assertEqual(result, original)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
+
+    def test_japanese_shadow_locks_selective_amount_mismatch(self):
+        from config import cfg
+        from modules.translator import get_quality_retry_trace
+
+        source = "만 5천원 받았어"
+        composite = "收到五千です"
+        good = "收到一萬五千元"
+        primary = self._FakeEngine("nvidia", composite)
+        alt = self._FakeEngine("groq", good)
+        t = self._translator_with([primary, alt])
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
+        try:
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, composite, "sys", False, None, primary, "pv0")
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        trace = get_quality_retry_trace()
+        self.assertEqual(result, composite)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
+        self.assertEqual(trace["trigger"], "target_has_japanese")
+        self.assertEqual(
+            trace["co_triggers"],
+            ["amount_mismatch", "target_has_japanese"],
+        )
+        self.assertTrue(trace["would_replace"])
+        self.assertFalse(trace["applied"])
+        self.assertEqual(trace["reason"], "shadow_only")
 
     def test_rejected_retry_keeps_primary_token_attribution(self):
         from modules.translation_engines import (
@@ -3373,19 +3623,22 @@ class TestQualityRetry(unittest.TestCase):
                 _log_token_usage(self.engine_name, {"prompt_tokens": 20, "completion_tokens": 2})
                 return self._reply
 
-        primary = self._FakeEngine("nvidia", self._BAD)
-        alt = _TokenEngine("groq", self._BAD)
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        primary = self._FakeEngine("nvidia", bad)
+        alt = _TokenEngine("groq", bad)
         t = self._translator_with([primary, alt])
         reset_translation_call_trace()
         _log_token_usage("nvidia", {"prompt_tokens": 10, "completion_tokens": 1})
         primary_attempt = record_translation_attempt(
-            primary, phase="fallback_chain", result=self._BAD
+            primary, phase="fallback_chain", result=bad
         )
         select_translation_attempt(primary_attempt)
 
-        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, bad, "sys", False, None, primary, "pv0")
         outcome = TranslationOutcome(
-            source_text=self._SRC,
+            source_text=source,
             target_text=result,
             status="success",
             result_source="api",
@@ -3507,22 +3760,24 @@ class TestQualityRetry(unittest.TestCase):
             def translate(self, *a, **k):
                 self.calls += 1
                 raise RuntimeError("api down")
-        primary = self._FakeEngine("nvidia", self._BAD)
+        source = "만 5천원 받았어"
+        bad = "收到五千"
+        primary = self._FakeEngine("nvidia", bad)
         alt = _Boom("groq", "")
         t = self._translator_with([primary, alt])
-        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
-        self.assertEqual(result, self._BAD)
+        result, engine, _pv = t._maybe_quality_retry(
+            source, source, bad, "sys", False, None, primary, "pv0")
+        self.assertEqual(result, bad)
         self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 1)
 
 
 class TestJapaneseShadowPrecedence(unittest.TestCase):
     """§17 contract: with mode=shadow, Japanese-flagged outputs are absolutely
-    record-only — the generic bad_output path must not replace them, or the
-    Phase B dataset loses exactly its highest-risk (Japanese+bad) samples."""
+    record-only even when a selective trigger also matches."""
 
     _SRC = "야하다 야하다 진짜야"
-    # Japanese + repetitive + low CJK => severity bad, no Hangul (so the
-    # generic bad_output trigger also fires — the composite case).
+    # Japanese + repetitive + low CJK => severity bad.
     _JP_BAD = "ヤダヤダヤダヤダヤダヤダ"
     _JP_BAD_ALT = "ラララララララララララ"
     _LATIN_BAD = "Light Light Light Light Light Light"
@@ -3531,6 +3786,9 @@ class TestJapaneseShadowPrecedence(unittest.TestCase):
     _FakeEngine = TestQualityRetry._FakeEngine
 
     def _translator_with(self, engines):
+        from modules.translation_engines import reset_translation_call_trace
+
+        reset_translation_call_trace()
         t = Translator()
         t._engines = engines
         return t
@@ -3576,7 +3834,7 @@ class TestJapaneseShadowPrecedence(unittest.TestCase):
         self.assertFalse(trace["applied"])
         self.assertEqual(trace["reason"], "shadow_only")
         self.assertEqual(trace["trigger"], "target_has_japanese")
-        self.assertIn("bad_output", trace["co_triggers"])
+        self.assertEqual(trace["co_triggers"], ["target_has_japanese"])
 
     def test_2_composite_with_non_improving_candidate(self):
         from modules.translator import get_quality_retry_trace
@@ -3594,7 +3852,7 @@ class TestJapaneseShadowPrecedence(unittest.TestCase):
         self.assertFalse(trace["applied"])
         self.assertEqual(trace["reason"], "shadow_only")
 
-    def test_3_generic_bad_without_japanese_still_replaces(self):
+    def test_3_generic_bad_without_japanese_does_not_retry(self):
         from modules.translator import get_quality_retry_trace
 
         primary = self._FakeEngine("nvidia", self._LATIN_BAD)
@@ -3604,10 +3862,10 @@ class TestJapaneseShadowPrecedence(unittest.TestCase):
             t, self._LATIN_BAD, engine=primary, mode="shadow")
 
         trace = get_quality_retry_trace()
-        self.assertEqual(result, self._GOOD)            # existing behavior intact
-        self.assertEqual(engine.engine_name, "deepl")
-        self.assertTrue(trace["applied"])
-        self.assertEqual(trace["trigger"], "bad_output")
+        self.assertEqual(result, self._LATIN_BAD)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+        self.assertEqual(trace, {})
 
     def test_4_active_mode_composite_can_still_replace(self):
         from modules.translator import get_quality_retry_trace

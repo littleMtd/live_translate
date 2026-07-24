@@ -459,6 +459,11 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                         "selected_for_output": True,
                     },
                 ],
+                quality_retry={
+                    "trigger": "amount_mismatch",
+                    "applied": True,
+                    "reason": "selective_trigger_resolved",
+                },
                 starts_with_dependency_marker=True,
                 dependency_marker="그래서",
             ),
@@ -501,6 +506,13 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
     assert report["retry_summary"]["retry_events"] == 1
     assert report["retry_summary"]["retry_rate"] == 0.5
     assert report["retry_summary"]["by_retry_reason"] == [{"value": "timeout", "count": 1}]
+    assert report["retry_summary"]["quality_retry"] == {
+        "events": 1,
+        "rate": 0.5,
+        "applied": 1,
+        "by_trigger": [{"value": "amount_mismatch", "count": 1}],
+        "by_reason": [{"value": "selective_trigger_resolved", "count": 1}],
+    }
     assert report["api_diagnostics"]["api_events"] == 2
     assert report["api_diagnostics"]["timeout_events"] == 1
     assert report["api_diagnostics"]["timeout_rate"] == 0.5

@@ -402,6 +402,16 @@ def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         int(_float_or_none(event.get("retry_count")) or 0)
         for event in events
     ]
+    quality_retry_events = [
+        event
+        for event in events
+        if isinstance(event.get("quality_retry"), dict)
+        and event.get("quality_retry")
+    ]
+    quality_retry_rows = [
+        event["quality_retry"]
+        for event in quality_retry_events
+    ]
     return {
         "total_events": len(events),
         "retry_events": len(retry_events),
@@ -411,6 +421,20 @@ def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             [event for event in events if event.get("retry_reason")],
             "retry_reason",
         ),
+        "quality_retry": {
+            "events": len(quality_retry_events),
+            "rate": (
+                round(len(quality_retry_events) / len(events), 3)
+                if events
+                else 0.0
+            ),
+            "applied": sum(
+                bool(row.get("applied"))
+                for row in quality_retry_rows
+            ),
+            "by_trigger": _count_by(quality_retry_rows, "trigger"),
+            "by_reason": _count_by(quality_retry_rows, "reason"),
+        },
     }
 
 
