@@ -57,6 +57,9 @@ def test_post_run_quality_loop_runs_existing_tools(tmp_path, monkeypatch):
     ]
     assert "--run-id" in captured_run[0]
     assert "run-1" in captured_run[0]
+    assert "--json-output" in captured_run[0]
+    json_output = captured_run[0][captured_run[0].index("--json-output") + 1]
+    assert json_output.endswith("glossary_candidates.json")
     assert captured_run[1] == [
         "py",
         "scripts/replay_eval.py",

@@ -78,6 +78,7 @@
       "term": "유아렐",
       "rendering": "UR:L",
       "aliases": ["UR:L", "URL", "유아엘", "YOU ARE LINKED", "결속아이돌", "결속 아이돌"],
+      "ambiguous_aliases": ["URL"],
       "notes": "UR:L group/community reference. Preserve UR:L for the group; URL alone may also mean a web address, so disambiguate from context. No official fandom name is recorded in current project data."
     },
     {

@@ -102,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     event_input = _prepare_event_input(args.events, output_dir)
     analyze_out = output_dir / "runtime_report.json"
     suggest_out = output_dir / "suggestions.md"
+    candidate_out = output_dir / "glossary_candidates.json"
 
     status = _run_capture_json(
         [
@@ -125,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         str(args.min_count),
         "--output",
         str(suggest_out),
+        "--json-output",
+        str(candidate_out),
     ]
     for run_id in args.run_id or []:
         suggest_cmd.extend(["--run-id", run_id])
