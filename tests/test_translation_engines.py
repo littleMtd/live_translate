@@ -116,14 +116,30 @@ class TestCompactProfileDigest(unittest.TestCase):
             object.__setattr__(cfg.translation, "use_profile", original["use_profile"])
 
     def test_digest_lists_profile_and_shared_names(self):
-        for engine in ("groq", "openrouter"):
-            prompt = self._compact_prompt(engine, "url", use_profile=True)
-            self.assertIn("Fixed name renderings", prompt)
-            self.assertIn("랑코", prompt)
-            self.assertIn("솜먕", prompt)
-            self.assertIn("유재석→劉在錫", prompt)  # shared scope rides along
-            self.assertIn("유아렐/유아엘=UR:L", prompt)
-            self.assertIn("Wish Me Love", prompt)
+        prompt = self._compact_prompt("groq", "url", use_profile=True)
+        self.assertIn("Fixed name renderings", prompt)
+        self.assertIn("랑코", prompt)
+        self.assertIn("솜먕", prompt)
+        self.assertIn("유재석→劉在錫", prompt)  # shared scope rides along
+        self.assertIn("유아렐/유아엘=UR:L", prompt)
+        self.assertIn("Wish Me Love", prompt)
+
+    def test_openrouter_uses_benchmarked_domain_capsule(self):
+        import hashlib
+
+        prompt = self._compact_prompt("openrouter", "url", use_profile=True)
+
+        self.assertIn("You translate noisy live-stream subtitles", prompt)
+        self.assertIn("never invent or complete missing meaning", prompt)
+        self.assertIn("Never copy history into the answer", prompt)
+        self.assertIn("[Active profile facts]", prompt)
+        self.assertIn("유아렐/유아엘=UR:L", prompt)
+        self.assertIn("Wish Me Love", prompt)
+        self.assertNotIn("Fixed name renderings", prompt)
+        self.assertEqual(
+            hashlib.sha256(prompt.encode()).hexdigest(),
+            "b8a1920e8f8aa1ced6a91d9f66d6f44cb3113e6616629b4d12e84e66b5af5d8d",
+        )
 
     def test_wrong_profile_names_do_not_leak(self):
         # 랑코 can't be the probe: it appears in _COMPACT_INVARIANTS itself.
@@ -137,9 +153,10 @@ class TestCompactProfileDigest(unittest.TestCase):
         self.assertIn("Chaenna", prompt)
 
     def test_no_digest_without_use_profile(self):
-        prompt = self._compact_prompt("groq", "url", use_profile=False)
-        self.assertNotIn("Fixed name renderings", prompt)
-        self.assertNotIn("솜먕", prompt)
+        for engine in ("groq", "openrouter"):
+            prompt = self._compact_prompt(engine, "url", use_profile=False)
+            self.assertNotIn("Fixed name renderings", prompt)
+            self.assertNotIn("솜먕", prompt)
 
     def test_digest_stays_within_compact_token_budget(self):
         from modules.translation_engines import _compact_profile_digest

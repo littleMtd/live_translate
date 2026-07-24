@@ -92,6 +92,15 @@ def _float_diagnostic(value, default: float | None = None) -> float | None:
         return default
 
 
+def _cost_diagnostic(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 10)
+    except (TypeError, ValueError):
+        return None
+
+
 def _timeout_config_ms(timeout) -> float | None:
     try:
         return _float_diagnostic(float(timeout) * 1000)
@@ -152,6 +161,7 @@ def _set_last_engine_diagnostics(
         "context_item_count": _optional_int_diagnostic(api_fields.get("context_item_count")),
         "api_error_type": api_fields.get("api_error_type"),
         "api_error_message_class": api_fields.get("api_error_message_class"),
+        "api_cost_usd": _cost_diagnostic(api_fields.get("api_cost_usd")),
     }
 
 
@@ -196,6 +206,7 @@ def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
         "context_item_count": _optional_int_diagnostic(value.get("context_item_count")),
         "api_error_type": value.get("api_error_type"),
         "api_error_message_class": value.get("api_error_message_class"),
+        "api_cost_usd": _cost_diagnostic(value.get("api_cost_usd")),
     }
 
 
@@ -579,16 +590,38 @@ def _groq_system_prompt(system_prompt: str) -> str:
     return _COMPACT_SYSTEM_PROMPT
 
 
+def _openrouter_capsule_prompt(profile_id: str) -> str:
+    """Production copy of the 40-case Qwen3-Next domain capsule."""
+    facts = get_translation_profile_facts(profile_id).strip()
+    return f"""You translate noisy live-stream subtitles into natural colloquial Traditional Chinese used in Taiwan.
+
+[Contract]
+- Output only the translation. No labels, quotes, notes, explanations, apologies, or alternatives.
+- Translate coherent Korean, English, or Japanese speech. Use Traditional Chinese, never Simplified Chinese.
+- Input comes from STT and may be fragmented, cut off, misheard, or contain hallucinated syllables. Translate only what is actually supported; never invent or complete missing meaning.
+- Use recent message history only to resolve references and continuity. Never copy history into the answer.
+- Preserve the speaker's tone, emotion, slang, and profanity. Avoid formal or literal phrasing.
+- Obey every exact profile mapping below. Profile rules override generic translation habits.
+- Keep official titles, game/skill names, streamer IDs, brands, and established English names unchanged.
+- For an unlisted Korean personal/stage name, preserve its Hangul instead of inventing a Chinese transliteration. Hangul is allowed only for such proper names or explicitly preserved profile terms.
+- Preserve numeric value and units exactly. Korean 만 means 10,000; never drop, duplicate, or change a digit or magnitude.
+- If the input is pure noise with no defensible meaning, output an empty string.
+
+[Active profile facts]
+{facts}
+
+Final check before answering: translation only; Traditional Chinese; no unsupported completion; exact profile names/titles; exact numbers and units."""
+
+
 def _openrouter_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "openrouter_compact_prompt", True)):
         return system_prompt
-    profile_id = getattr(cfg, "active_streamer_profile", "")
-    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
-        return (
-            f"{_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
-            f"{_compact_profile_digest(profile_id)}"
-        )
-    return _COMPACT_SYSTEM_PROMPT
+    profile_id = (
+        getattr(cfg, "active_streamer_profile", "")
+        if bool(getattr(cfg.translation, "use_profile", False))
+        else ""
+    )
+    return _openrouter_capsule_prompt(profile_id)
 
 
 def _deepl_prompt_signature() -> str:
@@ -1343,6 +1376,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
             api_error_message_class: str | None = None,
             request_body_char_count: int | None = None,
             message_count: int | None = None,
+            api_cost_usd: float | None = None,
         ) -> None:
             _set_last_engine_diagnostics(
                 "openrouter",
@@ -1362,6 +1396,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
                 context_item_count=len(history or []),
                 api_error_type=api_error_type,
                 api_error_message_class=api_error_message_class,
+                api_cost_usd=api_cost_usd,
             )
 
         record_diagnostics()
@@ -1382,7 +1417,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
             "messages": messages,
             "temperature": cfg.translation.temperature,
             "max_tokens": self._max_tokens,
-            "reasoning": {"exclude": True},
+            "reasoning": {"effort": "none", "exclude": True},
         }
         payload_text = _json.dumps(body)
         payload = payload_text.encode()
@@ -1409,7 +1444,8 @@ class OpenRouterTranslationEngine(TranslationEngine):
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
                 data = _json.loads(r.read())
             log.info("OpenRouter translate: %.0fms", (time.monotonic() - started_at) * 1000)
-            _log_token_usage("OpenRouter", data.get("usage"))
+            usage = data.get("usage") or {}
+            _log_token_usage("OpenRouter", usage)
             content = (data["choices"][0]["message"].get("content") or "").strip()
             if self._strip_think:
                 content = _strip_think_tags(content)
@@ -1417,6 +1453,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
                 started_at=started_at,
                 request_body_char_count=request_body_char_count,
                 message_count=message_count,
+                api_cost_usd=usage.get("cost"),
             )
             log.debug("OpenRouter: %.30s -> %s", text, content)
             return content or None

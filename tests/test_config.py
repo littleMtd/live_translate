@@ -34,6 +34,17 @@ class TestConfig(unittest.TestCase):
         for name in cfg.translation.engine_chain:
             self.assertIn(name, _VALID_ENGINE_NAMES)
 
+    def test_live_fallback_chain_uses_benchmarked_openrouter_capsule_order(self):
+        self.assertEqual(
+            cfg.translation.engine_chain,
+            ("openrouter", "deepl", "groq"),
+        )
+        self.assertEqual(
+            cfg.translation.openrouter_model,
+            "qwen/qwen3-next-80b-a3b-instruct",
+        )
+        self.assertEqual(cfg.translation.openrouter_max_tokens, 160)
+
     def test_streamer_profile_ids_match_registry(self):
         from config import _VALID_STREAMER_PROFILES
         from modules.streamer_profiles import known_profile_ids

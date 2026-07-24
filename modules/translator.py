@@ -93,6 +93,7 @@ _API_EVENT_DEFAULTS = {
     "context_item_count": None,
     "api_error_type": None,
     "api_error_message_class": None,
+    "api_cost_usd": None,
 }
 _CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
 FallbackEventSink = Callable[..., None]

@@ -154,11 +154,10 @@ class _Translation:
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    # Fallback chain when live_engine="nvidia" times out. DeepL is a fast,
-    # non-LLM cross-provider fallback; it uses a short translation context
-    # instead of the tested-worse global custom instruction. Groq and
-    # OpenRouter remain behind it.
-    engine_chain:   tuple        = ("deepl", "groq", "openrouter")
+    # Fallback chain when live_engine="nvidia" times out. OpenRouter uses the
+    # benchmarked Qwen3-Next capsule as the first quality fallback; DeepL is
+    # the fast non-LLM safety net and Groq remains last.
+    engine_chain:   tuple        = ("openrouter", "deepl", "groq")
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -182,10 +181,10 @@ class _Translation:
     groq_translation_history_target_chars: int = 220
     # OpenRouter fallback (uses OPENROUTER_API_KEY). Paid model, called only
     # after higher-priority engines in the active chain fail.
-    openrouter_model: str = "qwen/qwen3-30b-a3b-instruct-2507"
+    openrouter_model: str = "qwen/qwen3-next-80b-a3b-instruct"
     openrouter_timeout: int = 8
     openrouter_compact_prompt: bool = True
-    openrouter_max_tokens: int = 512
+    openrouter_max_tokens: int = 160
     openrouter_context_window: int = 2
     openrouter_history_source_chars: int = 160
     openrouter_history_target_chars: int = 220

@@ -17,7 +17,7 @@ import modules.translator as translator_module
 from modules.translation_engines import (
     _build_engine_chain, _build_user_message, TranslationEngine, ClaudeEngine, GoogleTranslateEngine,
     DeepLEngine, GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine, _deepl_base_url,
-    get_last_engine_api_diagnostics, get_last_engine_diagnostics,
+    get_last_engine_api_diagnostics, get_last_engine_diagnostics, get_last_token_usage,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -651,7 +651,7 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
     def _engine(self) -> OpenRouterTranslationEngine:
         e = OpenRouterTranslationEngine.__new__(OpenRouterTranslationEngine)
         e._api_key = "fake-openrouter-key"
-        e._model = "qwen/qwen3-30b-a3b-instruct-2507"
+        e._model = "qwen/qwen3-next-80b-a3b-instruct"
         e._timeout = 8
         e._max_tokens = 200
         e._strip_think = True
@@ -664,7 +664,12 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.read.return_value = json.dumps({
             "choices": [{"message": {"content": content}}],
-            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 7,
+                "total_tokens": 18,
+                "cost": 0.00012345,
+            },
         }).encode()
         return mock_resp
 
@@ -688,14 +693,30 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         self.assertEqual(headers["user-agent"], "live_translate/1.0")
         self.assertEqual(headers["http-referer"], "http://localhost/live_translate")
         self.assertEqual(headers["x-title"], "live_translate")
-        self.assertEqual(payload["model"], "qwen/qwen3-30b-a3b-instruct-2507")
-        self.assertEqual(payload["reasoning"], {"exclude": True})
+        self.assertEqual(payload["model"], "qwen/qwen3-next-80b-a3b-instruct")
+        self.assertEqual(payload["reasoning"], {"effort": "none", "exclude": True})
         self.assertEqual(payload["max_tokens"], 200)
         system_message = payload["messages"][0]["content"]
-        self.assertIn("Traditional Chinese live subtitle translator", system_message)
+        self.assertIn("noisy live-stream subtitles", system_message)
         self.assertIn("Korean, English, or Japanese", system_message)
-        self.assertIn("Active streamer profile:", system_message)
+        self.assertIn("[Active profile facts]", system_message)
+        self.assertIn("유아렐/유아엘=UR:L", system_message)
         self.assertNotIn("full quality prompt", system_message)
+        self.assertEqual(
+            get_last_token_usage(),
+            {
+                "prompt": 11,
+                "output": 7,
+                "total": 18,
+                "cache_read": None,
+                "cache_write": None,
+            },
+        )
+        diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(diagnostics["engine"], "openrouter")
+        self.assertEqual(diagnostics["api_attempt_count"], 1)
+        self.assertEqual(diagnostics["timeout_config_ms"], 8000)
+        self.assertEqual(diagnostics["api_cost_usd"], 0.00012345)
 
     def test_limits_history_for_live_fallback(self):
         import json
@@ -736,9 +757,28 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=self._response("<think>notes only")):
             self.assertIsNone(e.translate("hello", "system", False))
 
+    def test_timeout_records_structured_diagnostics(self):
+        import socket
+        import urllib.error
+
+        e = self._engine()
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError(socket.timeout("timed out")),
+        ):
+            self.assertIsNone(e.translate("hello", "system", False))
+
+        diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(diagnostics["engine"], "openrouter")
+        self.assertEqual(diagnostics["api_attempt_count"], 1)
+        self.assertEqual(diagnostics["api_timeout_count"], 1)
+        self.assertEqual(diagnostics["timeout_config_ms"], 8000)
+        self.assertEqual(diagnostics["api_error_type"], "timeout")
+        self.assertEqual(diagnostics["api_error_message_class"], "read_timeout")
+
 
 class TestOpenRouterFallbackChain(unittest.TestCase):
-    def test_nvidia_backend_uses_groq_before_openrouter_fallback(self):
+    def test_nvidia_backend_uses_openrouter_before_deepl_and_groq(self):
         from config import cfg
 
         class FakeEngine:
@@ -765,7 +805,11 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         original_live_engine = cfg.live_engine
         try:
             object.__setattr__(cfg.translation, "translation_mode", "live")
-            object.__setattr__(cfg.translation, "engine_chain", ("groq", "openrouter"))
+            object.__setattr__(
+                cfg.translation,
+                "engine_chain",
+                ("openrouter", "deepl", "groq"),
+            )
             object.__setattr__(cfg, "live_engine", "nvidia")
             # Patch the registry boundary actually used by _build_engine_chain.
             # Patching class names is ineffective because EngineSpec factories
@@ -782,7 +826,30 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             object.__setattr__(cfg.translation, "engine_chain", original_chain)
             object.__setattr__(cfg, "live_engine", original_live_engine)
 
-        self.assertEqual([engine.engine_name for engine in engines], ["nvidia", "groq", "openrouter"])
+        self.assertEqual(
+            [engine.engine_name for engine in engines],
+            ["nvidia", "openrouter", "deepl", "groq"],
+        )
+
+    def test_openrouter_success_is_attributed_and_stops_deeper_fallbacks(self):
+        t = _make_translator()
+        t._engines = [
+            _mock_engine("nvidia", None),
+            _mock_engine("openrouter", "正確翻譯"),
+            _mock_engine("deepl", "deepl"),
+            _mock_engine("groq", "groq"),
+        ]
+        _set_provider_failure(t._engines[0])
+
+        with _translation_mode("live"):
+            outcome = t.translate_event("안녕하세요")
+
+        self.assertEqual(outcome.target_text, "正確翻譯")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.model, "openrouter-test-model")
+        self.assertEqual(t._active_idx, 1)
+        t._engines[2].translate.assert_not_called()
+        t._engines[3].translate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1360,6 +1427,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
                 "context_item_count": 1,
                 "api_error_type": None,
                 "api_error_message_class": None,
+                "api_cost_usd": 0.00012345,
             },
         )
 
@@ -1380,6 +1448,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(event["message_count"], 4)
         self.assertEqual(event["context_item_count"], 1)
         self.assertIsNone(event["api_error_type"])
+        self.assertEqual(event["api_cost_usd"], 0.00012345)
         self.assertIsNone(event["api_error_message_class"])
 
 

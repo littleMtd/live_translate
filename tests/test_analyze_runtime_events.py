@@ -451,6 +451,7 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                         "engine": "groq",
                         "status": "success",
                         "api_timeout_count": 0,
+                        "api_cost_usd": 0.001,
                         "selected_for_output": True,
                     },
                 ],
@@ -458,6 +459,7 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 dependency_marker="그래서",
             ),
             _translation_event(
+                engine="openrouter",
                 engine_latency_ms=200,
                 queue_wait_ms=50,
                 output_delay_ms=260,
@@ -479,6 +481,7 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 request_body_char_count=1400,
                 message_count=2,
                 context_item_count=0,
+                api_cost_usd=0.002,
                 starts_with_dependency_marker=False,
                 dependency_marker="",
             ),
@@ -499,6 +502,14 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
     assert report["api_diagnostics"]["timeout_rate"] == 0.5
     assert report["api_diagnostics"]["long_api_ge_10s"] == 1
     assert report["api_diagnostics"]["long_api_ge_10s_timeout_events"] == 1
+    assert report["api_diagnostics"]["cost_usd"] == {
+        "observations": 2,
+        "total": 0.003,
+        "by_engine": [
+            {"engine": "groq", "cost_usd": 0.001},
+            {"engine": "openrouter", "cost_usd": 0.002},
+        ],
+    }
     assert report["api_diagnostics"]["fields"]["api_total_wall_ms"]["max"] == 12000
     assert report["api_diagnostics"]["fields"]["api_attempt_timeout_ms"]["p50"] == 10000
     assert report["api_diagnostics"]["fields"]["api_attempt_index"]["max"] == 2

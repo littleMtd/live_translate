@@ -439,6 +439,21 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         for event in api_events
         if (_float_or_none(event.get("api_total_wall_ms")) or 0) >= 10_000
     ]
+    cost_rows: list[tuple[str, float]] = []
+    for event in events:
+        chain = [
+            attempt
+            for attempt in (event.get("attempts") or [])
+            if isinstance(attempt, dict)
+        ]
+        sources = chain if chain else [event]
+        for source in sources:
+            cost = _float_or_none(source.get("api_cost_usd"))
+            if cost is not None:
+                cost_rows.append((str(source.get("engine") or ""), cost))
+    cost_by_engine: dict[str, float] = {}
+    for engine, cost in cost_rows:
+        cost_by_engine[engine] = cost_by_engine.get(engine, 0.0) + cost
     return {
         "total_events": len(events),
         "api_events": len(api_events),
@@ -464,6 +479,14 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             [event for event in api_events if event.get("api_error_message_class")],
             "api_error_message_class",
         ),
+        "cost_usd": {
+            "observations": len(cost_rows),
+            "total": round(sum(cost for _, cost in cost_rows), 8),
+            "by_engine": [
+                {"engine": engine, "cost_usd": round(cost, 8)}
+                for engine, cost in sorted(cost_by_engine.items())
+            ],
+        },
         "attempt_chain": {
             "events_with_chain": len(attempt_chains),
             "total_attempts": len(attempts),
