@@ -89,6 +89,7 @@ def analyze_runtime_events(
             if str(event.get("run_id") or "") == resolved_run_id
         ]
     translation_events = [event for event in events if event.get("event_type") == "translation"]
+    fallback_events = [event for event in events if event.get("event_type") == "translation_fallback"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
     audio_events = [event for event in events if event.get("event_type") == "audio"]
     labels = load_run_labels(labels_path)
@@ -115,6 +116,7 @@ def analyze_runtime_events(
         ),
         "total_events": len(events),
         "translation_events": len(translation_events),
+        "translation_fallback_events": len(fallback_events),
         "stt_events": len(stt_events),
         "audio_events": len(audio_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
@@ -139,8 +141,16 @@ def analyze_runtime_events(
         "retry_summary": _retry_summary(translation_events),
         "api_diagnostics": _api_diagnostics_summary(translation_events),
         "dependency_markers": _dependency_marker_summary(translation_events),
+        "translation_fallback": _fallback_summary(fallback_events),
         "analyzer_output_notes": ANALYZER_OUTPUT_NOTES,
-        "runs": _run_summaries(translation_events, stt_events, audio_events, labels, top_n),
+        "runs": _run_summaries(
+            translation_events,
+            fallback_events,
+            stt_events,
+            audio_events,
+            labels,
+            top_n,
+        ),
         "latest": _latest_samples(translation_events, top_n),
         "flagged_samples": _flagged_samples(translation_events, top_n),
         "empty_targets": _empty_target_summary(translation_events, top_n),
@@ -204,6 +214,7 @@ def load_run_labels(path: Path | None = None) -> dict[str, dict[str, str]]:
 
 def _run_summaries(
     events: list[dict[str, Any]],
+    fallback_events: list[dict[str, Any]],
     stt_events: list[dict[str, Any]],
     audio_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
@@ -218,6 +229,9 @@ def _run_summaries(
     grouped_audio: dict[str, list[dict[str, Any]]] = {}
     for event in audio_events:
         grouped_audio.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
+    grouped_fallback: dict[str, list[dict[str, Any]]] = {}
+    for event in fallback_events:
+        grouped_fallback.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
 
     summaries = []
     for run_id, run_events in grouped.items():
@@ -273,6 +287,7 @@ def _run_summaries(
                 "retry_summary": _retry_summary(run_events),
                 "api_diagnostics": _api_diagnostics_summary(run_events),
                 "dependency_markers": _dependency_marker_summary(run_events),
+                "translation_fallback": _fallback_summary(grouped_fallback.get(run_id, [])),
                 "template_hits": {
                     "total": len(template_events),
                     "by_status": _count_by(template_events, "status"),
@@ -507,6 +522,64 @@ def _status_breakdown(events: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _fallback_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    probe_events = [
+        event
+        for event in events
+        if event.get("action") in {"probe_succeeded", "probe_failed"}
+    ]
+    successful_probes = [
+        event for event in probe_events if event.get("action") == "probe_succeeded"
+    ]
+    failed_probes = [
+        event for event in probe_events if event.get("action") == "probe_failed"
+    ]
+    return {
+        "total": len(events),
+        "by_action": _count_by(events, "action"),
+        "by_probe_status": _count_by(
+            [event for event in events if event.get("probe_status")],
+            "probe_status",
+        ),
+        "circuits_opened": sum(
+            event.get("action") == "circuit_opened" for event in events
+        ),
+        "fallback_advances": sum(
+            event.get("action") == "fallback_advanced" for event in events
+        ),
+        "circuits_closed": sum(
+            event.get("action") == "circuit_closed" for event in events
+        ),
+        "probe_attempts": len(probe_events),
+        "successful_probes": len(successful_probes),
+        "failed_probes": len(failed_probes),
+        "cooldown_skips": sum(
+            event.get("action") == "probe_cooldown_skipped" for event in events
+        ),
+        "max_probe_success_streak": max(
+            (
+                int(_float_or_none(event.get("probe_success_streak")) or 0)
+                for event in successful_probes
+            ),
+            default=0,
+        ),
+        "probe_latency_ms": _latency_summary(
+            [
+                latency
+                for event in probe_events
+                if (latency := _float_or_none(event.get("probe_elapsed_ms"))) is not None
+            ]
+        ),
+        "probe_history_items": _latency_summary(
+            [
+                count
+                for event in probe_events
+                if (count := _float_or_none(event.get("probe_history_items"))) is not None
+            ]
+        ),
+    }
+
+
 def _float_or_none(value: Any) -> float | None:
     if value is None:
         return None
@@ -639,6 +712,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(
         f"Events: {report['total_events']} | "
         f"Translations: {report['translation_events']} | "
+        f"Fallback: {report.get('translation_fallback_events', 0)} | "
         f"STT: {report['stt_events']} | "
         f"Audio: {report.get('audio_events', 0)}"
     )
@@ -655,6 +729,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Retry summary: {report['retry_summary']}")
     print(f"API diagnostics: {report['api_diagnostics']}")
     print(f"Dependency markers: {report['dependency_markers']}")
+    print(f"Translation fallback: {report['translation_fallback']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
     print(
         "STT summary: "
@@ -686,6 +761,7 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"queue_latency={run['queue_latency_ms']}, "
                 f"retry_rate={run['retry_summary']['retry_rate']}, "
                 f"api_timeout_rate={run['api_diagnostics']['timeout_rate']}, "
+                f"fallback={run['translation_fallback']}, "
                 f"dependency_marker_ratio={run['dependency_markers']['marker_ratio']}, "
                 f"template_hits={run['template_hits']['total']}"
             )

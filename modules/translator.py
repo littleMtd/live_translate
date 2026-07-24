@@ -3,6 +3,7 @@ import queue
 import re
 import threading
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -92,6 +93,7 @@ _API_EVENT_DEFAULTS = {
     "api_error_message_class": None,
 }
 _CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
+FallbackEventSink = Callable[..., None]
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
 _DEPENDENCY_MARKER_BOUNDARY_RE = re.compile(r"^[\s\.,!?~…。？！,，、:;；]|$")
@@ -122,6 +124,16 @@ _MWMEU_PROFILE_ID = "mwmeu"
 _CORRECTION_TABLES = load_translation_corrections()
 _SOURCE_NORM_SHARED = _CORRECTION_TABLES.source_norm_shared
 _SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.source_norm_by_profile
+_CONDITIONAL_SOURCE_NORM_SHARED = tuple(
+    (group.source_terms, group.replacements, group.match_all)
+    for group in _CORRECTION_TABLES.conditional_source_norm_shared
+)
+_CONDITIONAL_SOURCE_NORM_BY_PROFILE = {
+    profile: tuple(
+        (group.source_terms, group.replacements, group.match_all) for group in groups
+    )
+    for profile, groups in _CORRECTION_TABLES.conditional_source_norm_by_profile.items()
+}
 _SOURCE_AWARE_TARGET_REPLACEMENTS = tuple(
     (group.source_terms, group.replacements, group.match_all)
     for group in _CORRECTION_TABLES.source_aware_target_replacements
@@ -155,6 +167,23 @@ def _fallback_failure_threshold() -> int:
     if cfg.translation.translation_mode == "live":
         return _LIVE_FALLBACK_THRESHOLD
     return _FALLBACK_THRESHOLD
+
+
+def _nvidia_circuit_breaker_enabled() -> bool:
+    if cfg.translation.translation_mode != "live":
+        return False
+    return bool(cfg.live_engine == "nvidia" and cfg.nvidia.circuit_breaker_enabled)
+
+
+def _emit_fallback_runtime_event(action: str, **fields) -> None:
+    runtime_events.emit(
+        "translation_fallback",
+        action=action,
+        translation_mode=cfg.translation.translation_mode,
+        profile_id=cfg.active_streamer_profile,
+        circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
+        **fields,
+    )
 
 
 def _db_cache_enabled() -> bool:
@@ -340,6 +369,21 @@ def _normalize_source_before_matching(text: str) -> str:
         text = _replace_recording(
             text, noisy, canonical, stage="source_norm", rule_id=f"{noisy}->{canonical}"
         )
+
+    conditional_groups = _CONDITIONAL_SOURCE_NORM_SHARED
+    if profile_id and bool(cfg.translation.use_profile):
+        conditional_groups += _CONDITIONAL_SOURCE_NORM_BY_PROFILE.get(profile_id, ())
+    for source_terms, replacements, match_all in conditional_groups:
+        if not _source_terms_match(text, source_terms, match_all):
+            continue
+        for noisy, canonical in replacements:
+            text = _replace_recording(
+                text,
+                noisy,
+                canonical,
+                stage="source_norm",
+                rule_id=f"conditional:{noisy}->{canonical}",
+            )
     return text
 
 
@@ -471,6 +515,7 @@ class _TranslatorSharedState:
     policy: TranslationPolicy
     fallback: FallbackState
     lock: object
+    fallback_event_sink: FallbackEventSink | None = None
 
 
 def _new_translation_memory() -> TranslationMemory:
@@ -500,13 +545,44 @@ def _new_translation_policy() -> TranslationPolicy:
     )
 
 
-def _new_translator_shared_state() -> _TranslatorSharedState:
+def _new_translator_shared_state(
+    *,
+    fallback_event_sink: FallbackEventSink | None = None,
+) -> _TranslatorSharedState:
     return _TranslatorSharedState(
         memory=_new_translation_memory(),
         policy=_new_translation_policy(),
         fallback=FallbackState(),
         lock=threading.RLock(),
+        fallback_event_sink=fallback_event_sink,
     )
+
+
+def _copy_fallback_state(state: FallbackState) -> FallbackState:
+    return FallbackState(
+        state.active_idx,
+        state.probe_counter,
+        state.consecutive_primary_failures,
+        state.primary_cooldown_until,
+        state.consecutive_probe_successes,
+    )
+
+
+def _send_fallback_event(
+    shared_state: _TranslatorSharedState | None,
+    action: str,
+    **fields,
+) -> None:
+    if shared_state is None:
+        return
+    sink = shared_state.fallback_event_sink
+    if sink is None:
+        return
+    try:
+        sink(action, **fields)
+    except Exception:
+        metrics.increment("translation.fallback.runtime_event_error")
+        log.exception("Failed to persist translation fallback event")
 
 
 def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: FallbackState) -> None:
@@ -514,22 +590,38 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
         shared.active_idx == before.active_idx
         and shared.probe_counter == before.probe_counter
         and shared.consecutive_primary_failures == before.consecutive_primary_failures
+        and shared.primary_cooldown_until == before.primary_cooldown_until
+        and shared.consecutive_probe_successes == before.consecutive_probe_successes
     ):
         shared.active_idx = after.active_idx
         shared.probe_counter = after.probe_counter
         shared.consecutive_primary_failures = after.consecutive_primary_failures
+        shared.primary_cooldown_until = after.primary_cooldown_until
+        shared.consecutive_probe_successes = after.consecutive_probe_successes
         return
 
-    if after.active_idx == 0 and before.active_idx > 0 and shared.active_idx == before.active_idx:
+    if (
+        after.active_idx == 0
+        and before.active_idx > 0
+        and shared.active_idx == before.active_idx
+        and shared.primary_cooldown_until == before.primary_cooldown_until
+        and shared.consecutive_probe_successes == before.consecutive_probe_successes
+    ):
         shared.active_idx = 0
         shared.probe_counter = 0
         shared.consecutive_primary_failures = 0
+        shared.primary_cooldown_until = 0.0
+        shared.consecutive_probe_successes = 0
         return
 
     if after.active_idx > before.active_idx and after.active_idx >= shared.active_idx:
+        previous_cooldown_until = shared.primary_cooldown_until
         shared.active_idx = after.active_idx
         shared.probe_counter = after.probe_counter
         shared.consecutive_primary_failures = after.consecutive_primary_failures
+        shared.primary_cooldown_until = max(previous_cooldown_until, after.primary_cooldown_until)
+        if after.primary_cooldown_until >= previous_cooldown_until:
+            shared.consecutive_probe_successes = after.consecutive_probe_successes
         return
 
     if shared.active_idx == after.active_idx:
@@ -538,6 +630,14 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
             shared.consecutive_primary_failures,
             after.consecutive_primary_failures,
         )
+        if after.primary_cooldown_until > shared.primary_cooldown_until:
+            shared.primary_cooldown_until = after.primary_cooldown_until
+            shared.consecutive_probe_successes = after.consecutive_probe_successes
+        elif after.primary_cooldown_until == shared.primary_cooldown_until:
+            shared.consecutive_probe_successes = max(
+                shared.consecutive_probe_successes,
+                after.consecutive_probe_successes,
+            )
 
 
 def _outcome_used_api(outcome: TranslationOutcome) -> bool:
@@ -639,6 +739,8 @@ class Translator:
             state.active_idx = 0
             state.probe_counter = 0
             state.consecutive_primary_failures = 0
+            state.primary_cooldown_until = 0.0
+            state.consecutive_probe_successes = 0
 
     @property
     def _active_idx(self) -> int:
@@ -943,19 +1045,12 @@ class Translator:
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
         if lock is None:
+            before_state = _copy_fallback_state(fallback_state)
             state = fallback_state
         else:
             with lock:
-                before_state = FallbackState(
-                    fallback_state.active_idx,
-                    fallback_state.probe_counter,
-                    fallback_state.consecutive_primary_failures,
-                )
-                state = FallbackState(
-                    before_state.active_idx,
-                    before_state.probe_counter,
-                    before_state.consecutive_primary_failures,
-                )
+                before_state = _copy_fallback_state(fallback_state)
+                state = _copy_fallback_state(before_state)
         result, used_idx = call_with_fallback(
             self._engines,
             state,
@@ -967,10 +1062,50 @@ class Translator:
             _fallback_failure_threshold(),
             _looks_untranslated,
             log,
+            circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
+            recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
         )
         if lock is not None:
             with lock:
+                committed_before = _copy_fallback_state(fallback_state)
                 _merge_fallback_state(fallback_state, before_state, state)
+                committed_after = _copy_fallback_state(fallback_state)
+        else:
+            committed_before = before_state
+            committed_after = _copy_fallback_state(fallback_state)
+
+        if (
+            _nvidia_circuit_breaker_enabled()
+            and committed_after.active_idx > committed_before.active_idx
+        ):
+            from_engine = active_engine(self._engines, committed_before.active_idx)
+            to_engine = active_engine(self._engines, committed_after.active_idx)
+            attempts = get_translation_attempts()
+            failed_status = next(
+                (
+                    str(attempt.get("status") or "")
+                    for attempt in attempts
+                    if str(attempt.get("engine") or "").lower()
+                    == str(getattr(from_engine, "engine_name", "") or "").lower()
+                ),
+                "",
+            )
+            _send_fallback_event(
+                getattr(self, "_shared_state", None),
+                "circuit_opened" if committed_before.active_idx == 0 else "fallback_advanced",
+                primary_engine=str(getattr(active_engine(self._engines, 0), "engine_name", "") or ""),
+                from_engine=str(getattr(from_engine, "engine_name", "") or ""),
+                active_engine=str(getattr(to_engine, "engine_name", "") or ""),
+                from_active_idx=committed_before.active_idx,
+                active_idx=committed_after.active_idx,
+                failure_status=failed_status,
+                cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
+                cooldown_remaining_ms=round(
+                    max(0.0, committed_after.primary_cooldown_until - time.monotonic()) * 1000,
+                    2,
+                ),
+                required_probe_successes=cfg.nvidia.recovery_success_threshold,
+            )
         used_engine = active_engine(self._engines, used_idx)
         return result, used_engine
 
@@ -1193,11 +1328,9 @@ def _start_fallback_probe_thread(
             with shared_state.lock:
                 if shared_state.fallback.active_idx <= 0:
                     continue
-                probe_state = FallbackState(
-                    shared_state.fallback.active_idx,
-                    shared_state.fallback.probe_counter,
-                    shared_state.fallback.consecutive_primary_failures,
-                )
+                probe_state = _copy_fallback_state(shared_state.fallback)
+                before_state = _copy_fallback_state(probe_state)
+                probe_history = shared_state.memory.context()
             # L7: rebuild the probe chain when the engine selection changes
             # mid-run instead of caching the first build forever.
             chain_key = engine_chain_config_key()
@@ -1205,25 +1338,72 @@ def _start_fallback_probe_thread(
                 engines = _build_engine_chain()
                 engines_key = chain_key
             system_prompt = _build_probe_system_prompt(shared_state)
+            probe_observations: list[dict[str, object]] = []
+            probe_started = time.monotonic()
             try:
-                recovered = probe_primary_recovery(
+                probe_primary_recovery(
                     engines,
                     probe_state,
                     _FALLBACK_PROBE_TEXT,
                     system_prompt,
                     _looks_untranslated,
                     log,
+                    circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
+                    recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
+                    required_consecutive_successes=cfg.nvidia.recovery_success_threshold,
+                    history=probe_history,
+                    observation_sink=probe_observations.append,
                 )
             except Exception:
                 log.exception("Fallback primary probe failed unexpectedly")
                 continue
-            if not recovered:
-                continue
+            probe_elapsed_ms = round((time.monotonic() - probe_started) * 1000, 2)
             with shared_state.lock:
-                if shared_state.fallback.active_idx > 0:
-                    shared_state.fallback.active_idx = 0
-                    shared_state.fallback.probe_counter = 0
-                    shared_state.fallback.consecutive_primary_failures = 0
+                committed_before = _copy_fallback_state(shared_state.fallback)
+                _merge_fallback_state(shared_state.fallback, before_state, probe_state)
+                committed_after = _copy_fallback_state(shared_state.fallback)
+
+            observation = probe_observations[-1] if probe_observations else {}
+            probe_status = str(observation.get("status") or "unknown")
+            state_applied = committed_after == probe_state
+            active_before = active_engine(engines, committed_before.active_idx)
+            active_after = active_engine(engines, committed_after.active_idx)
+            common_fields = {
+                "primary_engine": str(getattr(active_engine(engines, 0), "engine_name", "") or ""),
+                "active_engine": str(getattr(active_after, "engine_name", "") or ""),
+                "active_engine_before": str(getattr(active_before, "engine_name", "") or ""),
+                "active_idx_before": committed_before.active_idx,
+                "active_idx": committed_after.active_idx,
+                "probe_status": probe_status,
+                "probe_elapsed_ms": probe_elapsed_ms,
+                "probe_history_items": len(probe_history),
+                "probe_history_source_chars": sum(len(source) for source, _ in probe_history),
+                "probe_history_target_chars": sum(len(target) for _, target in probe_history),
+                "probe_success_streak": observation.get("success_streak", 0),
+                "committed_probe_success_streak": committed_after.consecutive_probe_successes,
+                "required_probe_successes": cfg.nvidia.recovery_success_threshold,
+                "cooldown_seconds": cfg.nvidia.recovery_cooldown_sec,
+                "cooldown_remaining_ms": round(
+                    max(0.0, committed_after.primary_cooldown_until - time.monotonic()) * 1000,
+                    2,
+                ),
+                "state_applied": state_applied,
+            }
+            if observation.get("exception_type"):
+                common_fields["exception_type"] = observation["exception_type"]
+            if probe_status == "cooldown_skipped":
+                action = "probe_cooldown_skipped"
+            elif probe_status == "success":
+                action = "probe_succeeded"
+            else:
+                action = "probe_failed"
+            _send_fallback_event(shared_state, action, **common_fields)
+            if (
+                bool(observation.get("recovered"))
+                and committed_before.active_idx > 0
+                and committed_after.active_idx == 0
+            ):
+                _send_fallback_event(shared_state, "circuit_closed", **common_fields)
 
     return start_daemon_thread("TranslationFallbackProbe", run)
 
@@ -1232,7 +1412,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
     def run():
-        shared_state = _new_translator_shared_state()
+        shared_state = _new_translator_shared_state(
+            fallback_event_sink=_emit_fallback_runtime_event,
+        )
         worker_state = threading.local()
         executor = ThreadPoolExecutor(
             max_workers=_TRANSLATION_WORKERS,

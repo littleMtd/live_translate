@@ -169,6 +169,172 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(snapshot.counters["translation.fallback.probe"], 1)
         self.assertEqual(snapshot.counters["translation.fallback.primary_recovered"], 1)
 
+    def test_hard_switch_arms_primary_recovery_cooldown(self):
+        engines = [_engine("primary", None), _engine("fallback", "ok")]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            50,
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            clock=lambda: 100.0,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.primary_cooldown_until, 160.0)
+        self.assertEqual(state.consecutive_probe_successes, 0)
+
+    def test_recovery_probe_skips_primary_during_cooldown(self):
+        metrics.reset()
+        engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback")]
+        state = FallbackState(active_idx=1, primary_cooldown_until=160.0)
+        observations = []
+
+        recovered = probe_primary_recovery(
+            engines,
+            state,
+            "probe source",
+            "prompt",
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            required_consecutive_successes=2,
+            observation_sink=observations.append,
+            clock=lambda: 159.0,
+        )
+
+        self.assertFalse(recovered)
+        self.assertEqual(state.active_idx, 1)
+        engines[0].translate.assert_not_called()
+        snapshot = metrics.snapshot()
+        self.assertEqual(snapshot.counters["translation.fallback.probe_cooldown_skipped"], 1)
+        self.assertNotIn("translation.fallback.probe", snapshot.counters)
+        self.assertEqual(observations[0]["status"], "cooldown_skipped")
+        self.assertEqual(observations[0]["cooldown_remaining_seconds"], 1.0)
+
+    def test_circuit_breaker_requires_consecutive_successful_probes(self):
+        metrics.reset()
+        engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback")]
+        state = FallbackState(active_idx=1)
+        history = [("이전 문장", "先前句子")]
+        observations = []
+        kwargs = {
+            "circuit_breaker_enabled": True,
+            "recovery_cooldown_seconds": 60.0,
+            "required_consecutive_successes": 2,
+            "history": history,
+            "observation_sink": observations.append,
+            "clock": lambda: 100.0,
+        }
+
+        first = probe_primary_recovery(
+            engines, state, "probe source", "prompt",
+            lambda result, source: False, logging.getLogger("test"), **kwargs,
+        )
+        self.assertFalse(first)
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.consecutive_probe_successes, 1)
+
+        second = probe_primary_recovery(
+            engines, state, "probe source", "prompt",
+            lambda result, source: False, logging.getLogger("test"), **kwargs,
+        )
+        self.assertTrue(second)
+        self.assertEqual(state.active_idx, 0)
+        self.assertEqual(state.consecutive_probe_successes, 0)
+        self.assertEqual(engines[0].translate.call_count, 2)
+        self.assertEqual(
+            engines[0].translate.call_args_list[0].args,
+            ("probe source", "prompt", False, history),
+        )
+        self.assertEqual(
+            [(item["status"], item["recovered"], item["success_streak"]) for item in observations],
+            [("success", False, 1), ("success", True, 2)],
+        )
+        snapshot = metrics.snapshot()
+        self.assertEqual(snapshot.counters["translation.fallback.probe_success"], 2)
+        self.assertEqual(snapshot.counters["translation.fallback.primary_recovered"], 1)
+
+    def test_failed_probe_resets_streak_and_restarts_cooldown(self):
+        metrics.reset()
+        engines = [_engine("primary", None), _engine("fallback", "fallback")]
+        state = FallbackState(active_idx=1, consecutive_probe_successes=1)
+        observations = []
+
+        recovered = probe_primary_recovery(
+            engines,
+            state,
+            "probe source",
+            "prompt",
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            required_consecutive_successes=2,
+            observation_sink=observations.append,
+            clock=lambda: 100.0,
+        )
+
+        self.assertFalse(recovered)
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.consecutive_probe_successes, 0)
+        self.assertEqual(state.primary_cooldown_until, 160.0)
+        self.assertEqual(observations[0]["status"], "empty")
+
+        probe_primary_recovery(
+            engines,
+            state,
+            "probe source",
+            "prompt",
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            required_consecutive_successes=2,
+            clock=lambda: 120.0,
+        )
+        self.assertEqual(engines[0].translate.call_count, 1)
+
+    def test_probe_exception_resets_streak_and_restarts_cooldown(self):
+        metrics.reset()
+        engines = [_engine("primary", None), _engine("fallback", "fallback")]
+        engines[0].translate.side_effect = TimeoutError("probe timeout")
+        state = FallbackState(active_idx=1, consecutive_probe_successes=1)
+        observations = []
+
+        recovered = probe_primary_recovery(
+            engines,
+            state,
+            "probe source",
+            "prompt",
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            required_consecutive_successes=2,
+            observation_sink=observations.append,
+            clock=lambda: 100.0,
+        )
+
+        self.assertFalse(recovered)
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.consecutive_probe_successes, 0)
+        self.assertEqual(state.primary_cooldown_until, 160.0)
+        self.assertEqual(metrics.snapshot().counters["translation.fallback.probe_error"], 1)
+        self.assertEqual(observations[0]["status"], "exception")
+        self.assertEqual(observations[0]["exception_type"], "TimeoutError")
+
     def test_soft_fallback_reports_fallback_engine_without_switching(self):
         metrics.reset()
         engines = [_engine("primary", None), _engine("fallback", "ok")]

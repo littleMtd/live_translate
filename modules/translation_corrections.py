@@ -32,6 +32,8 @@ class NameRenderingRule:
 class TranslationCorrectionTables:
     source_norm_shared: dict[str, str]
     source_norm_by_profile: dict[str, dict[str, str]]
+    conditional_source_norm_shared: tuple[ReplacementGroup, ...]
+    conditional_source_norm_by_profile: dict[str, tuple[ReplacementGroup, ...]]
     source_aware_target_replacements: tuple[ReplacementGroup, ...]
     profile_source_aware_target_replacements: dict[str, tuple[ReplacementGroup, ...]]
     korean_name_suffixes: frozenset[str]
@@ -133,6 +135,14 @@ def load_translation_corrections(
     if not isinstance(raw_profiles, dict):
         raise ValueError("source_norm.profiles must be an object")
 
+    raw_conditional_source_norm = data.get("conditional_source_norm")
+    if not isinstance(raw_conditional_source_norm, dict):
+        raise ValueError("conditional_source_norm must be an object")
+
+    raw_conditional_profiles = raw_conditional_source_norm.get("profiles")
+    if not isinstance(raw_conditional_profiles, dict):
+        raise ValueError("conditional_source_norm.profiles must be an object")
+
     profile_source_aware = data.get("profile_source_aware_target_replacements")
     if not isinstance(profile_source_aware, dict):
         raise ValueError("profile_source_aware_target_replacements must be an object")
@@ -142,6 +152,18 @@ def load_translation_corrections(
         source_norm_by_profile={
             profile: _string_map(values, f"source_norm.profiles.{profile}")
             for profile, values in raw_profiles.items()
+            if isinstance(profile, str)
+        },
+        conditional_source_norm_shared=_replacement_groups(
+            raw_conditional_source_norm.get("shared"),
+            "conditional_source_norm.shared",
+        ),
+        conditional_source_norm_by_profile={
+            profile: _replacement_groups(
+                groups,
+                f"conditional_source_norm.profiles.{profile}",
+            )
+            for profile, groups in raw_conditional_profiles.items()
             if isinstance(profile, str)
         },
         source_aware_target_replacements=_replacement_groups(

@@ -1449,10 +1449,58 @@ class TestFallbackProbe(unittest.TestCase):
         t._engines[0].translate.assert_not_called()
 
     def test_background_probe_thread_restores_primary(self):
-        shared = translator_module._new_translator_shared_state()
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        shared.memory.record_direct_memory("이전 문장", "先前句子", False)
         shared.fallback.active_idx = 1
         stop = threading.Event()
         engines = [_mock_engine("primary", "你好"), _mock_engine("fallback", "fallback")]
+
+        original_cooldown = translator_module.cfg.nvidia.recovery_cooldown_sec
+        original_threshold = translator_module.cfg.nvidia.recovery_success_threshold
+        try:
+            object.__setattr__(translator_module.cfg.nvidia, "recovery_cooldown_sec", 0.0)
+            object.__setattr__(translator_module.cfg.nvidia, "recovery_success_threshold", 2)
+            with patch.object(translator_module, "_build_engine_chain", return_value=engines):
+                thread = translator_module._start_fallback_probe_thread(
+                    shared,
+                    stop,
+                    interval_seconds=0.01,
+                )
+                deadline = time.monotonic() + 1.0
+                while shared.fallback.active_idx != 0 and time.monotonic() < deadline:
+                    stop.wait(0.005)
+                stop.set()
+                thread.join(timeout=1)
+        finally:
+            object.__setattr__(translator_module.cfg.nvidia, "recovery_cooldown_sec", original_cooldown)
+            object.__setattr__(translator_module.cfg.nvidia, "recovery_success_threshold", original_threshold)
+
+        self.assertEqual(shared.fallback.active_idx, 0)
+        self.assertGreaterEqual(engines[0].translate.call_count, 2)
+        for call in engines[0].translate.call_args_list:
+            self.assertEqual(call.args[3], [("이전 문장", "先前句子")])
+        self.assertEqual(
+            [event["action"] for event in fallback_events],
+            ["probe_succeeded", "probe_succeeded", "circuit_closed"],
+        )
+        self.assertTrue(all(event["probe_history_items"] == 1 for event in fallback_events))
+
+    def test_background_probe_thread_respects_cooldown(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        shared.fallback.active_idx = 1
+        shared.fallback.primary_cooldown_until = time.monotonic() + 60.0
+        stop = threading.Event()
+        engines = [_mock_engine("primary", "雿末"), _mock_engine("fallback", "fallback")]
 
         with patch.object(translator_module, "_build_engine_chain", return_value=engines):
             thread = translator_module._start_fallback_probe_thread(
@@ -1460,14 +1508,58 @@ class TestFallbackProbe(unittest.TestCase):
                 stop,
                 interval_seconds=0.01,
             )
-            deadline = time.monotonic() + 1.0
-            while shared.fallback.active_idx != 0 and time.monotonic() < deadline:
-                stop.wait(0.005)
+            stop.wait(0.05)
             stop.set()
             thread.join(timeout=1)
 
-        self.assertEqual(shared.fallback.active_idx, 0)
-        engines[0].translate.assert_called()
+        self.assertEqual(shared.fallback.active_idx, 1)
+        engines[0].translate.assert_not_called()
+        self.assertTrue(fallback_events)
+        self.assertTrue(
+            all(event["action"] == "probe_cooldown_skipped" for event in fallback_events)
+        )
+
+    def test_live_hard_switch_emits_committed_circuit_open_event(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        engines = [_mock_engine("nvidia", None), _mock_engine("deepl", "哈囉")]
+
+        with _translation_mode("live"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ):
+            translator = Translator(shared_state=shared)
+            result = translator.translate("안녕하세요")
+
+        self.assertEqual(result, "哈囉")
+        self.assertEqual(shared.fallback.active_idx, 1)
+        self.assertEqual(len(fallback_events), 1)
+        event = fallback_events[0]
+        self.assertEqual(event["action"], "circuit_opened")
+        self.assertEqual(event["primary_engine"], "nvidia")
+        self.assertEqual(event["from_engine"], "nvidia")
+        self.assertEqual(event["active_engine"], "deepl")
+        self.assertEqual(event["failure_status"], "empty")
+        self.assertGreater(event["cooldown_remaining_ms"], 0)
+
+    def test_runtime_fallback_event_uses_dedicated_event_type(self):
+        with patch.object(translator_module.runtime_events, "emit") as emit:
+            translator_module._emit_fallback_runtime_event(
+                "probe_failed",
+                probe_status="empty",
+            )
+
+        emit.assert_called_once()
+        args, kwargs = emit.call_args
+        self.assertEqual(args, ("translation_fallback",))
+        self.assertEqual(kwargs["action"], "probe_failed")
+        self.assertEqual(kwargs["probe_status"], "empty")
+        self.assertEqual(kwargs["translation_mode"], translator_module.cfg.translation.translation_mode)
 
     def test_single_failure_uses_fallback_without_switching(self):
         with _translation_mode("clip"):
@@ -1854,6 +1946,40 @@ class TestTranslateOptimizations(unittest.TestCase):
             self.assertEqual(_apply_source_aware_corrections(source, target), target)
         with _active_translation_profile("mwmeu", use_profile=False):
             self.assertEqual(_apply_source_aware_corrections(source, target), target)
+
+    def test_lilpa_name_rendering_fixes_runtime_variants(self):
+        cases = (
+            ("릴파님 출발 감사합니다", "前輩、릴파님，出發感謝您！", "前輩、Lilpa님，出發感謝您！"),
+            ("릴파 사랑해", "莉爾帕，我愛你", "Lilpa，我愛你"),
+            ("릴파가 왔어요", "莉爾法來了", "Lilpa來了"),
+            ("릴파 선배님", "莉帕前輩", "Lilpa前輩"),
+        )
+
+        with _active_translation_profile("isegye_lilpa"):
+            for source, target, expected in cases:
+                with self.subTest(source=source, target=target):
+                    once = _apply_source_aware_corrections(source, target)
+                    twice = _apply_source_aware_corrections(source, once)
+                    self.assertEqual(once, expected)
+                    self.assertEqual(twice, once)
+
+    def test_lilpa_name_rendering_remains_source_and_profile_gated(self):
+        target = "莉爾法來了"
+        with _active_translation_profile("isegye_lilpa"):
+            self.assertEqual(
+                _apply_source_aware_corrections("오늘 방송 재미있다", target),
+                target,
+            )
+        with _active_translation_profile("url"):
+            self.assertEqual(
+                _apply_source_aware_corrections("릴파가 왔어요", target),
+                target,
+            )
+        with _active_translation_profile("isegye_lilpa", use_profile=False):
+            self.assertEqual(
+                _apply_source_aware_corrections("릴파가 왔어요", target),
+                target,
+            )
 
     def test_streamer_name_rendering_boundary_positive_cases(self):
         cases = (

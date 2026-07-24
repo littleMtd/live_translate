@@ -164,6 +164,77 @@ def _audio_event(**overrides):
     return base
 
 
+def _fallback_event(**overrides):
+    base = {
+        "event_type": "translation_fallback",
+        "run_id": "run-x",
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "action": "probe_succeeded",
+        "probe_status": "success",
+        "probe_elapsed_ms": 250,
+        "probe_history_items": 5,
+        "probe_success_streak": 1,
+        "state_applied": True,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_fallback_summary_reports_circuit_and_probe_transitions(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-circuit"),
+            _fallback_event(
+                run_id="run-circuit",
+                action="circuit_opened",
+                probe_status="",
+            ),
+            _fallback_event(
+                run_id="run-circuit",
+                action="probe_cooldown_skipped",
+                probe_status="cooldown_skipped",
+                probe_elapsed_ms=0,
+            ),
+            _fallback_event(run_id="run-circuit"),
+            _fallback_event(
+                run_id="run-circuit",
+                action="probe_failed",
+                probe_status="empty",
+                probe_elapsed_ms=5000,
+                probe_success_streak=0,
+            ),
+            _fallback_event(
+                run_id="run-circuit",
+                probe_success_streak=2,
+                probe_elapsed_ms=900,
+            ),
+            _fallback_event(
+                run_id="run-circuit",
+                action="circuit_closed",
+                probe_success_streak=2,
+                probe_elapsed_ms=900,
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+
+    self_summary = report["translation_fallback"]
+    assert report["translation_fallback_events"] == 6
+    assert self_summary["circuits_opened"] == 1
+    assert self_summary["circuits_closed"] == 1
+    assert self_summary["probe_attempts"] == 3
+    assert self_summary["successful_probes"] == 2
+    assert self_summary["failed_probes"] == 1
+    assert self_summary["cooldown_skips"] == 1
+    assert self_summary["max_probe_success_streak"] == 2
+    assert self_summary["probe_latency_ms"]["p50"] == 900
+    assert self_summary["probe_history_items"]["p95"] == 5
+    assert report["runs"][0]["translation_fallback"] == self_summary
+
+
 def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(

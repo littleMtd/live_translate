@@ -164,6 +164,11 @@ class TestConfig(unittest.TestCase):
         self.assertLessEqual(cfg.nvidia.timeout, 10)
         self.assertEqual(cfg.nvidia.live_timeout, 5)
 
+    def test_nvidia_circuit_breaker_defaults_are_conservative(self):
+        self.assertTrue(cfg.nvidia.circuit_breaker_enabled)
+        self.assertGreaterEqual(cfg.nvidia.recovery_cooldown_sec, 30.0)
+        self.assertGreaterEqual(cfg.nvidia.recovery_success_threshold, 2)
+
     def test_translation_stale_subtitle_fuse_is_enabled(self):
         self.assertGreater(cfg.translation.max_subtitle_output_delay_ms, 0)
         self.assertLessEqual(cfg.translation.max_subtitle_output_delay_ms, 30000)

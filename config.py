@@ -337,6 +337,11 @@ class _Nvidia:
     timeout: int = 10
     # Live override: fail fast so fallback engines can take over when NIM is degraded.
     live_timeout: int = 5
+    # Keep live requests on the fallback while NVIDIA is unstable. Recovery is
+    # proven by background probes, never by routing a user sentence to NVIDIA.
+    circuit_breaker_enabled: bool = True
+    recovery_cooldown_sec: float = 60.0
+    recovery_success_threshold: int = 2
 
 
 @dataclass(frozen=True)

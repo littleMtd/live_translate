@@ -92,11 +92,65 @@
         "하츠와 아래": "하치와레",
         "하츠와": "하치와레"
       },
+      "isegye_lilpa": {
+        "목소리를 건 패링": "목숨을 건 패링",
+        "반즈만 들었어": "반주만 들었어",
+        "매트리스 세계": "매트릭스 세계",
+        "연서살인마": "연쇄살인마",
+        "구독 피콘": "구독티콘",
+        "멀티퍼스": "멀티버스",
+        "소울라인": "소울라이크",
+        "다리키": "다래끼",
+        "저펠구": "적혈구",
+        "적혈부": "적혈구",
+        "늘파": "릴파"
+      },
       "url": {
+        "파스파토 2": "Passpartout 2: The Lost Artist",
+        "파스파 2, 2": "Passpartout 2: The Lost Artist",
+        "파스파 2": "Passpartout 2: The Lost Artist",
+        "파스파2": "Passpartout 2: The Lost Artist",
+        "마비녹이": "마비노기",
+        "손명은이랑": "솜먕이랑",
+        "손명이": "솜먕이",
+        "손명은": "솜먕은",
+        "손명": "솜먕",
+        "솜명은이랑": "솜먕이랑",
         "솜명이": "솜먕이",
         "솜명은": "솜먕은",
         "솜명": "솜먕"
       }
+    }
+  },
+  "conditional_source_norm": {
+    "shared": [],
+    "profiles": {
+      "url": [
+        {
+          "source_terms": [
+            "멤버"
+          ],
+          "replacements": [
+            {
+              "wrong": "URL 멤버",
+              "right": "UR:L 멤버"
+            }
+          ]
+        },
+        {
+          "source_terms": [
+            "로아",
+            "전파"
+          ],
+          "match": "all",
+          "replacements": [
+            {
+              "wrong": "URL 로아",
+              "right": "UR:L 로스트아크"
+            }
+          ]
+        }
+      ]
     }
   },
   "source_aware_target_replacements": [
@@ -790,7 +844,122 @@
         ]
       }
     ],
+    "isegye_lilpa": [
+      {
+        "source_terms": [
+          "사륜안"
+        ],
+        "replacements": [
+          {
+            "wrong": "四眼",
+            "right": "寫輪眼"
+          },
+          {
+            "wrong": "写轮眼",
+            "right": "寫輪眼"
+          }
+        ]
+      }
+    ],
     "url": [
+      {
+        "source_terms": [
+          "UR:L 멤버",
+          "URL 멤버"
+        ],
+        "replacements": [
+          {
+            "wrong": "URL 成員",
+            "right": "UR:L 成員"
+          },
+          {
+            "wrong": "URL成員",
+            "right": "UR:L成員"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "로스트아크",
+          "로아"
+        ],
+        "replacements": [
+          {
+            "wrong": "《羅亞》",
+            "right": "《Lost Ark》"
+          },
+          {
+            "wrong": "《罗亚》",
+            "right": "《Lost Ark》"
+          },
+          {
+            "wrong": "羅亞",
+            "right": "Lost Ark"
+          },
+          {
+            "wrong": "罗亚",
+            "right": "Lost Ark"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "마비노기 영웅전",
+          "마비녹이 영웅전"
+        ],
+        "replacements": [
+          {
+            "wrong": "馬比諾基英雄戰",
+            "right": "《新瑪奇英雄傳》"
+          },
+          {
+            "wrong": "马比诺基英雄战",
+            "right": "《新瑪奇英雄傳》"
+          },
+          {
+            "wrong": "Mabinogi Heroes",
+            "right": "《新瑪奇英雄傳》"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "마비노기",
+          "마비녹이"
+        ],
+        "replacements": [
+          {
+            "wrong": "馬比諾基",
+            "right": "《新瑪奇》"
+          },
+          {
+            "wrong": "马比诺基",
+            "right": "《新瑪奇》"
+          },
+          {
+            "wrong": "Mabinogi",
+            "right": "《新瑪奇》"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "Passpartout 2: The Lost Artist",
+          "파스파토 2",
+          "파스파 2",
+          "파스파2"
+        ],
+        "replacements": [
+          {
+            "wrong": "《Paspa 2》",
+            "right": "《Passpartout 2: The Lost Artist》"
+          },
+          {
+            "wrong": "Paspa 2",
+            "right": "Passpartout 2: The Lost Artist"
+          }
+        ]
+      },
       {
         "source_terms": [
           "마냥님"
@@ -919,13 +1088,17 @@
       "scope": "url",
       "source_aliases": [
         "모카",
+        "목화",
         "Moka"
       ],
       "wrong_forms": [
         "모카",
         "摩卡",
         "莫卡",
-        "模卡"
+        "模卡",
+        "木華",
+        "木华",
+        "木花"
       ],
       "canonical": "모카"
     },
@@ -951,16 +1124,33 @@
       "scope": "url",
       "source_aliases": [
         "솜먕",
+        "솜먕이",
+        "솜먕은",
         "솜명",
+        "솜명이",
+        "솜명은",
+        "손명",
+        "손명이",
+        "손명은",
         "Sommyang"
       ],
       "wrong_forms": [
+        "솜먕이",
+        "솜먕은",
         "솜먕",
+        "솜명이",
+        "솜명은",
         "솜명",
+        "손명이",
+        "손명은",
+        "손명",
         "綿明",
         "绵明",
         "棉明",
-        "宋明"
+        "宋明",
+        "手明",
+        "孫明",
+        "孙明"
       ],
       "canonical": "솜먕"
     },
@@ -1165,6 +1355,64 @@
         "高世久"
       ],
       "canonical": "Gosegu"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "릴파",
+        "릴파님",
+        "늘파님",
+        "늘파",
+        "Lilpa"
+      ],
+      "wrong_forms": [
+        "莉爾帕小姐",
+        "莉尔帕小姐",
+        "莉爾帕先生",
+        "莉尔帕先生",
+        "莉帕小姐",
+        "莉帕先生",
+        "Rilpa 小姐",
+        "Rilpa小姐",
+        "Rilpa 先生",
+        "Rilpa先生",
+        "Neulpa 小姐",
+        "Neulpa小姐",
+        "Neulpa 先生",
+        "Neulpa先生",
+        "Lilpa 小姐",
+        "Lilpa小姐",
+        "Lilpa 先生",
+        "Lilpa先生",
+        "릴파",
+        "莉爾帕",
+        "莉尔帕",
+        "莉爾法",
+        "莉尔法",
+        "莉帕",
+        "Rilpa",
+        "瑞爾帕",
+        "瑞尔帕",
+        "Neulpa",
+        "Lilpa"
+      ],
+      "canonical": "Lilpa"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "이파리",
+        "이파리들"
+      ],
+      "wrong_forms": [
+        "伊帕里",
+        "這帕里",
+        "这帕里",
+        "這파리",
+        "这파리",
+        "이파리"
+      ],
+      "canonical": "이파리"
     },
     {
       "scope": "mwmeu",

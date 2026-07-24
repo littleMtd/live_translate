@@ -106,7 +106,20 @@ Default chain (`config.py`):
 | 2 | Gemini | `gemini-2.5-flash` | `GEMINI_API_KEY` |
 | 3 | Google Translate v2 | `google-translate-v2` | `GOOGLE_TRANSLATE_API_KEY` |
 
-The translator tracks `active_idx` across failures and probes engines[0] every `_FALLBACK_PROBE_EVERY` calls to recover from transient primary outages.
+The translator tracks `active_idx` across failures. In live NVIDIA mode, a
+primary failure switches user traffic to the fallback and opens a circuit
+breaker: background probes wait through `cfg.nvidia.recovery_cooldown_sec`, and
+NVIDIA is restored only after `cfg.nvidia.recovery_success_threshold`
+consecutive valid probe responses. A failed, empty, or rejected probe resets
+the streak and restarts the cooldown. Recovery probes copy the same recent
+translation history used by production requests, so a short probe exercises a
+representative message/context payload without putting user text on the probe
+path. Circuit transitions and probe outcomes are persisted as
+`translation_fallback` runtime events (`circuit_opened`,
+`fallback_advanced`, `probe_cooldown_skipped`, `probe_succeeded`,
+`probe_failed`, and `circuit_closed`). Set
+`cfg.nvidia.circuit_breaker_enabled = False` to restore the legacy
+single-success recovery behavior.
 
 To add a new engine: see the step-by-step guide in `config.py` (`_Translation.engine_chain` comment block).
 
