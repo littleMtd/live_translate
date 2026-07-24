@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import difflib
 import hashlib
 import json
@@ -16,8 +17,17 @@ import soundfile as sf
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_AUDIO_ROOT = DEFAULT_LOG_DIR / "audio_dump"
-DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "sensevoice_historical_scout_20260711.json"
+DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "sensevoice_selective_replay_20260725.json"
 TAG_RE = re.compile(r"<\|[^>]*\|>")
+LOW_LOGPROB_TRIGGER = -0.7
+FORCED_CUT_REASONS = {
+    "hard_max",
+    "soft_max",
+    "soft_max_pause",
+    "forced_blob",
+    "forced_prefix",
+    "forced_gap_prefix",
+}
 
 
 def _events(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
@@ -32,12 +42,16 @@ def _events(paths: Iterable[Path]) -> Iterable[dict[str, Any]]:
                     yield event
 
 
-def _risk(event: dict[str, Any]) -> tuple[int, float, str]:
-    severity = str(event.get("quality_severity") or "ok")
-    rank = {"bad": 3, "warn": 2, "ok": 1}.get(severity, 0)
+def _risk(event: dict[str, Any], triggers: list[str]) -> tuple[int, float, str]:
+    trigger_rank = {
+        "compression_ratio": 4,
+        "forced_cut": 3,
+        "low_logprob": 2,
+    }
+    rank = max((trigger_rank.get(trigger, 0) for trigger in triggers), default=0)
     avg_logprob = event.get("avg_logprob")
     confidence_risk = -float(avg_logprob) if isinstance(avg_logprob, (int, float)) else 0.0
-    return rank + int(bool(event.get("forced"))), confidence_risk, str(event.get("created_at") or "")
+    return rank, confidence_risk, str(event.get("created_at") or "")
 
 
 def _display_path(path: Path) -> str:
@@ -53,27 +67,120 @@ def select_candidates(
     audio_root: Path,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Select scannable, one-utterance historical cases without inventing alignment."""
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for event in events:
+    """Select risky original WAVs and compare text only when alignment is structural.
+
+    STT runtime events intentionally do not persist transcript text. A translation
+    event may contain a splitter prefix or residual rather than the exact transcript
+    for one WAV, even when its terminal utterance id matches. Therefore source text
+    is admitted as a Groq comparison only for a single-source/no-evidence event whose
+    raw text length equals the STT event's recorded text length.
+    """
+    all_events = list(events)
+    related_translations: dict[tuple[str, str], list[dict[str, Any]]] = collections.defaultdict(list)
+    forced_sentence_reasons: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
+    for event in all_events:
         utterance_ids = event.get("source_utterance_ids")
         if (
-            event.get("event_type") != "translation"
-            or event.get("status") != "success"
-            or event.get("incomplete")
-            or not isinstance(utterance_ids, list)
-            or len(utterance_ids) != 1
-            or int(event.get("source_count") or 1) != 1
-            or not str(event.get("source_text") or "").strip()
+            event.get("event_type") == "translation"
+            and event.get("status") == "success"
+            and isinstance(utterance_ids, list)
+        ):
+            run_id = str(event.get("run_id") or "")
+            for utterance_id in utterance_ids:
+                related_translations[(run_id, str(utterance_id or ""))].append(event)
+        if event.get("event_type") == "sentence" and (
+            bool(event.get("forced"))
+            or str(event.get("cut_reason") or "") in FORCED_CUT_REASONS
+            or str(event.get("cut_reason") or "").startswith("forced")
+        ):
+            run_id = str(event.get("run_id") or "")
+            sentence_ids = utterance_ids
+            if not isinstance(sentence_ids, list):
+                sentence_ids = [event.get("utterance_id")]
+            for utterance_id in sentence_ids:
+                if utterance_id:
+                    forced_sentence_reasons[(run_id, str(utterance_id))].add(
+                        str(event.get("cut_reason") or "forced")
+                    )
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for event in all_events:
+        if (
+            event.get("event_type") != "stt"
+            or event.get("status") not in {"success", "filtered"}
+            or event.get("request_sent") is False
         ):
             continue
         run_id = str(event.get("run_id") or "")
-        utterance_id = str(utterance_ids[0] or "")
+        utterance_id = str(event.get("utterance_id") or "")
         key = run_id, utterance_id
         audio_path = audio_root / run_id / f"{utterance_id}.wav"
         if not run_id or not utterance_id or key in seen or not audio_path.is_file():
             continue
+
+        triggers: list[str] = []
+        avg_logprob = event.get("avg_logprob")
+        if isinstance(avg_logprob, (int, float)) and float(avg_logprob) <= LOW_LOGPROB_TRIGGER:
+            triggers.append("low_logprob")
+        if str(event.get("reason") or "") == "compression_ratio":
+            triggers.append("compression_ratio")
+        cut_reason = str(event.get("vad_cut_reason") or "")
+        related = related_translations.get(key, [])
+        translation = next(
+            (
+                row
+                for row in related
+                if row.get("source_utterance_ids") == [utterance_id]
+                and int(row.get("source_count") or 1) == 1
+                and "evidence_source_utterance_ids" in row
+                and isinstance(row.get("evidence_source_utterance_ids"), list)
+                and not row["evidence_source_utterance_ids"]
+                and str(row.get("source_text") or "").strip()
+            ),
+            None,
+        )
+        translation_cut_reason = str((translation or {}).get("cut_reason") or "")
+        if (
+            cut_reason in FORCED_CUT_REASONS
+            or cut_reason.startswith("forced")
+            or key in forced_sentence_reasons
+            or bool((translation or {}).get("forced"))
+            or translation_cut_reason in FORCED_CUT_REASONS
+            or translation_cut_reason.startswith("forced")
+        ):
+            triggers.append("forced_cut")
+        if not triggers:
+            continue
+
+        source_text = str((translation or {}).get("source_text") or "")
+        stt_text_len = event.get("text_len")
+        aligned = (
+            bool(source_text)
+            and isinstance(stt_text_len, int)
+            and len(source_text) == stt_text_len
+        )
+        if translation is None and any(
+            "evidence_source_utterance_ids" not in row for row in related
+        ):
+            alignment = "evidence_attribution_unavailable"
+        elif translation is None and any(
+            isinstance(row.get("evidence_source_utterance_ids"), list)
+            and row["evidence_source_utterance_ids"]
+            for row in related
+        ):
+            alignment = "evidence_bearing_translation"
+        elif translation is None and related:
+            alignment = "multi_source_or_ineligible_translation"
+        elif translation is None:
+            alignment = "translation_unavailable"
+        elif not isinstance(stt_text_len, int):
+            alignment = "stt_text_length_unavailable"
+        elif len(source_text) != stt_text_len:
+            alignment = "text_length_mismatch"
+        else:
+            alignment = "single_source_length_match"
+
         seen.add(key)
         candidates.append(
             {
@@ -81,13 +188,19 @@ def select_candidates(
                 "utterance_id": utterance_id,
                 "created_at": event.get("created_at"),
                 "audio_path": _display_path(audio_path),
-                "groq_text": str(event.get("source_text") or ""),
+                "trigger_reasons": triggers,
+                "stt_status": event.get("status"),
+                "stt_reason": event.get("reason"),
+                "stt_text_len": stt_text_len,
+                "vad_cut_reason": cut_reason,
+                "sentence_forced_cut_reasons": sorted(forced_sentence_reasons.get(key, set())),
+                "groq_text": source_text if aligned else "",
+                "groq_text_alignment": alignment,
                 "avg_logprob": event.get("avg_logprob"),
                 "no_speech_prob": event.get("no_speech_prob"),
-                "forced": bool(event.get("forced")),
-                "quality_severity": event.get("quality_severity"),
-                "quality_flags": event.get("quality_flags") or [],
-                "risk": _risk(event),
+                "forced": "forced_cut" in triggers,
+                "profile_id": event.get("profile_id"),
+                "risk": _risk(event, triggers),
             }
         )
     candidates.sort(key=lambda row: row["risk"], reverse=True)
@@ -126,9 +239,14 @@ def run_scout(
         raw = generate(audio)
         latency_ms = round((time.monotonic() - started) * 1000, 1)
         sensevoice = TAG_RE.sub("", raw).strip()
-        similarity = difflib.SequenceMatcher(
-            None, _normalized(candidate["groq_text"]), _normalized(sensevoice)
-        ).ratio()
+        groq_text = str(candidate.get("groq_text") or "")
+        similarity = (
+            difflib.SequenceMatcher(
+                None, _normalized(groq_text), _normalized(sensevoice)
+            ).ratio()
+            if groq_text
+            else None
+        )
         results.append(
             {
                 **candidate,
@@ -136,8 +254,8 @@ def run_scout(
                 "audio_seconds": round(len(audio) / rate, 3),
                 "sensevoice_text": sensevoice,
                 "sensevoice_raw": raw,
-                "similarity": round(similarity, 3),
-                "disagreement": round(1.0 - similarity, 3),
+                "similarity": round(similarity, 3) if similarity is not None else None,
+                "disagreement": round(1.0 - similarity, 3) if similarity is not None else None,
                 "latency_ms": latency_ms,
             }
         )
@@ -145,12 +263,28 @@ def run_scout(
 
 
 def build_report(candidates: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[str, Any]:
-    disagreements = [float(row["disagreement"]) for row in results]
+    disagreements = [
+        float(row["disagreement"])
+        for row in results
+        if isinstance(row.get("disagreement"), (int, float))
+    ]
+    triggers = collections.Counter(
+        trigger
+        for candidate in candidates
+        for trigger in candidate.get("trigger_reasons", [])
+    )
+    alignments = collections.Counter(
+        str(candidate.get("groq_text_alignment") or "unknown")
+        for candidate in candidates
+    )
     return {
-        "schema": 1,
-        "method": "offline_historical_single_utterance_scout",
+        "schema": 2,
+        "method": "offline_selective_secondary_stt_replay",
         "candidate_count": len(candidates),
         "executed_count": len(results),
+        "comparison_count": len(disagreements),
+        "candidate_triggers": dict(sorted(triggers.items())),
+        "groq_text_alignment": dict(sorted(alignments.items())),
         "mean_disagreement": round(sum(disagreements) / len(disagreements), 3) if disagreements else None,
         "high_disagreement_ge_0_5": sum(value >= 0.5 for value in disagreements),
         "ground_truth_count": 0,
@@ -158,8 +292,13 @@ def build_report(candidates: list[dict[str, Any]], results: list[dict[str, Any]]
         "measured_false_corrections": None,
         "live_shadow_decision": "no-go",
         "decision_reason": (
-            "Engine disagreement is a candidate-generation signal, not correctness. "
-            "No exact heard-source ground truth exists for these historical WAVs."
+            "Replay uses original WAV evidence, but engine disagreement and non-empty "
+            "filtered-case output are not correctness. No exact heard-source ground "
+            "truth exists for these historical WAVs."
+        ),
+        "alignment_rule": (
+            "Groq comparison text is admitted only when a successful single-source, "
+            "no-evidence translation has the same raw length as the STT event."
         ),
         "candidates": candidates,
         "results": results,
