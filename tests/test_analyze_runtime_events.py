@@ -114,6 +114,115 @@ def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
     assert len(report["flagged_samples"]) == 1
 
 
+def test_analyzer_summarizes_sentence_hold_shadow_opportunities(tmp_path):
+    path = tmp_path / "runtime_events_20260725.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "event_type": "sentence_hold_shadow",
+                "run_id": "run-x",
+                "phase": "candidate",
+                "shadow_id": "sentence-hold-1",
+                "signals": ["unfinished_connector"],
+                "disposition": "emitted",
+                "cut_reason": "forced_blob",
+                "candidate_text": "게임 하고",
+            },
+            {
+                "event_type": "sentence_hold_shadow",
+                "run_id": "run-x",
+                "phase": "outcome",
+                "shadow_id": "sentence-hold-1",
+                "signals": ["unfinished_connector"],
+                "observed_next_chunk": True,
+                "next_chunk_delay_ms": 420,
+                "within_300ms": False,
+                "within_500ms": True,
+                "raw_continuation_heuristic": True,
+                "useful_merge_heuristic": True,
+                "outcome_reason": "next_stt_chunk",
+                "next_chunk_text": "있어요",
+            },
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["sentence_hold_shadow"]
+
+    assert summary["candidate_count"] == 1
+    assert summary["outcome_count"] == 1
+    assert summary["one_chunk_useful_rate"] == 1.0
+    assert summary["useful_within_300ms_rate"] == 0.0
+    assert summary["useful_within_500ms_rate"] == 1.0
+    assert summary["next_chunk_delay_ms"]["p50"] == 420
+    assert summary["by_signal"] == [
+        {"signal": "unfinished_connector", "count": 1}
+    ]
+    assert summary["actionable_emitted"]["useful_within_500ms_rate"] == 1.0
+
+
+def test_sentence_hold_summary_scopes_ids_and_excludes_bad_pairs_from_rates(tmp_path):
+    path = tmp_path / "runtime_events_20260725.jsonl"
+
+    def candidate(run_id, disposition="emitted"):
+        return {
+            "event_type": "sentence_hold_shadow",
+            "run_id": run_id,
+            "phase": "candidate",
+            "shadow_id": "sentence-hold-1",
+            "signals": ["unfinished_connector"],
+            "disposition": disposition,
+            "cut_reason": "forced_blob",
+        }
+
+    def outcome(run_id):
+        return {
+            "event_type": "sentence_hold_shadow",
+            "run_id": run_id,
+            "phase": "outcome",
+            "shadow_id": "sentence-hold-1",
+            "signals": ["unfinished_connector"],
+            "observed_next_chunk": True,
+            "next_chunk_delay_ms": 200,
+            "within_300ms": True,
+            "within_500ms": True,
+            "raw_continuation_heuristic": True,
+            "useful_merge_heuristic": True,
+            "outcome_reason": "next_stt_chunk",
+        }
+
+    _write_jsonl(
+        path,
+        [
+            candidate("run-a"),
+            outcome("run-a"),
+            outcome("run-a"),  # duplicate must not multiply the numerator
+            candidate("run-b", "buffered"),
+            candidate("run-b", "buffered"),  # duplicate candidate
+            outcome("run-b"),
+            outcome("run-c"),  # orphan outcome
+            candidate("run-d"),  # unresolved candidate
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["sentence_hold_shadow"]
+
+    assert summary["candidate_count"] == 3
+    assert summary["candidate_event_count"] == 4
+    assert summary["outcome_event_count"] == 4
+    assert summary["matched_outcome_count"] == 2
+    assert summary["unresolved_count"] == 1
+    assert summary["orphan_outcome_count"] == 1
+    assert summary["duplicate_candidate_count"] == 1
+    assert summary["duplicate_outcome_count"] == 1
+    assert summary["one_chunk_useful_count"] == 2
+    assert summary["one_chunk_useful_rate"] == 0.6667
+    assert summary["actionable_emitted"]["candidate_count"] == 2
+    assert summary["actionable_emitted"]["useful_within_500ms_rate"] == 0.5
+    assert summary["already_buffered"]["candidate_count"] == 1
+    assert summary["already_buffered"]["useful_within_500ms_rate"] == 1.0
+
+
 def _translation_event(**overrides):
     base = {
         "event_type": "translation",

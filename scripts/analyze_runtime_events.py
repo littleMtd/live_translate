@@ -92,6 +92,11 @@ def analyze_runtime_events(
     fallback_events = [event for event in events if event.get("event_type") == "translation_fallback"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
     audio_events = [event for event in events if event.get("event_type") == "audio"]
+    sentence_hold_shadow_events = [
+        event
+        for event in events
+        if event.get("event_type") == "sentence_hold_shadow"
+    ]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -124,6 +129,7 @@ def analyze_runtime_events(
         "translation_fallback_events": len(fallback_events),
         "stt_events": len(stt_events),
         "audio_events": len(audio_events),
+        "sentence_hold_shadow_events": len(sentence_hold_shadow_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
         "status_breakdown": _status_breakdown(translation_events),
@@ -145,6 +151,10 @@ def analyze_runtime_events(
         ],
         "audio_summary": _audio_summary(audio_events),
         "stt_summary": _stt_summary(stt_events),
+        "sentence_hold_shadow": _sentence_hold_shadow_summary(
+            sentence_hold_shadow_events,
+            top_n,
+        ),
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
@@ -723,6 +733,204 @@ def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _sentence_hold_shadow_summary(
+    events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    candidate_events = [event for event in events if event.get("phase") == "candidate"]
+    outcome_events = [event for event in events if event.get("phase") == "outcome"]
+
+    def key(event: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(event.get("run_id") or ""),
+            str(event.get("shadow_id") or ""),
+        )
+
+    candidates_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in candidate_events:
+        if key(event)[1]:
+            candidates_by_key.setdefault(key(event), []).append(event)
+    outcomes_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in outcome_events:
+        if key(event)[1]:
+            outcomes_by_key.setdefault(key(event), []).append(event)
+
+    # Keep one canonical event per key for rates. Duplicates and orphans are
+    # exposed separately rather than silently multiplying opportunity counts.
+    candidates = [group[0] for group in candidates_by_key.values()]
+    matched_outcomes = {
+        event_key: outcomes_by_key[event_key][0]
+        for event_key in candidates_by_key
+        if event_key in outcomes_by_key
+    }
+    outcomes = list(matched_outcomes.values())
+    observed = [event for event in outcomes if event.get("observed_next_chunk") is True]
+    raw_continuations = [
+        event
+        for event in observed
+        if event.get("raw_continuation_heuristic") is True
+    ]
+    useful = [event for event in observed if event.get("useful_merge_heuristic") is True]
+    useful_300 = [event for event in useful if event.get("within_300ms") is True]
+    useful_500 = [event for event in useful if event.get("within_500ms") is True]
+    candidate_count = len(candidates)
+
+    def rate(count: int) -> float:
+        return round(count / candidate_count, 4) if candidate_count else 0.0
+
+    signal_counts = Counter(
+        str(signal)
+        for event in candidates
+        for signal in event.get("signals", [])
+    )
+    matched_ending_counts = Counter(
+        str(event.get("matched_ending") or "")
+        for event in candidates
+        if event.get("matched_ending")
+    )
+    useful_500_keys = {
+        key(event)
+        for event in useful_500
+    }
+    signal_useful_500 = Counter(
+        str(signal)
+        for event in candidates
+        if key(event) in useful_500_keys
+        for signal in event.get("signals", [])
+    )
+
+    def opportunity_for(disposition: str) -> dict[str, Any]:
+        scoped_candidates = [
+            event
+            for event in candidates
+            if str(event.get("disposition") or "") == disposition
+        ]
+        scoped_keys = {key(event) for event in scoped_candidates}
+        scoped_outcomes = [
+            outcome
+            for event_key, outcome in matched_outcomes.items()
+            if event_key in scoped_keys
+        ]
+        scoped_useful = [
+            outcome
+            for outcome in scoped_outcomes
+            if outcome.get("observed_next_chunk") is True
+            and outcome.get("useful_merge_heuristic") is True
+        ]
+        scoped_raw = [
+            outcome
+            for outcome in scoped_outcomes
+            if outcome.get("observed_next_chunk") is True
+            and outcome.get("raw_continuation_heuristic") is True
+        ]
+        scoped_300 = [
+            outcome for outcome in scoped_useful if outcome.get("within_300ms") is True
+        ]
+        scoped_500 = [
+            outcome for outcome in scoped_useful if outcome.get("within_500ms") is True
+        ]
+        denominator = len(scoped_candidates)
+
+        def scoped_rate(count: int) -> float:
+            return round(count / denominator, 4) if denominator else 0.0
+
+        return {
+            "candidate_count": denominator,
+            "matched_outcome_count": len(scoped_outcomes),
+            "raw_continuation_count": len(scoped_raw),
+            "raw_continuation_rate": scoped_rate(len(scoped_raw)),
+            "one_chunk_useful_count": len(scoped_useful),
+            "one_chunk_useful_rate": scoped_rate(len(scoped_useful)),
+            "useful_within_300ms_count": len(scoped_300),
+            "useful_within_300ms_rate": scoped_rate(len(scoped_300)),
+            "useful_within_500ms_count": len(scoped_500),
+            "useful_within_500ms_rate": scoped_rate(len(scoped_500)),
+        }
+
+    samples = []
+    for candidate in candidates[:top_n]:
+        event_key = key(candidate)
+        shadow_id = event_key[1]
+        outcome = matched_outcomes.get(event_key, {})
+        samples.append(
+            {
+                "run_id": event_key[0],
+                "shadow_id": shadow_id,
+                "signals": candidate.get("signals", []),
+                "disposition": candidate.get("disposition"),
+                "cut_reason": candidate.get("cut_reason"),
+                "candidate_text": _short(str(candidate.get("candidate_text") or "")),
+                "observed_next_chunk": outcome.get("observed_next_chunk"),
+                "next_chunk_delay_ms": outcome.get("next_chunk_delay_ms"),
+                "within_300ms": outcome.get("within_300ms"),
+                "within_500ms": outcome.get("within_500ms"),
+                "raw_continuation_heuristic": outcome.get(
+                    "raw_continuation_heuristic"
+                ),
+                "useful_merge_heuristic": outcome.get("useful_merge_heuristic"),
+                "next_chunk_text": _short(str(outcome.get("next_chunk_text") or "")),
+            }
+        )
+
+    return {
+        "candidate_count": candidate_count,
+        "candidate_event_count": len(candidate_events),
+        "outcome_event_count": len(outcome_events),
+        "outcome_count": len(outcomes),
+        "matched_outcome_count": len(outcomes),
+        "unresolved_count": sum(
+            event_key not in outcomes_by_key for event_key in candidates_by_key
+        ),
+        "orphan_outcome_count": sum(
+            len(group)
+            for event_key, group in outcomes_by_key.items()
+            if event_key not in candidates_by_key
+        ),
+        "duplicate_candidate_count": sum(
+            max(0, len(group) - 1) for group in candidates_by_key.values()
+        ),
+        "duplicate_outcome_count": sum(
+            max(0, len(group) - 1)
+            for event_key, group in outcomes_by_key.items()
+            if event_key in candidates_by_key
+        ),
+        "observed_next_chunk_count": len(observed),
+        "raw_continuation_count": len(raw_continuations),
+        "raw_continuation_rate": rate(len(raw_continuations)),
+        "one_chunk_useful_count": len(useful),
+        "one_chunk_useful_rate": rate(len(useful)),
+        "useful_within_300ms_count": len(useful_300),
+        "useful_within_300ms_rate": rate(len(useful_300)),
+        "useful_within_500ms_count": len(useful_500),
+        "useful_within_500ms_rate": rate(len(useful_500)),
+        "next_chunk_delay_ms": _latency_summary(
+            [
+                delay
+                for event in observed
+                if (delay := _float_or_none(event.get("next_chunk_delay_ms"))) is not None
+            ]
+        ),
+        "by_signal": [
+            {"signal": signal, "count": count}
+            for signal, count in signal_counts.most_common()
+        ],
+        "by_matched_ending": [
+            {"ending": ending, "count": count}
+            for ending, count in matched_ending_counts.most_common()
+        ],
+        "useful_within_500ms_by_signal": [
+            {"signal": signal, "count": signal_useful_500[signal]}
+            for signal, _count in signal_counts.most_common()
+        ],
+        "by_disposition": _count_by(candidates, "disposition"),
+        "actionable_emitted": opportunity_for("emitted"),
+        "already_buffered": opportunity_for("buffered"),
+        "by_cut_reason": _count_by(candidates, "cut_reason"),
+        "by_outcome_reason": _count_by(outcomes, "outcome_reason"),
+        "samples": samples,
+    }
+
+
 def _audio_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total": len(events),
@@ -810,6 +1018,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"API diagnostics: {report['api_diagnostics']}")
     print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Translation fallback: {report['translation_fallback']}")
+    print(f"Sentence hold shadow: {report['sentence_hold_shadow']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
     print(
         "STT summary: "

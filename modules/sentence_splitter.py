@@ -7,8 +7,18 @@ from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
 from utils.queue_utils import put_drop_oldest
 from utils.runtime_events import runtime_events
-from modules.pipeline_events import source_confidence_summary, transcription_to_sentence
+from modules.pipeline_events import (
+    TranscriptionEvent,
+    source_confidence_summary,
+    transcription_text,
+    transcription_to_sentence,
+)
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
+from modules.sentence_hold_shadow import (
+    UnfinishedTail,
+    analyze_unfinished_tail,
+    evaluate_next_chunk,
+)
 
 log = get_logger("sentence_splitter")
 
@@ -108,8 +118,104 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             getattr(cfg.splitter, "pending_incomplete_timeout_seconds", 8.0),
             8.0,
         )
+        shadow_sequence = 0
+        active_shadow: dict[str, object] | None = None
 
-        def emit_cut(cut: SentenceCut) -> None:
+        def finish_shadow_without_chunk(reason: str, now: float) -> None:
+            nonlocal active_shadow
+            if active_shadow is None:
+                return
+            started = float(active_shadow["started"])
+            runtime_events.emit(
+                "sentence_hold_shadow",
+                phase="outcome",
+                shadow_id=active_shadow["shadow_id"],
+                signals=active_shadow["signals"],
+                observed_next_chunk=False,
+                outcome_reason=reason,
+                observed_wait_ms=round(max(0.0, now - started) * 1000, 2),
+                within_300ms=False,
+                within_500ms=False,
+                raw_continuation_heuristic=False,
+                structural_resolution=False,
+                useful_merge_heuristic=False,
+            )
+            active_shadow = None
+
+        def start_shadow(cut: SentenceCut, now: float, disposition: str) -> None:
+            nonlocal shadow_sequence, active_shadow
+            analysis = analyze_unfinished_tail(cut.text, forced=cut.forced)
+            if not analysis.signals:
+                return
+            if active_shadow is not None:
+                finish_shadow_without_chunk("superseded", now)
+            shadow_sequence += 1
+            shadow_id = f"sentence-hold-{shadow_sequence}"
+            active_shadow = {
+                "shadow_id": shadow_id,
+                "started": now,
+                "text": cut.text,
+                "analysis": analysis,
+                "signals": list(analysis.signals),
+            }
+            source = cut.source
+            runtime_events.emit(
+                "sentence_hold_shadow",
+                phase="candidate",
+                shadow_id=shadow_id,
+                disposition=disposition,
+                utterance_id=source.utterance_id if source else "",
+                profile_id=source.profile_id if source else "",
+                cut_reason=cut.cut_reason,
+                incomplete=cut.incomplete,
+                forced=cut.forced,
+                signals=list(analysis.signals),
+                matched_ending=analysis.matched_ending,
+                unclosed_delimiters=list(analysis.unclosed_delimiters),
+                candidate_text=cut.text,
+                candidate_text_len=len(cut.text),
+                source_utterance_ids=list(cut.source_utterance_ids),
+            )
+
+        def observe_next_chunk(
+            token: str | TranscriptionEvent,
+            now: float,
+        ) -> dict[str, object] | None:
+            nonlocal active_shadow
+            if active_shadow is None:
+                return None
+            started = float(active_shadow["started"])
+            delay_ms = round(max(0.0, now - started) * 1000, 2)
+            analysis = active_shadow["analysis"]
+            assert isinstance(analysis, UnfinishedTail)
+            evaluation = evaluate_next_chunk(
+                str(active_shadow["text"]),
+                transcription_text(token),
+                analysis,
+            )
+            payload: dict[str, object] = {
+                "phase": "outcome",
+                "shadow_id": active_shadow["shadow_id"],
+                "signals": active_shadow["signals"],
+                "observed_next_chunk": True,
+                "outcome_reason": "next_stt_chunk",
+                "next_chunk_delay_ms": delay_ms,
+                "within_300ms": delay_ms <= 300,
+                "within_500ms": delay_ms <= 500,
+                "next_chunk_utterance_id": (
+                    token.utterance_id if isinstance(token, TranscriptionEvent) else ""
+                ),
+                **evaluation,
+            }
+            active_shadow = None
+            return payload
+
+        def emit_cut(
+            cut: SentenceCut,
+            *,
+            track_shadow: bool = True,
+            shadow_started_at: float | None = None,
+        ) -> None:
             if cut.forced:
                 log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
             log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
@@ -150,6 +256,12 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             )
             metrics.increment("sentence.emitted")
             put_drop_oldest(sentence_queue, event, log, "sentence_queue")
+            if track_shadow:
+                start_shadow(
+                    cut,
+                    time.monotonic() if shadow_started_at is None else shadow_started_at,
+                    "emitted",
+                )
             metrics.log_summary_if_due()
 
         def buffer_incomplete(cut: SentenceCut, now: float) -> None:
@@ -158,6 +270,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             pending_incomplete_since = now
             metrics.increment("sentence.incomplete_buffered")
             log.info("Sentence buffered for next chunk: %s", cut.text)
+            start_shadow(cut, now, "buffered")
 
         def clear_pending() -> None:
             nonlocal pending_incomplete, pending_incomplete_since
@@ -175,12 +288,14 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 return
             metrics.increment("sentence.incomplete_timeout")
             log.info("Sentence pending incomplete timed out: %s", pending_incomplete.text)
-            emit_cut(pending_incomplete)
+            finish_shadow_without_chunk("pending_incomplete_timeout", now)
+            emit_cut(pending_incomplete, track_shadow=False)
             clear_pending()
 
         while not stop_event.is_set():
             if pause_event and pause_event.is_set():
                 buffer.reset()
+                finish_shadow_without_chunk("pipeline_paused", time.monotonic())
                 clear_pending()
                 wait_while_paused(stop_event, pause_event)
                 # Drain tokens that accumulated while paused so they don't
@@ -197,13 +312,20 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
 
             # Wait up to 100 ms for the first new token, then drain the rest immediately.
             # This single blocking call replaces the two time.sleep(0.1) paths below.
+            deferred_shadow_outcomes: list[dict[str, object]] = []
             try:
                 token = text_queue.get(timeout=0.1)
-                buffer.push(token, time.monotonic())
+                received_at = time.monotonic()
+                if shadow_outcome := observe_next_chunk(token, received_at):
+                    deferred_shadow_outcomes.append(shadow_outcome)
+                buffer.push(token, received_at)
                 while True:
                     try:
                         token = text_queue.get_nowait()
-                        buffer.push(token, time.monotonic())
+                        received_at = time.monotonic()
+                        if shadow_outcome := observe_next_chunk(token, received_at):
+                            deferred_shadow_outcomes.append(shadow_outcome)
+                        buffer.push(token, received_at)
                     except queue.Empty:
                         break
             except queue.Empty:
@@ -219,7 +341,10 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             if cut:
                 if pending_incomplete is not None:
                     if _can_merge_cuts(pending_incomplete, cut):
-                        emit_cut(_merge_cuts(pending_incomplete, cut))
+                        emit_cut(
+                            _merge_cuts(pending_incomplete, cut),
+                            shadow_started_at=now,
+                        )
                         clear_pending()
                     else:
                         log.info(
@@ -230,16 +355,25 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                             cut.cut_reason,
                         )
                         metrics.increment("sentence.merge_skipped")
-                        emit_cut(pending_incomplete)
+                        emit_cut(
+                            pending_incomplete,
+                            track_shadow=False,
+                            shadow_started_at=now,
+                        )
                         if cut.incomplete:
                             buffer_incomplete(cut, now)
                         else:
                             clear_pending()
-                            emit_cut(cut)
+                            emit_cut(cut, shadow_started_at=now)
                 elif cut.incomplete:
                     buffer_incomplete(cut, now)
                 else:
-                    emit_cut(cut)
+                    emit_cut(cut, shadow_started_at=now)
+
+            # Persist after buffer/cut behavior has completed so shadow I/O
+            # cannot delay the observed token's admission or its cut decision.
+            for shadow_outcome in deferred_shadow_outcomes:
+                runtime_events.emit("sentence_hold_shadow", **shadow_outcome)
 
         # Stop: flush the not-yet-cut tail of the buffer so the last sentence
         # isn't dropped, merging it with a pending incomplete cut when allowed
@@ -249,12 +383,13 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             if _can_merge_cuts(pending_incomplete, final_cut):
                 emit_cut(_merge_cuts(pending_incomplete, final_cut))
             else:
-                emit_cut(pending_incomplete)
+                emit_cut(pending_incomplete, track_shadow=False)
                 emit_cut(final_cut)
         elif pending_incomplete is not None:
-            emit_cut(pending_incomplete)
+            emit_cut(pending_incomplete, track_shadow=False)
         elif final_cut is not None:
             emit_cut(final_cut)
+        finish_shadow_without_chunk("splitter_stopped", time.monotonic())
         log.info("Sentence splitter stopped")
 
     return start_daemon_thread("SentenceSplitter", run)

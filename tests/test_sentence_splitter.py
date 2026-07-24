@@ -361,6 +361,109 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertEqual(kw["source_no_speech_probs"], [None, 0.6])
         self.assertEqual(kw["max_no_speech_prob"], 0.6)
 
+    def test_hold_shadow_records_first_next_chunk_without_changing_merge(self):
+        first = TranscriptionEvent(
+            text="지금 게임 하고",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-1",
+        )
+        second = TranscriptionEvent(
+            text="있어요",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-2",
+        )
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        with patch(
+            "modules.sentence_splitter.cfg",
+            _fast_cfg(min_wait=0.05, force_cut=0.15),
+        ), patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            tq.put(first)
+            time.sleep(0.35)
+            self.assertTrue(sq.empty())
+            tq.put(second)
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        shadow = [
+            call.kwargs
+            for call in events.emit.call_args_list
+            if call.args and call.args[0] == "sentence_hold_shadow"
+        ]
+        candidate = next(event for event in shadow if event["phase"] == "candidate")
+        outcome = next(event for event in shadow if event["phase"] == "outcome")
+        self.assertEqual(candidate["signals"], ["unfinished_connector"])
+        self.assertEqual(candidate["disposition"], "buffered")
+        self.assertTrue(outcome["observed_next_chunk"])
+        self.assertEqual(outcome["next_chunk_utterance_id"], "utt-2")
+        self.assertTrue(outcome["raw_continuation_heuristic"])
+        self.assertFalse(outcome["useful_merge_heuristic"])
+        self.assertEqual(result.text, "지금 게임 하고 있어요")
+
+    def test_hold_shadow_timeout_has_one_candidate_and_terminal_outcome(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        with patch(
+            "modules.sentence_splitter.cfg",
+            _fast_cfg(
+                min_wait=0.05,
+                force_cut=0.1,
+                pending_timeout=0.25,
+            ),
+        ), patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            tq.put("지금 게임 하고")
+            result = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        shadow = [
+            call.kwargs
+            for call in events.emit.call_args_list
+            if call.args and call.args[0] == "sentence_hold_shadow"
+        ]
+        self.assertEqual(
+            [event["phase"] for event in shadow],
+            ["candidate", "outcome"],
+        )
+        self.assertEqual(shadow[1]["outcome_reason"], "pending_incomplete_timeout")
+        self.assertFalse(shadow[1]["observed_next_chunk"])
+        self.assertEqual(result.text, "지금 게임 하고")
+
+    def test_hold_shadow_stop_closes_buffered_candidate_without_duplicate(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        with patch(
+            "modules.sentence_splitter.cfg",
+            _fast_cfg(min_wait=0.05, force_cut=0.1),
+        ), patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            tq.put("지금 게임 하고")
+            time.sleep(0.3)
+            self.assertTrue(sq.empty())
+            stop.set()
+            thread.join(timeout=2)
+            result = sq.get(timeout=1)
+
+        shadow = [
+            call.kwargs
+            for call in events.emit.call_args_list
+            if call.args and call.args[0] == "sentence_hold_shadow"
+        ]
+        self.assertEqual(
+            [event["phase"] for event in shadow],
+            ["candidate", "outcome"],
+        )
+        self.assertEqual(shadow[1]["outcome_reason"], "splitter_stopped")
+        self.assertEqual(result.text, "지금 게임 하고")
+
 
 class TestSentenceMergeGuardrail(unittest.TestCase):
     def test_merge_cuts_keeps_evidence_separate_from_current_source(self):
