@@ -158,6 +158,10 @@ def analyze_runtime_events(
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
+        "source_fuzzy_shadow": _source_fuzzy_shadow_summary(
+            translation_events,
+            top_n,
+        ),
         "api_diagnostics": _api_diagnostics_summary(translation_events),
         "dependency_markers": _dependency_marker_summary(translation_events),
         "translation_fallback": _fallback_summary(fallback_events),
@@ -313,6 +317,10 @@ def _run_summaries(
                 ),
                 "queue_latency_ms": _queue_latency_summary(run_events),
                 "retry_summary": _retry_summary(run_events),
+                "source_fuzzy_shadow": _source_fuzzy_shadow_summary(
+                    run_events,
+                    top_n,
+                ),
                 "api_diagnostics": _api_diagnostics_summary(run_events),
                 "dependency_markers": _dependency_marker_summary(run_events),
                 "translation_fallback": _fallback_summary(grouped_fallback.get(run_id, [])),
@@ -399,6 +407,91 @@ def _queue_latency_summary(events: list[dict[str, Any]]) -> dict[str, dict[str, 
             ]
         )
         for field in QUEUE_LATENCY_FIELDS
+    }
+
+
+def _source_fuzzy_shadow_summary(
+    events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    rows: list[tuple[dict[str, Any], dict[str, Any]]] = [
+        (event, shadow)
+        for event in events
+        if isinstance((shadow := event.get("source_fuzzy_shadow")), dict)
+    ]
+    candidate_rows = [
+        (event, shadow)
+        for event, shadow in rows
+        if int(shadow.get("candidate_count") or 0) > 0
+    ]
+    candidates = [
+        candidate
+        for _event, shadow in rows
+        for candidate in shadow.get("candidates", [])
+        if isinstance(candidate, dict)
+    ]
+    unique = [
+        candidate
+        for candidate in candidates
+        if candidate.get("decision") == "unique_match"
+    ]
+    ambiguous = [
+        candidate
+        for candidate in candidates
+        if candidate.get("decision") == "ambiguous"
+    ]
+    pair_counts = Counter(
+        (
+            str(candidate.get("observed") or ""),
+            str(candidate.get("canonical") or candidate.get("best_candidate") or ""),
+            str(candidate.get("decision") or "unknown"),
+        )
+        for candidate in candidates
+    )
+    return {
+        "observed_events": len(rows),
+        "coverage_rate": round(len(rows) / len(events), 4) if events else 0.0,
+        "enabled_events": sum(bool(shadow.get("enabled")) for _event, shadow in rows),
+        "eligible_events": sum(bool(shadow.get("eligible")) for _event, shadow in rows),
+        "candidate_events": len(candidate_rows),
+        "candidate_event_rate": round(len(candidate_rows) / len(rows), 4) if rows else 0.0,
+        "candidate_count": len(candidates),
+        "unique_match_count": len(unique),
+        "ambiguous_count": len(ambiguous),
+        "would_change_events": sum(bool(shadow.get("would_change")) for _event, shadow in rows),
+        "applied_count": sum(bool(shadow.get("applied")) for _event, shadow in rows),
+        "diagnostic_errors": sum(
+            shadow.get("reason") == "diagnostic_error"
+            for _event, shadow in rows
+        ),
+        "by_profile": _count_by(
+            [{"profile_id": shadow.get("profile_id")} for _event, shadow in rows],
+            "profile_id",
+        ),
+        "by_reason": _count_by(
+            [{"reason": shadow.get("reason")} for _event, shadow in rows],
+            "reason",
+        ),
+        "pairs": [
+            {
+                "observed": observed,
+                "candidate": candidate,
+                "decision": decision,
+                "count": count,
+            }
+            for (observed, candidate, decision), count in pair_counts.most_common(top_n)
+        ],
+        "samples": [
+            {
+                "run_id": event.get("run_id"),
+                "sequence_id": event.get("sequence_id"),
+                "profile_id": shadow.get("profile_id"),
+                "source_text": _short(str(event.get("source_text") or "")),
+                "proposed_text": _short(str(shadow.get("proposed_text") or "")),
+                "candidates": shadow.get("candidates", []),
+            }
+            for event, shadow in candidate_rows[:top_n]
+        ],
     }
 
 
@@ -1015,6 +1108,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Latency ms: {report['latency_ms']}")
     print(f"Queue latency ms: {report['queue_latency_ms']}")
     print(f"Retry summary: {report['retry_summary']}")
+    print(f"Source fuzzy shadow: {report['source_fuzzy_shadow']}")
     print(f"API diagnostics: {report['api_diagnostics']}")
     print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Translation fallback: {report['translation_fallback']}")

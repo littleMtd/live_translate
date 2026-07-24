@@ -1302,6 +1302,45 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         events.emit.assert_called_once()
         return events.emit.call_args.kwargs
 
+    def test_translation_event_carries_record_only_source_fuzzy_shadow(self):
+        outcome = TranslationOutcome(
+            source_text="채나",
+            target_text="測試",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="fake",
+            model="fake-model",
+        )
+        shadow = {
+            "schema": 1,
+            "mode": "record_only",
+            "enabled": True,
+            "eligible": True,
+            "applied": False,
+            "profile_id": "hades_chxxnnx",
+            "candidate_count": 1,
+            "unique_match_count": 1,
+            "ambiguous_count": 0,
+            "would_change": True,
+            "proposed_text": "챈나",
+            "candidates": [],
+        }
+
+        with patch.object(
+            translator_module,
+            "safe_source_fuzzy_shadow",
+            return_value=shadow,
+        ) as fuzzy:
+            fields = self._emit_outcome_with_stale_nvidia_diagnostics(outcome)
+
+        fuzzy.assert_called_once()
+        self.assertEqual(fuzzy.call_args.args[0], "채나")
+        self.assertEqual(fields["source_text"], "채나")
+        self.assertEqual(fields["source_fuzzy_shadow"], shadow)
+        self.assertFalse(fields["source_fuzzy_shadow"]["applied"])
+
     def test_translation_workers_share_translator_state(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()

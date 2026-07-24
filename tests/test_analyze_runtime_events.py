@@ -114,6 +114,80 @@ def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
     assert len(report["flagged_samples"]) == 1
 
 
+def test_analyzer_summarizes_record_only_source_fuzzy_shadow(tmp_path):
+    path = tmp_path / "runtime_events_20260725.jsonl"
+    unique = {
+        "schema": 1,
+        "mode": "record_only",
+        "enabled": True,
+        "eligible": True,
+        "applied": False,
+        "profile_id": "hades_chxxnnx",
+        "reason": "candidates_observed",
+        "candidate_count": 1,
+        "unique_match_count": 1,
+        "ambiguous_count": 0,
+        "would_change": True,
+        "proposed_text": "챈나",
+        "candidates": [
+            {
+                "observed": "채나",
+                "canonical": "챈나",
+                "best_candidate": "챈나",
+                "decision": "unique_match",
+            }
+        ],
+    }
+    ambiguous = {
+        **unique,
+        "unique_match_count": 0,
+        "ambiguous_count": 1,
+        "would_change": False,
+        "proposed_text": "가나",
+        "candidates": [
+            {
+                "observed": "가나",
+                "canonical": "",
+                "best_candidate": "각나",
+                "decision": "ambiguous",
+            }
+        ],
+    }
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-shadow",
+                source_text="채나",
+                source_fuzzy_shadow=unique,
+            ),
+            _translation_event(
+                run_id="run-shadow",
+                source_text="가나",
+                source_fuzzy_shadow=ambiguous,
+            ),
+            _translation_event(run_id="run-legacy"),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+    summary = report["source_fuzzy_shadow"]
+
+    assert summary["observed_events"] == 2
+    assert summary["coverage_rate"] == 0.6667
+    assert summary["candidate_events"] == 2
+    assert summary["candidate_count"] == 2
+    assert summary["unique_match_count"] == 1
+    assert summary["ambiguous_count"] == 1
+    assert summary["would_change_events"] == 1
+    assert summary["applied_count"] == 0
+    assert summary["diagnostic_errors"] == 0
+    assert summary["pairs"][0]["decision"] in {"unique_match", "ambiguous"}
+    assert report["runs"][0]["source_fuzzy_shadow"]["observed_events"] in {0, 2}
+    shadow_run = next(run for run in report["runs"] if run["run_id"] == "run-shadow")
+    assert shadow_run["source_fuzzy_shadow"]["candidate_count"] == 2
+
+
 def test_analyzer_summarizes_sentence_hold_shadow_opportunities(tmp_path):
     path = tmp_path / "runtime_events_20260725.jsonl"
     _write_jsonl(

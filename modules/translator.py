@@ -17,6 +17,7 @@ from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events, translation_quality
 from modules.pipeline_events import sentence_incomplete, sentence_metadata, sentence_text
+from modules.source_fuzzy_shadow import safe_source_fuzzy_shadow
 from modules.db import _get_db
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -1749,6 +1750,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         # from the 60s clip/offline path in latency artifacts.
                         "translation_mode": translation_mode,
                     }
+                )
+                metadata["source_fuzzy_shadow"] = safe_source_fuzzy_shadow(
+                    text,
+                    profile_id=cfg.active_streamer_profile,
+                    use_profile=bool(getattr(cfg.translation, "use_profile", False)),
                 )
                 worker_translator = getattr(worker_state, "translator", None)
                 if worker_translator is None:
