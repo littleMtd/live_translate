@@ -25,7 +25,9 @@ from modules.translation_prompts import (
     _QWEN_PROMPT_TAIL,
     _is_qwen_model,
     get_translation_profile,
+    get_translation_profile_preserve_terms,
 )
+from modules.streamer_profiles import common_stt_terms
 from modules.translation_engines import (
     TranslationEngine,
     _build_engine_chain,
@@ -97,6 +99,28 @@ FallbackEventSink = Callable[..., None]
 
 _HANGUL_RATIO_THRESHOLD = 0.50  # reject result if >50 % of chars are Hangul syllables
 _DEPENDENCY_MARKER_BOUNDARY_RE = re.compile(r"^[\s\.,!?~…。？！,，、:;；]|$")
+_DOTTED_ACRONYM_RE = re.compile(r"^(?:[A-Za-z]\.){2,}[A-Za-z]?$")
+_URL_RE = re.compile(
+    r"^(?:(?:https?|ftp)://|www\.)[^\s]+$",
+    flags=re.IGNORECASE,
+)
+_BARE_DOMAIN_RE = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}(?:[/?#][^\s]*)?$"
+)
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+_HANDLE_RE = re.compile(r"^[@#][A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+_MACHINE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{1,127}$")
+_NUMERIC_LITERAL_RE = re.compile(r"^[+-]?\d+(?:[.,:/-]\d+)*$")
+_COMMON_PRESERVED_ACRONYMS = frozenset(
+    term
+    for term in common_stt_terms()
+    if re.fullmatch(r"[A-Z][A-Z0-9&:+./-]{1,15}", term)
+)
 
 
 _META_GARBAGE_MARKERS = (
@@ -439,9 +463,57 @@ def _dependency_marker(text: str) -> str:
     return ""
 
 
-def _looks_untranslated(result: str, source: str) -> bool:
-    if result == source:
+def _profile_preserve_as_is_terms() -> frozenset[str]:
+    if not bool(cfg.translation.use_profile):
+        return frozenset()
+
+    profile_id = cfg.active_streamer_profile
+    if not profile_id:
+        return frozenset()
+
+    terms = set(get_translation_profile_preserve_terms(profile_id))
+    for rule in _NAME_RENDERING_RULES:
+        if rule.scope not in (profile_id, _SHARED_NAME_SCOPE):
+            continue
+        # Only the canonical spelling may pass unchanged. An alias such as
+        # 솜명이 or Haedungi still needs deterministic canonicalization.
+        if rule.canonical in rule.source_aliases:
+            terms.add(rule.canonical)
+    return frozenset(terms)
+
+
+def _is_legitimate_preserve_as_is(source: str) -> bool:
+    """Return True only when an identical translation is provably intentional."""
+    text = (source or "").strip()
+    if not text or "\n" in text or "\r" in text:
+        return False
+
+    if text in _profile_preserve_as_is_terms():
         return True
+    if text in _COMMON_PRESERVED_ACRONYMS:
+        return True
+    if _DOTTED_ACRONYM_RE.fullmatch(text):
+        return True
+    if (
+        _URL_RE.fullmatch(text)
+        or _BARE_DOMAIN_RE.fullmatch(text)
+        or _EMAIL_RE.fullmatch(text)
+        or _HANDLE_RE.fullmatch(text)
+    ):
+        return True
+    if _NUMERIC_LITERAL_RE.fullmatch(text):
+        return True
+    if _MACHINE_ID_RE.fullmatch(text):
+        has_letter = any(char.isascii() and char.isalpha() for char in text)
+        has_digit = any(char.isdigit() for char in text)
+        if "_" in text or has_letter and has_digit:
+            return True
+    return False
+
+
+def _looks_untranslated(result: str, source: str) -> bool:
+    if result.strip() == source.strip():
+        return not _is_legitimate_preserve_as_is(source)
     chars = [c for c in result if not c.isspace()]
     if not chars:
         return False

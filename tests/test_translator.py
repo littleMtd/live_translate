@@ -28,7 +28,9 @@ from modules.translation_prompts import (
 from modules.translation_policy import RepetitionEvidence
 from modules.translator import (
     _apply_source_aware_corrections,
+    _is_legitimate_preserve_as_is,
     _looks_like_meta_garbage_output,
+    _looks_untranslated,
     _normalize_source_before_matching,
     _new_translation_memory,
     _token_usage_for_outcome,
@@ -1438,7 +1440,82 @@ class TestTranslatorThreadPause(unittest.TestCase):
 # Fallback probe logic
 # ---------------------------------------------------------------------------
 
+class TestPreserveAsIsAcceptance(unittest.TestCase):
+
+    def test_accepts_narrow_machine_readable_shapes(self):
+        accepted = (
+            "A.I.N.D.S.",
+            "https://example.com/watch?v=42",
+            "example.com/path",
+            "viewer_42",
+            "@streamer_name",
+            "@x",
+            "hello@example.com",
+            "2026-07-25",
+            "SOOP",
+        )
+
+        for source in accepted:
+            with self.subTest(source=source):
+                self.assertTrue(_is_legitimate_preserve_as_is(source))
+                self.assertFalse(_looks_untranslated(source, source))
+
+    def test_rejects_ambiguous_words_and_ordinary_sentences(self):
+        rejected = (
+            "Hello",
+            "HELLO",
+            "hello-world",
+            "오늘 정말 재미있었어요",
+            "I'll be there for you.",
+        )
+
+        for source in rejected:
+            with self.subTest(source=source):
+                self.assertFalse(_is_legitimate_preserve_as_is(source))
+                self.assertTrue(_looks_untranslated(source, source))
+
+    def test_accepts_only_profile_authorized_canonical_terms(self):
+        with _active_translation_profile("url"):
+            for source in (
+                "모카",
+                "Wish Me Love",
+                "조금 더 가까이",
+                "Sandbox Network",
+            ):
+                with self.subTest(source=source):
+                    self.assertFalse(_looks_untranslated(source, source))
+            self.assertTrue(_looks_untranslated("유아렐", "유아렐"))
+            self.assertTrue(_looks_untranslated("Again", "Again"))
+
+        with _active_translation_profile("stellive_hina"):
+            self.assertFalse(_looks_untranslated("해둥이", "해둥이"))
+            self.assertTrue(_looks_untranslated("해둥", "해둥"))
+            self.assertTrue(_looks_untranslated("Haedungi", "Haedungi"))
+
+    def test_profile_terms_fail_closed_when_profile_is_disabled(self):
+        with _active_translation_profile("url", use_profile=False):
+            self.assertTrue(_looks_untranslated("모카", "모카"))
+            self.assertTrue(_looks_untranslated("Wish Me Love", "Wish Me Love"))
+
+
 class TestFallbackProbe(unittest.TestCase):
+
+    def test_dotted_acronym_identical_output_stops_at_primary(self):
+        t = _make_translator()
+        t._engines = [
+            _mock_engine("nvidia", "A.I.N.D.S."),
+            _mock_engine("deepl", "A.I.N.D.S."),
+            _mock_engine("groq", "A.I.N.D.S."),
+            _mock_engine("openrouter", "A.I.N.D.S."),
+        ]
+
+        result = t.translate("A.I.N.D.S.")
+
+        self.assertEqual(result, "A.I.N.D.S.")
+        t._engines[0].translate.assert_called_once()
+        for fallback in t._engines[1:]:
+            fallback.translate.assert_not_called()
+        self.assertEqual(t._active_idx, 0)
 
     def test_user_translation_path_does_not_probe_primary_after_recovery(self):
         from modules.translator import _FALLBACK_PROBE_EVERY

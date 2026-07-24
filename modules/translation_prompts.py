@@ -1,4 +1,6 @@
 import json
+import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,66 @@ def get_translation_profile_facts(profile_id: str) -> str:
     """
     profile = get_translation_profile(profile_id, qwen=True).strip()
     return profile.split("\n\n", 1)[0].strip() if profile else ""
+
+
+@lru_cache(maxsize=16)
+def get_translation_profile_preserve_terms(profile_id: str) -> frozenset[str]:
+    """Derive exact preserve-as-is terms from a profile's canonical glossary.
+
+    This deliberately understands only explicit glossary syntax. It accepts
+    self-mappings (``term -> term``) and directives that start with ``keep``;
+    prose, examples, aliases whose canonical output differs, and ambiguous
+    mappings stay excluded.
+    """
+    profile = get_translation_profile(profile_id)
+    if not profile:
+        return frozenset()
+
+    terms: set[str] = set()
+    for raw_line in profile.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- "):
+            continue
+        rule = line[2:].strip()
+
+        if "->" in rule:
+            left, right = (part.strip() for part in rule.split("->", 1))
+            aliases = tuple(
+                term.strip() for term in re.split(r"\s*/\s*", left) if term.strip()
+            )
+            right_lower = right.lower()
+            if right_lower.startswith("keep "):
+                preserve_aliases = aliases
+                if "official" in right_lower and "title" in right_lower:
+                    # A standalone ordinary English word remains ambiguous even
+                    # when a profile also knows a title with that spelling
+                    # (for example "Again"). Require additional title shape.
+                    preserve_aliases = tuple(
+                        term
+                        for term in aliases
+                        if not re.fullmatch(r"[A-Za-z]+", term)
+                    )
+                    terms.update(
+                        re.sub(r"\s+\([^)]*\)\s*$", "", term).strip()
+                        for term in preserve_aliases
+                    )
+                terms.update(preserve_aliases)
+                continue
+
+            canonical = re.split(r"\s+\(", right, maxsplit=1)[0].strip()
+            if canonical in aliases:
+                terms.add(canonical)
+            continue
+
+        keep_match = re.match(r"^(?P<left>.+):\s*keep\b", rule, flags=re.IGNORECASE)
+        if keep_match:
+            terms.update(
+                term.strip()
+                for term in re.split(r"\s*/\s*", keep_match.group("left"))
+                if term.strip()
+            )
+
+    return frozenset(term for term in terms if term)
 
 
 def translation_profile_ids(qwen: bool = False) -> frozenset[str]:

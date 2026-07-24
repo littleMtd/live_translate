@@ -106,6 +106,11 @@ def profile_stt_terms(profile_id: str) -> tuple[str, ...]:
     return get_profile(profile_id).stt_terms
 
 
+def common_stt_terms() -> tuple[str, ...]:
+    """Return shared STT glossary terms from the canonical profile data."""
+    return _COMMON_STT_TERMS
+
+
 def build_stt_glossary(profile_id: str, include_common: bool = True,
                        extra_terms: tuple[str, ...] = ()) -> str:
     """Profile STT bias terms, optionally merged with scene-keyed hot terms

@@ -10,6 +10,7 @@ from modules.translation_prompts import (
     _load_translation_profiles,
     get_translation_profile,
     get_translation_profile_facts,
+    get_translation_profile_preserve_terms,
     translation_profile_ids,
 )
 from scripts.update_translation_profile_snapshot import canonical_json_hash
@@ -71,6 +72,39 @@ def test_compact_profile_facts_exclude_examples():
     assert "유아렐" in facts
     assert "Wish Me Love" in facts
     assert "input:" not in facts
+
+
+def test_profile_preserve_terms_are_derived_from_explicit_glossary_rules():
+    url_terms = get_translation_profile_preserve_terms("url")
+
+    assert {
+        "모카",
+        "랑코",
+        "Wish Me Love",
+        "조금 더 가까이",
+        "Sandbox Network",
+        "YOU ARE LINKED",
+    } <= url_terms
+    assert "Again" not in url_terms
+    assert "유아렐" not in url_terms
+
+
+def test_profile_preserve_terms_keep_only_canonical_self_mapping():
+    stellive_terms = get_translation_profile_preserve_terms("stellive_hina")
+
+    assert "해둥이" in stellive_terms
+    assert "투니버스 메들리" in stellive_terms
+    assert "해둥" not in stellive_terms
+    assert "Haedungi" not in stellive_terms
+
+
+def test_profile_preserve_terms_include_later_official_title_rules():
+    hades_terms = get_translation_profile_preserve_terms("hades_chxxnnx")
+
+    assert "띵띵이" in hades_terms
+    assert "MEGA PIECE HARMONY" in hades_terms
+    assert "Planet B" in hades_terms
+    assert "챈나" not in hades_terms
 
 
 def test_hades_translation_profiles_contain_glossary_mappings():
