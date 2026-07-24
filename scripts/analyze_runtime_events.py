@@ -103,6 +103,11 @@ def analyze_runtime_events(
         for event in translation_events
         for flag in event.get("quality_flags", [])
     )
+    quality_classifications = Counter(
+        classification
+        for event in translation_events
+        for classification in event.get("quality_classifications", [])
+    )
 
     return {
         "event_path": str(event_path),
@@ -133,6 +138,10 @@ def analyze_runtime_events(
         "quality_flags": [
             {"flag": flag, "count": count}
             for flag, count in quality_flags.most_common()
+        ],
+        "quality_classifications": [
+            {"classification": classification, "count": count}
+            for classification, count in quality_classifications.most_common()
         ],
         "audio_summary": _audio_summary(audio_events),
         "stt_summary": _stt_summary(stt_events),
@@ -242,6 +251,11 @@ def _run_summaries(
             for event in run_events
             for flag in event.get("quality_flags", [])
         )
+        quality_classifications = Counter(
+            classification
+            for event in run_events
+            for classification in event.get("quality_classifications", [])
+        )
         summaries.append(
             {
                 "run_id": run_id,
@@ -265,6 +279,10 @@ def _run_summaries(
                 "quality_flags": [
                     {"flag": flag, "count": count}
                     for flag, count in quality_flags.most_common()
+                ],
+                "quality_classifications": [
+                    {"classification": classification, "count": count}
+                    for classification, count in quality_classifications.most_common()
                 ],
                 "latency_ms": _latency_summary(
                     [

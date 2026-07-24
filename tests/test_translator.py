@@ -75,6 +75,77 @@ def tearDownModule():
         _history_patch.stop()
 
 
+class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
+    def test_known_common_acronym_is_approved_without_profile(self):
+        outcome = TranslationOutcome(
+            source_text="SOOP",
+            target_text="SOOP",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        )
+
+        fields = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "url", "profile_applied": False},
+        )
+
+        self.assertEqual(fields["target_approved_latin_spans"], ["SOOP"])
+        self.assertEqual(fields["target_unexpected_latin_spans"], [])
+
+    def test_profile_terms_only_change_telemetry_classifications(self):
+        outcome = TranslationOutcome(
+            source_text="모카가 Wish Me Love를 소개했어",
+            target_text="모카介紹了Wish Me Love。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="openrouter",
+            model="qwen/qwen3-30b-a3b-instruct-2507",
+        )
+
+        approved = outcome.as_event_fields(
+            100.0,
+            {"profile_id": "url", "profile_applied": True},
+        )
+        unapproved = outcome.as_event_fields(
+            100.0,
+            {"profile_id": "url", "profile_applied": False},
+        )
+
+        self.assertEqual(approved["target_approved_hangul_spans"], ["모카"])
+        self.assertEqual(approved["target_unexpected_hangul_spans"], [])
+        self.assertEqual(
+            approved["target_approved_latin_spans"],
+            ["Wish", "Me", "Love"],
+        )
+        self.assertIn(
+            "target_has_approved_hangul",
+            approved["quality_classifications"],
+        )
+        self.assertEqual(unapproved["target_approved_hangul_spans"], [])
+        self.assertEqual(unapproved["target_unexpected_hangul_spans"], ["모카"])
+        self.assertEqual(
+            unapproved["target_unexpected_latin_spans"],
+            ["Wish", "Me", "Love"],
+        )
+        self.assertIn(
+            "target_has_unexpected_hangul",
+            unapproved["quality_classifications"],
+        )
+
+        # T04 is telemetry-only: profile knowledge must not alter the legacy
+        # signals currently consumed by retry, cache, or offline tooling.
+        self.assertEqual(approved["quality_flags"], unapproved["quality_flags"])
+        self.assertEqual(approved["quality_score"], unapproved["quality_score"])
+        self.assertEqual(
+            approved["quality_severity"],
+            unapproved["quality_severity"],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

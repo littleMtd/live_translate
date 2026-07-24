@@ -483,6 +483,18 @@ def _profile_preserve_as_is_terms() -> frozenset[str]:
     return frozenset(terms)
 
 
+def _quality_approved_terms(profile_id: str) -> frozenset[str]:
+    """Terms allowed to remain foreign-script in telemetry for one profile."""
+    terms = set(_COMMON_PRESERVED_ACRONYMS)
+    if not profile_id:
+        return frozenset(terms)
+    terms.update(get_translation_profile_preserve_terms(profile_id))
+    for rule in _NAME_RENDERING_RULES:
+        if rule.scope in (profile_id, _SHARED_NAME_SCOPE):
+            terms.add(rule.canonical)
+    return frozenset(term for term in terms if term)
+
+
 def _is_legitimate_preserve_as_is(source: str) -> bool:
     """Return True only when an identical translation is provably intentional."""
     text = (source or "").strip()
@@ -565,6 +577,11 @@ class TranslationOutcome:
     filter_reason: str = ""
 
     def as_event_fields(self, latency_ms: float, metadata: dict) -> dict:
+        profile_id = str(metadata.get("profile_id") or "")
+        profile_applied = bool(metadata.get("profile_applied"))
+        approved_terms = _quality_approved_terms(
+            profile_id if profile_applied else ""
+        )
         return {
             "source_text": self.source_text,
             "target_text": self.target_text,
@@ -578,7 +595,11 @@ class TranslationOutcome:
             "filter_reason": self.filter_reason,
             "latency_ms": round(latency_ms, 2),
             **metadata,
-            **translation_quality(self.source_text, self.target_text),
+            **translation_quality(
+                self.source_text,
+                self.target_text,
+                approved_terms=approved_terms,
+            ),
         }
 
 

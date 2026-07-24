@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Iterable
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any
@@ -233,6 +234,96 @@ def _is_latin(char: str) -> bool:
 
 def _is_japanese(char: str) -> bool:
     return "\u3040" <= char <= "\u30ff" or "\u31f0" <= char <= "\u31ff"
+
+
+_HANGUL_SPAN_RE = re.compile(r"[가-힯ᄀ-ᇿ㄰-㆏]+")
+_LATIN_SPAN_RE = re.compile(
+    r"[A-Za-z](?:[A-Za-z0-9._:+/@#-]*[A-Za-z0-9])?"
+)
+_SOURCE_LATIN_TOKEN_RE = re.compile(
+    r"[@#]?[A-Za-z0-9](?:[A-Za-z0-9._:+/@#-]*[A-Za-z0-9])?"
+)
+_DOTTED_ACRONYM_RE = re.compile(r"^(?:[A-Za-z]\.)+[A-Za-z]$")
+_SOURCE_URL_RE = re.compile(
+    r"^(?:(?:https?|ftp)://|www\.)[^\s]+$",
+    flags=re.IGNORECASE,
+)
+_SOURCE_BARE_DOMAIN_RE = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,63}(?:[/?#][^\s]*)?$"
+)
+_SOURCE_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+_SOURCE_STRUCTURED_TRIM = " \t\r\n()[]{}<>\"'.,!?;:，。！？；：、"
+_RECOGNIZED_LATIN_OUTPUT_TERMS = frozenset({"KTV", "Spotify"})
+
+
+def _source_machine_terms(source: str) -> set[str]:
+    """Return source tokens whose shape proves they are IDs/acronyms."""
+    terms = {
+        token
+        for raw_token in source.split()
+        if (
+            token := raw_token.strip(_SOURCE_STRUCTURED_TRIM)
+        )
+        and (
+            _SOURCE_URL_RE.fullmatch(token)
+            or _SOURCE_BARE_DOMAIN_RE.fullmatch(token)
+            or _SOURCE_EMAIL_RE.fullmatch(token)
+        )
+    }
+    for match in _SOURCE_LATIN_TOKEN_RE.finditer(source):
+        token = match.group(0)
+        letters = [char for char in token if char.isascii() and char.isalpha()]
+        has_digit = any(char.isdigit() for char in token)
+        if (
+            token.startswith(("@", "#"))
+            or "_" in token
+            or has_digit and bool(letters)
+            or _DOTTED_ACRONYM_RE.fullmatch(token)
+            or _SOURCE_URL_RE.fullmatch(token)
+            or _SOURCE_BARE_DOMAIN_RE.fullmatch(token)
+            or _SOURCE_EMAIL_RE.fullmatch(token)
+        ):
+            terms.add(token)
+    return terms
+
+
+def _covered_positions(text: str, terms: Iterable[str]) -> list[bool]:
+    covered = [False] * len(text)
+    folded = text.casefold()
+    for raw_term in terms:
+        term = str(raw_term or "").strip()
+        if not term:
+            continue
+        folded_term = term.casefold()
+        start = 0
+        while (index := folded.find(folded_term, start)) >= 0:
+            for position in range(index, min(len(text), index + len(term))):
+                covered[position] = True
+            start = index + max(1, len(term))
+    return covered
+
+
+def _classified_spans(
+    text: str,
+    pattern: re.Pattern[str],
+    covered: list[bool],
+) -> tuple[list[str], list[str]]:
+    approved: list[str] = []
+    unexpected: list[str] = []
+    for match in pattern.finditer(text):
+        span = match.group(0)
+        bucket = (
+            approved
+            if all(covered[index] for index in range(match.start(), match.end()))
+            else unexpected
+        )
+        bucket.append(span)
+    return approved, unexpected
 
 
 # Label/refusal phrasing that should never appear in a zh-TW subtitle: leaked
@@ -480,7 +571,12 @@ def quality_severity(score: float) -> str:
     return "bad"
 
 
-def translation_quality(source_text: str, target_text: str | None) -> dict[str, Any]:
+def translation_quality(
+    source_text: str,
+    target_text: str | None,
+    *,
+    approved_terms: Iterable[str] = (),
+) -> dict[str, Any]:
     source = source_text or ""
     target = target_text or ""
     target_len = len(target)
@@ -525,6 +621,33 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         flags.append("unbalanced_brackets")
     score = quality_score(flags)
 
+    supported_terms = {
+        *approved_terms,
+        *_RECOGNIZED_LATIN_OUTPUT_TERMS,
+        *_source_machine_terms(source),
+    }
+    covered = _covered_positions(target, supported_terms)
+    approved_hangul, unexpected_hangul = _classified_spans(
+        target,
+        _HANGUL_SPAN_RE,
+        covered,
+    )
+    approved_latin, unexpected_latin = _classified_spans(
+        target,
+        _LATIN_SPAN_RE,
+        covered,
+    )
+    classifications: list[str] = []
+    if approved_hangul:
+        classifications.append("target_has_approved_hangul")
+    if unexpected_hangul:
+        classifications.append("target_has_unexpected_hangul")
+    if "target_high_latin" in flags:
+        if approved_latin and not unexpected_latin:
+            classifications.append("target_high_latin_approved_only")
+        if unexpected_latin:
+            classifications.append("target_high_latin_unexpected")
+
     return {
         "source_len": source_len,
         "target_len": target_len,
@@ -539,6 +662,11 @@ def translation_quality(source_text: str, target_text: str | None) -> dict[str, 
         "source_amount_values": source_amount_values,
         "target_amount_values": target_amount_values,
         "amount_mismatch_candidate": amount_mismatch_candidate,
+        "target_approved_hangul_spans": approved_hangul,
+        "target_unexpected_hangul_spans": unexpected_hangul,
+        "target_approved_latin_spans": approved_latin,
+        "target_unexpected_latin_spans": unexpected_latin,
+        "quality_classifications": classifications,
         "quality_flags": flags,
         "quality_score": score,
         "quality_severity": quality_severity(score),

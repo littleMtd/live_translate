@@ -77,6 +77,7 @@ def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
                 "latency_ms": 100,
                 "subtitle_emitted": True,
                 "quality_flags": [],
+                "quality_classifications": ["target_high_latin_approved_only"],
                 "source_text": "안녕하세요",
                 "target_text": "你好",
             },
@@ -105,6 +106,9 @@ def test_analyze_runtime_events_summarizes_translation_events(tmp_path):
     assert report["by_status"][0] == {"value": "success", "count": 1}
     assert {"value": "True", "count": 1} in report["by_subtitle_emitted"]
     assert {"flag": "empty_target", "count": 1} in report["quality_flags"]
+    assert report["quality_classifications"] == [
+        {"classification": "target_high_latin_approved_only", "count": 1}
+    ]
     assert report["latency_ms"]["avg"] == 55
     assert len(report["latest"]) == 1
     assert len(report["flagged_samples"]) == 1

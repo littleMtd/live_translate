@@ -162,6 +162,100 @@ def test_translation_quality_observes_target_scripts():
     assert "target_has_hangul" in result["quality_flags"]
     assert "target_high_latin" in result["quality_flags"]
     assert "target_has_japanese" in result["quality_flags"]
+    assert result["target_unexpected_hangul_spans"] == ["해둥이"]
+    assert "target_has_unexpected_hangul" in result["quality_classifications"]
+
+
+def test_translation_quality_separates_profile_approved_hangul_and_latin():
+    result = translation_quality(
+        "히나가 해둥이와 새 노래를 소개했어요",
+        "Hina介紹了해둥이和Wish Me Love。",
+        approved_terms={"Hina", "해둥이", "Wish Me Love"},
+    )
+
+    assert result["target_approved_hangul_spans"] == ["해둥이"]
+    assert result["target_unexpected_hangul_spans"] == []
+    assert result["target_approved_latin_spans"] == ["Hina", "Wish", "Me", "Love"]
+    assert result["target_unexpected_latin_spans"] == []
+    assert "target_has_approved_hangul" in result["quality_classifications"]
+    assert "target_high_latin_approved_only" in result["quality_classifications"]
+    # T04 is telemetry-only: legacy flags/scores stay unchanged.
+    assert "target_has_hangul" in result["quality_flags"]
+    assert "target_high_latin" in result["quality_flags"]
+
+
+def test_translation_quality_recognizes_spotify_ktv_and_source_id():
+    result = translation_quality(
+        "viewer_42가 노래방과 음악 앱 얘기를 했어요",
+        "viewer_42說等等去KTV，現在用Spotify聽歌。",
+    )
+
+    assert result["target_approved_latin_spans"] == ["viewer_42", "KTV", "Spotify"]
+    assert result["target_unexpected_latin_spans"] == []
+    assert "target_high_latin_approved_only" in result["quality_classifications"]
+
+
+def test_translation_quality_excludes_ascii_sentence_punctuation_from_latin_spans():
+    result = translation_quality(
+        "viewer_42. Wish Me Love와 음악 앱 얘기를 했어요",
+        "viewer_42. Spotify. Wish Me Love.",
+        approved_terms={"Wish Me Love"},
+    )
+
+    assert result["target_approved_latin_spans"] == [
+        "viewer_42",
+        "Spotify",
+        "Wish",
+        "Me",
+        "Love",
+    ]
+    assert result["target_unexpected_latin_spans"] == []
+    assert "target_high_latin_approved_only" in result["quality_classifications"]
+    assert "target_high_latin_unexpected" not in result["quality_classifications"]
+
+
+def test_translation_quality_does_not_approve_arbitrary_uppercase_words():
+    for source in ("HELLO WORLD", "THIS IS BAD"):
+        result = translation_quality(source, source)
+
+        assert result["target_approved_latin_spans"] == []
+        assert result["target_unexpected_latin_spans"]
+        assert "target_high_latin_unexpected" in result["quality_classifications"]
+        assert "target_high_latin_approved_only" not in result["quality_classifications"]
+
+
+def test_translation_quality_recognizes_structured_source_terms():
+    for source, preserved in (
+        ("https://example.com/watch?v=42", "https://example.com/watch?v=42"),
+        ("user@example.com", "user@example.com"),
+        ("www.example.com", "www.example.com"),
+        ("https://example.com에서", "https://example.com"),
+        ("user@example.com으로", "user@example.com"),
+        ("www.example.com에서", "www.example.com"),
+    ):
+        result = translation_quality(source, preserved)
+
+        assert result["target_approved_latin_spans"]
+        assert result["target_unexpected_latin_spans"] == []
+        assert "target_high_latin_approved_only" in result["quality_classifications"]
+        assert "target_high_latin_unexpected" not in result["quality_classifications"]
+
+
+def test_translation_quality_keeps_unapproved_latin_visible():
+    result = translation_quality(
+        "음악 앱이 이상하대요",
+        "Spotify is suddenly unavailable right now。",
+    )
+
+    assert "Spotify" in result["target_approved_latin_spans"]
+    assert result["target_unexpected_latin_spans"] == [
+        "is",
+        "suddenly",
+        "unavailable",
+        "right",
+        "now",
+    ]
+    assert "target_high_latin_unexpected" in result["quality_classifications"]
 
 
 def test_translation_quality_target_high_latin_is_diagnostic_only():
