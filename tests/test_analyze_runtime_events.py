@@ -188,6 +188,69 @@ def test_analyzer_summarizes_record_only_source_fuzzy_shadow(tmp_path):
     assert shadow_run["source_fuzzy_shadow"]["candidate_count"] == 2
 
 
+def test_analyzer_summarizes_record_only_activity_shadow(tmp_path):
+    path = tmp_path / "runtime_events_20260725.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-shadow"),
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-shadow",
+                "event_type": "activity_shadow",
+                "mode": "record_only",
+                "capture_request_id": "capture-1",
+                "window_status": "ok",
+                "capture_status": "ok",
+                "candidate_activity_id": "starcraft",
+                "candidate_streak": 1,
+                "distinct_frame": True,
+                "evidence_reused": False,
+                "shadow_accepted": True,
+                "publication_blocked": True,
+                "manual_override_active": True,
+                "vision_latency_ms": 125,
+                "discard_reason": "",
+            },
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-shadow",
+                "event_type": "activity_shadow",
+                "mode": "record_only",
+                "capture_request_id": "capture-2",
+                "window_status": "ok",
+                "capture_status": "ok",
+                "candidate_activity_id": "starcraft",
+                "candidate_streak": 2,
+                "confirmed": True,
+                "distinct_frame": False,
+                "evidence_reused": True,
+                "shadow_accepted": True,
+                "publication_blocked": True,
+                "manual_override_active": False,
+                "vision_latency_ms": 175,
+                "discard_reason": "duplicate_evidence",
+            },
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+    summary = report["activity_shadow"]
+
+    assert report["activity_shadow_events"] == 2
+    assert summary["vision_request_count"] == 2
+    assert summary["confirmed_count"] == 1
+    assert summary["shadow_accepted_count"] == 2
+    assert summary["duplicate_evidence_count"] == 1
+    assert summary["distinct_frame_count"] == 1
+    assert summary["manual_override_event_count"] == 1
+    assert summary["publication_violation_count"] == 0
+    assert summary["vision_latency_ms"]["avg"] == 150
+    assert report["runs"][0]["activity_shadow"] == summary
+
+
 def test_analyzer_summarizes_sentence_hold_shadow_opportunities(tmp_path):
     path = tmp_path / "runtime_events_20260725.jsonl"
     _write_jsonl(

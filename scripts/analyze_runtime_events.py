@@ -97,6 +97,11 @@ def analyze_runtime_events(
         for event in events
         if event.get("event_type") == "sentence_hold_shadow"
     ]
+    activity_shadow_events = [
+        event
+        for event in events
+        if event.get("event_type") == "activity_shadow"
+    ]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -130,6 +135,7 @@ def analyze_runtime_events(
         "stt_events": len(stt_events),
         "audio_events": len(audio_events),
         "sentence_hold_shadow_events": len(sentence_hold_shadow_events),
+        "activity_shadow_events": len(activity_shadow_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
         "status_breakdown": _status_breakdown(translation_events),
@@ -155,6 +161,7 @@ def analyze_runtime_events(
             sentence_hold_shadow_events,
             top_n,
         ),
+        "activity_shadow": _activity_shadow_summary(activity_shadow_events),
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
@@ -171,6 +178,7 @@ def analyze_runtime_events(
             fallback_events,
             stt_events,
             audio_events,
+            activity_shadow_events,
             labels,
             top_n,
         ),
@@ -240,6 +248,7 @@ def _run_summaries(
     fallback_events: list[dict[str, Any]],
     stt_events: list[dict[str, Any]],
     audio_events: list[dict[str, Any]],
+    activity_shadow_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
     top_n: int,
 ) -> list[dict[str, Any]]:
@@ -255,6 +264,11 @@ def _run_summaries(
     grouped_fallback: dict[str, list[dict[str, Any]]] = {}
     for event in fallback_events:
         grouped_fallback.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
+    grouped_activity_shadow: dict[str, list[dict[str, Any]]] = {}
+    for event in activity_shadow_events:
+        grouped_activity_shadow.setdefault(
+            str(event.get("run_id") or "unknown"), []
+        ).append(event)
 
     summaries = []
     for run_id, run_events in grouped.items():
@@ -324,6 +338,9 @@ def _run_summaries(
                 "api_diagnostics": _api_diagnostics_summary(run_events),
                 "dependency_markers": _dependency_marker_summary(run_events),
                 "translation_fallback": _fallback_summary(grouped_fallback.get(run_id, [])),
+                "activity_shadow": _activity_shadow_summary(
+                    grouped_activity_shadow.get(run_id, [])
+                ),
                 "template_hits": {
                     "total": len(template_events),
                     "by_status": _count_by(template_events, "status"),
@@ -342,6 +359,59 @@ def _run_summaries(
         )
 
     return sorted(summaries, key=lambda item: item.get("started_at") or "")
+
+
+def _activity_shadow_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    request_ids = {
+        str(event.get("capture_request_id") or "")
+        for event in events
+        if event.get("capture_request_id")
+    }
+    confirmed = [event for event in events if event.get("confirmed") is True]
+    accepted = [event for event in events if event.get("shadow_accepted") is True]
+    reused = [event for event in events if event.get("evidence_reused") is True]
+    distinct = [event for event in events if event.get("distinct_frame") is True]
+    publication_violations = [
+        event
+        for event in events
+        if str(event.get("mode") or "") != "record_only"
+        or event.get("published") is True
+        or event.get("translation_context_applied") is True
+        or event.get("stt_terms_applied") is True
+    ]
+    return {
+        "total_events": len(events),
+        "vision_request_count": len(request_ids),
+        "confirmed_count": len(confirmed),
+        "shadow_accepted_count": len(accepted),
+        "duplicate_evidence_count": len(reused),
+        "distinct_frame_count": len(distinct),
+        "manual_override_event_count": sum(
+            event.get("manual_override_active") is True for event in events
+        ),
+        "publication_violation_count": len(publication_violations),
+        "by_window_status": _count_by(events, "window_status"),
+        "by_capture_status": _count_by(events, "capture_status"),
+        "by_discard_reason": _count_by(events, "discard_reason"),
+        "by_candidate_activity_id": _count_by(
+            [
+                event
+                for event in events
+                if event.get("candidate_activity_id")
+            ],
+            "candidate_activity_id",
+        ),
+        "vision_latency_ms": _latency_summary(
+            [
+                latency
+                for event in events
+                if (
+                    latency := _float_or_none(event.get("vision_latency_ms"))
+                )
+                is not None
+            ]
+        ),
+    }
 
 
 def _time_summary(events: list[dict[str, Any]]) -> dict[str, Any]:

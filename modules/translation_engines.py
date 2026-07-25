@@ -9,7 +9,11 @@ from typing import Any, Callable
 from urllib.error import URLError
 
 from config import cfg
-from modules.activity_context import activity_prompt_capsule, normalize_activity
+from modules.activity_context import (
+    activity_prompt_capsule,
+    effective_activity_value,
+    normalize_activity,
+)
 from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
 from modules.translation_prompts import get_translation_profile_facts
 from utils.api_retry import classify_error
@@ -519,7 +523,9 @@ def _direct_translation_source_lang(text: str) -> str:
 def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
     """Build the small, non-billed context supported by DeepL's text API."""
     parts = ["Livestream subtitles for a Taiwan audience."]
-    activity = normalize_activity(getattr(cfg.translation, "current_activity", ""))
+    activity = effective_activity_value(
+        getattr(cfg.translation, "current_activity", "")
+    )
     if activity:
         parts.append(f"Current stream activity: {activity}.")
     profile_id = str(getattr(cfg, "active_streamer_profile", "") or "").strip()
@@ -590,7 +596,7 @@ def _groq_system_prompt(system_prompt: str) -> str:
             f"{_compact_profile_digest(profile_id)}"
         )
     activity = activity_prompt_capsule(
-        getattr(cfg.translation, "current_activity", "")
+        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
     )
     if activity:
         prompt += "\n\n" + activity
@@ -623,7 +629,7 @@ def _openrouter_capsule_prompt(profile_id: str) -> str:
 
 Final check before answering: translation only; Traditional Chinese; no unsupported completion; exact profile names/titles; exact numbers and units."""
     activity = activity_prompt_capsule(
-        getattr(cfg.translation, "current_activity", "")
+        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
     )
     if activity:
         final_check = (

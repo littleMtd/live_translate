@@ -1,7 +1,8 @@
 """Scene-keyed STT hot vocabulary.
 
-scene_context distills the screen into a short activity string
-(cfg.translation.current_activity, e.g. "Pocket Monsters"). This module maps
+Manual session context supplies a short activity string
+(``cfg.translation.current_activity``, e.g. "Pocket Monsters"). The automatic
+scene resolver is record-only and never writes this value. This module maps
 that string to a set of Korean terms the STT prompt should bias toward, so
 game vocabulary is heard correctly at the source instead of being repaired
 after a mishear (observed: 메가태화←메가진화, 픽생몬←포켓몬).

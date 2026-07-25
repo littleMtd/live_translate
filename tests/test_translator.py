@@ -750,7 +750,8 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         e = self._engine()
         long_prompt = "full quality prompt " * 500
 
-        with patch("urllib.request.urlopen", return_value=self._response("translated")) as urlopen:
+        with _active_translation_profile("url"), \
+                patch("urllib.request.urlopen", return_value=self._response("translated")) as urlopen:
             result = e.translate("source", long_prompt, False)
 
         self.assertEqual(result, "translated")
@@ -1262,6 +1263,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self,
         outcome: TranslationOutcome,
         api_diagnostics: dict | None = None,
+        translator_cls=None,
     ) -> dict:
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
@@ -1285,7 +1287,8 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
             "engine": "nvidia",
             "api_attempt_count": 0,
         }
-        with patch.object(translator_module, "Translator", _FakeTranslator), \
+        translator_cls = translator_cls or _FakeTranslator
+        with patch.object(translator_module, "Translator", translator_cls), \
                 patch.object(translator_module, "get_last_engine_diagnostics", return_value=stale_diagnostics), \
                 patch.object(translator_module, "get_last_engine_api_diagnostics", return_value=api_diagnostics), \
                 patch.object(translator_module, "runtime_events") as events:
@@ -1370,6 +1373,64 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertTrue(fields["current_activity"].startswith("StarCraft ladder "))
         self.assertNotIn("\n", fields["current_activity"])
         self.assertLessEqual(len(fields["current_activity"]), 80)
+
+    def test_translation_worker_binds_one_activity_snapshot_for_runtime(self):
+        outcome = TranslationOutcome(
+            source_text="오늘 방송을 시작합니다",
+            target_text="今天開始直播",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="fake",
+            model="fake-model",
+        )
+        original = translator_module.cfg.translation.current_activity
+        observed = []
+
+        class _SwitchingTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                from modules.activity_context import effective_activity_value
+
+                observed.append(effective_activity_value())
+                object.__setattr__(
+                    translator_module.cfg.translation,
+                    "current_activity",
+                    "Hades",
+                )
+                observed.append(
+                    effective_activity_value(
+                        translator_module.cfg.translation.current_activity
+                    )
+                )
+                return outcome
+
+        object.__setattr__(
+            translator_module.cfg.translation,
+            "current_activity",
+            "StarCraft",
+        )
+        try:
+            fields = self._emit_outcome_with_stale_nvidia_diagnostics(
+                outcome,
+                translator_cls=_SwitchingTranslator,
+            )
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "current_activity",
+                original,
+            )
+
+        self.assertEqual(observed, ["StarCraft", "StarCraft"])
+        self.assertEqual(fields["current_activity"], "StarCraft")
+        self.assertEqual(fields["activity_id"], "starcraft")
+        self.assertEqual(fields["activity_context_schema_version"], 1)
 
     def test_translation_workers_share_translator_state(self):
         sentence_q = queue.Queue()

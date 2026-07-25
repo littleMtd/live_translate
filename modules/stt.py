@@ -690,7 +690,8 @@ class STTEngine:
 
     def _build_groq_prompt(self) -> str | None:
         context_transcript = self._context_transcript_for_prompt()
-        # Scene-keyed hot vocabulary: current_activity (scene_context) says
+        # Manual activity-keyed hot vocabulary. The automatic scene resolver
+        # is record-only and never activates STT terms.
         # what game is on screen; bias the recognizer toward its terms so
         # mishears are prevented at the source (메가태화←메가진화 class).
         scene_terms = terms_for_activity(

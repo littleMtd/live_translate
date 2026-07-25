@@ -11,7 +11,14 @@ from datetime import datetime
 from pathlib import Path
 
 from config import cfg
-from modules.activity_context import activity_prompt_capsule, normalize_activity
+from modules.activity_context import (
+    activity_prompt_capsule,
+    bind_activity_snapshot,
+    bound_activity_snapshot,
+    capture_activity_snapshot,
+    effective_activity_value,
+    normalize_activity,
+)
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
@@ -991,6 +998,23 @@ class Translator:
         *,
         repetition_evidence: RepetitionEvidence | None = None,
     ) -> TranslationOutcome:
+        snapshot = bound_activity_snapshot() or capture_activity_snapshot(
+            getattr(cfg.translation, "current_activity", "")
+        )
+        with bind_activity_snapshot(snapshot):
+            return self._translate_event_with_snapshot(
+                text,
+                incomplete,
+                repetition_evidence=repetition_evidence,
+            )
+
+    def _translate_event_with_snapshot(
+        self,
+        text: str,
+        incomplete: bool = False,
+        *,
+        repetition_evidence: RepetitionEvidence | None = None,
+    ) -> TranslationOutcome:
         raw_text = (text or "").strip()
         if repetition_evidence is not None:
             # The call argument is authoritative.  A stale/malformed evidence
@@ -1583,7 +1607,7 @@ def _compose_system_prompt() -> str:
     # Manual session state (orthogonal to profiles, applies even with
     # use_profile=False): one labeled background line, never source text.
     activity_capsule = activity_prompt_capsule(
-        getattr(cfg.translation, "current_activity", "")
+        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
     )
     if activity_capsule:
         system_prompt += "\n\n" + activity_capsule
@@ -1620,26 +1644,30 @@ def _start_fallback_probe_thread(
             if engines is None or chain_key != engines_key:
                 engines = _build_engine_chain()
                 engines_key = chain_key
-            system_prompt = _build_probe_system_prompt(shared_state)
             probe_observations: list[dict[str, object]] = []
             probe_started = time.monotonic()
-            try:
-                probe_primary_recovery(
-                    engines,
-                    probe_state,
-                    _FALLBACK_PROBE_TEXT,
-                    system_prompt,
-                    _looks_untranslated,
-                    log,
-                    circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
-                    recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
-                    required_consecutive_successes=cfg.nvidia.recovery_success_threshold,
-                    history=probe_history,
-                    observation_sink=probe_observations.append,
-                )
-            except Exception:
-                log.exception("Fallback primary probe failed unexpectedly")
-                continue
+            activity_snapshot = capture_activity_snapshot(
+                getattr(cfg.translation, "current_activity", "")
+            )
+            with bind_activity_snapshot(activity_snapshot):
+                system_prompt = _build_probe_system_prompt(shared_state)
+                try:
+                    probe_primary_recovery(
+                        engines,
+                        probe_state,
+                        _FALLBACK_PROBE_TEXT,
+                        system_prompt,
+                        _looks_untranslated,
+                        log,
+                        circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
+                        recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
+                        required_consecutive_successes=cfg.nvidia.recovery_success_threshold,
+                        history=probe_history,
+                        observation_sink=probe_observations.append,
+                    )
+                except Exception:
+                    log.exception("Fallback primary probe failed unexpectedly")
+                    continue
             probe_elapsed_ms = round((time.monotonic() - probe_started) * 1000, 2)
             with shared_state.lock:
                 committed_before = _copy_fallback_state(shared_state.fallback)
@@ -1733,6 +1761,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             try:
                 text = sentence_text(item)
                 incomplete = sentence_incomplete(item)
+                activity_snapshot = capture_activity_snapshot(
+                    getattr(cfg.translation, "current_activity", "")
+                )
                 metadata = sentence_metadata(item).copy()
                 marker = _dependency_marker(text)
                 metadata.update(
@@ -1744,8 +1775,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
                         # QE must be able to check whether background context
                         # helped or polluted; record it per event.
-                        "current_activity": normalize_activity(
-                            getattr(cfg.translation, "current_activity", "")
+                        "current_activity": activity_snapshot.display_label,
+                        "activity_id": activity_snapshot.activity_id,
+                        "activity_context_schema_version": (
+                            activity_snapshot.schema_version
                         ),
                         # Diagnostic-only: distinguishes the 5s live timeout path
                         # from the 60s clip/offline path in latency artifacts.
@@ -1768,11 +1801,12 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     forced=bool(metadata.get("forced", False)),
                     incomplete=incomplete,
                 )
-                outcome = worker_translator.translate_event(
-                    text,
-                    incomplete,
-                    repetition_evidence=repetition_evidence,
-                )
+                with bind_activity_snapshot(activity_snapshot):
+                    outcome = worker_translator.translate_event(
+                        text,
+                        incomplete,
+                        repetition_evidence=repetition_evidence,
+                    )
             except Exception:
                 log.exception("Translation worker failed for: %.40s", text)
                 metadata.setdefault("sequence_id", seq)

@@ -28,6 +28,7 @@ JSON_FIXTURES = [
 FOCUSED_TESTS = [
     "tests/test_config.py",
     "tests/test_streamer_profiles.py",
+    "tests/test_activity_context.py",
     "tests/test_translation_prompts.py",
     "tests/test_evaluate_translations.py",
     "tests/test_analyze_cache.py",
