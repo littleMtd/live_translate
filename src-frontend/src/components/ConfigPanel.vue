@@ -55,6 +55,18 @@
         Target language:
         <input v-model="local.translation.target_lang" type="text" />
       </label>
+      <label>
+        Current activity:
+        <input
+          v-model="local.translation.current_activity"
+          type="text"
+          maxlength="80"
+          placeholder="e.g. StarCraft, tier list talk"
+        />
+      </label>
+      <p class="field-note">
+        Optional one-line context metadata. It is never translated as subtitle text.
+      </p>
     </div>
 
     <div class="section">
@@ -111,7 +123,7 @@ const defaultConfig = (): ConfigDto => ({
                  google_translate_lang: 'zh-TW',
                  target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
                  context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
-                 use_profile: true, slang: {} },
+                 use_profile: true, current_activity: '', slang: {} },
   subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
               bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
               outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
@@ -158,6 +170,12 @@ h2 { margin-bottom: 8px; font-size: 20px; }
   border-radius: 8px;
   color: #9a3412;
   font-size: 13px;
+}
+
+.field-note {
+  margin: -4px 0 8px;
+  color: #6b7280;
+  font-size: 12px;
 }
 
 .section {

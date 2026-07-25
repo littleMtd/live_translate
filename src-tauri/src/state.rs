@@ -85,6 +85,7 @@ pub struct TranslationConfig {
     pub translation_mode: String,
     pub streamer_profile: String,
     pub use_profile: bool,
+    pub current_activity: String,
     pub slang: HashMap<String, String>,
 }
 
@@ -184,6 +185,7 @@ mod tests {
                 translation_mode: "live".into(),
                 streamer_profile: "hades_chxxnnx".into(),
                 use_profile: true,
+                current_activity: String::new(),
                 slang: HashMap::from([("ㅋㅋ".into(), "哈哈".into())]),
             },
             subtitle: SubtitleConfig {
@@ -243,7 +245,8 @@ mod tests {
 
     #[test]
     fn config_dto_deserializes_from_json() {
-        let cfg = sample_config();
+        let mut cfg = sample_config();
+        cfg.translation.current_activity = "StarCraft ladder".into();
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2: ConfigDto = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg.stt.language, cfg2.stt.language);
@@ -252,6 +255,10 @@ mod tests {
         assert_eq!(
             cfg.database.db_cache_max_rows,
             cfg2.database.db_cache_max_rows
+        );
+        assert_eq!(
+            cfg.translation.current_activity,
+            cfg2.translation.current_activity
         );
     }
 

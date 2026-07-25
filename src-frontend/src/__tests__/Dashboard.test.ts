@@ -18,7 +18,7 @@ const fakeConfig = {
                  google_translate_lang: 'zh-TW',
                  target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
                  context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
-                 use_profile: true, slang: {} },
+                 use_profile: true, current_activity: '', slang: {} },
   subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
               bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
               outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,

@@ -166,6 +166,41 @@ class TestCompactProfileDigest(unittest.TestCase):
             # ~4 chars/token upper bound: keep the digest under ~150 tokens.
             self.assertLess(len(digest), 600, f"{profile} digest too large: {len(digest)}")
 
+    def test_activity_capsule_reaches_both_compact_llm_prompts_once(self):
+        from config import cfg
+
+        original = cfg.translation.current_activity
+        object.__setattr__(
+            cfg.translation,
+            "current_activity",
+            "  StarCraft   ladder  " + ("x" * 100),
+        )
+        try:
+            for engine in ("groq", "openrouter"):
+                prompt = self._compact_prompt(engine, "url", use_profile=True)
+                self.assertEqual(
+                    prompt.count("[Background] Current stream activity:"),
+                    1,
+                    engine,
+                )
+                line = next(
+                    item
+                    for item in prompt.splitlines()
+                    if item.startswith("[Background] Current stream activity:")
+                )
+                self.assertIn("StarCraft ladder", line)
+                self.assertLessEqual(
+                    len(line.removeprefix("[Background] Current stream activity: ")),
+                    80,
+                )
+                self.assertLess(
+                    prompt.index("[Background]"),
+                    prompt.index("Final check before answering:"),
+                    engine,
+                )
+        finally:
+            object.__setattr__(cfg.translation, "current_activity", original)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -271,6 +306,12 @@ class TestDeepLCacheSignature(unittest.TestCase):
         self.assertNotEqual(
             self._signature(current_activity="StarCraft"),
             self._signature(current_activity="Hades"),
+        )
+
+    def test_current_activity_signature_uses_normalized_single_line(self):
+        self.assertEqual(
+            self._signature(current_activity="  StarCraft   ladder  "),
+            self._signature(current_activity="StarCraft ladder"),
         )
 
     def test_profile_facts_change_signature(self):

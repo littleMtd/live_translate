@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config import cfg
+from modules.activity_context import activity_prompt_capsule, normalize_activity
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
@@ -1581,13 +1582,11 @@ def _compose_system_prompt() -> str:
 
     # Manual session state (orthogonal to profiles, applies even with
     # use_profile=False): one labeled background line, never source text.
-    activity = (getattr(cfg.translation, "current_activity", "") or "").strip()
-    if activity:
-        system_prompt += (
-            "\n\n[Background] Current stream activity: " + activity
-            + "\nUse this only to disambiguate game/context-specific terms. "
-              "Never translate, mention, or copy it into the output."
-        )
+    activity_capsule = activity_prompt_capsule(
+        getattr(cfg.translation, "current_activity", "")
+    )
+    if activity_capsule:
+        system_prompt += "\n\n" + activity_capsule
 
     # Output rules go last so profile/background sections never sit after the
     # final instruction the model is supposed to obey.
@@ -1745,7 +1744,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
                         # QE must be able to check whether background context
                         # helped or polluted; record it per event.
-                        "current_activity": getattr(cfg.translation, "current_activity", ""),
+                        "current_activity": normalize_activity(
+                            getattr(cfg.translation, "current_activity", "")
+                        ),
                         # Diagnostic-only: distinguishes the 5s live timeout path
                         # from the 60s clip/offline path in latency artifacts.
                         "translation_mode": translation_mode,

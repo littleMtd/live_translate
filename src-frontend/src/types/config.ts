@@ -60,6 +60,7 @@ export interface TranslationConfig {
   translation_mode: 'live' | 'clip'
   streamer_profile: string
   use_profile: boolean
+  current_activity: string
   slang: Record<string, string>
 }
 

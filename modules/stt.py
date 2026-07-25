@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 
 from config import cfg
+from modules.activity_context import normalize_activity
 from utils.audio import rms as _rms, write_wav
 from utils.logger import get_logger
 from utils.metrics import metrics
@@ -693,7 +694,7 @@ class STTEngine:
         # what game is on screen; bias the recognizer toward its terms so
         # mishears are prevented at the source (메가태화←메가진화 class).
         scene_terms = terms_for_activity(
-            getattr(cfg.translation, "current_activity", ""))
+            normalize_activity(getattr(cfg.translation, "current_activity", "")))
         budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
             use_profile_glossary=cfg.stt.use_profile_glossary,

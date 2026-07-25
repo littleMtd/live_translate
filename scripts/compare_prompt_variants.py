@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import cfg
+from modules.activity_context import activity_prompt_capsule
 from modules.translation_engines import (
     NvidiaEngine,
     get_last_engine_api_diagnostics,
@@ -140,13 +141,11 @@ def _composed_prompt(builder: Callable[[], str], *, legacy_profile: bool = False
         )
         if profile:
             prompt += "\n\n" + profile
-    activity = str(getattr(cfg.translation, "current_activity", "") or "").strip()
+    activity = activity_prompt_capsule(
+        getattr(cfg.translation, "current_activity", "")
+    )
     if activity:
-        prompt += (
-            "\n\n[Background] Current stream activity: " + activity
-            + "\nUse this only to disambiguate game/context-specific terms. "
-            "Never translate, mention, or copy it into the output."
-        )
+        prompt += "\n\n" + activity
     return prompt + _QWEN_PROMPT_TAIL
 
 

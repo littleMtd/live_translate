@@ -1341,6 +1341,36 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(fields["source_fuzzy_shadow"], shadow)
         self.assertFalse(fields["source_fuzzy_shadow"]["applied"])
 
+    def test_translation_event_records_normalized_activity_metadata(self):
+        outcome = TranslationOutcome(
+            source_text="안녕하세요",
+            target_text="你好",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="fake",
+            model="fake-model",
+        )
+        original = translator_module.cfg.translation.current_activity
+        object.__setattr__(
+            translator_module.cfg.translation,
+            "current_activity",
+            "  StarCraft   ladder  " + ("x" * 100),
+        )
+        try:
+            fields = self._emit_outcome_with_stale_nvidia_diagnostics(outcome)
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "current_activity",
+                original,
+            )
+
+        self.assertTrue(fields["current_activity"].startswith("StarCraft ladder "))
+        self.assertNotIn("\n", fields["current_activity"])
+        self.assertLessEqual(len(fields["current_activity"]), 80)
+
     def test_translation_workers_share_translator_state(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()

@@ -308,6 +308,20 @@ def test_current_activity_injected_as_labeled_background_line():
     assert "Never translate" in prompt
 
 
+def test_current_activity_is_normalized_to_one_bounded_capsule():
+    with _activity("  StarCraft   ladder  " + ("x" * 100)):
+        prompt = _compose_system_prompt()
+
+    background = next(
+        line for line in prompt.splitlines()
+        if line.startswith("[Background] Current stream activity:")
+    )
+    assert "\t" not in background
+    assert "StarCraft ladder" in background
+    assert len(background.removeprefix("[Background] Current stream activity: ")) <= 80
+    assert prompt.count("[Background] Current stream activity:") == 1
+
+
 def test_current_activity_applies_even_without_profile():
     with _activity("StarCraft", use_profile=False):
         prompt = _compose_system_prompt()

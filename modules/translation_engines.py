@@ -9,6 +9,7 @@ from typing import Any, Callable
 from urllib.error import URLError
 
 from config import cfg
+from modules.activity_context import activity_prompt_capsule, normalize_activity
 from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
 from modules.translation_prompts import get_translation_profile_facts
 from utils.api_retry import classify_error
@@ -518,7 +519,7 @@ def _direct_translation_source_lang(text: str) -> str:
 def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
     """Build the small, non-billed context supported by DeepL's text API."""
     parts = ["Livestream subtitles for a Taiwan audience."]
-    activity = str(getattr(cfg.translation, "current_activity", "") or "").strip()
+    activity = normalize_activity(getattr(cfg.translation, "current_activity", ""))
     if activity:
         parts.append(f"Current stream activity: {activity}.")
     profile_id = str(getattr(cfg, "active_streamer_profile", "") or "").strip()
@@ -582,18 +583,28 @@ def _groq_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
         return system_prompt
     profile_id = getattr(cfg, "active_streamer_profile", "")
+    prompt = _COMPACT_SYSTEM_PROMPT
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
-        return (
-            f"{_COMPACT_SYSTEM_PROMPT} Active streamer profile: {profile_id}."
+        prompt += (
+            f" Active streamer profile: {profile_id}."
             f"{_compact_profile_digest(profile_id)}"
         )
-    return _COMPACT_SYSTEM_PROMPT
+    activity = activity_prompt_capsule(
+        getattr(cfg.translation, "current_activity", "")
+    )
+    if activity:
+        prompt += "\n\n" + activity
+        prompt += (
+            "\n\nFinal check before answering: output only the Traditional Chinese "
+            "translation; never output background metadata."
+        )
+    return prompt
 
 
 def _openrouter_capsule_prompt(profile_id: str) -> str:
     """Production copy of the 40-case Qwen3-Next domain capsule."""
     facts = get_translation_profile_facts(profile_id).strip()
-    return f"""You translate noisy live-stream subtitles into natural colloquial Traditional Chinese used in Taiwan.
+    prompt = f"""You translate noisy live-stream subtitles into natural colloquial Traditional Chinese used in Taiwan.
 
 [Contract]
 - Output only the translation. No labels, quotes, notes, explanations, apologies, or alternatives.
@@ -611,6 +622,17 @@ def _openrouter_capsule_prompt(profile_id: str) -> str:
 {facts}
 
 Final check before answering: translation only; Traditional Chinese; no unsupported completion; exact profile names/titles; exact numbers and units."""
+    activity = activity_prompt_capsule(
+        getattr(cfg.translation, "current_activity", "")
+    )
+    if activity:
+        final_check = (
+            "\n\nFinal check before answering: translation only; Traditional Chinese; "
+            "no unsupported completion; exact profile names/titles; exact numbers and units."
+        )
+        prompt = prompt.removesuffix(final_check)
+        prompt += "\n\n" + activity + final_check
+    return prompt
 
 
 def _openrouter_system_prompt(system_prompt: str) -> str:
