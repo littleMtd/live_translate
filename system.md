@@ -53,6 +53,18 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `modules/translation_policy.py`: input pre-processing, STT garbage detection, slang lookup
 - `modules/translation_prompts.py`: system prompt construction, Qwen variant, streamer profile injection
 - `modules/streamer_profiles.py`: JSON-driven streamer profiles and STT glossary builder
+- `modules/activity_context.py`: immutable manual/automatic activity snapshots,
+  bounded prompt capsule, opaque automatic identity, and the thread-safe
+  translation publication store
+- `modules/scene_context.py`: safe window-only scene resolver. Vision output
+  must match an exact bounded `{kind,label}` JSON schema; unknown/rejected
+  output resets pending consensus, and arbitrary activities require two
+  distinct matching frames. Broad kinds use fixed labels and identity-cap
+  exhaustion stays locked until the window generation changes. Known aliases
+  stabilize IDs but do not limit what the model may identify
+- `modules/scene_vision.py`: explicit provider/model routing for scene vision;
+  fallback occurs only for retryable provider failures, not for
+  unknown/content/schema results
 - `modules/db.py`: SQLite persistent translation cache, LRU eviction, WAL mode, schema migration
 - `modules/subtitle_display.py`: tkinter subtitle window and pause/resume UI
 
@@ -77,6 +89,9 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `cfg.stt`: STT engine, model, device, language, batch size, queue size
 - `cfg.splitter`: sentence timing windows
 - `cfg.translation`: engine chain, model names per engine, target language, max tokens, queue size, slang table
+- `cfg.scene`: safe capture/vision cadence and routes. Automatic translation
+  publication and model-derived open-set publication have separate switches;
+  the latter defaults off until its runtime gate passes
 - `cfg.subtitle`: overlay UI settings, timing, queue size
 
 ## Engine Strategy
@@ -92,34 +107,48 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 
 Two layers of selection:
 
-1. **Backend mode** — `cfg.live_engine` / `cfg.clip_engine` (default `"nvidia"`):
-   - `"nvidia"` — NIM-hosted Qwen3 as primary, with `engine_chain` as fallback
+1. **Backend mode** — `cfg.live_engine` / `cfg.clip_engine` (default
+   `"anthropic"`):
+   - `"nvidia"` — NIM-hosted model as primary, with `engine_chain` as fallback
    - `"ollama"` — local Ollama only, no fallback
-   - `"anthropic"` — bypass NIM and run the full `engine_chain` directly
-2. **Engine chain** — `cfg.translation.engine_chain`, the ordered fallback list used by the `nvidia` and `anthropic` modes.
+   - `"anthropic"` — run the configured `engine_chain` directly; this
+     compatibility label does not imply that Claude is primary
+2. **Engine chain** — `cfg.translation.engine_chain`, the ordered route list
+   used by the `nvidia` and `anthropic` modes.
 
 Default chain (`config.py`):
 
-| Priority | Engine | Model | Key |
+| Priority | Provider | Model | Key |
 |---|---|---|---|
-| 1 | Claude | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
-| 2 | Gemini | `gemini-2.5-flash` | `GEMINI_API_KEY` |
-| 3 | Google Translate v2 | `google-translate-v2` | `GOOGLE_TRANSLATE_API_KEY` |
+| 1 | OpenRouter | `qwen/qwen3-next-80b-a3b-instruct` | `OPENROUTER_API_KEY` |
+| 2 | DeepL | `deepl-api-v2` | `DEEPL_API_KEY` |
+| 3 | Groq | `openai/gpt-oss-120b` | `GROQ_API_KEY_fall_back` |
 
-The translator tracks `active_idx` across failures. In live NVIDIA mode, a
-primary failure switches user traffic to the fallback and opens a circuit
-breaker: background probes wait through `cfg.nvidia.recovery_cooldown_sec`, and
-NVIDIA is restored only after `cfg.nvidia.recovery_success_threshold`
-consecutive valid probe responses. A failed, empty, or rejected probe resets
-the streak and restarts the cooldown. Recovery probes copy the same recent
-translation history used by production requests, so a short probe exercises a
-representative message/context payload without putting user text on the probe
-path. Circuit transitions and probe outcomes are persisted as
+Every route has a stable `provider:model` identity. The translator tracks
+`active_idx` across routes. In live mode, only attributable provider failures
+(timeouts, transport/connection errors, rate limits, HTTP 5xx, parse failures,
+or explicit empty provider responses) may persist a switch. Content rejection,
+auth/payment failures, and general HTTP 4xx may soft-fallback the current
+sentence but do not open the circuit.
+
+The provider-neutral policy is configured by
+`cfg.translation.circuit_breaker_enabled`,
+`circuit_recovery_cooldown_sec`, and
+`circuit_recovery_success_threshold`. Background probes wait through the
+cooldown and restore the primary only after consecutive valid responses.
+Recovery probes copy recent translation history without putting user text on
+the probe path. Circuit transitions and probe outcomes are persisted as
 `translation_fallback` runtime events (`circuit_opened`,
 `fallback_advanced`, `probe_cooldown_skipped`, `probe_succeeded`,
-`probe_failed`, and `circuit_closed`). Set
-`cfg.nvidia.circuit_breaker_enabled = False` to restore the legacy
-single-success recovery behavior.
+`probe_failed`, and `circuit_closed`) with engine and route identities.
+
+Live API work also has an end-to-end
+`cfg.translation.live_total_deadline_sec` budget. Each adapter timeout is a
+smaller per-route cap inside that budget. Current synchronous HTTP calls cannot
+always be cancelled after their socket timeout, so the deadline boundary
+releases the subtitle worker and bounds late calls to
+`cfg.translation.live_route_max_inflight` per route. Later sentences use
+fallback instead of creating an unbounded request backlog.
 
 To add a new engine: see the step-by-step guide in `config.py` (`_Translation.engine_chain` comment block).
 
@@ -135,8 +164,11 @@ To add a new engine: see the step-by-step guide in `config.py` (`_Translation.en
 These fields are observational only and must not change routing, retries, or output:
 
 - Every `translation` event carries `translation_mode` from
-  `cfg.translation.translation_mode` (`live` or `clip`). This is required when
-  comparing the live 5-second NVIDIA timeout with the 60-second clip/offline path.
+  `cfg.translation.translation_mode` (`live` or `clip`) plus the selected
+  `route_id`. Attempt rows retain their own route identity,
+  `deadline_exceeded`, `deadline_scope`, and `deadline_budget_ms`, so route and
+  sentence-budget failures remain distinguishable from adapter socket
+  timeouts.
 - Every Groq `stt` event carries `attempt_index`, `key_role`, and `will_retry`.
   `attempt_index` is 1 for the first key and 2 for the one allowed immediate
   cross-key retry of the same utterance. `key_role` is the client actually used

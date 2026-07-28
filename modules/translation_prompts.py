@@ -117,11 +117,37 @@ def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
 
 
 def _is_qwen_model() -> bool:
-    """檢查當前後端是否為 Qwen 模型"""
-    if cfg.live_engine == "nvidia":
-        model = cfg.nvidia.model.lower()
-        return "qwen" in model
-    return False
+    """Return whether the route that owns the shared prompt is a Qwen model."""
+    mode = str(getattr(cfg.translation, "translation_mode", "live") or "live")
+    backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
+    if backend == "nvidia":
+        model = cfg.nvidia.model
+    elif backend == "ollama":
+        model = cfg.ollama.model
+    else:
+        configured = {
+            "claude": bool(cfg.keys.anthropic),
+            "google_translate": bool(cfg.keys.google_translate),
+            "deepl": bool(cfg.keys.deepl),
+            "openrouter": bool(cfg.keys.openrouter),
+            "groq": bool(cfg.keys.groq_fallback),
+        }
+        models = {
+            "claude": cfg.translation.model,
+            "google_translate": "google-translate-v2",
+            "deepl": "deepl-api-v2",
+            "openrouter": cfg.translation.openrouter_model,
+            "groq": cfg.translation.groq_translation_model,
+        }
+        model = next(
+            (
+                models.get(name, "")
+                for name in cfg.translation.engine_chain
+                if configured.get(name, False)
+            ),
+            "",
+        )
+    return "qwen" in str(model or "").lower()
 
 
 def _build_base_prompt() -> str:

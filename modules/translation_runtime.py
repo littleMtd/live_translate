@@ -6,7 +6,10 @@ from dataclasses import dataclass
 
 from modules.translation_engines import (
     TranslationEngine,
+    call_engine_with_deadline,
+    get_last_engine_api_diagnostics,
     record_translation_attempt,
+    record_engine_deadline_exceeded,
     reset_last_engine_diagnostics,
     reset_last_token_usage,
     select_translation_attempt,
@@ -53,6 +56,23 @@ def _observe_probe(
         metrics.increment("translation.fallback.probe_observation_error")
 
 
+def _probe_diagnostic_fields() -> dict[str, object]:
+    diagnostics = get_last_engine_api_diagnostics()
+    return {
+        key: diagnostics.get(key)
+        for key in (
+            "api_error_type",
+            "api_error_message_class",
+            "api_total_wall_ms",
+            "api_timeout_count",
+            "deadline_exceeded",
+            "deadline_scope",
+            "deadline_budget_ms",
+        )
+        if diagnostics.get(key) not in (None, "", False, 0)
+    }
+
+
 def active_engine(
     engines: Sequence[TranslationEngine],
     active_idx: int,
@@ -62,6 +82,57 @@ def active_engine(
     if active_idx < 0 or active_idx >= len(engines):
         return None
     return engines[active_idx]
+
+
+def _call_route(
+    engine: TranslationEngine,
+    text: str,
+    system_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+    *,
+    deadline_at: float | None,
+    max_route_inflight: int,
+    clock: Callable[[], float],
+) -> tuple[str | None, bool]:
+    """Return (result, sentence_deadline_exhausted)."""
+    if deadline_at is None:
+        return engine.translate(text, system_prompt, incomplete, history), False
+
+    remaining = deadline_at - clock()
+    if remaining <= 0:
+        record_engine_deadline_exceeded(
+            engine,
+            deadline_scope="sentence",
+        )
+        return None, True
+
+    configured_timeout = getattr(engine, "request_timeout_seconds", None)
+    if not isinstance(configured_timeout, (int, float)) or isinstance(
+        configured_timeout, bool
+    ):
+        configured_timeout = None
+    timeout_seconds = (
+        min(remaining, float(configured_timeout))
+        if configured_timeout is not None and configured_timeout > 0
+        else remaining
+    )
+    deadline_scope = (
+        "sentence"
+        if timeout_seconds >= remaining
+        else "route"
+    )
+    result = call_engine_with_deadline(
+        engine,
+        text,
+        system_prompt,
+        incomplete,
+        history,
+        timeout_seconds=timeout_seconds,
+        max_inflight=max_route_inflight,
+        deadline_scope=deadline_scope,
+    )
+    return result, deadline_at - clock() <= 0
 
 
 def _attempt_failure_scope(attempt: dict[str, object]) -> str:
@@ -159,6 +230,8 @@ def call_with_fallback(
     *,
     circuit_breaker_enabled: bool = False,
     recovery_cooldown_seconds: float = 0.0,
+    deadline_at: float | None = None,
+    max_route_inflight: int = 2,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[str | None, int]:
     """Returns (result, engine_idx) where engine_idx is the engine that
@@ -176,7 +249,16 @@ def call_with_fallback(
     reset_last_engine_diagnostics()
     reset_last_token_usage()
     try:
-        result = primary.translate(text, system_prompt, incomplete, history)
+        result, sentence_deadline_exhausted = _call_route(
+            primary,
+            text,
+            system_prompt,
+            incomplete,
+            history,
+            deadline_at=deadline_at,
+            max_route_inflight=max_route_inflight,
+            clock=clock,
+        )
     except Exception as exc:
         record_translation_attempt(primary, phase="fallback_chain", exception=exc)
         raise
@@ -225,12 +307,24 @@ def call_with_fallback(
 
     # ── Try fallback engines ──────────────────────────────────────────────────
     for index in range(primary_idx + 1, len(engines)):
+        if sentence_deadline_exhausted:
+            metrics.increment("translation.fallback.deadline_exhausted")
+            break
         metrics.increment("translation.fallback.attempt")
         reset_last_engine_diagnostics()
         reset_last_token_usage()
         fallback = engines[index]
         try:
-            fb_result = fallback.translate(text, system_prompt, incomplete, history)
+            fb_result, sentence_deadline_exhausted = _call_route(
+                fallback,
+                text,
+                system_prompt,
+                incomplete,
+                history,
+                deadline_at=deadline_at,
+                max_route_inflight=max_route_inflight,
+                clock=clock,
+            )
         except Exception as exc:
             record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
             raise
@@ -308,6 +402,8 @@ def probe_primary_recovery(
     required_consecutive_successes: int = 1,
     history: list[tuple[str, str]] | None = None,
     observation_sink: ProbeObservationSink | None = None,
+    deadline_at: float | None = None,
+    max_route_inflight: int = 2,
     clock: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Probe the primary engine without putting a user sentence on the probe path."""
@@ -331,8 +427,19 @@ def probe_primary_recovery(
     reset_last_engine_diagnostics()
     reset_last_token_usage()
     try:
-        probe = engines[0].translate(probe_text, system_prompt, False, history or [])
+        probe, _deadline_exhausted = _call_route(
+            engines[0],
+            probe_text,
+            system_prompt,
+            False,
+            history or [],
+            deadline_at=deadline_at,
+            max_route_inflight=max_route_inflight,
+            clock=clock,
+        )
+        probe_diagnostics = _probe_diagnostic_fields()
     except Exception as exc:
+        probe_diagnostics = _probe_diagnostic_fields()
         if not circuit_breaker_enabled:
             raise
         metrics.increment("translation.fallback.probe_error")
@@ -345,6 +452,7 @@ def probe_primary_recovery(
             success_streak=0,
             cooldown_until=state.primary_cooldown_until,
             exception_type=type(exc).__name__,
+            **probe_diagnostics,
         )
         log.debug("Primary probe raised; restarting recovery cooldown", exc_info=True)
         return False
@@ -365,6 +473,7 @@ def probe_primary_recovery(
                 recovered=False,
                 success_streak=success_streak,
                 cooldown_until=state.primary_cooldown_until,
+                **probe_diagnostics,
             )
             log.info(
                 "Primary engine %s recovery probe succeeded (%d/%d); staying on %s",
@@ -387,6 +496,7 @@ def probe_primary_recovery(
             recovered=True,
             success_streak=success_streak,
             cooldown_until=0.0,
+            **probe_diagnostics,
         )
         return True
     rejected_output = bool(probe)
@@ -401,6 +511,7 @@ def probe_primary_recovery(
         recovered=False,
         success_streak=0,
         cooldown_until=state.primary_cooldown_until,
+        **probe_diagnostics,
     )
     log.debug("Primary probe failed, staying on %s", engines[state.active_idx].engine_name)
     return False

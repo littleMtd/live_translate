@@ -2,10 +2,11 @@
 
 Manual session context supplies a short activity string
 (``cfg.translation.current_activity``, e.g. "Pocket Monsters"). The automatic
-scene resolver is record-only and never writes this value. This module maps
-that string to a set of Korean terms the STT prompt should bias toward, so
-game vocabulary is heard correctly at the source instead of being repaired
-after a mishear (observed: 메가태화←메가진화, 픽생몬←포켓몬).
+scene resolver may publish a separate translation-only snapshot but never
+writes this value or enters this module. This module maps the manual string to
+a set of Korean terms the STT prompt should bias toward, so game vocabulary is
+heard correctly at the source instead of being repaired after a mishear
+(observed: 메가태화←메가진화, 픽생몬←포켓몬).
 
 Deliberately config-free (config.py imports modules.streamer_profiles, so
 this layer must not import config); callers pass the activity string in.

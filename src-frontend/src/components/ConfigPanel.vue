@@ -130,8 +130,8 @@ const defaultConfig = (): ConfigDto => ({
               padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
               poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
   database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
-  live_engine: 'nvidia',
-  clip_engine: 'nvidia',
+  live_engine: 'anthropic',
+  clip_engine: 'anthropic',
   ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
   nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
 })

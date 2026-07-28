@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 import unittest
 from collections import OrderedDict
 from unittest.mock import MagicMock
@@ -19,6 +21,7 @@ from modules.translation_engines import (
     get_translation_attempts,
     reset_last_token_usage,
     reset_translation_call_trace,
+    translation_route_id,
 )
 from utils.metrics import metrics
 
@@ -117,6 +120,25 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
     def test_active_engine_returns_none_for_invalid_state(self):
         self.assertIsNone(active_engine([], 0))
         self.assertIsNone(active_engine([_engine("primary", "ok")], 9))
+
+    def test_route_identity_distinguishes_models_on_one_provider(self):
+        first = _engine("openrouter", "first")
+        first.model_name = "vendor/model-a"
+        second = _engine("openrouter", "second")
+        second.model_name = "vendor/model-b"
+
+        self.assertEqual(
+            translation_route_id(first),
+            "openrouter:vendor/model-a",
+        )
+        self.assertEqual(
+            translation_route_id(second),
+            "openrouter:vendor/model-b",
+        )
+        self.assertNotEqual(
+            translation_route_id(first),
+            translation_route_id(second),
+        )
 
     def test_fallback_advances_when_primary_fails(self):
         metrics.reset()
@@ -400,6 +422,137 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(state.active_idx, 1)
         self.assertEqual(get_translation_attempts()[0]["failure_scope"], "provider")
 
+    def test_route_wall_deadline_falls_back_and_records_route_identity(self):
+        release = threading.Event()
+        primary = _engine("openrouter", None)
+        primary.model_name = "quality/model"
+        primary.request_timeout_seconds = 0.04
+        primary.translate.side_effect = lambda *_args: release.wait(1.0)
+        fallback = _engine("deepl", "ok")
+        fallback.model_name = "deepl-api-v2"
+        fallback.request_timeout_seconds = 0.2
+        state = FallbackState()
+
+        started = time.monotonic()
+        try:
+            result, used_idx = call_with_fallback(
+                [primary, fallback],
+                state,
+                "source",
+                "prompt",
+                False,
+                [],
+                50,
+                1,
+                lambda result, source: False,
+                logging.getLogger("test"),
+                circuit_breaker_enabled=True,
+                recovery_cooldown_seconds=60.0,
+                deadline_at=time.monotonic() + 0.3,
+                max_route_inflight=1,
+            )
+        finally:
+            release.set()
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertLess(time.monotonic() - started, 0.2)
+        self.assertEqual(state.active_idx, 1)
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["route_id"], "openrouter:quality/model")
+        self.assertTrue(attempts[0]["deadline_exceeded"])
+        self.assertEqual(attempts[0]["deadline_scope"], "route")
+        self.assertEqual(attempts[0]["failure_scope"], "provider")
+        self.assertEqual(attempts[1]["route_id"], "deepl:deepl-api-v2")
+
+    def test_sentence_deadline_stops_before_lower_fallback(self):
+        release = threading.Event()
+        primary = _engine("primary-deadline", None)
+        primary.request_timeout_seconds = 1.0
+        primary.translate.side_effect = lambda *_args: release.wait(1.0)
+        fallback = _engine("fallback-deadline", "late")
+        state = FallbackState()
+
+        try:
+            result, used_idx = call_with_fallback(
+                [primary, fallback],
+                state,
+                "source",
+                "prompt",
+                False,
+                [],
+                50,
+                1,
+                lambda result, source: False,
+                logging.getLogger("test"),
+                circuit_breaker_enabled=True,
+                deadline_at=time.monotonic() + 0.04,
+                max_route_inflight=1,
+            )
+        finally:
+            release.set()
+
+        self.assertIsNone(result)
+        self.assertEqual(used_idx, 0)
+        fallback.translate.assert_not_called()
+        attempt = get_translation_attempts()[0]
+        self.assertTrue(attempt["deadline_exceeded"])
+        self.assertEqual(attempt["deadline_scope"], "sentence")
+
+    def test_late_request_keeps_route_inflight_bounded(self):
+        release = threading.Event()
+        primary = _engine("bounded-provider", None)
+        primary.model_name = "bounded-model"
+        primary.request_timeout_seconds = 0.02
+        primary.translate.side_effect = lambda *_args: release.wait(1.0)
+
+        try:
+            call_with_fallback(
+                [primary],
+                FallbackState(),
+                "first",
+                "prompt",
+                False,
+                [],
+                50,
+                1,
+                lambda result, source: False,
+                logging.getLogger("test"),
+                circuit_breaker_enabled=True,
+                deadline_at=time.monotonic() + 0.2,
+                max_route_inflight=1,
+            )
+            reset_translation_call_trace()
+            fallback = _engine("bounded-fallback", "ok")
+            fallback.request_timeout_seconds = 0.1
+            started = time.monotonic()
+            result, used_idx = call_with_fallback(
+                [primary, fallback],
+                FallbackState(),
+                "second",
+                "prompt",
+                False,
+                [],
+                50,
+                1,
+                lambda result, source: False,
+                logging.getLogger("test"),
+                circuit_breaker_enabled=True,
+                deadline_at=time.monotonic() + 0.2,
+                max_route_inflight=1,
+            )
+        finally:
+            release.set()
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertLess(time.monotonic() - started, 0.1)
+        self.assertEqual(primary.translate.call_count, 1)
+        attempt = get_translation_attempts()[0]
+        self.assertEqual(
+            attempt["api_error_message_class"],
+            "route_saturated",
+        )
+        self.assertEqual(attempt["deadline_scope"], "route_inflight")
+
     def test_empty_content_after_api_attempt_opens_circuit(self):
         engines = [
             _failed_engine(
@@ -613,7 +766,14 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
 
     def test_failed_probe_resets_streak_and_restarts_cooldown(self):
         metrics.reset()
-        engines = [_engine("primary", None), _engine("fallback", "fallback")]
+        engines = [
+            _failed_engine(
+                "primary",
+                error_type="timeout",
+                message_class="read_timeout",
+            ),
+            _engine("fallback", "fallback"),
+        ]
         state = FallbackState(active_idx=1, consecutive_probe_successes=1)
         observations = []
 
@@ -636,6 +796,11 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(state.consecutive_probe_successes, 0)
         self.assertEqual(state.primary_cooldown_until, 160.0)
         self.assertEqual(observations[0]["status"], "empty")
+        self.assertEqual(observations[0]["api_error_type"], "timeout")
+        self.assertEqual(
+            observations[0]["api_error_message_class"],
+            "read_timeout",
+        )
 
         probe_primary_recovery(
             engines,
@@ -679,6 +844,41 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(metrics.snapshot().counters["translation.fallback.probe_error"], 1)
         self.assertEqual(observations[0]["status"], "exception")
         self.assertEqual(observations[0]["exception_type"], "TimeoutError")
+
+    def test_probe_observation_keeps_wall_deadline_diagnostics(self):
+        release = threading.Event()
+        primary = _engine("probe-deadline", None)
+        primary.request_timeout_seconds = 0.02
+        primary.translate.side_effect = lambda *_args: release.wait(1.0)
+        state = FallbackState(active_idx=1)
+        observations = []
+
+        try:
+            recovered = probe_primary_recovery(
+                [primary, _engine("fallback", "fallback")],
+                state,
+                "probe source",
+                "prompt",
+                lambda result, source: False,
+                logging.getLogger("test"),
+                circuit_breaker_enabled=True,
+                recovery_cooldown_seconds=60.0,
+                required_consecutive_successes=2,
+                observation_sink=observations.append,
+                deadline_at=time.monotonic() + 0.2,
+                max_route_inflight=1,
+            )
+        finally:
+            release.set()
+
+        self.assertFalse(recovered)
+        self.assertEqual(observations[0]["status"], "empty")
+        self.assertTrue(observations[0]["deadline_exceeded"])
+        self.assertEqual(observations[0]["deadline_scope"], "route")
+        self.assertEqual(
+            observations[0]["api_error_message_class"],
+            "total_deadline",
+        )
 
     def test_soft_fallback_reports_fallback_engine_without_switching(self):
         metrics.reset()

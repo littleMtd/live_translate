@@ -15,6 +15,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 # Stub heavy optional modules so `import main` succeeds without a full venv.
 for _mod in ("sounddevice", "soundfile", "funasr", "groq", "anthropic"):
     if _mod not in sys.modules:
@@ -23,7 +25,21 @@ for _mod in ("sounddevice", "soundfile", "funasr", "groq", "anthropic"):
 from modules.pipeline_events import SentenceEvent
 
 
-def test_validate_config_accepts_nvidia_backend_without_engine_chain(monkeypatch):
+@pytest.fixture
+def isolate_scene_vision_startup_validation(monkeypatch):
+    import main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "_validate_scene_vision_config",
+        lambda: None,
+    )
+
+
+def test_validate_config_accepts_nvidia_backend_without_engine_chain(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
@@ -32,7 +48,10 @@ def test_validate_config_accepts_nvidia_backend_without_engine_chain(monkeypatch
     main_module._validate_config(stt_only=False)
 
 
-def test_validate_config_warns_for_missing_nvidia_fallback_key(monkeypatch):
+def test_validate_config_warns_for_missing_nvidia_fallback_key(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
     import main as main_module
 
     warnings = []
@@ -54,7 +73,10 @@ def test_validate_config_warns_for_missing_nvidia_fallback_key(monkeypatch):
     assert warnings == ["Engine 'groq' skipped - API key not set"]
 
 
-def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
+def test_validate_config_rejects_nvidia_backend_without_key(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
@@ -68,7 +90,10 @@ def test_validate_config_rejects_nvidia_backend_without_key(monkeypatch):
         raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
 
 
-def test_validate_config_warns_when_deepl_key_is_missing(monkeypatch):
+def test_validate_config_warns_when_deepl_key_is_missing(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
     import main as main_module
 
     warnings = []
@@ -87,6 +112,35 @@ def test_validate_config_warns_when_deepl_key_is_missing(monkeypatch):
         object.__setattr__(main_module.cfg.translation, "engine_chain", original_chain)
 
     assert warnings == ["Engine 'deepl' skipped - API key not set"]
+
+
+def test_scene_vision_startup_validation_rejects_missing_route_key(monkeypatch):
+    import main as main_module
+    import modules.scene_vision as scene_vision
+
+    monkeypatch.setattr(
+        scene_vision,
+        "missing_vision_route_credentials",
+        lambda: ("openrouter:vision-model",),
+    )
+
+    with pytest.raises(SystemExit) as captured:
+        main_module._validate_scene_vision_config()
+
+    assert captured.value.code == 1
+
+
+def test_scene_vision_startup_validation_accepts_configured_routes(monkeypatch):
+    import main as main_module
+    import modules.scene_vision as scene_vision
+
+    monkeypatch.setattr(
+        scene_vision,
+        "missing_vision_route_credentials",
+        lambda: (),
+    )
+
+    main_module._validate_scene_vision_config()
 
 
 def test_apply_listen_mode_config_relaxes_stt_filters():

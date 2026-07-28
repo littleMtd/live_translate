@@ -101,7 +101,8 @@ describe('ConfigPanel', () => {
     const wrapper = mount(ConfigPanel, { props: { config: null } })
     const vm = wrapper.vm as any
     expect(vm.local.subtitle.font_size).toBe(22)
-    expect(vm.local.live_engine).toBe('nvidia')
+    expect(vm.local.live_engine).toBe('anthropic')
+    expect(vm.local.clip_engine).toBe('anthropic')
   })
 
   it('updates local state when config prop changes', async () => {

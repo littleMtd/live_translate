@@ -35,6 +35,8 @@ class TestConfig(unittest.TestCase):
             self.assertIn(name, _VALID_ENGINE_NAMES)
 
     def test_live_fallback_chain_uses_benchmarked_openrouter_capsule_order(self):
+        self.assertEqual(cfg.live_engine, "anthropic")
+        self.assertEqual(cfg.clip_engine, "anthropic")
         self.assertEqual(
             cfg.translation.engine_chain,
             ("openrouter", "deepl", "groq"),
@@ -44,6 +46,98 @@ class TestConfig(unittest.TestCase):
             "qwen/qwen3-next-80b-a3b-instruct",
         )
         self.assertEqual(cfg.translation.openrouter_max_tokens, 160)
+        self.assertTrue(cfg.translation.circuit_breaker_enabled)
+        self.assertEqual(cfg.translation.circuit_recovery_success_threshold, 2)
+        self.assertGreater(cfg.translation.live_total_deadline_sec, 0)
+        self.assertEqual(cfg.translation.live_route_max_inflight, 2)
+        self.assertEqual(cfg.translation.claude_timeout, 5.0)
+        self.assertEqual(cfg.translation.google_translate_timeout, 5.0)
+
+    def test_translation_reliability_limits_are_validated(self):
+        from config import _Translation
+
+        for field_name, value in (
+            ("circuit_recovery_cooldown_sec", 0),
+            ("circuit_recovery_cooldown_sec", float("inf")),
+            ("live_total_deadline_sec", 0),
+            ("live_total_deadline_sec", float("nan")),
+        ):
+            with self.subTest(field_name=field_name, value=value):
+                with self.assertRaisesRegex(ValueError, "positive and finite"):
+                    _Translation(**{field_name: value})
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            _Translation(circuit_recovery_success_threshold=0)
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            _Translation(circuit_breaker_enabled="yes")
+        for value in (0, 9, True, 1.5):
+            with self.subTest(live_route_max_inflight=value):
+                with self.assertRaisesRegex(ValueError, "between 1 and 8"):
+                    _Translation(live_route_max_inflight=value)
+
+    def test_scene_vision_routes_are_explicit_groq_then_openrouter(self):
+        self.assertEqual(cfg.scene.vision_provider, "groq")
+        self.assertEqual(cfg.scene.vision_model, "qwen/qwen3.6-27b")
+        self.assertEqual(
+            cfg.scene.vision_fallback_routes,
+            (("openrouter", "qwen/qwen3-vl-32b-instruct"),),
+        )
+        self.assertEqual(cfg.scene.vision_max_retries, 0)
+
+    def test_scene_vision_rejects_unknown_malformed_and_duplicate_routes(self):
+        from config import _Scene
+
+        with self.assertRaisesRegex(ValueError, "provider invalid"):
+            _Scene(vision_provider="implicit", vision_model="model")
+        with self.assertRaisesRegex(ValueError, "malformed route"):
+            _Scene(vision_fallback_routes=(("openrouter",),))
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            _Scene(
+                vision_provider="groq",
+                vision_model="same",
+                vision_fallback_routes=(("groq", "same"),),
+            )
+
+    def test_scene_vision_rejects_blank_model_retry_and_invalid_timeout(self):
+        from config import _Scene
+
+        with self.assertRaisesRegex(ValueError, "model invalid"):
+            _Scene(vision_model="")
+        with self.assertRaisesRegex(ValueError, "model invalid"):
+            _Scene(vision_model="model with unbounded instructions")
+        with self.assertRaisesRegex(ValueError, "at most three"):
+            _Scene(
+                vision_fallback_routes=(
+                    ("openrouter", "fallback-1"),
+                    ("openrouter", "fallback-2"),
+                    ("groq", "fallback-3"),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "must remain zero"):
+            _Scene(vision_max_retries=1)
+        for timeout in (0, -1, float("inf"), float("nan"), True):
+            with self.subTest(timeout=timeout):
+                with self.assertRaisesRegex(ValueError, "must be positive"):
+                    _Scene(vision_timeout=timeout)
+
+    def test_scene_open_set_publication_is_default_off_and_bounded(self):
+        from config import _Scene
+
+        scene = _Scene()
+        self.assertFalse(scene.publish_open_set_activity)
+        self.assertGreaterEqual(scene.max_open_set_identities_per_window, 1)
+        self.assertLessEqual(scene.max_open_set_identities_per_window, 32)
+
+        for field_name in (
+            "publish_translation_activity",
+            "publish_open_set_activity",
+        ):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, "must be boolean"):
+                    _Scene(**{field_name: "yes"})
+        for value in (0, 33, True, 1.5):
+            with self.subTest(max_open_set_identities_per_window=value):
+                with self.assertRaisesRegex(ValueError, "between 1 and 32"):
+                    _Scene(max_open_set_identities_per_window=value)
 
     def test_streamer_profile_ids_match_registry(self):
         from config import _VALID_STREAMER_PROFILES
@@ -175,7 +269,7 @@ class TestConfig(unittest.TestCase):
         self.assertLessEqual(cfg.nvidia.timeout, 10)
         self.assertEqual(cfg.nvidia.live_timeout, 5)
 
-    def test_nvidia_circuit_breaker_defaults_are_conservative(self):
+    def test_legacy_nvidia_circuit_fields_remain_available_for_compatibility(self):
         self.assertTrue(cfg.nvidia.circuit_breaker_enabled)
         self.assertGreaterEqual(cfg.nvidia.recovery_cooldown_sec, 30.0)
         self.assertGreaterEqual(cfg.nvidia.recovery_success_threshold, 2)

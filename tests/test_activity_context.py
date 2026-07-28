@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from config import cfg
 from modules.activity_context import (
+    ActivitySnapshot,
+    ActivityPublicationStore,
+    AutomaticActivityPublication,
     MAX_ACTIVITY_CHARS,
     activity_prompt_capsule,
     activity_id_for_label,
+    automatic_activity_identity,
     bind_activity_snapshot,
     capture_activity_snapshot,
+    capture_effective_activity_snapshot,
     effective_activity_value,
     normalize_activity,
 )
@@ -51,16 +58,288 @@ def test_activity_prompt_capsule_is_single_metadata_section():
 
 def test_snapshot_identity_uses_schema_and_canonical_activity_id():
     pokemon = capture_activity_snapshot("Pocket Monsters", source="automatic")
+    league = capture_activity_snapshot("LoL", source="automatic")
     manual_alias = capture_activity_snapshot("Pocket Monsters")
     custom = capture_activity_snapshot("台服天梯")
 
     assert pokemon.activity_id == "pokemon"
     assert pokemon.display_label == "Pokémon"
-    assert pokemon.cache_identity == "activity-v1:pokemon"
+    assert pokemon.cache_identity == "activity-v2:pokemon"
+    assert league.activity_id == "league_of_legends"
+    assert league.display_label == "League of Legends"
+    assert league.cache_identity == "activity-v2:league_of_legends"
     assert manual_alias.activity_id.startswith("manual-")
     assert manual_alias.display_label == "Pocket Monsters"
     assert custom.activity_id.startswith("manual-")
     assert activity_id_for_label("台服天梯") == custom.activity_id
+
+
+def test_publication_store_captures_manual_then_fresh_auto_then_empty():
+    now = [100.0]
+    store = ActivityPublicationStore(clock=lambda: now[0])
+    publication = AutomaticActivityPublication(
+        activity_id="minecraft",
+        display_label="Minecraft",
+        confirmed_at_utc="2026-07-26T00:00:00+00:00",
+        fresh_until_monotonic=110.0,
+        confidence=1.0,
+        evidence_count=2,
+        activity_kind="game",
+    )
+    assert store.replace(publication) is True
+
+    automatic = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+    manual = capture_effective_activity_snapshot(
+        "StarCraft ladder",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+    disabled = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=False,
+        publication_store=store,
+    )
+
+    assert automatic.activity_id == "minecraft"
+    assert automatic.display_label == "Minecraft"
+    assert automatic.source == "automatic"
+    assert automatic.cache_identity == "activity-v2:minecraft"
+    assert automatic.activity_kind == "game"
+    assert manual.display_label == "StarCraft ladder"
+    assert manual.source == "manual"
+    assert disabled.display_label == ""
+    assert disabled.source == "none"
+
+    now[0] = 110.0
+    expired = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+    assert expired.display_label == ""
+    assert expired.source == "none"
+    assert store.current() is None
+
+
+def test_publication_store_accepts_canonical_league_of_legends():
+    store = ActivityPublicationStore(clock=lambda: 100.0)
+    publication = AutomaticActivityPublication(
+        activity_id="league_of_legends",
+        display_label="League of Legends",
+        confirmed_at_utc="2026-07-26T00:00:00+00:00",
+        fresh_until_monotonic=110.0,
+        confidence=1.0,
+        evidence_count=2,
+        activity_kind="game",
+    )
+
+    assert store.replace(publication) is True
+    captured = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+
+    assert captured.activity_id == "league_of_legends"
+    assert captured.display_label == "League of Legends"
+    assert captured.source == "automatic"
+
+
+def test_publication_store_rejects_mismatched_automatic_metadata():
+    store = ActivityPublicationStore()
+
+    with pytest.raises(ValueError, match="identity must match"):
+        store.replace(
+            AutomaticActivityPublication(
+                activity_id="minecraft",
+                display_label="Minecraft speedrun",
+                confirmed_at_utc="2026-07-26T00:00:00+00:00",
+                fresh_until_monotonic=9999999999.0,
+                confidence=1.0,
+                evidence_count=2,
+                activity_kind="game",
+            )
+        )
+
+
+def test_open_set_identity_is_deterministic_collision_resistant_and_bounded():
+    first = automatic_activity_identity("The Finals", kind="game")
+    repeated = automatic_activity_identity("  THE FINALS  ", kind="game")
+    compatibility = automatic_activity_identity(
+        "Ｔｈｅ Finals",
+        kind="game",
+    )
+    punctuation_variant = automatic_activity_identity("The-Finals", kind="game")
+    other_kind = automatic_activity_identity("The Finals", kind="media")
+    non_latin = automatic_activity_identity("雜談直播", kind="chatting")
+
+    assert first[0] == repeated[0]
+    assert first[0] == compatibility[0]
+    assert repeated[2] == "game"
+    assert first[0].startswith("auto-")
+    assert first[1:] == ("The Finals", "game")
+    assert punctuation_variant[0] != first[0]
+    assert other_kind[0] != first[0]
+    assert non_latin[0].startswith("auto-")
+    assert non_latin[1:] == ("雜談直播", "chatting")
+    assert automatic_activity_identity("x" * 81, kind="game") == ("", "", "")
+    assert automatic_activity_identity("The Finals", kind="unknown") == (
+        "",
+        "",
+        "",
+    )
+
+
+def test_publication_store_accepts_open_set_and_rejects_kind_mismatch():
+    store = ActivityPublicationStore(clock=lambda: 10.0)
+    activity_id, label, kind = automatic_activity_identity(
+        "The Finals",
+        kind="game",
+    )
+    publication = AutomaticActivityPublication(
+        activity_id=activity_id,
+        display_label=label,
+        confirmed_at_utc="2026-07-26T00:00:00+00:00",
+        fresh_until_monotonic=100.0,
+        confidence=0.9,
+        evidence_count=2,
+        activity_kind=kind,
+    )
+
+    assert store.replace(publication) is True
+    captured = store.capture("", automatic_enabled=True)
+    assert captured.activity_id == activity_id
+    assert captured.display_label == "The Finals"
+    assert captured.activity_kind == "game"
+
+    with pytest.raises(ValueError, match="identity must match"):
+        store.replace(
+            AutomaticActivityPublication(
+                activity_id=activity_id,
+                display_label=label,
+                confirmed_at_utc="2026-07-26T00:00:00+00:00",
+                fresh_until_monotonic=100.0,
+                confidence=0.9,
+                evidence_count=2,
+                activity_kind="media",
+            )
+        )
+
+
+def test_captured_automatic_snapshot_is_immutable_across_store_changes():
+    store = ActivityPublicationStore(clock=lambda: 10.0)
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="minecraft",
+            display_label="Minecraft",
+            confirmed_at_utc="2026-07-26T00:00:00+00:00",
+            fresh_until_monotonic=100.0,
+            confidence=1.0,
+            evidence_count=2,
+            activity_kind="game",
+        )
+    )
+    captured = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="hades",
+            display_label="Hades",
+            confirmed_at_utc="2026-07-26T00:01:00+00:00",
+            fresh_until_monotonic=100.0,
+            confidence=0.8,
+            evidence_count=3,
+            activity_kind="game",
+        )
+    )
+
+    assert captured.activity_id == "minecraft"
+    assert captured.display_label == "Minecraft"
+    assert captured.cache_identity == "activity-v2:minecraft"
+
+
+def test_automatic_cache_identity_ignores_confirmation_metadata():
+    store = ActivityPublicationStore(clock=lambda: 10.0)
+    first_publication = AutomaticActivityPublication(
+        activity_id="minecraft",
+        display_label="Minecraft",
+        confirmed_at_utc="2026-07-26T00:00:00+00:00",
+        fresh_until_monotonic=100.0,
+        confidence=1.0,
+        evidence_count=2,
+        activity_kind="game",
+    )
+    store.replace(first_publication)
+    first = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="minecraft",
+            display_label="Minecraft",
+            confirmed_at_utc="2026-07-26T00:05:00+00:00",
+            fresh_until_monotonic=200.0,
+            confidence=0.6,
+            evidence_count=4,
+            activity_kind="game",
+        )
+    )
+    second = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        publication_store=store,
+    )
+
+    assert first.cache_identity == second.cache_identity
+    assert first.cache_identity == "activity-v2:minecraft"
+
+
+def test_prompt_cache_version_uses_activity_id_and_schema_not_source_or_time():
+    translator = Translator()
+    engine = "groq"
+    prompt = "BASE PROMPT"
+    first = ActivitySnapshot(
+        activity_id="minecraft",
+        display_label="Minecraft",
+        source="automatic",
+        schema_version=1,
+        captured_at_utc="2026-07-26T00:00:00+00:00",
+    )
+    same_identity = ActivitySnapshot(
+        activity_id="minecraft",
+        display_label="Minecraft",
+        source="manual",
+        schema_version=1,
+        captured_at_utc="2026-07-26T00:05:00+00:00",
+    )
+    new_schema = ActivitySnapshot(
+        activity_id="minecraft",
+        display_label="Minecraft",
+        source="automatic",
+        schema_version=2,
+        captured_at_utc="2026-07-26T00:00:00+00:00",
+    )
+
+    with bind_activity_snapshot(first):
+        first_version = translator._prompt_version_for_engine(engine, prompt)
+    with bind_activity_snapshot(same_identity):
+        same_version = translator._prompt_version_for_engine(engine, prompt)
+    with bind_activity_snapshot(new_schema):
+        new_version = translator._prompt_version_for_engine(engine, prompt)
+
+    assert first_version == same_version
+    assert first_version != new_version
 
 
 def test_bound_snapshot_wins_over_inflight_global_manual_change():
@@ -116,5 +395,8 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
     assert "StarCraft" in seen["effective_prompt"]
     assert "Hades" not in seen["effective_prompt"]
     assert outcome.prompt_version == hashlib.md5(
-        seen["effective_prompt"].encode()
+        (
+            seen["effective_prompt"]
+            + "\n[activity-cache-identity] activity-v2:starcraft"
+        ).encode()
     ).hexdigest()[:8]

@@ -204,12 +204,24 @@ def test_analyzer_summarizes_record_only_activity_shadow(tmp_path):
                 "window_status": "ok",
                 "capture_status": "ok",
                 "candidate_activity_id": "starcraft",
+                "candidate_activity_kind": "game",
+                "activity_parse_status": "accepted",
                 "candidate_streak": 1,
                 "distinct_frame": True,
                 "evidence_reused": False,
                 "shadow_accepted": True,
                 "publication_blocked": True,
                 "manual_override_active": True,
+                "vision_provider": "groq",
+                "vision_model": "qwen/qwen3.6-27b",
+                "vision_outcome": "success",
+                "vision_attempt_limit": 1,
+                "vision_prompt_tokens": 837,
+                "vision_completion_tokens": 4,
+                "vision_total_tokens": 841,
+                "vision_rate_limit_tpm": 8000,
+                "vision_rate_limit_remaining_tokens": 5519,
+                "vision_rate_limit_reset_tokens_sec": 18.607,
                 "vision_latency_ms": 125,
                 "discard_reason": "",
             },
@@ -223,6 +235,8 @@ def test_analyzer_summarizes_record_only_activity_shadow(tmp_path):
                 "window_status": "ok",
                 "capture_status": "ok",
                 "candidate_activity_id": "starcraft",
+                "candidate_activity_kind": "game",
+                "activity_parse_status": "accepted",
                 "candidate_streak": 2,
                 "confirmed": True,
                 "distinct_frame": False,
@@ -248,7 +262,348 @@ def test_analyzer_summarizes_record_only_activity_shadow(tmp_path):
     assert summary["manual_override_event_count"] == 1
     assert summary["publication_violation_count"] == 0
     assert summary["vision_latency_ms"]["avg"] == 150
+    assert summary["by_vision_provider"] == [{"value": "groq", "count": 1}]
+    assert summary["by_vision_model"] == [
+        {"value": "qwen/qwen3.6-27b", "count": 1}
+    ]
+    assert summary["by_vision_outcome"] == [
+        {"value": "success", "count": 1}
+    ]
+    assert summary["by_vision_error_type"] == []
+    assert summary["by_candidate_activity_kind"] == [
+        {"value": "game", "count": 2}
+    ]
+    assert summary["by_activity_parse_status"] == [
+        {"value": "accepted", "count": 2}
+    ]
+    assert summary["by_activity_rejection_reason"] == []
+    assert summary["vision_usage"] == {
+        "event_count": 1,
+        "prompt_tokens": 837,
+        "completion_tokens": 4,
+        "total_tokens": 841,
+    }
+    assert summary["vision_rate_limit"] == {
+        "observation_count": 1,
+        "observed_tpm_limits": [8000],
+        "minimum_remaining_tokens": 5519,
+        "maximum_reset_tokens_sec": 18.607,
+    }
     assert report["runs"][0]["activity_shadow"] == summary
+
+
+def test_activity_shadow_analyzer_groups_bounded_provider_errors(tmp_path):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-provider-error",
+                "event_type": "activity_shadow",
+                "mode": "record_only",
+                "capture_request_id": "capture-1",
+                "vision_provider": "groq",
+                "vision_model": "qwen/qwen3.6-27b",
+                "vision_outcome": "error",
+                "vision_error_type": "rate_limit",
+                "vision_http_status": 429,
+                "vision_attempt_limit": 1,
+                "published": False,
+                "translation_context_applied": False,
+                "stt_terms_applied": False,
+                "discard_reason": "vision_provider_error",
+            },
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-provider-error",
+                "event_type": "activity_shadow",
+                "mode": "record_only",
+                "window_status": "ok",
+                "capture_status": "not_attempted",
+                "published": False,
+                "translation_context_applied": False,
+                "stt_terms_applied": False,
+                "vision_prompt_tokens": 10,
+                "vision_rate_limit_tpm": 8000,
+                "vision_attempt_chain": ["malformed legacy-compatible value"],
+                "discard_reason": "",
+            },
+        ],
+    )
+
+    summary = analyze_runtime_events(
+        path,
+        run_id="run-provider-error",
+    )["activity_shadow"]
+
+    assert summary["by_vision_outcome"] == [{"value": "error", "count": 1}]
+    assert summary["by_vision_error_type"] == [
+        {"value": "rate_limit", "count": 1}
+    ]
+    assert summary["by_vision_http_status"] == [{"value": "429", "count": 1}]
+    assert summary["vision_usage"] == {
+        "event_count": 1,
+        "prompt_tokens": 10,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    assert summary["vision_rate_limit"] == {
+        "observation_count": 1,
+        "observed_tpm_limits": [8000],
+    }
+
+
+def test_activity_shadow_flags_open_set_publication_with_switch_off(tmp_path):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-open-set-violation",
+                "event_type": "activity_shadow",
+                "mode": "translation_only",
+                "candidate_activity_id": "auto-opaque",
+                "candidate_open_set": True,
+                "open_set_publication_enabled": False,
+                "published": True,
+                "translation_context_applied": False,
+                "stt_terms_applied": False,
+            }
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["activity_shadow"]
+
+    assert summary["publication_violation_count"] == 1
+
+
+def test_activity_shadow_analyzer_uses_route_attempt_chain_without_double_count(
+    tmp_path,
+):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-vision-fallback",
+                "event_type": "activity_shadow",
+                "mode": "translation_only",
+                "capture_request_id": "capture-1",
+                "vision_provider": "openrouter",
+                "vision_model": "qwen/qwen3-vl-32b-instruct",
+                "vision_outcome": "success",
+                "vision_attempt_limit": 2,
+                "vision_attempt_count": 2,
+                "vision_fallback_used": True,
+                "vision_prompt_tokens": 800,
+                "vision_completion_tokens": 4,
+                "vision_total_tokens": 804,
+                "vision_api_cost_usd": 0.0000572,
+                "vision_attempt_chain": [
+                    {
+                        "provider": "groq",
+                        "model": "qwen/qwen3.6-27b",
+                        "outcome": "error",
+                        "retryable": True,
+                        "error_type": "timeout",
+                        "latency_ms": 20000,
+                    },
+                    {
+                        "provider": "openrouter",
+                        "model": "qwen/qwen3-vl-32b-instruct",
+                        "outcome": "success",
+                        "retryable": False,
+                        "latency_ms": 900,
+                        "prompt_tokens": 800,
+                        "completion_tokens": 4,
+                        "total_tokens": 804,
+                        "api_cost_usd": 0.0000572,
+                    },
+                ],
+                "published": True,
+                "translation_context_applied": False,
+                "stt_terms_applied": False,
+                "discard_reason": "",
+            }
+        ],
+    )
+
+    summary = analyze_runtime_events(
+        path,
+        run_id="run-vision-fallback",
+    )["activity_shadow"]
+
+    assert summary["vision_usage"] == {
+        "event_count": 1,
+        "prompt_tokens": 800,
+        "completion_tokens": 4,
+        "total_tokens": 804,
+    }
+    attempts = summary["vision_attempts"]
+    assert attempts["total"] == 2
+    assert attempts["fallback_event_count"] == 1
+    assert attempts["fallback_success_count"] == 1
+    assert attempts["by_provider"] == [
+        {"value": "groq", "count": 1},
+        {"value": "openrouter", "count": 1},
+    ]
+    assert attempts["by_outcome"] == [
+        {"value": "error", "count": 1},
+        {"value": "success", "count": 1},
+    ]
+    assert attempts["by_error_type"] == [
+        {"value": "timeout", "count": 1}
+    ]
+    assert attempts["api_cost_usd"] == 0.0000572
+
+
+def test_analyzer_summarizes_translation_only_activity_publication(tmp_path):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-publication",
+                activity_source="automatic",
+                activity_id="minecraft",
+            ),
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-publication",
+                "event_type": "activity_publication",
+                "mode": "translation_only",
+                "publication_enabled": True,
+                "action": "published",
+                "reason": "confirmed",
+                "effective_source": "automatic",
+                "activity_id": "minecraft",
+                "activity_kind": "game",
+                "automatic_available": True,
+                "manual_override_active": False,
+                "translation_context_available": True,
+                "stt_terms_applied": False,
+            },
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-publication",
+                "event_type": "activity_publication",
+                "mode": "translation_only",
+                "publication_enabled": True,
+                "action": "manual_override",
+                "reason": "manual_activity_changed",
+                "effective_source": "manual",
+                "activity_id": "manual-opaque",
+                "automatic_available": True,
+                "manual_override_active": True,
+                "translation_context_available": False,
+                "stt_terms_applied": False,
+            },
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+    summary = report["activity_publication"]
+
+    assert report["activity_publication_events"] == 2
+    assert report["by_activity_source"] == [
+        {"value": "automatic", "count": 1}
+    ]
+    assert summary["translation_context_available_count"] == 1
+    assert summary["translation_context_applied_count"] == 1
+    assert summary["application_without_publication_count"] == 0
+    assert summary["manual_override_event_count"] == 1
+    assert summary["safety_violation_count"] == 0
+    assert summary["by_action"] == [
+        {"value": "published", "count": 1},
+        {"value": "manual_override", "count": 1},
+    ]
+    assert summary["by_activity_kind"] == [
+        {"value": "game", "count": 1}
+    ]
+    assert report["runs"][0]["activity_publication"] == summary
+
+
+def test_analyzer_flags_inconsistent_publication_transition(tmp_path):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-bad-publication",
+                activity_source="automatic",
+                activity_id="minecraft",
+            ),
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-bad-publication",
+                "event_type": "activity_publication",
+                "mode": "translation_only",
+                "publication_enabled": True,
+                "action": "published",
+                "reason": "confirmed",
+                "effective_source": "automatic",
+                "activity_id": "minecraft",
+                "automatic_available": False,
+                "manual_override_active": False,
+                "translation_context_available": False,
+                "stt_terms_applied": False,
+            },
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["activity_publication"]
+
+    assert summary["translation_context_applied_count"] == 1
+    assert summary["application_without_publication_count"] == 1
+    assert summary["safety_violation_count"] == 2
+
+
+def test_analyzer_flags_open_set_publication_with_switch_off(tmp_path):
+    path = tmp_path / "runtime_events_20260726.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-open-set-violation",
+                activity_source="automatic",
+                activity_id="auto-opaque",
+            ),
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "run_id": "run-open-set-violation",
+                "event_type": "activity_publication",
+                "mode": "translation_only",
+                "publication_enabled": True,
+                "open_set_publication_enabled": False,
+                "open_set_activity": True,
+                "action": "published",
+                "reason": "confirmed",
+                "effective_source": "automatic",
+                "activity_id": "auto-opaque",
+                "activity_kind": "game",
+                "automatic_available": True,
+                "manual_override_active": False,
+                "translation_context_available": True,
+                "stt_terms_applied": False,
+            },
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["activity_publication"]
+
+    assert summary["application_without_publication_count"] == 1
+    assert summary["safety_violation_count"] == 2
 
 
 def test_analyzer_summarizes_sentence_hold_shadow_opportunities(tmp_path):
@@ -369,6 +724,7 @@ def _translation_event(**overrides):
         "result_source": "api",
         "cache_status": "miss",
         "engine": "claude",
+        "activity_source": "manual",
         "latency_ms": 100,
         "subtitle_emitted": True,
         "quality_flags": [],

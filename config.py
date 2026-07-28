@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -135,6 +136,8 @@ _VALID_TRANSLATION_MODES = {"live", "clip"}
 _VALID_JAPANESE_RETRY_MODES = {"off", "shadow", "active"}
 _VALID_ENGINE_NAMES      = {"claude", "google_translate", "deepl", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
+_VALID_SCENE_VISION_PROVIDERS = {"groq", "openrouter"}
+_SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 
 
 @dataclass(frozen=True)
@@ -154,9 +157,9 @@ class _Translation:
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    # Fallback chain when live_engine="nvidia" times out. OpenRouter uses the
-    # benchmarked Qwen3-Next capsule as the first quality fallback; DeepL is
-    # the fast non-LLM safety net and Groq remains last.
+    # Primary chain when live_engine="anthropic", and fallback chain when
+    # live_engine="nvidia". OpenRouter uses the benchmarked Qwen3-Next capsule;
+    # DeepL is the fast non-LLM safety net and Groq remains last.
     engine_chain:   tuple        = ("openrouter", "deepl", "groq")
 
     # --- Model / API settings (one block per engine) -------------------------
@@ -192,6 +195,7 @@ class _Translation:
     openrouter_app_name: str = "live_translate"
     # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
     google_translate_lang:    str = "zh-TW"
+    google_translate_timeout: float = 5.0
     # DeepSeek  (uncomment when DeepSeekEngine is implemented)
     # deepseek_model: str        = "deepseek-chat"
     # DeepL     (target lang uses a different code from target_lang below)
@@ -206,6 +210,14 @@ class _Translation:
     deepl_context_max_chars: int = 1400
 
     # --- Shared translation settings -----------------------------------------
+    # Live reliability is route-neutral: every configured provider/model route
+    # uses the same circuit policy and shares one end-to-end API deadline.
+    # Individual adapter timeouts remain per-route caps inside this budget.
+    circuit_breaker_enabled: bool = True
+    circuit_recovery_cooldown_sec: float = 60.0
+    circuit_recovery_success_threshold: int = 2
+    live_total_deadline_sec: float = 10.0
+    live_route_max_inflight: int = 2
     target_lang:    str          = "zh-TW"
     max_tokens:     int          = 200
     temperature:    float        = 0.1
@@ -285,6 +297,43 @@ class _Translation:
                     f"cfg.translation.engine_chain contains unknown engine {name!r} "
                     f"(must be one of {_VALID_ENGINE_NAMES})"
                 )
+        for field_name in (
+            "circuit_recovery_cooldown_sec",
+            "live_total_deadline_sec",
+            "claude_timeout",
+            "google_translate_timeout",
+        ):
+            value = getattr(self, field_name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"cfg.translation.{field_name} must be positive and finite"
+                )
+        if not isinstance(self.circuit_breaker_enabled, bool):
+            raise ValueError(
+                "cfg.translation.circuit_breaker_enabled must be boolean"
+            )
+        if (
+            isinstance(self.circuit_recovery_success_threshold, bool)
+            or not isinstance(self.circuit_recovery_success_threshold, int)
+            or self.circuit_recovery_success_threshold < 1
+        ):
+            raise ValueError(
+                "cfg.translation.circuit_recovery_success_threshold must be at least 1"
+            )
+        if (
+            isinstance(self.live_route_max_inflight, bool)
+            or not isinstance(self.live_route_max_inflight, int)
+            or self.live_route_max_inflight < 1
+            or self.live_route_max_inflight > 8
+        ):
+            raise ValueError(
+                "cfg.translation.live_route_max_inflight must be between 1 and 8"
+            )
 
 
 @dataclass(frozen=True)
@@ -336,8 +385,8 @@ class _Nvidia:
     timeout: int = 10
     # Live override: fail fast so fallback engines can take over when NIM is degraded.
     live_timeout: int = 5
-    # Keep live requests on the fallback while NVIDIA is unstable. Recovery is
-    # proven by background probes, never by routing a user sentence to NVIDIA.
+    # Legacy compatibility fields. Live fallback policy is provider-neutral
+    # and is configured by cfg.translation.circuit_*.
     circuit_breaker_enabled: bool = True
     recovery_cooldown_sec: float = 60.0
     recovery_success_threshold: int = 2
@@ -347,14 +396,19 @@ class _Nvidia:
 class _Scene:
     """Automatic scene-context updater (modules/scene_context.py).
 
-    Distills the screen into cfg.translation.current_activity by asking a
-    vision model "what game/activity is this" on a sampled frame, a few times
-    per hour. Only that short conclusion ever reaches the prompt — screen
-    text (chat, donations) is never fed as context.
+    Samples a safe livestream player crop and records bounded activity
+    evidence a few times per hour. Capture and translation-only publication
+    have separate default-off switches; automatic activity never reaches STT
+    hot terms.
     """
-    # Groq's current vision default (Llama 4 Scout) is scheduled for removal.
-    # Keep scene context off until a production-stable vision backend is chosen.
-    enabled:              bool  = False
+    # Keep disabled until the complete activity/correctness runtime gate passes.
+    enabled:              bool  = True
+    # T13-B activation switch. Manual activity remains authoritative, and a
+    # fresh confirmed automatic snapshot may affect translation context only.
+    publish_translation_activity: bool = True
+    # T15 kill switch. Known reviewed aliases may keep T13-B behavior while
+    # model-derived open-set identities run record-only until their live gate.
+    publish_open_set_activity: bool = False
     check_interval_sec:   float = 20.0    # cheap fingerprint check cadence
     min_call_gap_sec:     float = 180.0   # at most one vision call per gap
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
@@ -385,10 +439,80 @@ class _Scene:
     # this title substring so chrome_window mode never locks onto Edge etc.
     chrome_title_marker:  str   = "google chrome"
     window_fallback_fullscreen: bool = False
-    # Groq OpenAI-compatible endpoint; uses cfg.keys.groq (fallback key as backup).
-    vision_model:         str   = "meta-llama/llama-4-scout-17b-16e-instruct"
+    # Explicit provider/model routes. Groq remains primary; the owner-approved
+    # OpenRouter route is used only after a retryable Groq transport/provider
+    # failure, never after valid unknown/noncanonical output.
+    vision_provider:      str   = "groq"
+    vision_model:         str   = "qwen/qwen3.6-27b"
+    vision_fallback_routes: tuple[tuple[str, str], ...] = (
+        ("openrouter", "qwen/qwen3-vl-32b-instruct"),
+    )
     vision_timeout:       float = 20.0
+    vision_max_retries:   int   = 0
     max_activity_chars:   int   = 40
+    max_open_set_identities_per_window: int = 8
+
+    def __post_init__(self):
+        routes: list[tuple[str, str]] = [
+            (self.vision_provider, self.vision_model)
+        ]
+        if not isinstance(self.vision_fallback_routes, tuple):
+            raise ValueError("cfg.scene.vision_fallback_routes must be a tuple")
+        for route in self.vision_fallback_routes:
+            if (
+                not isinstance(route, tuple)
+                or len(route) != 2
+                or not all(isinstance(value, str) for value in route)
+            ):
+                raise ValueError(
+                    "cfg.scene.vision_fallback_routes contains malformed route"
+                )
+            routes.append(route)
+        for provider, model in routes:
+            if provider not in _VALID_SCENE_VISION_PROVIDERS:
+                raise ValueError(
+                    f"cfg.scene vision provider invalid: {provider!r}"
+                )
+            if not _SCENE_VISION_MODEL_RE.fullmatch(model):
+                raise ValueError(
+                    f"cfg.scene vision model invalid: {model!r}"
+                )
+        if len(routes) > 3:
+            raise ValueError("cfg.scene supports at most three vision routes")
+        if len(set(routes)) != len(routes):
+            raise ValueError("cfg.scene vision routes must be unique")
+        if self.vision_max_retries != 0:
+            raise ValueError("cfg.scene.vision_max_retries must remain zero")
+        for field_name in (
+            "publish_translation_activity",
+            "publish_open_set_activity",
+        ):
+            if not isinstance(getattr(self, field_name), bool):
+                raise ValueError(f"cfg.scene.{field_name} must be boolean")
+        if (
+            isinstance(self.max_activity_chars, bool)
+            or not isinstance(self.max_activity_chars, int)
+            or not 1 <= self.max_activity_chars <= 80
+        ):
+            raise ValueError(
+                "cfg.scene.max_activity_chars must be between 1 and 80"
+            )
+        if (
+            isinstance(self.max_open_set_identities_per_window, bool)
+            or not isinstance(self.max_open_set_identities_per_window, int)
+            or not 1 <= self.max_open_set_identities_per_window <= 32
+        ):
+            raise ValueError(
+                "cfg.scene.max_open_set_identities_per_window must be "
+                "between 1 and 32"
+            )
+        if (
+            isinstance(self.vision_timeout, bool)
+            or not isinstance(self.vision_timeout, (int, float))
+            or not math.isfinite(self.vision_timeout)
+            or self.vision_timeout <= 0
+        ):
+            raise ValueError("cfg.scene.vision_timeout must be positive")
 
 
 @dataclass(frozen=True)
@@ -402,8 +526,8 @@ class _Config:
     database:            _Database    = field(default_factory=_Database)
     # Translation backend per mode — options: "anthropic" | "ollama" | "nvidia"
     # "anthropic" uses engine_chain (with fallback); "ollama"/"nvidia" bypass it entirely.
-    live_engine:         str          = "nvidia"
-    clip_engine:         str          = "nvidia"
+    live_engine:         str          = "anthropic"
+    clip_engine:         str          = "anthropic"
     ollama:              _Ollama      = field(default_factory=_Ollama)
     nvidia:              _Nvidia      = field(default_factory=_Nvidia)
     scene:               _Scene       = field(default_factory=_Scene)

@@ -102,6 +102,11 @@ def analyze_runtime_events(
         for event in events
         if event.get("event_type") == "activity_shadow"
     ]
+    activity_publication_events = [
+        event
+        for event in events
+        if event.get("event_type") == "activity_publication"
+    ]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -136,12 +141,17 @@ def analyze_runtime_events(
         "audio_events": len(audio_events),
         "sentence_hold_shadow_events": len(sentence_hold_shadow_events),
         "activity_shadow_events": len(activity_shadow_events),
+        "activity_publication_events": len(activity_publication_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
         "by_status": _count_by(translation_events, "status"),
         "status_breakdown": _status_breakdown(translation_events),
         "by_result_source": _count_by(translation_events, "result_source"),
         "by_cache_status": _count_by(translation_events, "cache_status"),
         "by_engine": _count_by(translation_events, "engine"),
+        "by_activity_source": _count_by(
+            translation_events,
+            "activity_source",
+        ),
         "by_filter_reason": _count_by(
             [e for e in translation_events if e.get("filter_reason")],
             "filter_reason",
@@ -162,6 +172,10 @@ def analyze_runtime_events(
             top_n,
         ),
         "activity_shadow": _activity_shadow_summary(activity_shadow_events),
+        "activity_publication": _activity_publication_summary(
+            activity_publication_events,
+            translation_events,
+        ),
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
@@ -179,6 +193,7 @@ def analyze_runtime_events(
             stt_events,
             audio_events,
             activity_shadow_events,
+            activity_publication_events,
             labels,
             top_n,
         ),
@@ -249,6 +264,7 @@ def _run_summaries(
     stt_events: list[dict[str, Any]],
     audio_events: list[dict[str, Any]],
     activity_shadow_events: list[dict[str, Any]],
+    activity_publication_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
     top_n: int,
 ) -> list[dict[str, Any]]:
@@ -267,6 +283,11 @@ def _run_summaries(
     grouped_activity_shadow: dict[str, list[dict[str, Any]]] = {}
     for event in activity_shadow_events:
         grouped_activity_shadow.setdefault(
+            str(event.get("run_id") or "unknown"), []
+        ).append(event)
+    grouped_activity_publication: dict[str, list[dict[str, Any]]] = {}
+    for event in activity_publication_events:
+        grouped_activity_publication.setdefault(
             str(event.get("run_id") or "unknown"), []
         ).append(event)
 
@@ -299,6 +320,10 @@ def _run_summaries(
                 "by_result_source": _count_by(run_events, "result_source"),
                 "by_cache_status": _count_by(run_events, "cache_status"),
                 "by_engine": _count_by(run_events, "engine"),
+                "by_activity_source": _count_by(
+                    run_events,
+                    "activity_source",
+                ),
                 "by_filter_reason": _count_by(
                     [event for event in run_events if event.get("filter_reason")],
                     "filter_reason",
@@ -341,6 +366,10 @@ def _run_summaries(
                 "activity_shadow": _activity_shadow_summary(
                     grouped_activity_shadow.get(run_id, [])
                 ),
+                "activity_publication": _activity_publication_summary(
+                    grouped_activity_publication.get(run_id, []),
+                    run_events,
+                ),
                 "template_hits": {
                     "total": len(template_events),
                     "by_status": _count_by(template_events, "status"),
@@ -371,14 +400,150 @@ def _activity_shadow_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     accepted = [event for event in events if event.get("shadow_accepted") is True]
     reused = [event for event in events if event.get("evidence_reused") is True]
     distinct = [event for event in events if event.get("distinct_frame") is True]
-    publication_violations = [
-        event
-        for event in events
-        if str(event.get("mode") or "") != "record_only"
-        or event.get("published") is True
-        or event.get("translation_context_applied") is True
-        or event.get("stt_terms_applied") is True
+    publication_violations = []
+    for event in events:
+        mode = str(event.get("mode") or "")
+        if event.get("stt_terms_applied") is True:
+            publication_violations.append(event)
+        elif mode == "record_only" and (
+            event.get("published") is True
+            or event.get("translation_context_applied") is True
+        ):
+            publication_violations.append(event)
+        elif (
+            event.get("candidate_open_set") is True
+            and event.get("open_set_publication_enabled") is not True
+            and (
+                event.get("published") is True
+                or event.get("translation_context_applied") is True
+            )
+        ):
+            publication_violations.append(event)
+        elif mode not in {"record_only", "translation_only"}:
+            publication_violations.append(event)
+    attempt_rows: list[dict[str, Any]] = []
+    fallback_events = 0
+    fallback_successes = 0
+    for event in events:
+        raw_chain = event.get("vision_attempt_chain")
+        if isinstance(raw_chain, list) and raw_chain:
+            chain = [
+                {
+                    key: attempt.get(key)
+                    for key in (
+                        "provider",
+                        "model",
+                        "outcome",
+                        "retryable",
+                        "error_type",
+                        "http_status",
+                        "latency_ms",
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                        "api_cost_usd",
+                        "rate_limit_tpm",
+                        "rate_limit_remaining_tokens",
+                        "rate_limit_reset_tokens_sec",
+                    )
+                }
+                for attempt in raw_chain
+                if isinstance(attempt, dict)
+            ]
+            if chain:
+                attempt_rows.extend(chain)
+                if len(chain) > 1:
+                    fallback_events += 1
+                    if event.get("vision_outcome") == "success":
+                        fallback_successes += 1
+                continue
+        legacy_map = {
+            "provider": "vision_provider",
+            "model": "vision_model",
+            "outcome": "vision_outcome",
+            "retryable": "vision_retryable",
+            "error_type": "vision_error_type",
+            "http_status": "vision_http_status",
+            "latency_ms": "vision_latency_ms",
+            "prompt_tokens": "vision_prompt_tokens",
+            "completion_tokens": "vision_completion_tokens",
+            "total_tokens": "vision_total_tokens",
+            "api_cost_usd": "vision_api_cost_usd",
+            "rate_limit_tpm": "vision_rate_limit_tpm",
+            "rate_limit_remaining_tokens": (
+                "vision_rate_limit_remaining_tokens"
+            ),
+            "rate_limit_reset_tokens_sec": (
+                "vision_rate_limit_reset_tokens_sec"
+            ),
+        }
+        legacy = {
+            key: event.get(source)
+            for key, source in legacy_map.items()
+        }
+        if any(value not in {None, ""} for value in legacy.values()):
+            attempt_rows.append(legacy)
+    usage_fields = (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+    )
+    usage_events = [
+        attempt
+        for attempt in attempt_rows
+        if any(
+            _float_or_none(attempt.get(field)) is not None
+            for field in usage_fields
+        )
     ]
+    rate_fields = (
+        "rate_limit_tpm",
+        "rate_limit_remaining_tokens",
+        "rate_limit_reset_tokens_sec",
+    )
+    rate_events = [
+        attempt
+        for attempt in attempt_rows
+        if any(
+            _float_or_none(attempt.get(field)) is not None
+            for field in rate_fields
+        )
+    ]
+    remaining_tokens = [
+        value
+        for attempt in attempt_rows
+        if (
+            value := _float_or_none(
+                attempt.get("rate_limit_remaining_tokens")
+            )
+        )
+        is not None
+    ]
+    reset_seconds = [
+        value
+        for attempt in attempt_rows
+        if (
+            value := _float_or_none(
+                attempt.get("rate_limit_reset_tokens_sec")
+            )
+        )
+        is not None
+    ]
+    tpm_limits = [
+        value
+        for attempt in attempt_rows
+        if (
+            value := _float_or_none(attempt.get("rate_limit_tpm"))
+        )
+        is not None
+    ]
+
+    def count_present(key: str) -> list[dict[str, Any]]:
+        return _count_by(
+            [event for event in events if event.get(key) not in {None, ""}],
+            key,
+        )
+
     return {
         "total_events": len(events),
         "vision_request_count": len(request_ids),
@@ -390,6 +555,11 @@ def _activity_shadow_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             event.get("manual_override_active") is True for event in events
         ),
         "publication_violation_count": len(publication_violations),
+        "by_vision_provider": count_present("vision_provider"),
+        "by_vision_model": count_present("vision_model"),
+        "by_vision_outcome": count_present("vision_outcome"),
+        "by_vision_error_type": count_present("vision_error_type"),
+        "by_vision_http_status": count_present("vision_http_status"),
         "by_window_status": _count_by(events, "window_status"),
         "by_capture_status": _count_by(events, "capture_status"),
         "by_discard_reason": _count_by(events, "discard_reason"),
@@ -401,6 +571,30 @@ def _activity_shadow_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             ],
             "candidate_activity_id",
         ),
+        "by_candidate_activity_kind": _count_by(
+            [
+                event
+                for event in events
+                if event.get("candidate_activity_kind")
+            ],
+            "candidate_activity_kind",
+        ),
+        "by_activity_parse_status": _count_by(
+            [
+                event
+                for event in events
+                if event.get("activity_parse_status")
+            ],
+            "activity_parse_status",
+        ),
+        "by_activity_rejection_reason": _count_by(
+            [
+                event
+                for event in events
+                if event.get("activity_rejection_reason")
+            ],
+            "activity_rejection_reason",
+        ),
         "vision_latency_ms": _latency_summary(
             [
                 latency
@@ -410,6 +604,209 @@ def _activity_shadow_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
                 )
                 is not None
             ]
+        ),
+        "vision_usage": {
+            "event_count": len(usage_events),
+            "prompt_tokens": int(
+                sum(
+                    _float_or_none(attempt.get("prompt_tokens")) or 0
+                    for attempt in usage_events
+                )
+            ),
+            "completion_tokens": int(
+                sum(
+                    _float_or_none(attempt.get("completion_tokens")) or 0
+                    for attempt in usage_events
+                )
+            ),
+            "total_tokens": int(
+                sum(
+                    _float_or_none(attempt.get("total_tokens")) or 0
+                    for attempt in usage_events
+                )
+            ),
+        },
+        "vision_attempts": {
+            "total": len(attempt_rows),
+            "fallback_event_count": fallback_events,
+            "fallback_success_count": fallback_successes,
+            "by_provider": _count_by(attempt_rows, "provider"),
+            "by_model": _count_by(attempt_rows, "model"),
+            "by_outcome": _count_by(attempt_rows, "outcome"),
+            "by_error_type": _count_by(
+                [
+                    attempt
+                    for attempt in attempt_rows
+                    if attempt.get("error_type")
+                ],
+                "error_type",
+            ),
+            "latency_ms": _latency_summary(
+                [
+                    latency
+                    for attempt in attempt_rows
+                    if (
+                        latency := _float_or_none(
+                            attempt.get("latency_ms")
+                        )
+                    )
+                    is not None
+                ]
+            ),
+            "api_cost_usd": round(
+                sum(
+                    _float_or_none(attempt.get("api_cost_usd")) or 0.0
+                    for attempt in attempt_rows
+                ),
+                10,
+            ),
+        },
+        "vision_rate_limit": {
+            "observation_count": len(rate_events),
+            **(
+                {
+                    "observed_tpm_limits": sorted(
+                        {int(value) for value in tpm_limits}
+                    )
+                }
+                if tpm_limits
+                else {}
+            ),
+            **(
+                {"minimum_remaining_tokens": int(min(remaining_tokens))}
+                if remaining_tokens
+                else {}
+            ),
+            **(
+                {"maximum_reset_tokens_sec": round(max(reset_seconds), 3)}
+                if reset_seconds
+                else {}
+            ),
+        },
+    }
+
+
+def _activity_publication_summary(
+    events: list[dict[str, Any]],
+    translation_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    def is_open_set_event(event: dict[str, Any]) -> bool:
+        return bool(
+            event.get("open_set_activity") is True
+            or str(event.get("activity_id") or "").startswith("auto-")
+        )
+
+    transition_violations = [
+        event
+        for event in events
+        if event.get("stt_terms_applied") is True
+        or event.get("translation_context_applied") is True
+        or (
+            str(event.get("mode") or "") == "record_only"
+            and event.get("translation_context_available") is True
+        )
+        or (
+            event.get("effective_source") == "automatic"
+            and event.get("manual_override_active") is True
+        )
+        or (
+            event.get("effective_source") == "automatic"
+            and event.get("publication_enabled") is not True
+        )
+        or (
+            event.get("effective_source") == "automatic"
+            and is_open_set_event(event)
+            and event.get("open_set_publication_enabled") is not True
+        )
+        or (
+            event.get("action") == "published"
+            and (
+                event.get("effective_source") != "automatic"
+                or event.get("automatic_available") is not True
+                or event.get("translation_context_available") is not True
+                or event.get("manual_override_active") is True
+                or not event.get("activity_id")
+            )
+        )
+        or (
+            event.get("action") == "manual_override"
+            and (
+                event.get("effective_source") != "manual"
+                or event.get("manual_override_active") is not True
+                or event.get("translation_context_available") is True
+                or not event.get("activity_id")
+            )
+        )
+        or (
+            event.get("action") == "cleared"
+            and (
+                event.get("effective_source") != "none"
+                or event.get("automatic_available") is True
+                or event.get("manual_override_active") is True
+                or event.get("translation_context_available") is True
+            )
+        )
+    ]
+    automatic_translation_events = [
+        event
+        for event in translation_events
+        if event.get("activity_source") == "automatic"
+    ]
+    valid_publication_run_ids = {
+        str(event.get("run_id") or "unknown")
+        for event in events
+        if event.get("mode") == "translation_only"
+        and event.get("publication_enabled") is True
+        and event.get("action") == "published"
+        and event.get("effective_source") == "automatic"
+        and event.get("automatic_available") is True
+        and event.get("translation_context_available") is True
+        and event.get("manual_override_active") is not True
+        and (
+            not is_open_set_event(event)
+            or event.get("open_set_publication_enabled") is True
+        )
+    }
+    application_without_publication = [
+        event
+        for event in automatic_translation_events
+        if str(event.get("run_id") or "unknown")
+        not in valid_publication_run_ids
+    ]
+    return {
+        "total_events": len(events),
+        "translation_context_applied_count": len(
+            automatic_translation_events
+        ),
+        "translation_context_available_count": sum(
+            event.get("translation_context_available") is True
+            for event in events
+        ),
+        "manual_override_event_count": sum(
+            event.get("manual_override_active") is True
+            for event in events
+        ),
+        "application_without_publication_count": len(
+            application_without_publication
+        ),
+        "safety_violation_count": (
+            len(transition_violations)
+            + len(application_without_publication)
+        ),
+        "by_action": _count_by(events, "action"),
+        "by_effective_source": _count_by(events, "effective_source"),
+        "by_translation_activity_source": _count_by(
+            translation_events,
+            "activity_source",
+        ),
+        "by_reason": _count_by(events, "reason"),
+        "by_activity_id": _count_by(
+            [event for event in events if event.get("activity_id")],
+            "activity_id",
+        ),
+        "by_activity_kind": _count_by(
+            [event for event in events if event.get("activity_kind")],
+            "activity_kind",
         ),
     }
 

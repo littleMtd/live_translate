@@ -15,7 +15,7 @@ from modules.activity_context import (
     activity_prompt_capsule,
     bind_activity_snapshot,
     bound_activity_snapshot,
-    capture_activity_snapshot,
+    capture_effective_activity_snapshot,
     effective_activity_value,
     normalize_activity,
 )
@@ -40,6 +40,7 @@ from modules.streamer_profiles import common_stt_terms
 from modules.translation_engines import (
     TranslationEngine,
     _build_engine_chain,
+    call_engine_with_deadline,
     effective_system_prompt_for_engine,
     engine_chain_config_key,
     get_last_engine_api_diagnostics,
@@ -52,6 +53,7 @@ from modules.translation_engines import (
     reset_last_token_usage,
     reset_translation_call_trace,
     select_translation_attempt,
+    translation_route_id,
 )
 from modules.translation_runtime import (
     FallbackState,
@@ -132,6 +134,9 @@ _API_EVENT_DEFAULTS = {
     "api_error_type": None,
     "api_error_message_class": None,
     "api_cost_usd": None,
+    "deadline_exceeded": False,
+    "deadline_scope": "",
+    "deadline_budget_ms": None,
 }
 _CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
 FallbackEventSink = Callable[..., None]
@@ -232,10 +237,32 @@ def _fallback_failure_threshold() -> int:
     return _FALLBACK_THRESHOLD
 
 
-def _nvidia_circuit_breaker_enabled() -> bool:
+def _translation_circuit_breaker_enabled() -> bool:
     if cfg.translation.translation_mode != "live":
         return False
-    return bool(cfg.live_engine == "nvidia" and cfg.nvidia.circuit_breaker_enabled)
+    return bool(cfg.translation.circuit_breaker_enabled)
+
+
+def _translation_deadline_at() -> float | None:
+    if cfg.translation.translation_mode != "live":
+        return None
+    return time.monotonic() + float(cfg.translation.live_total_deadline_sec)
+
+
+def _remaining_deadline_for_engine(
+    engine: TranslationEngine,
+    deadline_at: float,
+) -> tuple[float, str]:
+    remaining = max(0.0, deadline_at - time.monotonic())
+    route_timeout = getattr(engine, "request_timeout_seconds", None)
+    if (
+        isinstance(route_timeout, (int, float))
+        and not isinstance(route_timeout, bool)
+        and route_timeout > 0
+        and route_timeout < remaining
+    ):
+        return float(route_timeout), "route"
+    return remaining, "sentence"
 
 
 def _emit_fallback_runtime_event(action: str, **fields) -> None:
@@ -244,7 +271,7 @@ def _emit_fallback_runtime_event(action: str, **fields) -> None:
         action=action,
         translation_mode=cfg.translation.translation_mode,
         profile_id=cfg.active_streamer_profile,
-        circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
+        circuit_breaker_enabled=_translation_circuit_breaker_enabled(),
         **fields,
     )
 
@@ -700,6 +727,14 @@ class TranslationOutcome:
     prompt_version: str = ""
     filter_reason: str = ""
 
+    @property
+    def route_id(self) -> str:
+        provider = str(self.engine or "").strip().lower()
+        model = str(self.model or "").strip()
+        if not provider:
+            return ""
+        return f"{provider}:{model}" if model else provider
+
     def as_event_fields(self, latency_ms: float, metadata: dict) -> dict:
         profile_id = str(metadata.get("profile_id") or "")
         profile_applied = bool(metadata.get("profile_applied"))
@@ -715,6 +750,7 @@ class TranslationOutcome:
             "incomplete": self.incomplete,
             "engine": self.engine,
             "model": self.model,
+            "route_id": self.route_id,
             "prompt_version": self.prompt_version,
             "filter_reason": self.filter_reason,
             "latency_ms": round(latency_ms, 2),
@@ -878,7 +914,16 @@ def _api_event_fields(
 ) -> dict:
     fields = dict(_API_EVENT_DEFAULTS)
     engine = str(diagnostics.get("engine") or "")
-    if not engine or engine != outcome.engine or not _outcome_used_api(outcome):
+    diagnostic_route = str(diagnostics.get("route_id") or "")
+    if (
+        not engine
+        or engine != outcome.engine
+        or (
+            diagnostic_route
+            and diagnostic_route != outcome.route_id
+        )
+        or not _outcome_used_api(outcome)
+    ):
         return fields
     if int(diagnostics.get("api_attempt_count") or 0) <= 0:
         return fields
@@ -889,14 +934,24 @@ def _api_event_fields(
 
 def _retry_diagnostics_apply(outcome: TranslationOutcome, diagnostics: dict[str, int | str]) -> bool:
     engine = str(diagnostics.get("engine") or "")
-    return bool(engine and engine == outcome.engine and _outcome_used_api(outcome))
+    diagnostic_route = str(diagnostics.get("route_id") or "")
+    return bool(
+        engine
+        and engine == outcome.engine
+        and (not diagnostic_route or diagnostic_route == outcome.route_id)
+        and _outcome_used_api(outcome)
+    )
 
 
 def _token_usage_for_outcome(outcome: TranslationOutcome) -> dict[str, int | None]:
     if not _outcome_used_api(outcome):
         return {}
     selected = get_selected_translation_attempt()
-    if str(selected.get("engine") or "").strip().lower() != str(outcome.engine or "").strip().lower():
+    selected_route = str(selected.get("route_id") or "")
+    if selected_route:
+        if selected_route != outcome.route_id:
+            return {}
+    elif str(selected.get("engine") or "").strip().lower() != str(outcome.engine or "").strip().lower():
         return {}
     return get_selected_token_usage()
 
@@ -998,8 +1053,11 @@ class Translator:
         *,
         repetition_evidence: RepetitionEvidence | None = None,
     ) -> TranslationOutcome:
-        snapshot = bound_activity_snapshot() or capture_activity_snapshot(
-            getattr(cfg.translation, "current_activity", "")
+        snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
+            getattr(cfg.translation, "current_activity", ""),
+            automatic_enabled=bool(
+                getattr(cfg.scene, "publish_translation_activity", False)
+            ),
         )
         with bind_activity_snapshot(snapshot):
             return self._translate_event_with_snapshot(
@@ -1106,7 +1164,14 @@ class Translator:
 
         with self._state_guard():
             history = self._memory_state().context()
-        result, used_engine = self._call_with_fallback(text, system_prompt, incomplete, history)
+        deadline_at = _translation_deadline_at()
+        result, used_engine = self._call_with_fallback(
+            text,
+            system_prompt,
+            incomplete,
+            history,
+            deadline_at=deadline_at,
+        )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
         # _active_engine() here mislabeled the result source, API diagnostics
@@ -1117,7 +1182,7 @@ class Translator:
             result = _apply_source_aware_corrections(text, result)
             result, engine, prompt_ver = self._maybe_quality_retry(
                 raw_text, text, result, system_prompt, incomplete, history,
-                engine, prompt_ver,
+                engine, prompt_ver, deadline_at=deadline_at,
             )
             if (
                 _looks_like_meta_garbage_output(result)
@@ -1278,11 +1343,40 @@ class Translator:
         engine: TranslationEngine | None,
         system_prompt: str,
     ) -> str:
-        return self._prompt_version(effective_system_prompt_for_engine(engine, system_prompt))
+        snapshot = bound_activity_snapshot()
+        if snapshot is None:
+            snapshot = capture_effective_activity_snapshot(
+                getattr(cfg.translation, "current_activity", ""),
+                automatic_enabled=bool(
+                    getattr(cfg.scene, "publish_translation_activity", False)
+                ),
+            )
+            with bind_activity_snapshot(snapshot):
+                effective_prompt = effective_system_prompt_for_engine(
+                    engine,
+                    system_prompt,
+                )
+        else:
+            effective_prompt = effective_system_prompt_for_engine(
+                engine,
+                system_prompt,
+            )
+        if not snapshot.activity_id:
+            return self._prompt_version(effective_prompt)
+        # The prompt profile still protects all other semantic prompt changes.
+        # The activity-specific cache component is deliberately the stable
+        # canonical id plus schema, never source/confidence/confirmation time.
+        return self._prompt_version(
+            effective_prompt
+            + "\n[activity-cache-identity] "
+            + snapshot.cache_identity
+        )
 
     def _call_with_fallback(
         self, text: str, system_prompt: str, incomplete: bool,
         history: list[tuple[str, str]] | None = None,
+        *,
+        deadline_at: float | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
         actually produced the result — on a soft fallback this differs from
@@ -1307,8 +1401,12 @@ class Translator:
             _fallback_failure_threshold(),
             _looks_untranslated,
             log,
-            circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
-            recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
+            circuit_breaker_enabled=_translation_circuit_breaker_enabled(),
+            recovery_cooldown_seconds=(
+                cfg.translation.circuit_recovery_cooldown_sec
+            ),
+            deadline_at=deadline_at,
+            max_route_inflight=cfg.translation.live_route_max_inflight,
         )
         if lock is not None:
             with lock:
@@ -1320,7 +1418,7 @@ class Translator:
             committed_after = _copy_fallback_state(fallback_state)
 
         if (
-            _nvidia_circuit_breaker_enabled()
+            _translation_circuit_breaker_enabled()
             and committed_after.active_idx > committed_before.active_idx
         ):
             from_engine = active_engine(self._engines, committed_before.active_idx)
@@ -1330,8 +1428,8 @@ class Translator:
                 (
                     attempt
                     for attempt in reversed(attempts)
-                    if str(attempt.get("engine") or "").lower()
-                    == str(getattr(from_engine, "engine_name", "") or "").lower()
+                    if str(attempt.get("route_id") or "")
+                    == translation_route_id(from_engine)
                 ),
                 {},
             )
@@ -1339,20 +1437,25 @@ class Translator:
                 getattr(self, "_shared_state", None),
                 "circuit_opened" if committed_before.active_idx == 0 else "fallback_advanced",
                 primary_engine=str(getattr(active_engine(self._engines, 0), "engine_name", "") or ""),
+                primary_route=translation_route_id(active_engine(self._engines, 0)),
                 from_engine=str(getattr(from_engine, "engine_name", "") or ""),
+                from_route=translation_route_id(from_engine),
                 active_engine=str(getattr(to_engine, "engine_name", "") or ""),
+                active_route=translation_route_id(to_engine),
                 from_active_idx=committed_before.active_idx,
                 active_idx=committed_after.active_idx,
                 failure_status=str(failed_attempt.get("status") or ""),
                 failure_scope=str(failed_attempt.get("failure_scope") or ""),
                 api_error_type=failed_attempt.get("api_error_type"),
                 api_error_message_class=failed_attempt.get("api_error_message_class"),
-                cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
+                cooldown_seconds=cfg.translation.circuit_recovery_cooldown_sec,
                 cooldown_remaining_ms=round(
                     max(0.0, committed_after.primary_cooldown_until - time.monotonic()) * 1000,
                     2,
                 ),
-                required_probe_successes=cfg.nvidia.recovery_success_threshold,
+                required_probe_successes=(
+                    cfg.translation.circuit_recovery_success_threshold
+                ),
             )
         used_engine = active_engine(self._engines, used_idx)
         return result, used_engine
@@ -1363,6 +1466,8 @@ class Translator:
         self, raw_text: str, text: str, result: str, system_prompt: str,
         incomplete: bool, history: list[tuple[str, str]] | None,
         engine, prompt_ver: str,
+        *,
+        deadline_at: float | None = None,
     ):
         """Act on the QE signal at runtime instead of only logging it.
 
@@ -1423,10 +1528,12 @@ class Translator:
             "co_triggers": co_triggers,
             "mode": trace_mode,
             "original_engine": current_name,
+            "original_route": translation_route_id(engine),
             "original_output": result,
             "original_severity": severity,
             "original_flags": sorted(flags),
             "candidate_engine": "",
+            "candidate_route": "",
             "candidate_output": "",
             "candidate_severity": "",
             "candidate_flags": [],
@@ -1435,32 +1542,61 @@ class Translator:
             "reason": "",
         }
         _QUALITY_RETRY_TRACE.value = trace
-        attempted_engines = {
-            str(attempt.get("engine") or "")
+        attempted_routes = {
+            str(attempt.get("route_id") or "")
             for attempt in get_translation_attempts()
         }
+        current_route = translation_route_id(engine)
         alternate = next(
             (e for e in self._engines
              if (
                  e.available
-                 and e.engine_name != current_name
-                 and e.engine_name not in attempted_engines
+                 and translation_route_id(e) != current_route
+                 and translation_route_id(e) not in attempted_routes
              )),
             None,
         )
         if alternate is None:
             trace["reason"] = (
                 "no_untried_alternate_engine"
-                if attempted_engines
+                if attempted_routes
                 else "no_alternate_engine"
             )
             return result, engine, prompt_ver
         trace["candidate_engine"] = alternate.engine_name
+        trace["candidate_route"] = translation_route_id(alternate)
         metrics.increment("translation.quality_retry.attempted")
         reset_last_engine_diagnostics()
         reset_last_token_usage()
         try:
-            retry_raw = alternate.translate(text, system_prompt, incomplete, history)
+            if deadline_at is None:
+                retry_raw = alternate.translate(
+                    text,
+                    system_prompt,
+                    incomplete,
+                    history,
+                )
+            else:
+                timeout_seconds, deadline_scope = _remaining_deadline_for_engine(
+                    alternate,
+                    deadline_at,
+                )
+                if timeout_seconds <= 0:
+                    trace["reason"] = "sentence_deadline_exhausted"
+                    metrics.increment(
+                        "translation.quality_retry.deadline_exhausted"
+                    )
+                    return result, engine, prompt_ver
+                retry_raw = call_engine_with_deadline(
+                    alternate,
+                    text,
+                    system_prompt,
+                    incomplete,
+                    history,
+                    timeout_seconds=timeout_seconds,
+                    max_inflight=cfg.translation.live_route_max_inflight,
+                    deadline_scope=deadline_scope,
+                )
         except Exception as exc:  # second opinion must never break the first
             record_translation_attempt(alternate, phase="quality_retry", exception=exc)
             trace["reason"] = "alternate_exception"
@@ -1568,7 +1704,17 @@ class Translator:
         return result, engine, prompt_ver
 
     def _get_prompt_version_hash(self) -> str:
-        return self._prompt_version_for_engine(self._active_engine(), self._build_system_prompt())
+        snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
+            getattr(cfg.translation, "current_activity", ""),
+            automatic_enabled=bool(
+                getattr(cfg.scene, "publish_translation_activity", False)
+            ),
+        )
+        with bind_activity_snapshot(snapshot):
+            return self._prompt_version_for_engine(
+                self._active_engine(),
+                self._build_system_prompt(),
+            )
 
 
 _DEDUP_SUBTITLE_SEC = 5.0   # suppress identical subtitle within this window
@@ -1646,8 +1792,11 @@ def _start_fallback_probe_thread(
                 engines_key = chain_key
             probe_observations: list[dict[str, object]] = []
             probe_started = time.monotonic()
-            activity_snapshot = capture_activity_snapshot(
-                getattr(cfg.translation, "current_activity", "")
+            activity_snapshot = capture_effective_activity_snapshot(
+                getattr(cfg.translation, "current_activity", ""),
+                automatic_enabled=bool(
+                    getattr(cfg.scene, "publish_translation_activity", False)
+                ),
             )
             with bind_activity_snapshot(activity_snapshot):
                 system_prompt = _build_probe_system_prompt(shared_state)
@@ -1659,11 +1808,21 @@ def _start_fallback_probe_thread(
                         system_prompt,
                         _looks_untranslated,
                         log,
-                        circuit_breaker_enabled=_nvidia_circuit_breaker_enabled(),
-                        recovery_cooldown_seconds=cfg.nvidia.recovery_cooldown_sec,
-                        required_consecutive_successes=cfg.nvidia.recovery_success_threshold,
+                        circuit_breaker_enabled=(
+                            _translation_circuit_breaker_enabled()
+                        ),
+                        recovery_cooldown_seconds=(
+                            cfg.translation.circuit_recovery_cooldown_sec
+                        ),
+                        required_consecutive_successes=(
+                            cfg.translation.circuit_recovery_success_threshold
+                        ),
                         history=probe_history,
                         observation_sink=probe_observations.append,
+                        deadline_at=_translation_deadline_at(),
+                        max_route_inflight=(
+                            cfg.translation.live_route_max_inflight
+                        ),
                     )
                 except Exception:
                     log.exception("Fallback primary probe failed unexpectedly")
@@ -1681,8 +1840,11 @@ def _start_fallback_probe_thread(
             active_after = active_engine(engines, committed_after.active_idx)
             common_fields = {
                 "primary_engine": str(getattr(active_engine(engines, 0), "engine_name", "") or ""),
+                "primary_route": translation_route_id(active_engine(engines, 0)),
                 "active_engine": str(getattr(active_after, "engine_name", "") or ""),
+                "active_route": translation_route_id(active_after),
                 "active_engine_before": str(getattr(active_before, "engine_name", "") or ""),
+                "active_route_before": translation_route_id(active_before),
                 "active_idx_before": committed_before.active_idx,
                 "active_idx": committed_after.active_idx,
                 "probe_status": probe_status,
@@ -1692,8 +1854,12 @@ def _start_fallback_probe_thread(
                 "probe_history_target_chars": sum(len(target) for _, target in probe_history),
                 "probe_success_streak": observation.get("success_streak", 0),
                 "committed_probe_success_streak": committed_after.consecutive_probe_successes,
-                "required_probe_successes": cfg.nvidia.recovery_success_threshold,
-                "cooldown_seconds": cfg.nvidia.recovery_cooldown_sec,
+                "required_probe_successes": (
+                    cfg.translation.circuit_recovery_success_threshold
+                ),
+                "cooldown_seconds": (
+                    cfg.translation.circuit_recovery_cooldown_sec
+                ),
                 "cooldown_remaining_ms": round(
                     max(0.0, committed_after.primary_cooldown_until - time.monotonic()) * 1000,
                     2,
@@ -1702,6 +1868,19 @@ def _start_fallback_probe_thread(
             }
             if observation.get("exception_type"):
                 common_fields["exception_type"] = observation["exception_type"]
+            for diagnostic_field in (
+                "api_error_type",
+                "api_error_message_class",
+                "api_total_wall_ms",
+                "api_timeout_count",
+                "deadline_exceeded",
+                "deadline_scope",
+                "deadline_budget_ms",
+            ):
+                if diagnostic_field in observation:
+                    common_fields[diagnostic_field] = observation[
+                        diagnostic_field
+                    ]
             if probe_status == "cooldown_skipped":
                 action = "probe_cooldown_skipped"
             elif probe_status == "success":
@@ -1761,8 +1940,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             try:
                 text = sentence_text(item)
                 incomplete = sentence_incomplete(item)
-                activity_snapshot = capture_activity_snapshot(
-                    getattr(cfg.translation, "current_activity", "")
+                activity_snapshot = capture_effective_activity_snapshot(
+                    getattr(cfg.translation, "current_activity", ""),
+                    automatic_enabled=bool(
+                        getattr(cfg.scene, "publish_translation_activity", False)
+                    ),
                 )
                 metadata = sentence_metadata(item).copy()
                 marker = _dependency_marker(text)
@@ -1777,6 +1959,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         # helped or polluted; record it per event.
                         "current_activity": activity_snapshot.display_label,
                         "activity_id": activity_snapshot.activity_id,
+                        "activity_kind": activity_snapshot.activity_kind,
+                        "activity_source": activity_snapshot.source,
                         "activity_context_schema_version": (
                             activity_snapshot.schema_version
                         ),

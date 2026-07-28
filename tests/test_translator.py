@@ -115,6 +115,10 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             {"profile_id": "url", "profile_applied": False},
         )
 
+        self.assertEqual(
+            approved["route_id"],
+            "openrouter:qwen/qwen3-30b-a3b-instruct-2507",
+        )
         self.assertEqual(approved["target_approved_hangul_spans"], ["모카"])
         self.assertEqual(approved["target_unexpected_hangul_spans"], [])
         self.assertEqual(
@@ -243,6 +247,18 @@ def _translation_mode(mode: str):
         yield
     finally:
         object.__setattr__(cfg.translation, "translation_mode", original_mode)
+
+
+@contextmanager
+def _live_backend(name: str):
+    from config import cfg
+
+    original_backend = cfg.live_engine
+    object.__setattr__(cfg, "live_engine", name)
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg, "live_engine", original_backend)
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +416,7 @@ class TestClaudeEngine(unittest.TestCase):
     def _make_engine(self, resp_text: str = "你好", side_effect=None) -> ClaudeEngine:
         e = ClaudeEngine.__new__(ClaudeEngine)
         e._client = MagicMock()
+        e._timeout = 5.0
         if side_effect:
             e._client.messages.create.side_effect = side_effect
         else:
@@ -417,6 +434,40 @@ class TestClaudeEngine(unittest.TestCase):
     def test_returns_none_on_exception(self):
         e = self._make_engine(side_effect=Exception("API down"))
         self.assertIsNone(e.translate("안녕하세요", _sys_prompt(_make_translator()), False))
+
+    def test_timeout_exposes_route_cap_and_provider_diagnostics(self):
+        e = self._make_engine(side_effect=TimeoutError("timed out"))
+
+        self.assertIsNone(
+            e.translate("안녕하세요", _sys_prompt(_make_translator()), False)
+        )
+
+        diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(e.request_timeout_seconds, 5.0)
+        self.assertEqual(diagnostics["api_attempt_count"], 1)
+        self.assertEqual(diagnostics["api_timeout_count"], 1)
+        self.assertEqual(diagnostics["api_error_type"], "timeout")
+        self.assertEqual(
+            diagnostics["api_error_message_class"],
+            "read_timeout",
+        )
+
+    def test_http_status_diagnostics_distinguish_provider_and_auth(self):
+        class StatusError(Exception):
+            def __init__(self, status_code):
+                super().__init__(f"HTTP {status_code}")
+                self.status_code = status_code
+
+        for status_code, expected_class in ((503, "http_5xx"), (401, "http_4xx")):
+            with self.subTest(status_code=status_code):
+                e = self._make_engine(side_effect=StatusError(status_code))
+                self.assertIsNone(e.translate("안녕하세요", "system", False))
+                self.assertEqual(
+                    get_last_engine_api_diagnostics()[
+                        "api_error_message_class"
+                    ],
+                    expected_class,
+                )
 
     def test_returns_none_when_client_is_none(self):
         e = ClaudeEngine.__new__(ClaudeEngine)
@@ -437,6 +488,7 @@ class TestGoogleTranslateEngine(unittest.TestCase):
         e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
         e._api_key = "fake-key"
         e._target_lang = "zh-TW"
+        e._timeout = 5.0
         if side_effect:
             with patch("urllib.request.urlopen", side_effect=side_effect):
                 return e.translate(text, "system", False)
@@ -457,6 +509,50 @@ class TestGoogleTranslateEngine(unittest.TestCase):
 
     def test_returns_none_on_exception(self):
         self.assertIsNone(self._call(side_effect=Exception("network down")))
+
+    def test_timeout_exposes_route_cap_and_provider_diagnostics(self):
+        import socket
+        import urllib.error
+
+        e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
+        e._api_key = "fake-key"
+        e._target_lang = "zh-TW"
+        e._timeout = 5.0
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError(socket.timeout("timed out")),
+        ):
+            self.assertIsNone(e.translate("안녕하세요", "system", False))
+
+        diagnostics = get_last_engine_api_diagnostics()
+        self.assertEqual(e.request_timeout_seconds, 5.0)
+        self.assertEqual(diagnostics["api_attempt_count"], 1)
+        self.assertEqual(diagnostics["api_timeout_count"], 1)
+        self.assertEqual(diagnostics["api_error_type"], "timeout")
+        self.assertEqual(
+            diagnostics["api_error_message_class"],
+            "read_timeout",
+        )
+
+    def test_http_status_diagnostics_distinguish_provider_and_auth(self):
+        import urllib.error
+
+        for status_code, expected_class in ((503, "http_5xx"), (401, "http_4xx")):
+            with self.subTest(status_code=status_code):
+                error = urllib.error.HTTPError(
+                    "https://translation.googleapis.com",
+                    status_code,
+                    "failure",
+                    {},
+                    None,
+                )
+                self.assertIsNone(self._call(side_effect=error))
+                self.assertEqual(
+                    get_last_engine_api_diagnostics()[
+                        "api_error_message_class"
+                    ],
+                    expected_class,
+                )
 
     def test_returns_none_when_api_key_empty(self):
         e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
@@ -850,6 +946,52 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
 
 
 class TestOpenRouterFallbackChain(unittest.TestCase):
+    def test_default_backend_builds_openrouter_chain_without_nvidia(self):
+        class FakeEngine:
+            def __init__(self, name: str):
+                self._name = name
+
+            @property
+            def engine_name(self) -> str:
+                return self._name
+
+            @property
+            def model_name(self) -> str:
+                return f"{self._name}-model"
+
+            @property
+            def available(self) -> bool:
+                return True
+
+            def translate(self, text, system_prompt, incomplete, history=None):
+                return "ok"
+
+        original_mode = translator_module.cfg.translation.translation_mode
+        try:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "translation_mode",
+                "live",
+            )
+            with patch.object(
+                translation_engines_module,
+                "_make_engine",
+                side_effect=lambda name: FakeEngine(name),
+            ):
+                engines = _build_engine_chain()
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "translation_mode",
+                original_mode,
+            )
+
+        self.assertEqual(translator_module.cfg.live_engine, "anthropic")
+        self.assertEqual(
+            [engine.engine_name for engine in engines],
+            ["openrouter", "deepl", "groq"],
+        )
+
     def test_nvidia_backend_uses_openrouter_before_deepl_and_groq(self):
         from config import cfg
 
@@ -1430,7 +1572,70 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(observed, ["StarCraft", "StarCraft"])
         self.assertEqual(fields["current_activity"], "StarCraft")
         self.assertEqual(fields["activity_id"], "starcraft")
-        self.assertEqual(fields["activity_context_schema_version"], 1)
+        self.assertEqual(fields["activity_source"], "manual")
+        self.assertEqual(fields["activity_context_schema_version"], 2)
+
+    def test_translation_worker_uses_published_auto_only_when_enabled(self):
+        from modules.activity_context import (
+            AutomaticActivityPublication,
+            activity_publication_store,
+        )
+
+        outcome = TranslationOutcome(
+            source_text="자동 활동 테스트",
+            target_text="自動活動測試",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="fake",
+            model="fake-model",
+        )
+        original_manual = translator_module.cfg.translation.current_activity
+        original_enabled = (
+            translator_module.cfg.scene.publish_translation_activity
+        )
+        activity_publication_store.replace(
+            AutomaticActivityPublication(
+                activity_id="minecraft",
+                display_label="Minecraft",
+                confirmed_at_utc="2026-07-26T00:00:00+00:00",
+                fresh_until_monotonic=time.monotonic() + 60,
+                confidence=1.0,
+                evidence_count=2,
+                activity_kind="game",
+            )
+        )
+        object.__setattr__(
+            translator_module.cfg.translation,
+            "current_activity",
+            "",
+        )
+        object.__setattr__(
+            translator_module.cfg.scene,
+            "publish_translation_activity",
+            True,
+        )
+        try:
+            fields = self._emit_outcome_with_stale_nvidia_diagnostics(outcome)
+        finally:
+            object.__setattr__(
+                translator_module.cfg.scene,
+                "publish_translation_activity",
+                original_enabled,
+            )
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "current_activity",
+                original_manual,
+            )
+            activity_publication_store.replace(None)
+
+        self.assertEqual(fields["current_activity"], "Minecraft")
+        self.assertEqual(fields["activity_id"], "minecraft")
+        self.assertEqual(fields["activity_source"], "automatic")
+        self.assertEqual(fields["activity_context_schema_version"], 2)
+        self.assertEqual(fields["activity_kind"], "game")
 
     def test_translation_workers_share_translator_state(self):
         sentence_q = queue.Queue()
@@ -1825,12 +2030,28 @@ class TestFallbackProbe(unittest.TestCase):
         stop = threading.Event()
         engines = [_mock_engine("primary", "你好"), _mock_engine("fallback", "fallback")]
 
-        original_cooldown = translator_module.cfg.nvidia.recovery_cooldown_sec
-        original_threshold = translator_module.cfg.nvidia.recovery_success_threshold
+        original_cooldown = (
+            translator_module.cfg.translation.circuit_recovery_cooldown_sec
+        )
+        original_threshold = (
+            translator_module.cfg.translation.circuit_recovery_success_threshold
+        )
         try:
-            object.__setattr__(translator_module.cfg.nvidia, "recovery_cooldown_sec", 0.0)
-            object.__setattr__(translator_module.cfg.nvidia, "recovery_success_threshold", 2)
-            with patch.object(translator_module, "_build_engine_chain", return_value=engines):
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "circuit_recovery_cooldown_sec",
+                0.01,
+            )
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "circuit_recovery_success_threshold",
+                2,
+            )
+            with _live_backend("nvidia"), patch.object(
+                translator_module,
+                "_build_engine_chain",
+                return_value=engines,
+            ):
                 thread = translator_module._start_fallback_probe_thread(
                     shared,
                     stop,
@@ -1842,8 +2063,16 @@ class TestFallbackProbe(unittest.TestCase):
                 stop.set()
                 thread.join(timeout=1)
         finally:
-            object.__setattr__(translator_module.cfg.nvidia, "recovery_cooldown_sec", original_cooldown)
-            object.__setattr__(translator_module.cfg.nvidia, "recovery_success_threshold", original_threshold)
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "circuit_recovery_cooldown_sec",
+                original_cooldown,
+            )
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "circuit_recovery_success_threshold",
+                original_threshold,
+            )
 
         self.assertEqual(shared.fallback.active_idx, 0)
         self.assertGreaterEqual(engines[0].translate.call_count, 2)
@@ -1867,7 +2096,11 @@ class TestFallbackProbe(unittest.TestCase):
         stop = threading.Event()
         engines = [_mock_engine("primary", "雿末"), _mock_engine("fallback", "fallback")]
 
-        with patch.object(translator_module, "_build_engine_chain", return_value=engines):
+        with _live_backend("nvidia"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ):
             thread = translator_module._start_fallback_probe_thread(
                 shared,
                 stop,
@@ -1895,7 +2128,7 @@ class TestFallbackProbe(unittest.TestCase):
 
         _set_provider_failure(engines[0])
 
-        with _translation_mode("live"), patch.object(
+        with _translation_mode("live"), _live_backend("nvidia"), patch.object(
             translator_module,
             "_build_engine_chain",
             return_value=engines,
@@ -1917,6 +2150,42 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(event["api_error_message_class"], "read_timeout")
         self.assertGreater(event["cooldown_remaining_ms"], 0)
 
+    def test_live_openrouter_chain_uses_provider_neutral_circuit(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        engines = [
+            _mock_engine("openrouter", None),
+            _mock_engine("deepl", "fallback"),
+        ]
+        _set_provider_failure(engines[0])
+
+        with _translation_mode("live"), _live_backend("anthropic"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ):
+            translator = Translator(shared_state=shared)
+            result = translator.translate("provider neutral source")
+
+        self.assertEqual(result, "fallback")
+        self.assertEqual(shared.fallback.active_idx, 1)
+        self.assertEqual(len(fallback_events), 1)
+        event = fallback_events[0]
+        self.assertEqual(event["action"], "circuit_opened")
+        self.assertEqual(event["primary_engine"], "openrouter")
+        self.assertEqual(
+            event["primary_route"],
+            "openrouter:openrouter-test-model",
+        )
+        self.assertEqual(event["active_route"], "deepl:deepl-test-model")
+        self.assertTrue(
+            translator_module._translation_circuit_breaker_enabled()
+        )
+
     def test_live_content_rejection_does_not_emit_circuit_open_event(self):
         fallback_events = []
         shared = translator_module._new_translator_shared_state(
@@ -1926,7 +2195,7 @@ class TestFallbackProbe(unittest.TestCase):
         )
         engines = [_mock_engine("nvidia", "source"), _mock_engine("deepl", "fallback")]
 
-        with _translation_mode("live"), patch.object(
+        with _translation_mode("live"), _live_backend("nvidia"), patch.object(
             translator_module,
             "_build_engine_chain",
             return_value=engines,

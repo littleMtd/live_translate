@@ -1,7 +1,9 @@
+import queue
 import socket
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextvars import copy_context
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
@@ -70,6 +72,8 @@ _TOKEN_USAGE = threading.local()
 _TRANSLATION_CALL_TRACE = threading.local()
 _NVIDIA_INFLIGHT_LOCK = threading.Lock()
 _NVIDIA_INFLIGHT_COUNT = 0
+_ROUTE_CALL_LIMITERS_LOCK = threading.Lock()
+_ROUTE_CALL_LIMITERS: dict[tuple[str, int], threading.BoundedSemaphore] = {}
 
 
 def _int_diagnostic(value, default: int = 0) -> int:
@@ -167,6 +171,9 @@ def _set_last_engine_diagnostics(
         "api_error_type": api_fields.get("api_error_type"),
         "api_error_message_class": api_fields.get("api_error_message_class"),
         "api_cost_usd": _cost_diagnostic(api_fields.get("api_cost_usd")),
+        "deadline_exceeded": bool(api_fields.get("deadline_exceeded", False)),
+        "deadline_scope": str(api_fields.get("deadline_scope") or ""),
+        "deadline_budget_ms": _float_diagnostic(api_fields.get("deadline_budget_ms")),
     }
 
 
@@ -212,6 +219,9 @@ def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
         "api_error_type": value.get("api_error_type"),
         "api_error_message_class": value.get("api_error_message_class"),
         "api_cost_usd": _cost_diagnostic(value.get("api_cost_usd")),
+        "deadline_exceeded": bool(value.get("deadline_exceeded", False)),
+        "deadline_scope": str(value.get("deadline_scope") or ""),
+        "deadline_budget_ms": _float_diagnostic(value.get("deadline_budget_ms")),
     }
 
 
@@ -254,6 +264,7 @@ def record_translation_attempt(
         "phase": str(phase or "fallback_chain"),
         "engine": str(getattr(engine, "engine_name", "") or ""),
         "model": str(getattr(engine, "model_name", "") or ""),
+        "route_id": translation_route_id(engine),
         "status": status,
         "selected_for_output": False,
         **{key: value for key, value in diagnostics.items() if key != "engine"},
@@ -318,6 +329,8 @@ def _is_timeout_exception(exc: BaseException) -> bool:
 
 def _http_status_code(exc: BaseException) -> int | None:
     code = getattr(exc, "code", None)
+    if code is None:
+        code = getattr(exc, "status_code", None)
     try:
         return int(code)
     except (TypeError, ValueError):
@@ -799,6 +812,23 @@ class TranslationEngine(ABC):
         ...
 
     @property
+    def route_id(self) -> str:
+        """Stable provider/model identity used by routing and telemetry."""
+        return translation_route_id(self)
+
+    @property
+    def request_timeout_seconds(self) -> float | None:
+        """Configured per-route timeout, if this adapter exposes one."""
+        value = getattr(self, "_timeout", None)
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @property
     @abstractmethod
     def available(self) -> bool:
         """True if the engine initialised successfully and can accept calls."""
@@ -807,22 +837,185 @@ class TranslationEngine(ABC):
     @abstractmethod
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
-        """
-        Translate text. Return None on any failure.
-
-        text:          raw source text (Korean)
-        system_prompt: evolved prompt — LLM engines use it;
-                       direct-translation engines (Google Translate) may ignore it.
-        incomplete:    True if the sentence is a fragment.
-        history:       recent (ko, zh) pairs; LLM engines prepend as multi-turn messages.
-                       Direct-translation engines ignore this.
-        """
+        """Translate text, returning None on provider or transport failure."""
         ...
 
+
+def translation_route_id(engine: TranslationEngine | object | None) -> str:
+    """Return a provider/model route identity without depending on class type."""
+    if engine is None:
+        return ""
+    provider = str(getattr(engine, "engine_name", "") or "").strip().lower()
+    model = str(getattr(engine, "model_name", "") or "").strip()
+    if not provider:
+        return ""
+    return f"{provider}:{model}" if model else provider
+
+
+@dataclass(frozen=True)
+class EngineCallCompletion:
+    result: str | None
+    exception: BaseException | None
+    diagnostics: dict[str, Any]
+    token_usage: dict[str, Any]
+    deadline_exceeded: bool = False
+
+
+def _restore_engine_call_context(completion: EngineCallCompletion) -> None:
+    _ENGINE_DIAGNOSTICS.value = dict(completion.diagnostics)
+    _TOKEN_USAGE.value = dict(completion.token_usage)
+
+
+def _route_call_limiter(route_id: str, limit: int) -> threading.BoundedSemaphore:
+    key = (route_id, limit)
+    with _ROUTE_CALL_LIMITERS_LOCK:
+        limiter = _ROUTE_CALL_LIMITERS.get(key)
+        if limiter is None:
+            limiter = threading.BoundedSemaphore(limit)
+            _ROUTE_CALL_LIMITERS[key] = limiter
+        return limiter
+
+
+def record_engine_deadline_exceeded(
+    engine: TranslationEngine,
+    *,
+    deadline_scope: str,
+    deadline_budget_ms: float = 0.0,
+) -> None:
+    """Publish a synthetic timeout when no wall-clock budget remains."""
+    _set_last_engine_diagnostics(
+        str(getattr(engine, "engine_name", "") or ""),
+        retry_reason="total_deadline",
+        api_attempt_count=0,
+        api_timeout_count=1,
+        api_total_wall_ms=0.0,
+        api_error_type="timeout",
+        api_error_message_class="total_deadline",
+        deadline_exceeded=True,
+        deadline_scope=deadline_scope,
+        deadline_budget_ms=deadline_budget_ms,
+    )
+    reset_last_token_usage()
+
+
+def call_engine_with_deadline(
+    engine: TranslationEngine,
+    text: str,
+    system_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+    *,
+    timeout_seconds: float,
+    max_inflight: int,
+    deadline_scope: str = "route",
+) -> str | None:
+    """Run one synchronous adapter behind a hard caller-side wall deadline.
+
+    ``urllib`` timeouts are socket-operation limits and may exceed their
+    configured value across DNS/connect/read phases. The daemon boundary lets
+    the subtitle worker continue at the exact wall deadline. A per-route
+    semaphore keeps late, non-cancellable requests bounded instead of leaking
+    one thread per sentence during an outage.
+    """
+    timeout_seconds = max(0.001, float(timeout_seconds))
+    max_inflight = max(1, int(max_inflight))
+    route_id = translation_route_id(engine)
+    limiter = _route_call_limiter(route_id, max_inflight)
+    if not limiter.acquire(blocking=False):
+        diagnostics = {
+            "engine": str(getattr(engine, "engine_name", "") or ""),
+            "retry_count": 0,
+            "retry_reason": "route_saturated",
+            "api_attempt_count": 0,
+            "api_timeout_count": 1,
+            "api_total_wall_ms": 0.0,
+            "api_error_type": "timeout",
+            "api_error_message_class": "route_saturated",
+            "deadline_exceeded": True,
+            "deadline_scope": "route_inflight",
+            "deadline_budget_ms": round(timeout_seconds * 1000, 2),
+        }
+        completion = EngineCallCompletion(
+            None,
+            None,
+            diagnostics,
+            {},
+            deadline_exceeded=True,
+        )
+        _restore_engine_call_context(completion)
+        return None
+
+    completed: queue.Queue[EngineCallCompletion] = queue.Queue(maxsize=1)
+
+    def run() -> None:
+        reset_last_engine_diagnostics()
+        reset_last_token_usage()
+        try:
+            result = engine.translate(text, system_prompt, incomplete, history)
+            exception: BaseException | None = None
+        except BaseException as exc:
+            result = None
+            exception = exc
+        diagnostics = dict(getattr(_ENGINE_DIAGNOSTICS, "value", {}) or {})
+        token_usage = dict(getattr(_TOKEN_USAGE, "value", {}) or {})
+        try:
+            completed.put_nowait(
+                EngineCallCompletion(result, exception, diagnostics, token_usage)
+            )
+        finally:
+            limiter.release()
+
+    started_at = time.monotonic()
+    copy_context_snapshot = copy_context()
+    worker = threading.Thread(
+        target=lambda: copy_context_snapshot.run(run),
+        name=f"TranslationRoute-{route_id[:48]}",
+        daemon=True,
+    )
+    try:
+        worker.start()
+    except BaseException:
+        limiter.release()
+        raise
+    try:
+        completion = completed.get(timeout=timeout_seconds)
+    except queue.Empty:
+        elapsed_ms = round((time.monotonic() - started_at) * 1000, 2)
+        diagnostics = {
+            "engine": str(getattr(engine, "engine_name", "") or ""),
+            "retry_count": 0,
+            "retry_reason": "total_deadline",
+            "api_attempt_count": 1,
+            "api_timeout_count": 1,
+            "api_total_wall_ms": elapsed_ms,
+            "api_final_attempt_ms": elapsed_ms,
+            "api_first_attempt_ms": elapsed_ms,
+            "api_attempt_timeout_ms": round(timeout_seconds * 1000, 2),
+            "api_attempt_index": 1,
+            "api_error_type": "timeout",
+            "api_error_message_class": "total_deadline",
+            "deadline_exceeded": True,
+            "deadline_scope": deadline_scope,
+            "deadline_budget_ms": round(timeout_seconds * 1000, 2),
+        }
+        completion = EngineCallCompletion(
+            None,
+            None,
+            diagnostics,
+            {},
+            deadline_exceeded=True,
+        )
+    _restore_engine_call_context(completion)
+    if completion.exception is not None:
+        raise completion.exception
+    return completion.result
 
 class ClaudeEngine(TranslationEngine):
     def __init__(self):
         self._client = None
+        self._timeout = float(
+            getattr(cfg.translation, "claude_timeout", 5.0) or 5.0
+        )
         if not cfg.keys.anthropic:
             log.error("ANTHROPIC_API_KEY not set")
             return
@@ -849,27 +1042,68 @@ class ClaudeEngine(TranslationEngine):
                   history: list[tuple[str, str]] | None = None) -> str | None:
         if self._client is None:
             return None
+        timeout = float(
+            getattr(
+                self,
+                "_timeout",
+                getattr(cfg.translation, "claude_timeout", 5.0),
+            )
+            or 5.0
+        )
+        started_at: float | None = None
+        messages = []
+
+        def record(error: BaseException | None = None) -> None:
+            error_type, message_class = (
+                _classify_api_error(error) if error is not None else (None, None)
+            )
+            _set_last_engine_diagnostics(
+                "claude",
+                api_attempt_count=1 if started_at is not None else 0,
+                api_timeout_count=(
+                    1
+                    if error is not None and _is_timeout_exception(error)
+                    else 0
+                ),
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                api_first_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=_timeout_config_ms(timeout),
+                api_attempt_timeout_ms=_timeout_config_ms(timeout),
+                api_attempt_index=1 if started_at is not None else 0,
+                source_text_char_count=len(text or ""),
+                prompt_char_count=len(system_prompt or ""),
+                message_count=len(messages) if messages else None,
+                context_item_count=len(history or []),
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+            )
+
+        record()
         try:
-            _t0 = time.monotonic()
             system_content: dict = {"type": "text", "text": system_prompt}
             if cfg.translation.translation_mode == "live":
                 system_content["cache_control"] = {"type": "ephemeral"}
-            messages = []
             for ko, zh in _limited_primary_history(history, text):
                 messages.append({"role": "user", "content": f"input: {ko}"})
                 messages.append({"role": "assistant", "content": zh})
             messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+            started_at = time.monotonic()
             resp = self._client.messages.create(
                 model=cfg.translation.model,
                 max_tokens=cfg.translation.max_tokens,
                 temperature=cfg.translation.temperature,
                 system=[system_content],
                 messages=messages,
-                timeout=float(getattr(cfg.translation, "claude_timeout", 5.0) or 5.0),
+                timeout=timeout,
             )
-            log.info("Claude translate: %.0fms", (time.monotonic() - _t0) * 1000)
+            log.info(
+                "Claude translate: %.0fms",
+                (time.monotonic() - started_at) * 1000,
+            )
             _log_token_usage("Claude", getattr(resp, "usage", None))
             result = resp.content[0].text.strip()
+            record()
             log.debug("Claude: %.30s → %s", text, result)
             return result
         except Exception as e:
@@ -882,6 +1116,7 @@ class ClaudeEngine(TranslationEngine):
                 log.warning("Claude network error: %s", e)
             else:
                 log.error("Claude error: %s", e)
+            record(e)
             return None
 
 
@@ -893,6 +1128,7 @@ class GoogleTranslateEngine(TranslationEngine):
     def __init__(self):
         self._api_key = cfg.keys.google_translate
         self._target_lang = cfg.translation.google_translate_lang
+        self._timeout = cfg.translation.google_translate_timeout
         if not self._api_key:
             log.error("GOOGLE_TRANSLATE_API_KEY not set")
 
@@ -912,6 +1148,44 @@ class GoogleTranslateEngine(TranslationEngine):
                   _history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
         if not self._api_key:
             return None
+        timeout = float(
+            getattr(
+                self,
+                "_timeout",
+                getattr(cfg.translation, "google_translate_timeout", 5.0),
+            )
+            or 5.0
+        )
+        started_at: float | None = None
+        payload: bytes | None = None
+
+        def record(error: BaseException | None = None) -> None:
+            error_type, message_class = (
+                _classify_api_error(error) if error is not None else (None, None)
+            )
+            _set_last_engine_diagnostics(
+                "google_translate",
+                api_attempt_count=1 if started_at is not None else 0,
+                api_timeout_count=(
+                    1
+                    if error is not None and _is_timeout_exception(error)
+                    else 0
+                ),
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                api_first_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=_timeout_config_ms(timeout),
+                api_attempt_timeout_ms=_timeout_config_ms(timeout),
+                api_attempt_index=1 if started_at is not None else 0,
+                source_text_char_count=len(text or ""),
+                request_body_char_count=len(payload) if payload is not None else None,
+                message_count=1,
+                context_item_count=0,
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+            )
+
+        record()
         try:
             import urllib.request
             import urllib.parse
@@ -925,11 +1199,15 @@ class GoogleTranslateEngine(TranslationEngine):
             url = f"{self._URL}?key={urllib.parse.quote(self._api_key, safe='')}"
             req = urllib.request.Request(url, data=payload,
                                          headers={"Content-Type": "application/json"})
-            _t0 = time.monotonic()
-            with urllib.request.urlopen(req, timeout=5) as r:
+            started_at = time.monotonic()
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 data = _json.loads(r.read())
             result = data["data"]["translations"][0]["translatedText"].strip()
-            log.info("GoogleTranslate translate: %.0fms", (time.monotonic() - _t0) * 1000)
+            record()
+            log.info(
+                "GoogleTranslate translate: %.0fms",
+                (time.monotonic() - started_at) * 1000,
+            )
             log.debug("GoogleTranslate: %.30s → %s", text, result)
             return result
         except Exception as e:
@@ -943,6 +1221,7 @@ class GoogleTranslateEngine(TranslationEngine):
                 log.warning("GoogleTranslate network error: %s", safe)
             else:
                 log.error("GoogleTranslate error: %s", safe)
+            record(e)
             return None
 
 
@@ -1829,6 +2108,7 @@ def engine_chain_config_key() -> tuple:
         backend,
         tuple(getattr(cfg.translation, "engine_chain", ())),
         getattr(cfg.translation, "model", ""),
+        getattr(cfg.translation, "claude_timeout", ""),
         getattr(cfg.ollama, "base_url", ""),
         getattr(cfg.ollama, "model", ""),
         getattr(cfg.ollama, "timeout", ""),
@@ -1841,6 +2121,7 @@ def engine_chain_config_key() -> tuple:
         getattr(cfg.translation, "groq_translation_reasoning_effort", ""),
         getattr(cfg.translation, "groq_translation_timeout", ""),
         getattr(cfg.translation, "google_translate_lang", ""),
+        getattr(cfg.translation, "google_translate_timeout", ""),
         getattr(cfg.translation, "deepl_target_lang", ""),
         getattr(cfg.translation, "deepl_timeout", ""),
         getattr(cfg.translation, "deepl_context_window", ""),

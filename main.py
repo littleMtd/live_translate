@@ -47,6 +47,20 @@ def _warn_missing_engine_chain_keys() -> list[str]:
     return available
 
 
+def _validate_scene_vision_config() -> None:
+    if not cfg.scene.enabled:
+        return
+    from modules.scene_vision import missing_vision_route_credentials
+
+    missing = missing_vision_route_credentials()
+    if missing:
+        log.error(
+            "Startup error: missing API key for configured scene vision route(s): %s",
+            ", ".join(missing),
+        )
+        sys.exit(1)
+
+
 def _validate_config(stt_only: bool):
     if stt_only:
         return
@@ -57,13 +71,13 @@ def _validate_config(stt_only: bool):
             sys.exit(1)
         if backend == "nvidia":
             _warn_missing_engine_chain_keys()
-        return
-
-    available = _warn_missing_engine_chain_keys()
-    if not available:
-        log.error("Startup error: no API key set for any engine in engine_chain %s",
-                  cfg.translation.engine_chain)
-        sys.exit(1)
+    else:
+        available = _warn_missing_engine_chain_keys()
+        if not available:
+            log.error("Startup error: no API key set for any engine in engine_chain %s",
+                      cfg.translation.engine_chain)
+            sys.exit(1)
+    _validate_scene_vision_config()
 
 
 def _donation_ocr_command(app_path: Path) -> list[str]:
