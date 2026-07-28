@@ -11,7 +11,18 @@ Individual DB integration tests override this by setting
 ``from modules.db import _get_db``) inside their own setUp/tearDown.
 """
 
+import os
+from pathlib import Path
 import sys
+
+# Keep pytest-owned cache/temp artifacts out of the repository. This host's
+# standard Windows pytest temp root has also been observed with broken ACLs, so
+# use a dedicated user-owned root while retaining pytest's numbered per-run
+# directories and retention behavior. Respect an explicit caller override.
+_PYTEST_TEMP_ROOT = Path.home() / ".cache" / "live_translate" / "pytest" / "tmp"
+if "PYTEST_DEBUG_TEMPROOT" not in os.environ:
+    _PYTEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(_PYTEST_TEMP_ROOT)
 
 # Stub out API libraries before any module imports them.
 from unittest.mock import MagicMock

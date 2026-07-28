@@ -1,8 +1,7 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-cache_dir = "scratch/pytest/cache"
-addopts = "--basetemp=scratch/pytest/basetemp"
+cache_dir = "~/.cache/live_translate/pytest"
 markers = [
   "live_api: tests that call external live APIs and require RUN_LIVE_TESTS=1",
 ]

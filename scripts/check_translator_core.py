@@ -89,7 +89,6 @@ def run_focused_pytest() -> CheckResult:
             "pytest",
             *FOCUSED_TESTS,
             "-q",
-            "--basetemp=.pytest-tmpcheck-translator-core",
         ],
         cwd=PROJECT_ROOT,
         text=True,
