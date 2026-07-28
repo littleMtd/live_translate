@@ -66,11 +66,13 @@ two ever disagree, treat that as a bug and reconcile both.)
   candidate list. v3 explicitly does not change Phase 0/1 priority; even the
   items marked "can run in parallel" are offline/read-only validation steps,
   not implementation.
-- `ARCHITECTURE_PROPOSAL_CODEX_20260613.md` — superseded by
-  `ARCHITECTURE_RECOMMENDATION_20260613.md`; historical context only (candidate
-  for `archive/`).
 
 **Core rule:** implementation requires Tier 1 + Tier 2 read first; Tier 3
 governs process; Tier 4 items only become implementation-ready after the user
 explicitly decides to promote one, at which point Tier 2 must be updated (or a
 new execution-plan doc created) — never implement directly from a Tier 4 doc.
+
+Historical reviews, completed proposals, and superseded experiments live under
+`archive/`; they are evidence, not current instructions. Read
+`archive/INDEX.md` before relying on an archived document, and prefer the
+replacement named there.
