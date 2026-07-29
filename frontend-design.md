@@ -73,9 +73,9 @@ Tauri 修改 config 後寫回同一 JSON 檔。Python 透過輪詢（或 `watchd
 Current implementation uses restart semantics, not hot reload: Tauri persists
 the dashboard JSON, and its Python launcher opts into the strict
 `config.py` whitelist on the next process start. The UI exposes only the
-dedicated default-off `scene.publish_open_set_activity` switch for automatic
-open-set publication; provider/model, capture, cadence, consensus, and STT
-settings remain outside that scene override surface.
+dedicated default-on `scene.publish_open_set_activity` kill switch for
+automatic open-set publication; provider/model, capture, cadence, consensus,
+and STT settings remain outside that scene override surface.
 
 ### Directory Structure (actual)
 

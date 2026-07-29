@@ -119,11 +119,11 @@ class TestConfig(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     _Scene(vision_timeout=timeout)
 
-    def test_scene_open_set_publication_is_default_off_and_bounded(self):
+    def test_scene_open_set_publication_is_default_on_and_bounded(self):
         from config import _Scene
 
         scene = _Scene()
-        self.assertFalse(scene.publish_open_set_activity)
+        self.assertTrue(scene.publish_open_set_activity)
         self.assertGreaterEqual(scene.max_open_set_identities_per_window, 1)
         self.assertLessEqual(scene.max_open_set_identities_per_window, 32)
 

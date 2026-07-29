@@ -90,10 +90,18 @@ pub struct TranslationConfig {
     pub slang: HashMap<String, String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct SceneConfig {
     pub publish_open_set_activity: bool,
+}
+
+impl Default for SceneConfig {
+    fn default() -> Self {
+        Self {
+            publish_open_set_activity: true,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
@@ -317,7 +325,7 @@ mod tests {
         // a section absent from the JSON defaults rather than erroring
         assert_eq!(cfg.translation.max_tokens, 0);
         assert!(cfg.translation.engine_chain.is_empty());
-        assert!(!cfg.scene.publish_open_set_activity);
+        assert!(cfg.scene.publish_open_set_activity);
     }
 
     #[test]
@@ -346,13 +354,13 @@ mod tests {
     }
 
     #[test]
-    fn scene_publication_switch_defaults_off_when_section_or_field_is_missing() {
+    fn scene_publication_switch_defaults_on_when_section_or_field_is_missing() {
         let missing_section: ConfigDto = serde_json::from_str("{}").unwrap();
-        assert!(!missing_section.scene.publish_open_set_activity);
+        assert!(missing_section.scene.publish_open_set_activity);
 
         let missing_field: ConfigDto =
             serde_json::from_str(r#"{"scene":{"vision_model":"ignored"}}"#).unwrap();
-        assert!(!missing_field.scene.publish_open_set_activity);
+        assert!(missing_field.scene.publish_open_set_activity);
     }
 
     #[test]

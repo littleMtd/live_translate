@@ -34,7 +34,7 @@ def test_ui_rendered_fields_present():
         assert field in d["translation"], f"translation.{field} missing from export"
     for field in ("font_family", "font_size", "font_style", "alpha", "idle_hide_ms"):
         assert field in d["subtitle"], f"subtitle.{field} missing from export"
-    assert d["scene"]["publish_open_set_activity"] is False
+    assert d["scene"]["publish_open_set_activity"] is True
 
 
 def test_font_tuple_is_flattened_not_a_sequence():

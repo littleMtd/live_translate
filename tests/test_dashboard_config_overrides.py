@@ -88,7 +88,7 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
     assert merged.subtitle.alpha == base.subtitle.alpha
     assert merged.subtitle.idle_hide_ms == 12000
     assert merged.stt.primary_engine == base.stt.primary_engine
-    assert merged.scene.publish_open_set_activity is False
+    assert merged.scene.publish_open_set_activity is True
 
 
 def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):
@@ -101,20 +101,20 @@ def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):
             "subtitle": {"idle_hide_ms": 12000},
         })
         merged = config_mod._apply_dashboard_overrides(base, json_path)
-        assert merged.scene.publish_open_set_activity is False
+        assert merged.scene.publish_open_set_activity is True
         assert merged.subtitle.idle_hide_ms == 12000
 
+    disabled_base = config_mod._Config(
+        scene=config_mod._Scene(publish_open_set_activity=False)
+    )
     _write(json_path, {"scene": {"publish_open_set_activity": True}})
     assert config_mod._apply_dashboard_overrides(
-        base, json_path
+        disabled_base, json_path
     ).scene.publish_open_set_activity is True
 
-    enabled_base = config_mod._Config(
-        scene=config_mod._Scene(publish_open_set_activity=True)
-    )
     _write(json_path, {"scene": {"publish_open_set_activity": False}})
     assert config_mod._apply_dashboard_overrides(
-        enabled_base, json_path
+        base, json_path
     ).scene.publish_open_set_activity is False
 
 

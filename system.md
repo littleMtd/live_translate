@@ -91,8 +91,8 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `cfg.translation`: engine chain, model names per engine, target language, max tokens, queue size, slang table
 - `cfg.scene`: safe capture/vision cadence and routes. Automatic translation
   publication and model-derived open-set publication have separate switches;
-  the latter remains default-off and can be explicitly enabled through the
-  dashboard config bridge for the next Python restart
+  the latter defaults on after its runtime gate passed and can be explicitly
+  disabled through the dashboard config bridge for the next Python restart
 - `cfg.subtitle`: overlay UI settings, timing, queue size
 
 ## Engine Strategy

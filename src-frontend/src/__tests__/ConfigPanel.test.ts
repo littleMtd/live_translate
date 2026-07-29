@@ -68,13 +68,20 @@ describe('ConfigPanel', () => {
     expect(activity.attributes('maxlength')).toBe('80')
   })
 
-  it('keeps model-derived activity publication off by default', () => {
+  it('enables model-derived activity publication by default', () => {
     const wrapper = mount(ConfigPanel, { props: { config: null } })
     const checkbox = wrapper.get('[data-testid="publish-open-set-activity"]')
 
-    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.text()).toContain('translation context')
     expect(wrapper.text()).toContain('STT terms are unchanged')
+  })
+
+  it('preserves an explicit disabled publication kill switch', () => {
+    const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
+    const checkbox = wrapper.get('[data-testid="publish-open-set-activity"]')
+
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
   })
 
   it('emits the owner-selected model-derived activity publication state', async () => {

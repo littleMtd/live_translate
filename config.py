@@ -398,17 +398,16 @@ class _Scene:
 
     Samples a safe livestream player crop and records bounded activity
     evidence a few times per hour. Capture and translation-only publication
-    have separate default-off switches; automatic activity never reaches STT
-    hot terms.
+    have separate switches; automatic activity never reaches STT hot terms.
     """
-    # Keep disabled until the complete activity/correctness runtime gate passes.
+    # Enabled after the complete activity/correctness runtime gate passed.
     enabled:              bool  = True
     # T13-B activation switch. Manual activity remains authoritative, and a
     # fresh confirmed automatic snapshot may affect translation context only.
     publish_translation_activity: bool = True
-    # T15 kill switch. Known reviewed aliases may keep T13-B behavior while
-    # model-derived open-set identities run record-only until their live gate.
-    publish_open_set_activity: bool = False
+    # T15/T17 kill switch. The open-set runtime gate passed, so direct pipeline
+    # runs publish by default; an explicit dashboard false still disables it.
+    publish_open_set_activity: bool = True
     check_interval_sec:   float = 20.0    # cheap fingerprint check cadence
     min_call_gap_sec:     float = 180.0   # at most one vision call per gap
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
