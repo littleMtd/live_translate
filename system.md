@@ -91,7 +91,8 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `cfg.translation`: engine chain, model names per engine, target language, max tokens, queue size, slang table
 - `cfg.scene`: safe capture/vision cadence and routes. Automatic translation
   publication and model-derived open-set publication have separate switches;
-  the latter defaults off until its runtime gate passes
+  the latter remains default-off and can be explicitly enabled through the
+  dashboard config bridge for the next Python restart
 - `cfg.subtitle`: overlay UI settings, timing, queue size
 
 ## Engine Strategy
@@ -239,7 +240,7 @@ Interactive configuration and monitoring dashboard using Tauri (Rust backend) + 
 **Deliverables:**
 - Tauri app skeleton with Rust handlers
 - Vue.js dashboard with 3+ tabs
-- Live config editing without restart
+- Persisted dashboard config editing applied on the next Python restart
 - Cache statistics visualization
 - Python process lifecycle control
 

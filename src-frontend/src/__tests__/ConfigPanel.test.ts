@@ -18,6 +18,7 @@ function makeConfig(overrides: Partial<ConfigDto> = {}): ConfigDto {
                    target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
                    context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
                    use_profile: true, current_activity: '', slang: {} },
+    scene: { publish_open_set_activity: false },
     subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
                 bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
                 outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
@@ -65,6 +66,26 @@ describe('ConfigPanel', () => {
     const saved = wrapper.emitted('save')![0][0] as ConfigDto
     expect(saved.translation.current_activity).toBe('StarCraft ladder')
     expect(activity.attributes('maxlength')).toBe('80')
+  })
+
+  it('keeps model-derived activity publication off by default', () => {
+    const wrapper = mount(ConfigPanel, { props: { config: null } })
+    const checkbox = wrapper.get('[data-testid="publish-open-set-activity"]')
+
+    expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.text()).toContain('translation context')
+    expect(wrapper.text()).toContain('STT terms are unchanged')
+  })
+
+  it('emits the owner-selected model-derived activity publication state', async () => {
+    const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
+    const checkbox = wrapper.get('[data-testid="publish-open-set-activity"]')
+
+    await checkbox.setValue(true)
+    await wrapper.find('button.primary').trigger('click')
+
+    const saved = wrapper.emitted('save')![0][0] as ConfigDto
+    expect(saved.scene.publish_open_set_activity).toBe(true)
   })
 
   it('emits save event with current config when Save clicked', async () => {
@@ -115,7 +136,7 @@ describe('ConfigPanel', () => {
 
   it('vad_enabled checkbox reflects config', () => {
     const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
-    const checkbox = wrapper.find('input[type="checkbox"]')
+    const checkbox = wrapper.get('[data-testid="vad-enabled"]')
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
   })
 })

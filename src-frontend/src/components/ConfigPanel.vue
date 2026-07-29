@@ -70,6 +70,22 @@
     </div>
 
     <div class="section">
+      <h3>Automatic Scene Context</h3>
+      <label>
+        Publish model-derived activity:
+        <input
+          v-model="local.scene.publish_open_set_activity"
+          data-testid="publish-open-set-activity"
+          type="checkbox"
+        />
+      </label>
+      <p class="field-note">
+        Allows a confirmed model-derived activity to inform translation context.
+        Scene capture and STT terms are unchanged. Restart the Python pipeline after saving.
+      </p>
+    </div>
+
+    <div class="section">
       <h3>STT Engine</h3>
       <label>
         Primary engine:
@@ -84,7 +100,7 @@
       <h3>Audio / VAD</h3>
       <label>
         VAD enabled:
-        <input v-model="local.audio.vad_enabled" type="checkbox" />
+        <input v-model="local.audio.vad_enabled" data-testid="vad-enabled" type="checkbox" />
       </label>
       <label>
         Silence threshold (s):
@@ -124,6 +140,7 @@ const defaultConfig = (): ConfigDto => ({
                  target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
                  context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
                  use_profile: true, current_activity: '', slang: {} },
+  scene: { publish_open_set_activity: false },
   subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
               bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
               outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,

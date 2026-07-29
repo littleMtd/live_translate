@@ -563,6 +563,7 @@ _DASHBOARD_OVERRIDE_FIELDS = {
     "stt": ("primary_engine",),
     "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang",
                     "current_activity"),
+    "scene": ("publish_open_set_activity",),
     "subtitle": ("idle_hide_ms", "alpha"),
 }
 _DASHBOARD_OVERRIDE_TOP = ("live_engine",)
@@ -612,6 +613,8 @@ def _dashboard_value_is_valid(
             return isinstance(value, str) and bool(value.strip()) and len(value) <= 50
         if name == "current_activity":
             return isinstance(value, str) and len(value) <= 200
+    if section == "scene" and name == "publish_open_set_activity":
+        return isinstance(value, bool)
     if section == "subtitle":
         if name == "idle_hide_ms":
             return isinstance(value, int) and not isinstance(value, bool) and 1000 <= value <= 120000

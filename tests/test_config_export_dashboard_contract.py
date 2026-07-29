@@ -19,7 +19,8 @@ def _export() -> dict:
 def test_top_level_sections_present():
     d = _export()
     for section in ("audio", "stt", "splitter", "translation", "subtitle",
-                    "database", "live_engine", "clip_engine", "ollama", "nvidia"):
+                    "database", "live_engine", "clip_engine", "ollama", "nvidia",
+                    "scene"):
         assert section in d, f"export missing top-level section: {section}"
 
 
@@ -33,6 +34,7 @@ def test_ui_rendered_fields_present():
         assert field in d["translation"], f"translation.{field} missing from export"
     for field in ("font_family", "font_size", "font_style", "alpha", "idle_hide_ms"):
         assert field in d["subtitle"], f"subtitle.{field} missing from export"
+    assert d["scene"]["publish_open_set_activity"] is False
 
 
 def test_font_tuple_is_flattened_not_a_sequence():

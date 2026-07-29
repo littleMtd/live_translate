@@ -23,6 +23,7 @@ pub struct ConfigDto {
     pub stt: SttConfig,
     pub splitter: SplitterConfig,
     pub translation: TranslationConfig,
+    pub scene: SceneConfig,
     pub subtitle: SubtitleConfig,
     pub database: DatabaseConfig,
     pub live_engine: String,
@@ -87,6 +88,12 @@ pub struct TranslationConfig {
     pub use_profile: bool,
     pub current_activity: String,
     pub slang: HashMap<String, String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct SceneConfig {
+    pub publish_open_set_activity: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
@@ -188,6 +195,9 @@ mod tests {
                 current_activity: String::new(),
                 slang: HashMap::from([("ㅋㅋ".into(), "哈哈".into())]),
             },
+            scene: SceneConfig {
+                publish_open_set_activity: false,
+            },
             subtitle: SubtitleConfig {
                 idle_hide_ms: 30000,
                 font_family: "Microsoft JhengHei".into(),
@@ -260,6 +270,10 @@ mod tests {
             cfg.translation.current_activity,
             cfg2.translation.current_activity
         );
+        assert_eq!(
+            cfg.scene.publish_open_set_activity,
+            cfg2.scene.publish_open_set_activity
+        );
     }
 
     #[test]
@@ -303,6 +317,7 @@ mod tests {
         // a section absent from the JSON defaults rather than erroring
         assert_eq!(cfg.translation.max_tokens, 0);
         assert!(cfg.translation.engine_chain.is_empty());
+        assert!(!cfg.scene.publish_open_set_activity);
     }
 
     #[test]
@@ -317,5 +332,34 @@ mod tests {
         let cfg: ConfigDto = serde_json::from_str(with_extra).unwrap();
         assert_eq!(cfg.translation.max_tokens, 80);
         assert_eq!(cfg.splitter.force_cut_seconds, 8);
+    }
+
+    #[test]
+    fn scene_publication_switch_roundtrips_true_and_false() {
+        for enabled in [false, true] {
+            let mut cfg = sample_config();
+            cfg.scene.publish_open_set_activity = enabled;
+            let json = serde_json::to_string(&cfg).unwrap();
+            let decoded: ConfigDto = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.scene.publish_open_set_activity, enabled);
+        }
+    }
+
+    #[test]
+    fn scene_publication_switch_defaults_off_when_section_or_field_is_missing() {
+        let missing_section: ConfigDto = serde_json::from_str("{}").unwrap();
+        assert!(!missing_section.scene.publish_open_set_activity);
+
+        let missing_field: ConfigDto =
+            serde_json::from_str(r#"{"scene":{"vision_model":"ignored"}}"#).unwrap();
+        assert!(!missing_field.scene.publish_open_set_activity);
+    }
+
+    #[test]
+    fn scene_publication_switch_rejects_non_boolean_json() {
+        for value in [r#""true""#, "1", "null"] {
+            let json = format!(r#"{{"scene":{{"publish_open_set_activity":{value}}}}}"#);
+            assert!(serde_json::from_str::<ConfigDto>(&json).is_err());
+        }
     }
 }

@@ -70,6 +70,13 @@ Tauri 修改 config 後寫回同一 JSON 檔。Python 透過輪詢（或 `watchd
 > **Tauri v2 注意**：本文件範例使用 Tauri v1 API（`@tauri-apps/api/tauri`）。
 > Tauri v2 的 invoke 路徑改為 `@tauri-apps/api`，請在建立專案時確認版本。
 
+Current implementation uses restart semantics, not hot reload: Tauri persists
+the dashboard JSON, and its Python launcher opts into the strict
+`config.py` whitelist on the next process start. The UI exposes only the
+dedicated default-off `scene.publish_open_set_activity` switch for automatic
+open-set publication; provider/model, capture, cadence, consensus, and STT
+settings remain outside that scene override surface.
+
 ### Directory Structure (actual)
 
 ```

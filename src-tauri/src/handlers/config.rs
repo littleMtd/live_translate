@@ -146,6 +146,9 @@ mod tests {
                 current_activity: String::new(),
                 slang: HashMap::new(),
             },
+            scene: SceneConfig {
+                publish_open_set_activity: false,
+            },
             subtitle: SubtitleConfig {
                 idle_hide_ms: 30000,
                 font_family: "Arial".into(),
@@ -294,6 +297,10 @@ mod tests {
         assert_eq!(
             cfg.translation.current_activity,
             cfg2.translation.current_activity
+        );
+        assert_eq!(
+            cfg.scene.publish_open_set_activity,
+            cfg2.scene.publish_open_set_activity
         );
     }
 

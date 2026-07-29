@@ -24,6 +24,7 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
                         "engine_chain": ["groq"], "model": "should-be-ignored"},
         "stt": {"primary_engine": "sensevoice"},
         "audio": {"vad_enabled": False, "vad_silence_sec": 1.2, "vad_max_speech_sec": 12.0},
+        "scene": {"publish_open_set_activity": True, "vision_model": "should-be-ignored"},
         "live_engine": base.live_engine,
     })
 
@@ -41,9 +42,11 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
     assert merged.stt.primary_engine == "sensevoice"
     assert merged.audio.vad_enabled is False
     assert merged.audio.vad_max_speech_sec == 12.0
+    assert merged.scene.publish_open_set_activity is True
     # NON-whitelisted fields in the JSON must NOT leak through
     assert merged.translation.model == base.translation.model
     assert merged.subtitle.bg == base.subtitle.bg
+    assert merged.scene.vision_model == base.scene.vision_model
 
 
 def test_missing_file_returns_base_unchanged(tmp_path):
@@ -75,6 +78,7 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
         "audio": {"vad_enabled": "no", "vad_max_speech_sec": 12.0},
         "subtitle": {"alpha": "opaque", "idle_hide_ms": 12000},
         "stt": {"primary_engine": "not-an-engine"},
+        "scene": {"publish_open_set_activity": "true"},
     })
 
     merged = config_mod._apply_dashboard_overrides(base, json_path)
@@ -84,6 +88,34 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
     assert merged.subtitle.alpha == base.subtitle.alpha
     assert merged.subtitle.idle_hide_ms == 12000
     assert merged.stt.primary_engine == base.stt.primary_engine
+    assert merged.scene.publish_open_set_activity is False
+
+
+def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):
+    base = config_mod._Config()
+    json_path = tmp_path / "scene.json"
+
+    for value in ("true", 1, None):
+        _write(json_path, {
+            "scene": {"publish_open_set_activity": value},
+            "subtitle": {"idle_hide_ms": 12000},
+        })
+        merged = config_mod._apply_dashboard_overrides(base, json_path)
+        assert merged.scene.publish_open_set_activity is False
+        assert merged.subtitle.idle_hide_ms == 12000
+
+    _write(json_path, {"scene": {"publish_open_set_activity": True}})
+    assert config_mod._apply_dashboard_overrides(
+        base, json_path
+    ).scene.publish_open_set_activity is True
+
+    enabled_base = config_mod._Config(
+        scene=config_mod._Scene(publish_open_set_activity=True)
+    )
+    _write(json_path, {"scene": {"publish_open_set_activity": False}})
+    assert config_mod._apply_dashboard_overrides(
+        enabled_base, json_path
+    ).scene.publish_open_set_activity is False
 
 
 def test_no_whitelisted_changes_returns_base(tmp_path):

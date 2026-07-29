@@ -3,6 +3,7 @@ export interface ConfigDto {
   stt: SttConfig
   splitter: SplitterConfig
   translation: TranslationConfig
+  scene: SceneConfig
   subtitle: SubtitleConfig
   database: DatabaseConfig
   live_engine: BackendEngine
@@ -62,6 +63,10 @@ export interface TranslationConfig {
   use_profile: boolean
   current_activity: string
   slang: Record<string, string>
+}
+
+export interface SceneConfig {
+  publish_open_set_activity: boolean
 }
 
 export interface SubtitleConfig {
