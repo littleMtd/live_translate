@@ -4008,6 +4008,31 @@ class TestQualityRetry(unittest.TestCase):
         self.assertFalse(trace["applied"])
         self.assertEqual(trace["reason"], "shadow_only")
 
+    def test_japanese_off_skips_selective_amount_mismatch(self):
+        from config import cfg
+        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
+
+        source = "만 5천원 받았어"
+        composite = "收到五千です"
+        good = "收到一萬五千元"
+        primary = self._FakeEngine("nvidia", composite)
+        alt = self._FakeEngine("groq", good)
+        t = self._translator_with([primary, alt])
+        old_mode = cfg.translation.quality_retry_japanese_mode
+        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "off")
+        reset_quality_retry_trace()
+        try:
+            result, engine, _pv = t._maybe_quality_retry(
+                source, source, composite, "sys", False, None, primary, "pv0"
+            )
+        finally:
+            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
+
+        self.assertEqual(result, composite)
+        self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+        self.assertEqual(get_quality_retry_trace(), {})
+
     def test_rejected_retry_keeps_primary_token_attribution(self):
         from modules.translation_engines import (
             _log_token_usage,
@@ -4079,12 +4104,12 @@ class TestQualityRetry(unittest.TestCase):
         self.assertEqual(result, self._BAD)
         self.assertEqual(alt.calls, 0)
 
-    def test_japanese_retry_default_mode_never_replaces_output(self):
-        # Phase B (audit §10.1): default is "shadow" — candidates may be
-        # generated for the gate dataset, but the shipped subtitle must stay
-        # the original. "active" must never become the default without the
-        # Phase C gate.
+    def test_japanese_retry_default_mode_does_not_call_alternate(self):
+        # Japanese residue remains observable, but the production default
+        # must not delay a subtitle for a diagnostic-only second opinion.
         from config import cfg
+        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
+        from utils.runtime_events import translation_quality
 
         source = "오늘 방송은 정말 재미있어요"
         original = "今天直播很好です"
@@ -4092,15 +4117,21 @@ class TestQualityRetry(unittest.TestCase):
         primary = self._FakeEngine("nvidia", original)
         alt = self._FakeEngine("groq", candidate)
         t = self._translator_with([primary, alt])
+        reset_quality_retry_trace()
 
         result, engine, _pv = t._maybe_quality_retry(
             source, source, original, "sys", False, None, primary, "pv0"
         )
 
-        self.assertIn(cfg.translation.quality_retry_japanese_mode, ("off", "shadow"))
-        self.assertNotEqual(cfg.translation.quality_retry_japanese_mode, "active")
+        self.assertEqual(cfg.translation.quality_retry_japanese_mode, "off")
         self.assertEqual(result, original)
         self.assertEqual(engine.engine_name, "nvidia")
+        self.assertEqual(alt.calls, 0)
+        self.assertEqual(get_quality_retry_trace(), {})
+        self.assertIn(
+            "target_has_japanese",
+            translation_quality(source, original)["quality_flags"],
+        )
 
     def test_japanese_shadow_records_better_candidate_without_replacing(self):
         from config import cfg

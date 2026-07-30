@@ -151,6 +151,16 @@ releases the subtitle worker and bounds late calls to
 `cfg.translation.live_route_max_inflight` per route. Later sentences use
 fallback instead of creating an unbounded request backlog.
 
+Japanese residue detection remains enabled as translation-quality telemetry.
+Japanese-specific quality retry defaults `off`, so a production subtitle does
+not wait for a diagnostic-only second provider call. Operators may explicitly
+select `shadow` for synchronous record-only candidate collection; `active`
+remains non-default and requires its separate evidence gate. This setting does
+not disable the existing selective retry path on non-Japanese outputs. In
+`off`, a Japanese-flagged output fails closed without a retry even when another
+selective defect is present, preserving the former default shadow mode's
+no-replacement boundary.
+
 To add a new engine: see the step-by-step guide in `config.py` (`_Translation.engine_chain` comment block).
 
 ## Important Behavior

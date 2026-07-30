@@ -266,11 +266,12 @@ class _Translation:
     # Japanese residue is ambiguous. "shadow" pays for a second opinion but
     # never changes subtitles; "active" may replace only on a strict severity
     # improvement. Keep off until offline + live-shadow evidence passes.
-    # Phase B data collection (audit §10.1/§11.3): record-only — the candidate
-    # retry is generated and logged but the original subtitle always ships.
-    # Flip to "active" only after the Phase C gate passes (≥30 shadow events,
-    # ≥30 semantic labels, zero observed false corrections).
-    quality_retry_japanese_mode: str = "shadow"
+    # Japanese residue remains observable through translation-quality flags.
+    # "shadow" is an explicit diagnostic mode: it synchronously generates and
+    # logs a candidate while the original subtitle ships, so flagged subtitles
+    # wait for the extra call. Keep production default "off"; use "active" only
+    # after its evidence gate passes.
+    quality_retry_japanese_mode: str = "off"
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):

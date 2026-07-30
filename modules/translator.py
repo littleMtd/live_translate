@@ -1499,6 +1499,13 @@ class Translator:
             getattr(cfg.translation, "quality_retry_japanese_mode", "off") or "off"
         ).lower()
         japanese_flagged = "target_has_japanese" in flags
+        # The production-default "off" mode is fail-closed for every
+        # Japanese-flagged original, including composite selective defects.
+        # The former default shadow mode never replaced those originals;
+        # changing the default must remove its diagnostic call without
+        # silently activating replacement for the same subtitles.
+        if japanese_flagged and japanese_mode == "off":
+            return result, engine, prompt_ver
         japanese_trigger = japanese_flagged and japanese_mode in {
             "shadow",
             "active",

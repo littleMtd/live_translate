@@ -175,6 +175,11 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "quality_retry_japanese_mode invalid"):
             _Translation(quality_retry_japanese_mode="replace-everything")
 
+    def test_japanese_retry_defaults_off(self):
+        from config import _Translation
+
+        self.assertEqual(_Translation().quality_retry_japanese_mode, "off")
+
     def test_translation_slang_is_dict(self):
         from collections.abc import Mapping
         self.assertIsInstance(cfg.translation.slang, Mapping)
