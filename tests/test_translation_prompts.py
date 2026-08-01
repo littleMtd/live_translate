@@ -1,7 +1,10 @@
 import json
+from dataclasses import replace
 
 import pytest
 
+from config import cfg
+import modules.translation_prompts as translation_prompts
 from modules.streamer_profiles import known_profile_ids
 from modules.translation_prompts import (
     _PROFILE_DATA_PATH,
@@ -202,14 +205,26 @@ def test_url_translation_profiles_contain_official_group_terms():
             assert term in profile
 
 
-def test_live_path_uses_qwen_prompt():
+def test_live_path_uses_qwen_prompt(monkeypatch):
     """_BASE_PROMPT is benchmark-only: the 2026-07 fixes (number units,
     name-rule tightening, anti-echo) live only in _QWEN_PROMPT. If this
     fails, the live engine is no longer a qwen model — port those fixes to
     _BASE_PROMPT before switching."""
-    from modules.translation_prompts import _is_qwen_model
+    configured_keys = replace(
+        cfg.keys,
+        anthropic="test-key",
+        google_translate="test-key",
+        deepl="test-key",
+        openrouter="test-key",
+        groq_fallback="test-key",
+    )
+    monkeypatch.setattr(
+        translation_prompts,
+        "cfg",
+        replace(cfg, keys=configured_keys),
+    )
 
-    assert _is_qwen_model(), (
+    assert translation_prompts._is_qwen_model(), (
         "live path no longer selects _QWEN_PROMPT; _BASE_PROMPT is stale "
         "(missing the 2026-07 prompt fixes) — port them before switching engines"
     )
