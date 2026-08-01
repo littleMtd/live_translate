@@ -2,6 +2,7 @@ python-dotenv
 sounddevice
 soundfile
 numpy
+Pillow
 anthropic
 groq
 funasr

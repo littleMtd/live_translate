@@ -3,5 +3,6 @@ pytest
 sounddevice
 soundfile
 numpy
+Pillow
 anthropic
 groq
