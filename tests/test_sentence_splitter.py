@@ -4,7 +4,13 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.sentence_splitter import _can_merge_cuts, _is_complete, _merge_cuts, start
+from modules.sentence_splitter import (
+    _can_merge_cuts,
+    _is_complete,
+    _merge_cuts,
+    _semantic_mode_setting,
+    start,
+)
 from modules.pipeline_events import TranscriptionEvent
 from modules.sentence_buffer import SentenceCut
 
@@ -24,6 +30,7 @@ def _fast_cfg(
     m.splitter.segment_gap_seconds = 0.6
     m.splitter.silence_complete_enabled = False
     m.splitter.pending_incomplete_timeout_seconds = pending_timeout
+    m.splitter.semantic_early_cut_mode = "off"
     return m
 
 
@@ -93,6 +100,14 @@ class TestIsComplete(unittest.TestCase):
     def test_incomplete_overrides_complete_substring(self):
         # "배고서" ends with 서 (incomplete 이서/어서 family) even though 고 is also checked
         self.assertFalse(_is_complete("배고서"))
+
+
+class TestSemanticEarlyCutMode(unittest.TestCase):
+    def test_only_explicit_shadow_is_enabled(self):
+        self.assertEqual(_semantic_mode_setting("shadow"), "shadow")
+        for value in ("off", "active", "invalid", None):
+            with self.subTest(value=value):
+                self.assertEqual(_semantic_mode_setting(value), "off")
 
 
 class TestSentenceSplitterThread(unittest.TestCase):
@@ -319,6 +334,90 @@ class TestSentenceRuntimeEvent(unittest.TestCase):
         self.assertEqual(kw["max_no_speech_prob"], 0.2)
         self.assertFalse(kw["incomplete"])
         self.assertFalse(kw["forced"])
+
+    def test_semantic_shadow_observes_each_prefilled_chunk_without_cutting(self):
+        first = TranscriptionEvent(
+            text="안녕하세요",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-1",
+            vad_cut_reason="soft_max_pause",
+        )
+        second = TranscriptionEvent(
+            text="게임 하고",
+            engine="groq",
+            profile_id="a",
+            utterance_id="utt-2",
+            vad_cut_reason="hard_max",
+        )
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=5.0, force_cut=8.0)
+        cfg.splitter.semantic_early_cut_mode = "shadow"
+        tq.put(first)
+        tq.put(second)
+
+        with patch("modules.sentence_splitter.cfg", cfg), \
+                patch("modules.sentence_splitter.runtime_events") as events:
+            thread = start(tq, sq, stop)
+            time.sleep(0.25)
+            self.assertTrue(sq.empty())
+            stop.set()
+            thread.join(timeout=2)
+
+        semantic = [
+            call.kwargs
+            for call in events.emit.call_args_list
+            if call.args and call.args[0] == "sentence_early_cut"
+        ]
+        self.assertEqual(len(semantic), 2)
+        self.assertEqual([event["drain_batch_position"] for event in semantic], [1, 2])
+        self.assertEqual([event["drain_batch_size"] for event in semantic], [2, 2])
+        self.assertTrue(semantic[0]["would_cut"])
+        self.assertFalse(semantic[0]["legacy_would_cut"])
+        self.assertEqual(semantic[0]["saved_wait_ms"], 5000.0)
+        self.assertEqual(semantic[1]["classification"], "incomplete")
+        self.assertFalse(semantic[1]["would_cut"])
+        self.assertFalse(semantic[0]["applied"])
+        self.assertFalse(semantic[0]["actual_cut_ready"])
+        final = sq.get_nowait()
+        self.assertEqual(final.text, "안녕하세요 게임 하고")
+
+    def test_semantic_shadow_snapshots_metrics_only_after_normal_cut(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.0, force_cut=8.0)
+        cfg.splitter.semantic_early_cut_mode = "shadow"
+        tq.put(
+            TranscriptionEvent(
+                text="안녕하세요",
+                engine="groq",
+                profile_id="a",
+                utterance_id="utt-1",
+            )
+        )
+        fake_metrics = MagicMock()
+
+        def snapshot_after_cut():
+            self.assertFalse(sq.empty())
+            result = MagicMock()
+            result.counters = {}
+            return result
+
+        fake_metrics.snapshot.side_effect = snapshot_after_cut
+        with patch("modules.sentence_splitter.cfg", cfg), \
+                patch("modules.sentence_splitter.metrics", fake_metrics), \
+                patch("modules.sentence_splitter.runtime_events"):
+            thread = start(tq, sq, stop)
+            time.sleep(0.25)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        fake_metrics.snapshot.assert_called_once_with()
+        self.assertEqual(sq.get_nowait().text, "안녕하세요")
 
     def test_merged_cut_reports_combined_assembly(self):
         first = TranscriptionEvent(

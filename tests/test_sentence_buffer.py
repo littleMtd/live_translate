@@ -4,9 +4,120 @@ from modules.pipeline_events import SegmentInfo, TranscriptionEvent
 from modules.sentence_buffer import (
     SentenceBuffer,
     _split_prefix_with_reason,
+    classify_korean_completeness,
     is_complete,
+    split_safe_complete_prefix,
     split_complete_prefix,
 )
+
+
+class TestKoreanCompletenessDecision(unittest.TestCase):
+    def test_accepts_narrow_positive_evidence(self):
+        expected = {
+            "안녕하세요": "strong_final_ending",
+            "정말 좋다": "strong_final_ending",
+            "끝났어!": "terminal_punctuation",
+            '"정말이야?"': "terminal_punctuation",
+            "네": "short_acknowledgement",
+        }
+        for text, reason in expected.items():
+            with self.subTest(text=text):
+                decision = classify_korean_completeness(text)
+                self.assertEqual(decision.state, "complete")
+                self.assertEqual(decision.reason, reason)
+
+    def test_vetoes_runtime_particle_adnominal_and_connector_tails(self):
+        cases = (
+            "선풍기 쓰는 고양이",
+            "그냥 편하게 있는",
+            "이거 옷 귀엽다 했는데 랑코가",
+            "카페에 올렸던 사진 중에",
+            "이거 뭐야 이것도 올렸던 것 같은데 앞에",
+            "게임 하고",
+            "게임이 끝나면",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                decision = classify_korean_completeness(text)
+                self.assertEqual(decision.state, "incomplete")
+                self.assertIn(
+                    decision.reason,
+                    {
+                        "unfinished_particle",
+                        "unfinished_connector",
+                        "unfinished_grammatical_tail",
+                    },
+                )
+
+    def test_terminal_punctuation_does_not_override_grammatical_tail_veto(self):
+        for text in (
+            "게임 하고.",
+            "게임이 끝나면.",
+            "이거는.",
+            "그냥 편하게 있는.",
+            "그때 먹던.",
+            "예전에 하던.",
+            "내가 알던.",
+        ):
+            with self.subTest(text=text):
+                decision = classify_korean_completeness(text)
+                self.assertEqual(decision.state, "incomplete")
+                self.assertIn(
+                    decision.reason,
+                    {
+                        "unfinished_particle",
+                        "unfinished_connector",
+                        "unfinished_adnominal",
+                        "unfinished_grammatical_tail",
+                    },
+                )
+
+    def test_unclosed_delimiter_vetoes_terminal_morphology(self):
+        decision = classify_korean_completeness('오늘은 (정말 좋아요')
+        self.assertEqual(decision.state, "incomplete")
+        self.assertEqual(decision.reason, "unclosed_delimiter")
+
+    def test_decimal_version_url_and_ellipsis_are_not_terminal_boundaries(self):
+        for text in ("버전 1.2.", "example.com.", "잠깐...", "어..", "v2.0."):
+            with self.subTest(text=text):
+                self.assertNotEqual(
+                    classify_korean_completeness(text).state,
+                    "complete",
+                )
+
+    def test_short_misheard_strong_final_is_not_enough_positive_evidence(self):
+        decision = classify_korean_completeness("출게요")
+        self.assertEqual(decision.state, "uncertain")
+        self.assertEqual(decision.reason, "ambiguous_tail")
+
+    def test_safe_prefix_keeps_closing_quote_and_rejects_unsafe_dots(self):
+        self.assertEqual(
+            split_safe_complete_prefix('"안녕하세요?" 그런데 아직'),
+            ('"안녕하세요?"', "그런데 아직"),
+        )
+        self.assertEqual(
+            split_safe_complete_prefix("오늘도 안녕하세요. 그런데 아직"),
+            ("오늘도 안녕하세요.", "그런데 아직"),
+        )
+        for text in ("버전 1.2 입니다", "example.com 주소예요", "잠깐... 아직"):
+            with self.subTest(text=text):
+                self.assertEqual(split_safe_complete_prefix(text), ("", text))
+
+    def test_safe_prefix_returns_first_boundary_to_bound_subtitle_length(self):
+        self.assertEqual(
+            split_safe_complete_prefix(
+                "첫 번째 문장입니다. 두 번째 문장입니다. 아직 이어지는 내용"
+            ),
+            ("첫 번째 문장입니다.", "두 번째 문장입니다. 아직 이어지는 내용"),
+        )
+
+    def test_safe_prefix_rejects_punctuated_incomplete_grammar(self):
+        for text in (
+            "오늘은 게임을 하고. 다음 문장입니다",
+            "내가 예전에 자주 하던. 다음 문장입니다",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(split_safe_complete_prefix(text), ("", text))
 
 
 class TestSentenceBuffer(unittest.TestCase):

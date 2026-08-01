@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from modules.pipeline_events import TranscriptionEvent, transcription_text
+from modules.sentence_hold_shadow import analyze_unfinished_tail
 from utils.metrics import metrics
 from utils.text_heuristics import (
     SENTENCE_COMPLETE_ENDINGS,
@@ -23,10 +25,201 @@ _BOUNDARY_CHARS = ".?!~…。？！"
 # Codex §11.11 #1/#5 thresholds.
 _MIN_PREFIX_SIGNIFICANT = 6   # prefix shorter than this → don't split
 _MAX_TRIVIAL_RESIDUAL = 3     # residual at or below this → drop, don't carry
+_MIN_STRONG_FINAL_SIGNIFICANT = 4
+
+
+_STRONG_COMPLETE_ENDINGS = tuple(
+    ending
+    for ending in _COMPLETE_ENDINGS
+    if ending not in {"어", "아", "네", "예", "야", "지", "군", ".", "!", "?", "~"}
+)
+_SHORT_ACKNOWLEDGEMENTS = frozenset(
+    {"네", "예", "응", "어", "아", "그래", "맞아", "좋아", "싫어"}
+)
+_BOUNDARY_CLOSERS = frozenset("\"'”’)]}」』》")
+_TERMINAL_PUNCTUATION = frozenset("!?~？！。")
+_URL_OR_VERSION_TOKEN_RE = re.compile(
+    r"(?:https?://|www\.|[A-Za-z0-9_-]+\.(?:com|net|org|gg|io|tv)|\d+\.\d+)",
+    re.IGNORECASE,
+)
 
 
 def _significant_len(value: str) -> int:
     return len(STT_INSIGNIFICANT_RE.sub("", value))
+
+
+@dataclass(frozen=True)
+class CompletenessDecision:
+    state: str
+    reason: str
+    matched_ending: str = ""
+    signals: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EarlyCutAssessment:
+    classification: str
+    reason: str
+    matched_ending: str
+    signals: tuple[str, ...]
+    would_cut: bool
+    candidate_kind: str
+    candidate_text: str
+    residual_text: str
+    elapsed_ms: float
+    saved_wait_ms: float
+    legacy_would_cut: bool
+    source_count: int
+    evidence_source_count: int
+
+
+def _terminal_core(text: str) -> str:
+    core = text.rstrip()
+    while core and core[-1] in _BOUNDARY_CLOSERS:
+        core = core[:-1].rstrip()
+    return core
+
+
+def _has_safe_terminal_punctuation(text: str) -> bool:
+    core = _terminal_core(text)
+    if not core or core.endswith("…") or re.search(r"\.{2,}$", core):
+        return False
+    terminal = core[-1]
+    if terminal in _TERMINAL_PUNCTUATION:
+        return True
+    if terminal != ".":
+        return False
+    token = core.split()[-1]
+    body = token[:-1]
+    return bool(body) and not _URL_OR_VERSION_TOKEN_RE.search(body)
+
+
+def _has_unsafe_terminal_dot_run(text: str) -> bool:
+    core = _terminal_core(text)
+    return bool(core and (core.endswith("…") or re.search(r"\.{2,}$", core)))
+
+
+def classify_korean_completeness(text: str) -> CompletenessDecision:
+    """Conservatively classify whether a transcript is safe to release early."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return CompletenessDecision("uncertain", "empty")
+
+    structural = analyze_unfinished_tail(stripped, forced=False)
+    grammatical_text = _terminal_core(stripped).rstrip(".!?~？！。…").rstrip()
+    grammatical = analyze_unfinished_tail(
+        grammatical_text,
+        forced=False,
+        grammatical_min_significant=1,
+        include_adnominal=True,
+    )
+    fallback_incomplete_ending = next(
+        (
+            ending
+            for ending in _INCOMPLETE_ENDINGS
+            if grammatical_text.endswith(ending)
+        ),
+        "",
+    )
+    signals = tuple(
+        dict.fromkeys(
+            structural.signals
+            + tuple(
+                signal
+                for signal in grammatical.signals
+                if signal
+                in {
+                    "unfinished_adnominal",
+                    "unfinished_connector",
+                    "unfinished_particle",
+                }
+            )
+        )
+    )
+    if "unclosed_delimiter" in structural.signals:
+        return CompletenessDecision(
+            "incomplete",
+            "unclosed_delimiter",
+            structural.matched_ending,
+            signals,
+        )
+    if "unfinished_connector" in grammatical.signals:
+        return CompletenessDecision(
+            "incomplete",
+            "unfinished_connector",
+            grammatical.matched_ending,
+            signals,
+        )
+    if "unfinished_particle" in grammatical.signals:
+        return CompletenessDecision(
+            "incomplete",
+            "unfinished_particle",
+            grammatical.matched_ending,
+            signals,
+        )
+    if "unfinished_adnominal" in grammatical.signals:
+        return CompletenessDecision(
+            "incomplete",
+            "unfinished_adnominal",
+            grammatical.matched_ending,
+            signals,
+        )
+    if fallback_incomplete_ending:
+        return CompletenessDecision(
+            "incomplete",
+            "unfinished_grammatical_tail",
+            fallback_incomplete_ending,
+            signals,
+        )
+    if _has_unsafe_terminal_dot_run(stripped):
+        return CompletenessDecision("uncertain", "unsafe_terminal_punctuation")
+    if _has_safe_terminal_punctuation(stripped):
+        return CompletenessDecision("complete", "terminal_punctuation")
+
+    compact = STT_INSIGNIFICANT_RE.sub("", stripped)
+    if compact in _SHORT_ACKNOWLEDGEMENTS:
+        return CompletenessDecision("complete", "short_acknowledgement", compact)
+
+    matched = next(
+        (ending for ending in _STRONG_COMPLETE_ENDINGS if stripped.endswith(ending)),
+        "",
+    )
+    if matched and _significant_len(stripped) >= _MIN_STRONG_FINAL_SIGNIFICANT:
+        return CompletenessDecision("complete", "strong_final_ending", matched)
+    return CompletenessDecision(
+        "uncertain",
+        "ambiguous_tail",
+        grammatical.matched_ending or structural.matched_ending,
+        signals,
+    )
+
+
+def split_safe_complete_prefix(text: str) -> tuple[str, str]:
+    """Return the first safe punctuation-bounded prefix and its residual."""
+    stripped = (text or "").strip()
+    index = 0
+    while index < len(stripped):
+        char = stripped[index]
+        if char not in ".!?~？！。":
+            index += 1
+            continue
+        end = index + 1
+        while end < len(stripped) and stripped[end] in _BOUNDARY_CLOSERS:
+            end += 1
+        if end < len(stripped) and not stripped[end].isspace():
+            index += 1
+            continue
+        prefix = stripped[:end].strip()
+        residual = stripped[end:].strip()
+        if (
+            residual
+            and _significant_len(prefix) >= _MIN_PREFIX_SIGNIFICANT
+            and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL
+            and classify_korean_completeness(prefix).state == "complete"
+        ):
+            return prefix, residual
+        index += 1
+    return "", stripped
 
 
 def _split_prefix_with_reason(
@@ -202,6 +395,62 @@ class SentenceBuffer:
                 self._source_no_speech_probs.append(token.no_speech_prob)
         self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
+
+    def assess_semantic_early_cut(
+        self,
+        now: float,
+        *,
+        min_wait_seconds: float,
+        force_cut_seconds: float,
+    ) -> EarlyCutAssessment:
+        """Describe a counterfactual early cut without mutating the buffer."""
+        text = self._buffer.strip()
+        elapsed = (
+            max(0.0, now - self._first_token_time)
+            if self._first_token_time is not None
+            else 0.0
+        )
+        prefix, residual = split_safe_complete_prefix(text)
+        decision = classify_korean_completeness(prefix or text)
+        candidate_kind = "prefix" if prefix else ("full" if decision.state == "complete" else "")
+        candidate_text = prefix or text
+        would_cut = bool(candidate_kind)
+        legacy_complete = is_complete(text)
+        legacy_silence_ready = bool(
+            self._silence_complete_enabled
+            and self._silence_complete_pending
+            and not _ends_with_incomplete_ending(text)
+            and _significant_len(text) >= _MIN_PREFIX_SIGNIFICANT
+        )
+        legacy_would_cut = bool(
+            text
+            and (
+                legacy_silence_ready
+                or elapsed >= force_cut_seconds
+                or (elapsed >= min_wait_seconds and legacy_complete)
+            )
+        )
+        if legacy_would_cut or not would_cut:
+            saved_wait = 0.0
+        elif candidate_kind == "prefix":
+            saved_wait = max(0.0, force_cut_seconds - elapsed)
+        else:
+            saved_wait = max(0.0, min_wait_seconds - elapsed)
+        return EarlyCutAssessment(
+            classification=decision.state,
+            reason=decision.reason,
+            matched_ending=decision.matched_ending,
+            signals=decision.signals,
+            would_cut=would_cut,
+            candidate_kind=candidate_kind,
+            candidate_text=candidate_text,
+            residual_text=residual if prefix else "",
+            elapsed_ms=round(elapsed * 1000, 2),
+            saved_wait_ms=round(saved_wait * 1000, 2),
+            legacy_would_cut=legacy_would_cut,
+            source_count=len(self._source_utterance_ids),
+            evidence_source_count=len(self._evidence_source_utterance_ids),
+        )
 
     def flush(self, now: float) -> SentenceCut | None:
         """Drain whatever is buffered as a final cut (used at stage stop so

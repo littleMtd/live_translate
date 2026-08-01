@@ -51,6 +51,7 @@ _CONNECTOR_ENDINGS = tuple(
     for ending in SENTENCE_INCOMPLETE_ENDINGS
     if ending not in _PARTICLE_ENDINGS
 )
+_ADNOMINAL_ENDINGS = ("던",)
 _PAIRED_DELIMITERS = (
     ("(", ")"),
     ("[", "]"),
@@ -100,7 +101,13 @@ class UnfinishedTail:
     unclosed_delimiters: tuple[str, ...] = ()
 
 
-def analyze_unfinished_tail(text: str, *, forced: bool) -> UnfinishedTail:
+def analyze_unfinished_tail(
+    text: str,
+    *,
+    forced: bool,
+    grammatical_min_significant: int = _MIN_GRAMMATICAL_TAIL_TEXT,
+    include_adnominal: bool = False,
+) -> UnfinishedTail:
     """Classify conservative unfinished-tail signals for shadow telemetry."""
     stripped = (text or "").rstrip()
     if not stripped:
@@ -110,19 +117,26 @@ def analyze_unfinished_tail(text: str, *, forced: bool) -> UnfinishedTail:
     significant_len = len(STT_INSIGNIFICANT_RE.sub("", stripped))
     particle = (
         _matched_ending(stripped, _PARTICLE_ENDINGS)
-        if significant_len >= _MIN_GRAMMATICAL_TAIL_TEXT
+        if significant_len >= grammatical_min_significant
         else ""
     )
     connector = (
         _matched_ending(stripped, _CONNECTOR_ENDINGS)
-        if significant_len >= _MIN_GRAMMATICAL_TAIL_TEXT
+        if significant_len >= grammatical_min_significant
         else ""
     )
-    matched_ending = particle or connector
+    adnominal = (
+        _matched_ending(stripped, _ADNOMINAL_ENDINGS)
+        if include_adnominal and significant_len >= grammatical_min_significant
+        else ""
+    )
+    matched_ending = particle or connector or adnominal
     if particle:
         signals.append("unfinished_particle")
     elif connector:
         signals.append("unfinished_connector")
+    elif adnominal:
+        signals.append("unfinished_adnominal")
 
     unclosed = _unclosed_delimiters(stripped)
     if unclosed:

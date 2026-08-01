@@ -653,6 +653,122 @@ def test_analyzer_summarizes_sentence_hold_shadow_opportunities(tmp_path):
     assert summary["actionable_emitted"]["useful_within_500ms_rate"] == 1.0
 
 
+def test_analyzer_summarizes_semantic_early_cut_shadow(tmp_path):
+    path = tmp_path / "runtime_events_20260731.jsonl"
+
+    def semantic(decision_id, **overrides):
+        event = {
+            "schema_version": 3,
+            "run_kind": "live",
+            "event_type": "sentence_early_cut",
+            "run_id": "run-x",
+            "mode": "shadow",
+            "decision_id": decision_id,
+            "drain_batch_id": "batch-1",
+            "drain_batch_position": 1,
+            "drain_batch_size": 2,
+            "classification": "complete",
+            "reason_code": "strong_final_ending",
+            "would_cut": True,
+            "legacy_would_cut": False,
+            "applied": False,
+            "candidate_kind": "full",
+            "candidate_text": "안녕하세요",
+            "residual_text": "",
+            "saved_wait_ms": 3000,
+            "text_queue_drops": 0,
+            "sentence_queue_drops": 0,
+        }
+        event.update(overrides)
+        return event
+
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-x"),
+            _translation_event(
+                run_id="run-x",
+                status="filtered",
+                result_source="policy",
+                api_attempt_count=0,
+            ),
+            semantic("decision-1"),
+            semantic(
+                "decision-2",
+                drain_batch_position=2,
+                classification="incomplete",
+                reason_code="unfinished_connector",
+                would_cut=False,
+                candidate_kind="",
+                saved_wait_ms=0,
+            ),
+            semantic(
+                "decision-3",
+                drain_batch_id="batch-2",
+                drain_batch_position=1,
+                drain_batch_size=1,
+                legacy_would_cut=True,
+                saved_wait_ms=0,
+                actual_cut_reason="silence_complete",
+                sentence_queue_drops=1,
+            ),
+            semantic("decision-1"),  # duplicate correlation key
+            semantic("", run_id=""),  # missing correlation key
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["sentence_early_cut"]
+
+    assert summary["event_count"] == 5
+    assert summary["decision_count"] == 3
+    assert summary["missing_decision_key_count"] == 1
+    assert summary["duplicate_decision_count"] == 1
+    assert summary["would_cut_count"] == 2
+    assert summary["legacy_overlap_count"] == 1
+    assert summary["actionable_would_cut_count"] == 1
+    assert summary["translation_request_count"] == 1
+    assert summary["projected_additional_request_upper_bound_ratio"] == 1.0
+    assert summary["saved_wait_ms"]["p50"] == 3000
+    assert summary["drain_batch_size"]["count"] == 2
+    assert summary["multi_item_batch_count"] == 1
+    assert summary["max_text_queue_drops"] == 0
+    assert summary["max_sentence_queue_drops"] == 1
+
+
+def test_semantic_early_cut_request_count_includes_all_fallback_attempts(tmp_path):
+    path = tmp_path / "runtime_events_20260731.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="run-x",
+                api_attempt_count=1,
+                attempts=[
+                    {"api_attempt_count": 2, "status": "failed"},
+                    {"api_attempt_count": 1, "status": "success"},
+                ],
+            ),
+            {
+                "schema_version": 3,
+                "run_kind": "live",
+                "event_type": "sentence_early_cut",
+                "run_id": "run-x",
+                "mode": "shadow",
+                "decision_id": "decision-1",
+                "drain_batch_id": "batch-1",
+                "would_cut": True,
+                "legacy_would_cut": False,
+                "saved_wait_ms": 3000,
+            },
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["sentence_early_cut"]
+
+    assert summary["translation_request_count"] == 3
+    assert summary["projected_additional_request_upper_bound_ratio"] == 0.3333
+
+
 def test_sentence_hold_summary_scopes_ids_and_excludes_bad_pairs_from_rates(tmp_path):
     path = tmp_path / "runtime_events_20260725.jsonl"
 

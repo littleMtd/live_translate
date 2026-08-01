@@ -45,6 +45,11 @@ def _bool_setting(value: object, default: bool) -> bool:
     return bool(value) if isinstance(value, bool) else default
 
 
+def _semantic_mode_setting(value: object) -> str:
+    normalized = str(value or "off").strip().lower()
+    return normalized if normalized in {"off", "shadow"} else "off"
+
+
 def _merge_source_count(first: SentenceCut, second: SentenceCut) -> int:
     if first.source_utterance_ids or second.source_utterance_ids:
         return len(first.source_utterance_ids) + len(second.source_utterance_ids)
@@ -118,6 +123,12 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             getattr(cfg.splitter, "pending_incomplete_timeout_seconds", 8.0),
             8.0,
         )
+        semantic_mode = _semantic_mode_setting(
+            getattr(cfg.splitter, "semantic_early_cut_mode", "off")
+        )
+        semantic_decision_sequence = 0
+        semantic_batch_sequence = 0
+        sentence_emit_sequence = 0
         shadow_sequence = 0
         active_shadow: dict[str, object] | None = None
 
@@ -210,12 +221,61 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             active_shadow = None
             return payload
 
+        def build_semantic_shadow(
+            token: str | TranscriptionEvent,
+            now: float,
+            *,
+            batch_id: str,
+            batch_position: int,
+        ) -> dict[str, object] | None:
+            nonlocal semantic_decision_sequence
+            if semantic_mode == "off":
+                return None
+            semantic_decision_sequence += 1
+            assessment = buffer.assess_semantic_early_cut(
+                now,
+                min_wait_seconds=cfg.splitter.min_wait_seconds,
+                force_cut_seconds=cfg.splitter.force_cut_seconds,
+            )
+            source = token if isinstance(token, TranscriptionEvent) else None
+            return {
+                "mode": semantic_mode,
+                "decision_id": f"semantic-early-cut-{semantic_decision_sequence}",
+                "drain_batch_id": batch_id,
+                "drain_batch_position": batch_position,
+                "classification": assessment.classification,
+                "reason_code": assessment.reason,
+                "matched_ending": assessment.matched_ending,
+                "signals": list(assessment.signals),
+                "legacy_complete": is_complete(assessment.candidate_text),
+                "legacy_would_cut": assessment.legacy_would_cut,
+                "would_cut": assessment.would_cut,
+                "applied": False,
+                "candidate_kind": assessment.candidate_kind,
+                "candidate_text": assessment.candidate_text,
+                "candidate_text_len": len(assessment.candidate_text),
+                "residual_text": assessment.residual_text,
+                "residual_chars": len(assessment.residual_text),
+                "residual_carry_policy": (
+                    "as5_all_prior_sources_to_evidence"
+                    if assessment.residual_text
+                    else "none"
+                ),
+                "elapsed_ms": assessment.elapsed_ms,
+                "saved_wait_ms": assessment.saved_wait_ms,
+                "source_count": assessment.source_count,
+                "evidence_source_count": assessment.evidence_source_count,
+                "utterance_id": source.utterance_id if source else "",
+                "vad_cut_reason": source.vad_cut_reason if source else "",
+            }
+
         def emit_cut(
             cut: SentenceCut,
             *,
             track_shadow: bool = True,
             shadow_started_at: float | None = None,
         ) -> None:
+            nonlocal sentence_emit_sequence
             if cut.forced:
                 log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
             log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
@@ -256,6 +316,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             )
             metrics.increment("sentence.emitted")
             put_drop_oldest(sentence_queue, event, log, "sentence_queue")
+            sentence_emit_sequence += 1
             if track_shadow:
                 start_shadow(
                     cut,
@@ -313,12 +374,22 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             # Wait up to 100 ms for the first new token, then drain the rest immediately.
             # This single blocking call replaces the two time.sleep(0.1) paths below.
             deferred_shadow_outcomes: list[dict[str, object]] = []
+            deferred_semantic_events: list[dict[str, object]] = []
+            semantic_batch_sequence += 1
+            semantic_batch_id = f"semantic-drain-{semantic_batch_sequence}"
             try:
                 token = text_queue.get(timeout=0.1)
                 received_at = time.monotonic()
                 if shadow_outcome := observe_next_chunk(token, received_at):
                     deferred_shadow_outcomes.append(shadow_outcome)
                 buffer.push(token, received_at)
+                if semantic_event := build_semantic_shadow(
+                    token,
+                    received_at,
+                    batch_id=semantic_batch_id,
+                    batch_position=1,
+                ):
+                    deferred_semantic_events.append(semantic_event)
                 while True:
                     try:
                         token = text_queue.get_nowait()
@@ -326,12 +397,20 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                         if shadow_outcome := observe_next_chunk(token, received_at):
                             deferred_shadow_outcomes.append(shadow_outcome)
                         buffer.push(token, received_at)
+                        if semantic_event := build_semantic_shadow(
+                            token,
+                            received_at,
+                            batch_id=semantic_batch_id,
+                            batch_position=len(deferred_semantic_events) + 1,
+                        ):
+                            deferred_semantic_events.append(semantic_event)
                     except queue.Empty:
                         break
             except queue.Empty:
                 pass  # no new tokens within 100 ms — fall through to check cut
 
             now = time.monotonic()
+            emitted_before = sentence_emit_sequence
             flush_pending_if_timed_out(now)
             cut = buffer.pop_ready(
                 now,
@@ -374,6 +453,30 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             # cannot delay the observed token's admission or its cut decision.
             for shadow_outcome in deferred_shadow_outcomes:
                 runtime_events.emit("sentence_hold_shadow", **shadow_outcome)
+            if deferred_semantic_events:
+                counters_after = metrics.snapshot().counters
+                emitted_delta = max(
+                    0,
+                    sentence_emit_sequence - emitted_before,
+                )
+                batch_size = len(deferred_semantic_events)
+                for semantic_event in deferred_semantic_events:
+                    semantic_event.update(
+                        {
+                            "drain_batch_size": batch_size,
+                            "actual_cut_ready": cut is not None,
+                            "actual_cut_reason": cut.cut_reason if cut else "",
+                            "actual_cut_incomplete": cut.incomplete if cut else False,
+                            "actual_emitted_count": emitted_delta,
+                            "text_queue_drops": counters_after.get(
+                                "queue.text_queue.dropped", 0
+                            ),
+                            "sentence_queue_drops": counters_after.get(
+                                "queue.sentence_queue.dropped", 0
+                            ),
+                        }
+                    )
+                    runtime_events.emit("sentence_early_cut", **semantic_event)
 
         # Stop: flush the not-yet-cut tail of the buffer so the last sentence
         # isn't dropped, merging it with a pending incomplete cut when allowed

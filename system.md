@@ -45,6 +45,13 @@ The pipeline is controlled by `stop_event` and `pause_event`.
 - `modules/stt_policy.py`: STT output quality filtering (no_speech, logprob, hallucination detection)
 - `modules/sentence_splitter.py`: sentence segmentation orchestration
 - `modules/sentence_buffer.py`: sentence accumulation, timing windows, force-cut logic
+- `modules/sentence_buffer.py` also owns T20's pure Korean completeness
+  diagnostic (`complete` / `incomplete` / `uncertain`) and conservative
+  first-prefix assessment. `cfg.splitter.semantic_early_cut_mode` defaults
+  `off`; explicit `shadow` only records counterfactual
+  `sentence_early_cut` events after normal behavior completes. The frozen
+  shadow gate failed, so there is no active mutation mode and legacy
+  sentence timing remains authoritative.
 - `modules/pipeline_events.py`: typed pipeline events — `TranscriptionEvent`, `SentenceEvent`
 - `modules/translator.py`: translation coordinator (facade)
 - `modules/translation_engines.py`: `TranslationEngine` ABC + Gemini, Claude, GoogleTranslate, Ollama, Nvidia implementations

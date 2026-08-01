@@ -1,5 +1,6 @@
 import unittest
-from config import cfg
+
+from config import _Splitter, cfg
 
 
 class TestConfig(unittest.TestCase):
@@ -341,6 +342,13 @@ class TestVadConfig(unittest.TestCase):
         self.assertIsInstance(cfg.splitter.segment_gap_split_enabled, bool)
         self.assertIsInstance(cfg.splitter.silence_complete_enabled, bool)
         self.assertGreater(cfg.splitter.segment_gap_seconds, 0)
+        self.assertEqual(cfg.splitter.semantic_early_cut_mode, "off")
+
+    def test_splitter_semantic_early_cut_mode_rejects_unknown_value(self):
+        with self.assertRaisesRegex(ValueError, "semantic_early_cut_mode"):
+            _Splitter(semantic_early_cut_mode="invalid")
+        with self.assertRaisesRegex(ValueError, "semantic_early_cut_mode"):
+            _Splitter(semantic_early_cut_mode="active")
 
     def test_vad_min_less_than_max(self):
         self.assertLess(cfg.audio.vad_min_speech_sec, cfg.audio.vad_max_speech_sec)

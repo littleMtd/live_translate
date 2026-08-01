@@ -97,6 +97,11 @@ def analyze_runtime_events(
         for event in events
         if event.get("event_type") == "sentence_hold_shadow"
     ]
+    sentence_early_cut_events = [
+        event
+        for event in events
+        if event.get("event_type") == "sentence_early_cut"
+    ]
     activity_shadow_events = [
         event
         for event in events
@@ -140,6 +145,7 @@ def analyze_runtime_events(
         "stt_events": len(stt_events),
         "audio_events": len(audio_events),
         "sentence_hold_shadow_events": len(sentence_hold_shadow_events),
+        "sentence_early_cut_events": len(sentence_early_cut_events),
         "activity_shadow_events": len(activity_shadow_events),
         "activity_publication_events": len(activity_publication_events),
         "run_ids": sorted({str(event.get("run_id", "")) for event in events if event.get("run_id")}),
@@ -169,6 +175,11 @@ def analyze_runtime_events(
         "stt_summary": _stt_summary(stt_events),
         "sentence_hold_shadow": _sentence_hold_shadow_summary(
             sentence_hold_shadow_events,
+            top_n,
+        ),
+        "sentence_early_cut": _sentence_early_cut_summary(
+            sentence_early_cut_events,
+            translation_events,
             top_n,
         ),
         "activity_shadow": _activity_shadow_summary(activity_shadow_events),
@@ -1293,6 +1304,143 @@ def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _sentence_early_cut_summary(
+    events: list[dict[str, Any]],
+    translation_events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    def decision_key(event: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(event.get("run_id") or ""),
+            str(event.get("decision_id") or ""),
+        )
+
+    keyed: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    missing_key_count = 0
+    for event in events:
+        key = decision_key(event)
+        if not all(key):
+            missing_key_count += 1
+            continue
+        keyed.setdefault(key, []).append(event)
+    canonical = [group[0] for group in keyed.values()]
+    candidates = [event for event in canonical if event.get("would_cut") is True]
+    legacy_overlap = [
+        event for event in candidates if event.get("legacy_would_cut") is True
+    ]
+    actionable = [
+        event for event in candidates if event.get("legacy_would_cut") is not True
+    ]
+    applied = [event for event in canonical if event.get("applied") is True]
+    def provider_request_count(event: dict[str, Any]) -> int:
+        attempts = event.get("attempts")
+        if isinstance(attempts, list):
+            nested_count = sum(
+                max(
+                    0,
+                    int(_float_or_none(attempt.get("api_attempt_count")) or 0),
+                )
+                for attempt in attempts
+                if isinstance(attempt, dict)
+            )
+            if nested_count:
+                return nested_count
+        return max(
+            int(_float_or_none(event.get("api_attempt_count")) or 0),
+            1 if event.get("result_source") == "api" else 0,
+        )
+
+    translation_request_count = sum(
+        provider_request_count(event) for event in translation_events
+    )
+
+    batch_sizes: dict[tuple[str, str], float] = {}
+    for event in canonical:
+        batch_id = str(event.get("drain_batch_id") or "")
+        batch_size = _float_or_none(event.get("drain_batch_size"))
+        if batch_id and batch_size is not None:
+            batch_sizes[(str(event.get("run_id") or ""), batch_id)] = batch_size
+
+    saved_wait = [
+        value
+        for event in actionable
+        if (value := _float_or_none(event.get("saved_wait_ms"))) is not None
+    ]
+    max_text_drops = max(
+        (
+            int(_float_or_none(event.get("text_queue_drops")) or 0)
+            for event in canonical
+        ),
+        default=0,
+    )
+    max_sentence_drops = max(
+        (
+            int(_float_or_none(event.get("sentence_queue_drops")) or 0)
+            for event in canonical
+        ),
+        default=0,
+    )
+
+    samples = [
+        {
+            "run_id": event.get("run_id"),
+            "decision_id": event.get("decision_id"),
+            "mode": event.get("mode"),
+            "classification": event.get("classification"),
+            "reason_code": event.get("reason_code"),
+            "candidate_kind": event.get("candidate_kind"),
+            "candidate_text": _short(str(event.get("candidate_text") or "")),
+            "residual_text": _short(str(event.get("residual_text") or "")),
+            "legacy_would_cut": event.get("legacy_would_cut"),
+            "would_cut": event.get("would_cut"),
+            "applied": event.get("applied"),
+            "saved_wait_ms": event.get("saved_wait_ms"),
+            "drain_batch_position": event.get("drain_batch_position"),
+            "drain_batch_size": event.get("drain_batch_size"),
+            "actual_cut_reason": event.get("actual_cut_reason"),
+        }
+        for event in candidates[:top_n]
+    ]
+    return {
+        "event_count": len(events),
+        "decision_count": len(canonical),
+        "missing_decision_key_count": missing_key_count,
+        "duplicate_decision_count": sum(
+            max(0, len(group) - 1) for group in keyed.values()
+        ),
+        "by_mode": _count_by(canonical, "mode"),
+        "by_classification": _count_by(canonical, "classification"),
+        "by_reason_code": _count_by(canonical, "reason_code"),
+        "by_candidate_kind": _count_by(candidates, "candidate_kind"),
+        "would_cut_count": len(candidates),
+        "legacy_overlap_count": len(legacy_overlap),
+        "actionable_would_cut_count": len(actionable),
+        "applied_count": len(applied),
+        "candidate_rate": (
+            round(len(candidates) / len(canonical), 4) if canonical else 0.0
+        ),
+        "actionable_rate": (
+            round(len(actionable) / len(canonical), 4) if canonical else 0.0
+        ),
+        "projected_additional_request_upper_bound_ratio": (
+            round(len(actionable) / translation_request_count, 4)
+            if translation_request_count
+            else None
+        ),
+        "translation_request_count": translation_request_count,
+        "saved_wait_ms": _latency_summary(saved_wait),
+        "drain_batch_size": _latency_summary(list(batch_sizes.values())),
+        "multi_item_batch_count": sum(size > 1 for size in batch_sizes.values()),
+        "max_text_queue_drops": max_text_drops,
+        "max_sentence_queue_drops": max_sentence_drops,
+        "by_actual_cut_reason": _count_by(
+            [event for event in canonical if event.get("actual_cut_reason")],
+            "actual_cut_reason",
+        ),
+        "samples": samples,
+    }
+
+
 def _sentence_hold_shadow_summary(
     events: list[dict[str, Any]],
     top_n: int,
@@ -1580,6 +1728,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Translation fallback: {report['translation_fallback']}")
     print(f"Sentence hold shadow: {report['sentence_hold_shadow']}")
+    print(f"Sentence early cut: {report['sentence_early_cut']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
     print(
         "STT summary: "

@@ -7,6 +7,11 @@ from modules.sentence_hold_shadow import (
 def test_detects_connector_particle_delimiter_and_forced_lexical_tail():
     connector = analyze_unfinished_tail("지금 게임 하고", forced=True)
     particle = analyze_unfinished_tail("오늘 나는", forced=True)
+    adnominal = analyze_unfinished_tail(
+        "예전에 자주 하던",
+        forced=False,
+        include_adnominal=True,
+    )
     delimiter = analyze_unfinished_tail("오늘은 (진짜 좋아요", forced=False)
     lexical = analyze_unfinished_tail("이게 뭔가 이상한", forced=True)
 
@@ -14,9 +19,27 @@ def test_detects_connector_particle_delimiter_and_forced_lexical_tail():
     assert connector.matched_ending == "하고"
     assert particle.signals == ("unfinished_particle",)
     assert particle.matched_ending == "는"
+    assert adnominal.signals == ("unfinished_adnominal",)
+    assert adnominal.matched_ending == "던"
     assert delimiter.signals == ("unclosed_delimiter",)
     assert delimiter.unclosed_delimiters == ("(",)
     assert lexical.signals == ("possible_truncated_lexical_tail",)
+
+
+def test_short_grammatical_tail_requires_explicit_lower_floor():
+    assert analyze_unfinished_tail("이거는", forced=False).signals == ()
+    assert analyze_unfinished_tail(
+        "이거는",
+        forced=False,
+        grammatical_min_significant=1,
+    ).signals == ("unfinished_particle",)
+
+
+def test_adnominal_signal_is_opt_in_for_t20_only():
+    assert analyze_unfinished_tail(
+        "예전에 자주 하던",
+        forced=False,
+    ).signals == ()
 
 
 def test_complete_sentence_has_no_shadow_signal():

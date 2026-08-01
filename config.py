@@ -104,6 +104,9 @@ class _STT:
     max_repeat_ratio:       float = 0.7    # reject if a repeated phrase fills > this fraction
 
 
+_VALID_SEMANTIC_EARLY_CUT_MODES = {"off", "shadow"}
+
+
 @dataclass(frozen=True)
 class _Splitter:
     min_wait_seconds:  int = 3
@@ -114,6 +117,17 @@ class _Splitter:
     segment_gap_seconds: float = 0.6
     silence_complete_enabled: bool = True
     pending_incomplete_timeout_seconds: float = 8.0
+    # T20's shadow gate did not clear the frozen activation criteria. Keep the
+    # record-only diagnostic explicit; no "active" value is accepted.
+    semantic_early_cut_mode: str = "off"
+
+    def __post_init__(self):
+        if self.semantic_early_cut_mode not in _VALID_SEMANTIC_EARLY_CUT_MODES:
+            raise ValueError(
+                "cfg.splitter.semantic_early_cut_mode invalid: "
+                f"{self.semantic_early_cut_mode!r} "
+                f"(must be one of {_VALID_SEMANTIC_EARLY_CUT_MODES})"
+            )
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
