@@ -34,11 +34,6 @@ function makeConfig(overrides: Partial<ConfigDto> = {}): ConfigDto {
 }
 
 describe('ConfigPanel', () => {
-  it('renders without crash when config is null', () => {
-    const wrapper = mount(ConfigPanel, { props: { config: null } })
-    expect(wrapper.find('h2').text()).toBe('Settings')
-  })
-
   it('renders with provided config and shows font size', () => {
     const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
     expect(wrapper.html()).toContain('22')
@@ -69,7 +64,9 @@ describe('ConfigPanel', () => {
   })
 
   it('enables model-derived activity publication by default', () => {
-    const wrapper = mount(ConfigPanel, { props: { config: null } })
+    const cfg = makeConfig()
+    cfg.scene.publish_open_set_activity = true
+    const wrapper = mount(ConfigPanel, { props: { config: cfg } })
     const checkbox = wrapper.get('[data-testid="publish-open-set-activity"]')
 
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
@@ -123,14 +120,6 @@ describe('ConfigPanel', () => {
 
     await wrapper.find('button:not(.primary)').trigger('click')
     expect(vm.local.translation.max_tokens).toBe(80)
-  })
-
-  it('shows default values when config is null', () => {
-    const wrapper = mount(ConfigPanel, { props: { config: null } })
-    const vm = wrapper.vm as any
-    expect(vm.local.subtitle.font_size).toBe(22)
-    expect(vm.local.live_engine).toBe('anthropic')
-    expect(vm.local.clip_engine).toBe('anthropic')
   })
 
   it('updates local state when config prop changes', async () => {

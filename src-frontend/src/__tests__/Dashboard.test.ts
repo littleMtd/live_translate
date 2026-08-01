@@ -35,6 +35,21 @@ const fakeConfig = {
 const fakeStats = { total_entries: 0, hit_count_sum: 0, last_used: 'Never', db_size_mb: 0 }
 const fakeSysStats = { unix_timestamp_seconds: 1000, platform: 'windows', arch: 'x86_64' }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+const cloneConfig = (overrides: Record<string, unknown> = {}) => ({
+  ...JSON.parse(JSON.stringify(fakeConfig)),
+  ...overrides,
+})
+
 function setupDefaultMocks() {
   mockInvoke.mockImplementation((cmd: string) => {
     if (cmd === 'get_config') return Promise.resolve(fakeConfig)
@@ -98,6 +113,23 @@ describe('Dashboard', () => {
     expect(mockInvoke).toHaveBeenCalledWith('get_config')
   })
 
+  it('does not mount an editable settings form while config is loading', async () => {
+    const pending = deferred<typeof fakeConfig>()
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') return pending.promise
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      return Promise.resolve(null)
+    })
+
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="config-loading"]').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'ConfigPanel' }).exists()).toBe(false)
+    expect(mockInvoke).not.toHaveBeenCalledWith('update_config', expect.anything())
+  })
+
   it('calls get_cache_stats on mount', async () => {
     setupDefaultMocks()
     mount(Dashboard)
@@ -148,9 +180,23 @@ describe('Dashboard', () => {
     expect(wrapper.find('button.btn-start').exists()).toBe(false)
   })
 
-  it('shows error banner when get_config fails', async () => {
+  it('keeps config load failure fail-closed and retries authoritative values', async () => {
+    const authoritative = cloneConfig({
+      audio: { ...fakeConfig.audio, vad_silence_sec: 0.9, vad_max_speech_sec: 6.5 },
+      translation: {
+        ...fakeConfig.translation,
+        engine_chain: ['openrouter', 'deepl', 'groq'],
+        max_tokens: 200,
+      },
+    })
+    let configCalls = 0
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === 'get_config') return Promise.reject(new Error('not found'))
+      if (cmd === 'get_config') {
+        configCalls += 1
+        return configCalls === 1
+          ? Promise.reject(new Error('not found'))
+          : Promise.resolve(authoritative)
+      }
       if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
       if (cmd === 'python_status') return Promise.resolve(false)
       if (cmd === 'get_system_stats') return Promise.resolve(fakeSysStats)
@@ -158,8 +204,103 @@ describe('Dashboard', () => {
     })
     const wrapper = mount(Dashboard)
     await flushPromises()
-    expect(wrapper.find('.error-banner').exists()).toBe(true)
-    expect(wrapper.find('.error-banner').text()).toContain('not found')
+
+    expect(wrapper.find('[data-testid="config-error"]').text()).toContain('not found')
+    expect(wrapper.findComponent({ name: 'ConfigPanel' }).exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(wrapper.find('[data-testid="config-error"]').exists()).toBe(true)
+    expect(mockInvoke).not.toHaveBeenCalledWith('update_config', expect.anything())
+
+    await wrapper.find('[data-testid="config-retry"]').trigger('click')
+    await flushPromises()
+
+    const panel = wrapper.findComponent({ name: 'ConfigPanel' })
+    expect(panel.exists()).toBe(true)
+    expect((panel.props('config') as typeof fakeConfig).translation.engine_chain).toEqual([
+      'openrouter', 'deepl', 'groq',
+    ])
+    expect((panel.props('config') as typeof fakeConfig).translation.max_tokens).toBe(200)
+    expect((panel.props('config') as typeof fakeConfig).audio.vad_silence_sec).toBe(0.9)
+  })
+
+  it('ignores an old failure after a newer config load succeeds', async () => {
+    const oldLoad = deferred<typeof fakeConfig>()
+    const newest = cloneConfig({ subtitle: { ...fakeConfig.subtitle, font_size: 31 } })
+    let configCalls = 0
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') {
+        configCalls += 1
+        return configCalls === 1 ? oldLoad.promise : Promise.resolve(newest)
+      }
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    await (wrapper.vm as any).loadConfig()
+    await flushPromises()
+    oldLoad.reject(new Error('stale failure'))
+    await flushPromises()
+
+    const panel = wrapper.findComponent({ name: 'ConfigPanel' })
+    expect(panel.exists()).toBe(true)
+    expect((panel.props('config') as typeof fakeConfig).subtitle.font_size).toBe(31)
+    expect(wrapper.find('[data-testid="config-error"]').exists()).toBe(false)
+  })
+
+  it('ignores an old success after a newer config load fails', async () => {
+    const oldLoad = deferred<typeof fakeConfig>()
+    let configCalls = 0
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') {
+        configCalls += 1
+        return configCalls === 1
+          ? oldLoad.promise
+          : Promise.reject(new Error('latest failure'))
+      }
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    await (wrapper.vm as any).loadConfig()
+    await flushPromises()
+    oldLoad.resolve(cloneConfig({ subtitle: { ...fakeConfig.subtitle, font_size: 44 } }))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="config-error"]').text()).toContain('latest failure')
+    expect(wrapper.findComponent({ name: 'ConfigPanel' }).exists()).toBe(false)
+  })
+
+  it('keeps the newer success when two config loads complete out of order', async () => {
+    const oldLoad = deferred<typeof fakeConfig>()
+    const newLoad = deferred<typeof fakeConfig>()
+    let configCalls = 0
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') {
+        configCalls += 1
+        return configCalls === 1 ? oldLoad.promise : newLoad.promise
+      }
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    const newestPromise = (wrapper.vm as any).loadConfig()
+    newLoad.resolve(cloneConfig({ subtitle: { ...fakeConfig.subtitle, font_size: 35 } }))
+    await newestPromise
+    await flushPromises()
+    oldLoad.resolve(cloneConfig({ subtitle: { ...fakeConfig.subtitle, font_size: 19 } }))
+    await flushPromises()
+
+    const panel = wrapper.findComponent({ name: 'ConfigPanel' })
+    expect((panel.props('config') as typeof fakeConfig).subtitle.font_size).toBe(35)
   })
 
   it('shows restart notice after saving config while Python is online', async () => {
@@ -179,6 +320,30 @@ describe('Dashboard', () => {
 
     expect(mockInvoke).toHaveBeenCalledWith('update_config', { newConfig: fakeConfig })
     expect(wrapper.find('.notice-banner').text()).toContain('Restart Python')
+  })
+
+  it('saves a stable snapshot even if the emitted object is mutated in flight', async () => {
+    const update = deferred<void>()
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') return Promise.resolve(fakeConfig)
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(false)
+      if (cmd === 'update_config') return update.promise
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+    const emitted = cloneConfig({ subtitle: { ...fakeConfig.subtitle, font_size: 28 } })
+
+    wrapper.findComponent({ name: 'ConfigPanel' }).vm.$emit('save', emitted)
+    emitted.subtitle.font_size = 47
+    update.resolve()
+    await flushPromises()
+
+    const updateCall = mockInvoke.mock.calls.find(([cmd]) => cmd === 'update_config')
+    expect((updateCall![1] as any).newConfig.subtitle.font_size).toBe(28)
+    const panel = wrapper.findComponent({ name: 'ConfigPanel' })
+    expect((panel.props('config') as typeof fakeConfig).subtitle.font_size).toBe(28)
   })
 
   it('active tab button has active class', async () => {

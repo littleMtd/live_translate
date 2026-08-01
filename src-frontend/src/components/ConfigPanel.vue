@@ -123,38 +123,10 @@
 import { computed, ref, watch } from 'vue'
 import type { ConfigDto } from '../types/config'
 
-const props = defineProps<{ config: ConfigDto | null }>()
+const props = defineProps<{ config: ConfigDto }>()
 const emit = defineEmits<{ save: [ConfigDto] }>()
 
-const defaultConfig = (): ConfigDto => ({
-  audio: { sample_rate: 16000, channels: 1, chunk_seconds: 3, device_name: 'CABLE Output', volume_threshold: 0.01,
-           vad_enabled: true, vad_silence_sec: 0.6,
-           vad_min_speech_sec: 0.4, vad_max_speech_sec: 8.0, vad_silero_threshold: 0.5, queue_maxsize: 10 },
-  stt: { primary_engine: 'groq', sensevoice_model: 'iic/SenseVoiceSmall', sensevoice_device: 'cuda',
-         groq_model: 'whisper-large-v3', language: 'ko', groq_prompt: '', batch_size_s: 60,
-         queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
-         max_japanese_chars: 2, max_repeat_ratio: 0.7 },
-  splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-  translation: { engine_chain: ['openrouter', 'groq'], model: 'claude-sonnet-4-6',
-                 google_translate_lang: 'zh-TW',
-                 target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
-                 context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
-                 use_profile: true, current_activity: '', slang: {} },
-  scene: { publish_open_set_activity: true },
-  subtitle: { idle_hide_ms: 30000, font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
-              bg: '#010101', ctrl_bg: '#1a1a1a', fg: '#FFFFFF', outline_color: '#000000',
-              outline_width: 2, alpha: 0.82, max_width_chars: 36, wraplength: 700,
-              padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
-              poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
-  database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
-  live_engine: 'anthropic',
-  clip_engine: 'anthropic',
-  ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
-  nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
-})
-
-const clone = (c: ConfigDto | null): ConfigDto =>
-  c ? JSON.parse(JSON.stringify(c)) : defaultConfig()
+const clone = (config: ConfigDto): ConfigDto => JSON.parse(JSON.stringify(config))
 
 const local = ref<ConfigDto>(clone(props.config))
 
@@ -168,9 +140,9 @@ const engineChainText = computed({
   },
 })
 
-watch(() => props.config, (c) => { local.value = clone(c) }, { deep: true })
+watch(() => props.config, (config) => { local.value = clone(config) }, { deep: true })
 
-const save = () => emit('save', local.value)
+const save = () => emit('save', clone(local.value))
 const reset = () => { local.value = clone(props.config) }
 </script>
 
