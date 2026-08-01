@@ -269,8 +269,9 @@ class _Translation:
     # Manual session state: what the streamer is doing right now (e.g.
     # "StarCraft", "tier list talk"). Injected into the system prompt as one
     # labeled background line to disambiguate game/context terms — never as
-    # text to translate. Empty = omitted. Low-frequency by design: set it by
-    # hand (config or dashboard JSON); no screen text is ever fed as context.
+    # text to translate. Empty = omitted. This field remains manual-only; the
+    # automatic resolver publishes a separate canonical snapshot and never
+    # writes this value.
     current_activity: str        = ""
     # Act on the QE signal at runtime: when the reference-free heuristics rate
     # an API result "bad" (Hangul leak / repetition / meta shapes), ask one
