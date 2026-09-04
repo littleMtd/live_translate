@@ -1,0 +1,1792 @@
+[
+  {
+    "id": "qa_20260801_001",
+    "source_text": "감독은 왜케 많이 나와?\n손도구 그만 나와",
+    "reference_output": "盔甲怎麼一直出啊？\n手斧別再出了。",
+    "current_output": "教練怎麼老是出現啊？\n孫都夠 別再出現了",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "遊戲掉落物語境中「감독」疑似是「갑옷」，「손도구」疑似是「손도끼」。目前分別譯成教練與無意義音譯，物品資訊完全錯誤。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.84,
+    "rule_target": "source_norm",
+    "proposed_rule": "在目前遊戲／掉落物語境加入 source_norm：감독→갑옷、손도구→손도끼，並把 갑옷、손도끼加入該實況主的 STT 熱詞。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 1,
+    "supplemental_annotation_ids": [
+      47
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 260,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 259,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_002",
+    "source_text": "메데타신 메데타신",
+    "reference_output": "可喜可賀，可喜可賀。",
+    "current_output": "梅達辛 梅達辛",
+    "categories": [
+      "warn",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "疑似日語慣用句「めでたしめでたし」被轉寫成「메데타신」，意思是故事圓滿結束／可喜可賀，不應直接音譯成人名。",
+    "severity": "warn",
+    "issue_type": "stt_mishear",
+    "confidence": 0.88,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source_norm：메데타신→메데타시，並在 translation_prompt 提醒此日語口頭梗譯為「可喜可賀／圓滿落幕」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 2,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 258,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_003",
+    "source_text": "나 랩업하느라 바쁘다고.",
+    "reference_output": "我正忙著練等啦。",
+    "current_output": "我正忙著打完呢。",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「랩업」是「렙업／레벨업」的 STT 變體，表示練等；目前譯成「打完」改變了行動內容。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.97,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source_norm：랩업→렙업，並固定 렙업／레벨업→練等／升級。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 3,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 269,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_004",
+    "source_text": "빨리 방파샘 빨리 싸우고 나가게.\n빨리 방파샘 방을 내가 팔아요?",
+    "reference_output": "快點開房，趕快打完出去。\n快點開房。房間要我來開嗎？",
+    "current_output": "快點，方帕師，打完快走。\n方帕師，房間我來賣？",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「방파샘」應是口語「방 파셈」（快開房），不是人名；「방을 팔다」在連線遊戲語境是開／建立房間，不是賣房。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.96,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source_norm：방파샘→방 파셈；translation_prompt 補充遊戲語境「방을 파다」＝開房／建立房間。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 4,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 271,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 270,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_005",
+    "source_text": "뭐야? 아니 불악천장...\n어 불확천장 오래 살아남는데요\n썬도그 엉덩이를 열심히 베는 불확천장\n손보를 쓰는 구락천장!",
+    "reference_output": "咦？不對，불악천장……\n불악천장還活得很久耶。\n努力砍썬도그屁股的불악천장。\n使用손보的불악천장！",
+    "current_output": "幹嘛？不是，不樂天倉……\n啊，不確定場能活很久耶。\n瘋狂砍太陽狗屁股的不確天將\n用修補的不確天將！",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "「불악천장／불확천장／구락천장」明顯是同一個反覆出現的角色或寵物名，另有「썬더구／썬도그」變體；目前每句各自亂譯成不同中文，造成實體無法追蹤。canonical 疑似為「불악천장」與「썬도그」，需人工確認。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.64,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 streamer_profile 新增本局寵物／角色名，至少先收錄 불악천장、썬도그；確認後把 불확천장、구락천장、썬더구設為 source_norm alias，中文輸出固定保留同一名稱。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 5,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 283,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 284,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 272,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 282,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_006",
+    "source_text": "자꾸 레신을 패게 돼",
+    "reference_output": "老是會打到레신。",
+    "current_output": "老是被雷神打到。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "「레신을 패게 돼」的受詞是 레신，意思是自己老是打到 레신；目前把施受關係完全反轉成自己被打。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.96,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 補充「N을/를 V-게 되다」要保留受詞與動作者，不可翻成被動。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 6,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 281,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "打到레신"
+    ],
+    "forbidden_terms": [
+      "被雷神"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The active-voice contrast is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_007",
+    "source_text": "제트레고는 뭐야?\n삼성? 제트레곤?",
+    "reference_output": "제트래곤是什麼？\n三星？제트래곤？",
+    "current_output": "Jetrego 是什麼？\n三星？Zetargon？",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "兩句疑似都在說《Palworld》的「제트래곤」，STT 產生 제트레고／제트레곤 變體；目前羅馬字輸出不一致，無法辨識為同一專有名詞。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.93,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 streamer_profile 的遊戲熱詞加入 제트래곤，並加 source_norm：제트레고、제트레곤→제트래곤；目標端固定使用同一官方譯名或保留韓文。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 7,
+    "supplemental_annotation_ids": [
+      44
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 290,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 289,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_008",
+    "source_text": "만! 만이야, 십만이야. 십만!",
+    "reference_output": "一萬！是一萬還是十萬？十萬！",
+    "current_output": "十萬！是十萬啊！十萬！",
+    "categories": [
+      "bad",
+      "number_error",
+      "translation_prompt"
+    ],
+    "note": "原文先說「만（一萬）」，再問「是一萬還是十萬」，最後確認「十萬」；目前把所有數字都譯成十萬，漏掉關鍵的數量判斷。",
+    "severity": "bad",
+    "issue_type": "number_error",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 強制逐項保留韓文數字單位，特別區分 만（一萬）與 십만（十萬），不得因後文更正而回填前文。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 8,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 295,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_009",
+    "source_text": "오 벨라루즈 석판! 우와 벨라루즈 석판이다!\n벨라루즈 그거 잡기 되게 어렵지 않나?\n벨라로주는 나름 쉬운 편이라는데?\n일반 벨라춘은 쉬운데",
+    "reference_output": "喔，벨라루주石板！哇，是벨라루주石板！\n벨라루주不是很難打嗎？\n聽說벨라루주算比較簡單的？\n普通的벨라루주還算簡單。",
+    "current_output": "喔！白俄羅斯石板！哇！是白俄羅斯石板！\n抓白俄羅斯那東西不是超難嗎？\n聽說貝拉羅朱算比較簡單的？\n普通的貝拉春還算簡單",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "벨라루즈／벨라로주／벨라춘疑似都是遊戲 Boss 名「벨라루주」的 STT 變體。把 벨라루즈譯成「白俄羅斯」是嚴重專名錯誤，且同一實體被輸出成三種名稱。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.82,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 streamer_profile 加入 벨라루주及其官方繁中譯名；source_norm 收錄 벨라루즈、벨라로주、벨라춘→벨라루주。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 9,
+    "supplemental_annotation_ids": [
+      44
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 314,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 323,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 297,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 298,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_010",
+    "source_text": "소환의 재단이 어디요?\n소환의 재단이라고 만드는 게 있는데\n소환의 재단에서 석판을 넣어서 레이드를 만들어야 돼.",
+    "reference_output": "召喚祭壇在哪裡？\n有個要製作的東西叫召喚祭壇。\n要在召喚祭壇放入石板，才能開啟團體戰。",
+    "current_output": "召喚的基盤在哪啊？\n有個叫召喚基盤的東西\n得在召喚基盤那邊把石板放進去，才能建出討伐戰。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "target_replacement"
+    ],
+    "note": "「재단」在此是祭壇，不是基盤；這是反覆出現的遊戲設施名稱，現譯會誤導操作位置。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "target_replacement",
+    "proposed_rule": "加入 source-aware target replacement：소환의 재단→召喚祭壇；在目前遊戲 profile 固定此設施名稱。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 10,
+    "supplemental_annotation_ids": [
+      44
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 300,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 299,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 298,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "召喚祭壇"
+    ],
+    "forbidden_terms": [
+      "召喚基盤"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The Palworld term contrast is externally corroborated and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_011",
+    "source_text": "전설 팰더 있는데 설마 죽겠어?",
+    "reference_output": "我們也有傳說級帕魯，總不會死吧？",
+    "current_output": "有傳說級防禦者，總不會死吧？",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「팰더」疑似是「팰도」（也有傳說級帕魯）；目前把 팰誤切成「防禦者」，改變遊戲單位。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.92,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source_norm：팰더→팰도；目前遊戲語境固定 팰→帕魯，不要按一般名詞拆譯。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 11,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 303,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_012",
+    "source_text": "나 그때 빈 천만 있어도 져똥끼고 봤지. 기억이 희미하네. 에이 썩 가능이겠지. 보스 소화는 엔드 컨텐츠래. 이제 고인물들이 심쌀 거 없어서 하는 그거래.",
+    "reference_output": "我那時候就算有빙천마也被打得很慘吧，記憶有點模糊了。唉，應該還是有可能吧。聽說召喚BOSS是終局內容，是老玩家沒事做才玩的。",
+    "current_output": "那時候我就算有空也只會蹲著看，記憶有點模糊了。唉，反正也沒什麼可能吧。打BOSS本來就是末期內容，現在老玩家都懶得做了，才有人在做這檔事。",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "整句有多處 STT 崩壞；依上下文疑似為「빙천마 있어도 쫄딱 깨지고」「보스 소환은」「할 거 없어서」。目前翻成「有空蹲著看」「沒什麼可能」「老玩家懶得做」，核心意思相反。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.72,
+    "rule_target": "source_norm",
+    "proposed_rule": "新增片語級 source_norm 候選：빈 천만→빙천마、져똥끼고→쫄딱 깨지고、보스 소화→보스 소환、심쌀 거 없어서→할 거 없어서；此段建議保留人工覆核。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 12,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 304,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_013",
+    "source_text": "넌 시선할 수 있나? 찬이는 잡을 것 같아?",
+    "reference_output": "你能犧牲牠嗎？찬이應該抓得到嗎？",
+    "current_output": "你有辦法鎖定嗎？贊伊能抓到嗎？",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "前文正在討論拿高等帕魯當犧牲品，「시선할」疑似是「희생할」；翻成鎖定脫離上下文。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.82,
+    "rule_target": "source_norm",
+    "proposed_rule": "在犧牲帕魯的上下文加入 source_norm：시선하다→희생하다；若無此上下文則不要全域替換。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 13,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 313,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_014",
+    "source_text": "찬이 1명이라도 된다며? 많이 죽을 것 같대, 패들이.",
+    "reference_output": "不是說只要有一個찬이也行嗎？聽說帕魯會死很多隻。",
+    "current_output": "就算只有一個贊伊也行吧？聽說會死一堆人，帕迪。嗯…",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "句尾「패들이」疑似是「팰들이」，主語是帕魯們會死很多，不是「人會死一堆」也不是名叫帕迪的人。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.95,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入目前遊戲 profile 的 source_norm：패들이→팰들이；帕魯語境中 팰들固定譯為帕魯們。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 14,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 316,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_015",
+    "source_text": "그럼 다 한... 6, 70렙 넘으면 그래도 할 만한 건가?\n70렙 정도 되면 할 만한 건가?",
+    "reference_output": "那如果都超過六、七十級，應該就打得動了嗎？\n到七十級左右就能打了嗎？",
+    "current_output": "那如果等級都到六七十級以上，還算值得玩嗎？\n到七十級左右還值得玩嗎？",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "「할 만하다」在攻略／難度語境是「做得到、打得動、還算能應付」，不是「值得玩」。目前把可行性判斷變成價值判斷。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 補充：戰鬥或任務語境的 할 만하다優先譯為「做得到／能打／能應付」，不要譯成「值得玩」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 15,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 319,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T150947Z-25224",
+        "sequence_id": 318,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_016",
+    "source_text": "아 목이 너무 많이 부었어\n목에 취할 수 있는 조치는 다 취했는데 아직... 아직도 목이 아픕니다.",
+    "reference_output": "啊，喉嚨腫得太厲害了。\n能對喉嚨做的處理都做了，但還是……喉嚨還是很痛。",
+    "current_output": "啊，脖子腫得太厲害了\n該做的護理我都做了，但還是... 還是脖子好痛。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "感冒、鼻炎、噴喉藥的上下文中「목」明確指喉嚨，不是脖子；現譯會誤導症狀位置。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 增加語境判斷：感冒、咳嗽、吞嚥、噴藥、嗓音脈絡中的 목→喉嚨；外觀／姿勢／受傷脈絡才譯脖子。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 16,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 5,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 4,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "喉嚨"
+    ],
+    "forbidden_terms": [
+      "脖子"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The throat/neck contrast is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_017",
+    "source_text": "계속 일었네요... 그런가? 아 잠깐만 재채기 나올 것 같아...",
+    "reference_output": "一直都是這樣呢……是嗎？啊等一下，好像要打噴嚏了……",
+    "current_output": "一直打噴嚏……是這樣嗎？啊等一下，又要打噴嚏了……",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「계속 일었네요」本身不合理，依語流疑似「계속 이러네요」（一直這樣）；原文到後半才說好像要打噴嚏，目前前半憑空新增「一直打噴嚏」。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.84,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source_norm 候選：계속 일었네요→계속 이러네요；遇到不完整病況描述時禁止用後句症狀回填前句。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 17,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 9,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_018",
+    "source_text": "양하 안녕\n영하 안녕\n양하",
+    "reference_output": "먕하，你好。\n먕하，你好。\n먕하。",
+    "current_output": "陽夏你好\n英夏，你好\n陽夏",
+    "categories": [
+      "warn",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "這些位置都像是마냥直播的招呼語，疑似是「먕하」被 STT 成 양하／영하；目前被當成人名音譯。專案的 url profile 已有마냥，但缺少其常用招呼變體。",
+    "severity": "warn",
+    "issue_type": "glossary_gap",
+    "confidence": 0.68,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "人工確認招呼語後，在 streamer_profiles.json 的 url.stt_terms 加入 먕하，並加入條件式 source_norm：句首招呼語境下 양하／영하→먕하。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 18,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 38,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 12,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 6,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_019",
+    "source_text": "후원 이미지도 시거풍 빼고 시거풍 빼고 나머지 거 하고 천 개 또 바꿨어\n최근에 이제 시거풍 리뉴얼했고",
+    "reference_output": "贊助圖片除了시그풍之外，其他的和一千顆星氣球檔位也都換了。\n最近把시그풍改版了。",
+    "current_output": "贊助圖也把煙霧風刪掉，再刪掉煙霧風，剩下的改了，又換了一千個。\n最近剛把雪茄風格改版了",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "streamer_profile"
+    ],
+    "note": "SOOP斗內語境中的「시거풍」疑似「시그풍」（signature 별풍선／簽名星氣球效果），不是煙霧或雪茄風格；「천 개」也指一千顆星氣球檔位的圖片，不是換了一千張。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.9,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 url streamer_profile 加入 SOOP 平台詞 시그풍、별풍선 천 개；source_norm：시거풍→시그풍，並在 prompt 說明數字＋개可指斗內檔位。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 19,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 30,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 19,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_020",
+    "source_text": "이제 대기화면도 슬슬 리뉴얼할까 싶어.",
+    "reference_output": "現在也在想是不是該慢慢改版等待畫面了。",
+    "current_output": "現在連開機畫面也該慢慢更新了。",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "target_replacement"
+    ],
+    "note": "直播語境的「대기화면」是開播前／暫離時的等待畫面，不是裝置開機畫面。",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "target_replacement",
+    "proposed_rule": "加入 target replacement：直播語境 대기화면→等待畫面／待機畫面，禁止譯成開機畫面。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 20,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 29,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "等待畫面"
+    ],
+    "forbidden_terms": [
+      "開機畫面"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The waiting-screen contrast is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_021",
+    "source_text": "페이셜도 되게 해야 되는데...",
+    "reference_output": "還得讓它支援臉部追蹤才行……",
+    "current_output": "臉部也要做得很有感覺……",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "target_replacement"
+    ],
+    "note": "VTuber製作語境的「페이셜」指 facial tracking／臉部表情捕捉，不是「很有感覺」。",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 0.96,
+    "rule_target": "target_replacement",
+    "proposed_rule": "在 streamer_profile 加入 페이셜→臉部追蹤／表情捕捉，與 Live2D／3D 模型語境綁定。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 21,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 36,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "臉部追蹤"
+    ],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The VTuber facial-tracking sense is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_022",
+    "source_text": "나중에 임마냥이 힘들 때 깻잎이가 대신 방송할 수 있게...",
+    "reference_output": "以後마냥累的時候，就能讓깻잎이代替我直播……",
+    "current_output": "以後當馬尼亞累了的時候，讓紫蘇葉幫她直播……",
+    "categories": [
+      "bad",
+      "name_error",
+      "streamer_profile"
+    ],
+    "note": "「임마냥이」應切成「이 마냥이」或直接視為마냥自稱；專案資料已明確規定 UR:L 成員「마냥」必須保留韓文，但目前輸出成「馬尼亞」。已有資料但未命中。",
+    "severity": "bad",
+    "issue_type": "name_error",
+    "confidence": 0.98,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "強化 url profile 的 name rendering：包含助詞／前綴的 이 마냥이、마냥이也必須先辨識核心名 마냥；另把 깻잎이作為角色名加入 streamer_profile，固定保留韓文。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 22,
+    "supplemental_annotation_ids": [
+      45
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 37,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_023",
+    "source_text": "어떻게 알고 그런 브이만 보내셨냐는데\n저는 이런 브이를 좋아합니다 이렇게 말을 했으니까",
+    "reference_output": "她怎麼知道我喜歡這種部位，還只寄這些部位給我？\n因為我說過「我喜歡這種部位」。",
+    "current_output": "她怎麼知道我超愛這種肥肉的，還特地寄了V給我？\n我有說過我喜歡這種V啊。",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "談牛肉部位時「브이」明顯是「부위」的 STT 誤聽；目前直接輸出英文字母 V，句意斷裂。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.99,
+    "rule_target": "source_norm",
+    "proposed_rule": "在食物／肉品語境加入 source_norm：브이→부위；不要將單獨音節自動轉成英文字母。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 23,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 41,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 40,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_024",
+    "source_text": "공청기도 틀었어 나 공청기도 틀고 에어컨...",
+    "reference_output": "我連空氣清淨機都開了，也開了冷氣……",
+    "current_output": "我連公聽會都開了，公聽會我也開了，冷氣也開了……",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "病況與室內空氣語境中「공청기」是「공기청정기」的縮寫／誤聽，指空氣清淨機；譯成公聽會完全錯誤。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.99,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 shared source_norm：공청기→공기청정기；target 固定譯為空氣清淨機。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 24,
+    "supplemental_annotation_ids": [
+      47
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 46,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_025",
+    "source_text": "노래책 날렸어요. 노래책 그냥 날리고 기존 걸로 다시 일단 임시로 달아 놔야 되겠다.",
+    "reference_output": "歌單被我弄沒了。歌單就這樣沒了，先把原本的暫時掛回去好了。",
+    "current_output": "歌本飛了，歌本直接飛走，先用原來的暫時再掛回去吧。",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "數位介面／直播資產語境的「날리다」是弄丟、刪掉或資料消失，不是物理上飛走。",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 0.96,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 補充：檔案、設定、連結、資料等受詞搭配 날리다時，優先譯為「刪掉／弄丟／弄沒」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 25,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 48,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_026",
+    "source_text": "이런 이 짱갈래 있습니다.",
+    "reference_output": "也有這種雙馬尾髮型。",
+    "current_output": "這種爛東西我也有。",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "正在展示新髮型，原句疑似「이런 양갈래 있습니다」（還有這種雙馬尾）；「짱갈래」被錯譯成爛東西，完全偏離畫面主題。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.94,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入髮型語境 source_norm：이 짱갈래／짱갈래→양갈래，並把 양갈래固定譯為雙馬尾。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 26,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 53,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_027",
+    "source_text": "최근에 가장 특근으로는 랑코 있었고 그리고 유튜브로는 비찬님하고 부가땅 그 개나리즈의 스시버거 영상을 봤거든요? 근데 부가땅이 너무 잘생긴 거야",
+    "reference_output": "最近看到的就是랑코，另外我在YouTube看了비챤和부가땅的那支影片，부가땅真的太帥了。",
+    "current_output": "最近最特別的加班就是랑코了，還有在YouTube上看了非燦和布加塘的開花鶯壽司漢堡影片？但布加塘真的太帥了。",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "streamer_profile"
+    ],
+    "note": "「가장 특근으로는」疑似「가장 최근으로는」，不是特別加班；비찬님疑似비챤님，비챤／부가땅被任意漢字音譯，影片名稱也因 STT 崩壞產生無意義中文。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.78,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "加入 source_norm：가장 특근으로는→가장 최근으로는、비찬님→비챤님；在 url streamer_profile 增加비챤、부가땅及常談的相關節目／影片熱詞，專名固定保留或採官方寫法。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 27,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 57,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_028",
+    "source_text": "아, 맞아. 약간 보이시한 느낌이죠.",
+    "reference_output": "啊，對，就是有點中性帥氣的感覺。",
+    "current_output": "啊，對，就是那種若隱若現的感覺。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "target_replacement"
+    ],
+    "note": "「보이시하다」是 boyish，指中性、少年感或帥氣風格；「若隱若現」毫無關聯。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "target_replacement",
+    "proposed_rule": "加入 target replacement：보이시하다／보이시한 느낌→中性帥氣／少年感，不要按近音猜成其他形容。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 28,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 60,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_029",
+    "source_text": "최근에 본 쇼트가 또 생각나네?",
+    "reference_output": "又讓我想到最近看過的一支Shorts了。",
+    "current_output": "突然又想到最近看過的短髮了？",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「쇼트」在近期影片語境疑似是「쇼츠」（Shorts短影片），不是短髮；後文立刻開始講最近看的影片。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.97,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入影片語境 source_norm：쇼트→쇼츠；若後文出現 영상、유튜브、봤다，優先判定為短影片而非髮型。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 29,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 62,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_030",
+    "source_text": "효리수 분들이 나오는데\n근데 효린수는?\n안녕하세요 저희는 효리쇠입니다.\n안녕하세요, 혜리스입니다.\n효리소 세 명이서 모여서",
+    "reference_output": "효리수的成員出現了。\n那효리수呢？\n「大家好，我們是효리수。」\n「大家好，我們是효리수。」\n효리수三個人聚在一起。",
+    "current_output": "有來過利秀的\n那利秀呢？\n大家好，我們是孝利瘦。\n嗨，我是惠利斯。\n效里索三個人聚在一起",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "這些都是由효연、유리、수영組成的同一節目單位名「효리수」的 STT 變體；目前每次都輸出不同中文，無法維持實體一致。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.94,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 url streamer_profile 新增 효리수，source_norm 收錄 효린수、효리쇠、혜리스、효리소→효리수；目標端固定保留효리수。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 30,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 70,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 96,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 68,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 63,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 65,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_031",
+    "source_text": "하트 투 하츠 분들\n그 하트 투 하츠 이연\n이건 에이나가 윙크 원조예요\n수영님이 유리님을 딱 가리키면서\n하필 하트 투 하트의 맏언니이자 가장 내향인인 지우에게",
+    "reference_output": "Hearts2Hearts的成員\nHearts2Hearts的Ian\n這是A-na最早做的眨眼\nSooyoung指著Yuri\n跑向Hearts2Hearts裡年紀最大、也最內向的Jiwoo",
+    "current_output": "Heart to Hearts的那些人\nHeart to Hearts的李妍\n這招是艾娜的原版眨眼\n泳姐直接指著玻璃姐\nHeart to Heart裡最年長又最內向的Zoo",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "streamer_profile"
+    ],
+    "note": "此段集中出現K-pop團體與成員名，現譯把수영、유리、지우等姓名按字面譯成「泳、玻璃、Zoo」，且團名不一致。這些是可預期反覆出現的專名，應建立固定表。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.95,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "在 streamer_profile／translation profile 新增固定專名：하츠투하츠／하트 투 하츠→Hearts2Hearts、이안／이한／이연→Ian、에이나→A-na、지우→Jiwoo、스텔라→Stella、효연→Hyoyeon、수영→Sooyoung、유리→Yuri；禁止姓名按一般名詞直譯。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 31,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 71,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 72,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 94,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 64,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 67,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 69,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_032",
+    "source_text": "그래서 하트 투 하츠 분들이 약간 선배인 것처럼 해서 가는 컨셉이었나 봐.",
+    "reference_output": "所以節目概念好像是讓Hearts2Hearts的成員表現得像前輩一樣。",
+    "current_output": "所以才搞出那種讓Heart to Hearts的粉絲感覺像前輩的設定吧。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "「분들」指Hearts2Hearts的成員，不是粉絲；原意是讓她們以像前輩一樣的方式進行節目設定。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 提醒「團體名＋분들」通常是對成員的敬稱，只有明確出現 팬／팬분들才可譯為粉絲。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 32,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 67,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_033",
+    "source_text": "어 우리 동갑, 스텔라랑 유아랑, 어 우리 동갑이다, 동갑",
+    "reference_output": "欸，我們同歲，Stella和Yuha同歲，同歲。",
+    "current_output": "欸，我們同歲，跟Stella和UR:L，欸，我們同歲，同歲",
+    "categories": [
+      "bad",
+      "overcorrection",
+      "translation_prompt"
+    ],
+    "note": "Hearts2Hearts 官方成員資料沒有 Yuri；YUHA 與 STELLA 都生於 2007 年，因此「유아랑」最強候選是 STT 誤聽的「유하랑」。目前輸出仍可確定是把近音過度聯想到團體名 UR:L，但由於未保留音訊，Yuha 只可作外部語境支持的 reference candidate，不能宣稱為已驗證逐字 STT ground truth。",
+    "severity": "bad",
+    "issue_type": "overcorrection",
+    "confidence": 0.96,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 增加 UR:L 防過度修正規則：只有 source 為 UR:L／URL／유아렐／유아엘且語境指團體時才輸出UR:L；유아、유하、유리等近音不得自動套用。若有明確 Hearts2Hearts 人物與同齡語境，可把 유아랑→유하랑列為 bounded source-normalization 候選，但須用音訊或 A/B 驗證。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "official_entity_and_birth_year_context_supports_reference_candidate_audio_pending",
+    "reference_status": "externally_supported_candidate_audio_pending",
+    "external_evidence": [
+      "https://hearts2heartsofficial.jp/",
+      "https://www.universal-music.co.jp/hearts2hearts/biography/"
+    ],
+    "source_annotation_id": 33,
+    "supplemental_annotation_ids": [
+      46
+    ],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 76,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference was corrected from Yuri to Yuha using official Hearts2Hearts membership and birth-year context. Audio is unavailable, so this remains a reference candidate and automated evaluation is structural only until audio or human A/B review confirms it."
+  },
+  {
+    "id": "qa_20260801_034",
+    "source_text": "요즘에 영통 팬싸 하잖아요 아이돌들\n요즘 영통 팬싸 하잖아요?\n근데 영통 팬싸에서\n옛날에 닝닝 영통 팬싸 했을 때도",
+    "reference_output": "現在偶像不是常辦視訊簽售嗎？\n最近不是常辦視訊簽售嗎？\n不過在視訊簽售時……\n以前Ningning辦視訊簽售時也有一個很有名的片段。",
+    "current_output": "現在不是流行在永通開粉絲沙龍嗎\n最近英通粉絲薩好火啊？\n但英通粉絲薩裡\n以前寧寧去英通粉絲薩的時候",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "target_replacement"
+    ],
+    "note": "「영통 팬싸」是「영상통화 팬사인회」的縮寫，即視訊簽售；目前被當成地名／音譯，且同詞輸出不一致。",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.99,
+    "rule_target": "target_replacement",
+    "proposed_rule": "加入 target replacement：영통 팬싸／영통팬싸→視訊簽售（영상통화 팬사인회），並加入K-pop常用詞庫。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 34,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 81,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 83,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 77,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 80,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "視訊簽售"
+    ],
+    "forbidden_terms": [
+      "粉絲薩"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The video-call fan-sign term is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_035",
+    "source_text": "지금 나한테 뭐 언니한테 야 라고 한 거야? 여기 여기 아가 어딨어? 내가 야야?\n여기 언니가 어딨어? 내가... 내가 야... 여기 야가 어딨어? 내가 야야?",
+    "reference_output": "你剛剛是對姐姐叫「喂」嗎？這裡哪有小孩？你敢對我叫「喂」？\n哪來的姐姐？你剛剛叫誰「喂」？你敢對我叫「喂」？",
+    "current_output": "現在你跟我說「姊姊」是什麼意思？這裡、這裡，小可愛在哪？我才是「呀」吧？\n姐姐你人在哪？我...我啊...姐姐你在哪？姐姐...這裡的「啊」在哪？我是「啊啊」？",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "這裡的「야」是被引用的稱呼「喂／欸」，整段是在年上者責問對方怎麼敢對姐姐叫「야」。目前把야當語尾或「啊」，導致台詞完全不可理解。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.94,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 增加 quoted speech 判斷：언니한테 ‘야’라고 하다／내가 야야? 中的 야是被引用的稱呼，應譯「喂／欸」，不可當語尾。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 35,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 88,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_036",
+    "source_text": "너 괜찮아? 너 못생긴 거 보면 토하잖아. 언니 봐봐. 언니 보니까 괜찮지?\n괜찮아? 너 못생긴 거 보면 토하잖아. 언니, 언니 봐봐. 이제 괜찮지?",
+    "reference_output": "你還好嗎？你看到醜的東西不是會吐嗎？看看姐姐。看到姐姐就沒事了吧？",
+    "current_output": "你沒事吧？看你那張臉簡直想吐。看看姊姊，看姊姊是不是好多了？\n你沒事吧？看你那張臉簡直想吐。姊姊，看看姊姊，現在好點了沒？",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "省略受詞的「못생긴 거 보면」是「你看到醜的東西會吐」，不是「看到你這張醜臉想吐」。目前把調情台詞翻成直接辱罵對方，語意與笑點相反。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 補充省略主詞／受詞判斷：너＋못생긴 거 보면 토하다中 너是經驗者，못생긴 거是看到的對象，不可把너誤當「醜的人」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 36,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 94,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 93,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_037",
+    "source_text": "냅다수영님이 지우, 하필 하트 투 하트의 맏언니이자 가장 내향인인 지우에게 달려가서",
+    "reference_output": "Sooyoung突然衝向Jiwoo，偏偏還是Hearts2Hearts裡年紀最大、也最內向的Jiwoo。",
+    "current_output": "內達秀姐突然衝到Zoo，就是那個Heart to Heart裡最年長又最內向的Zoo",
+    "categories": [
+      "bad",
+      "stt_mishear",
+      "source_norm"
+    ],
+    "note": "「냅다수영님이」應切分為副詞「냅다」＋人名「수영님이」，不是名叫「內達秀」的人；지우也被錯譯成Zoo。",
+    "severity": "bad",
+    "issue_type": "stt_mishear",
+    "confidence": 0.99,
+    "rule_target": "source_norm",
+    "proposed_rule": "加入 source normalization／斷詞規則：냅다수영님이→냅다 수영님이；搭配專名表固定 수영→Sooyoung、지우→Jiwoo。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_stt_inference_from_runtime_text_without_audio",
+    "source_annotation_id": 37,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 94,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_038",
+    "source_text": "수영님은 갑자기 크아아악 이러는데 카악씨 막 이러던데",
+    "reference_output": "Sooyoung突然「啊啊啊！」地吼，還「嘖，真是的」那樣亂叫。",
+    "current_output": "泳姐突然一聲「哇啊啊啊」，卡卡姐也跟著那樣喊起來。",
+    "categories": [
+      "bad",
+      "hallucination",
+      "translation_prompt"
+    ],
+    "note": "「카악씨」是吼聲／咂舌加髒話的口語片段，原文沒有一位「卡卡姐」；目前憑空新增人物。",
+    "severity": "bad",
+    "issue_type": "hallucination",
+    "confidence": 0.88,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 提醒：크아악、카악、씨等連續感嘆音優先視為擬聲／咒罵，不可自動建立人名。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 38,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 99,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_039",
+    "source_text": "완전 공감을 했대요 덕선이에게 엄마가 둘째 이모 옷 입고 나갔다가 엄청 혼났대\n막 그래가지고 엄마가 언니 무서워서 이제 옷 못 입겠다고",
+    "reference_output": "她說完全能共感。媽媽以前也像德善一樣，穿著二姨的衣服出門後被狠狠罵了一頓。\n所以媽媽因為怕姊姊，後來就不敢再穿她的衣服了。",
+    "current_output": "她說完全感同身受，德善以前穿了二姨的衣服出門，被媽媽狠狠罵了一頓。\n然後因為媽媽太凶，姊姊說不敢再穿了。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "承接「媽媽是三姊妹中的老么」，真正穿二姨衣服、被姊姊罵的是主播的媽媽，德善只是《請回答1988》的對照角色。第二句也是「媽媽怕姊姊」，目前把人物關係全部倒置。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.95,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 強化跨句核心指涉：已知說話者母親是三姊妹老么時，後續省略主詞的穿衣／被罵事件應延續為母親；不要把影劇角色或「언니」誤設為新主詞。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 39,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 111,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 110,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_040",
+    "source_text": "아 막 동생이 막 어 난 엄마는 막 동생만 이뻐하고 동생만 무슨 장난감 사주고 나는 막 저런거 안 사준다 말해서 응 나는 외동이라서 다 내 건데",
+    "reference_output": "朋友們會抱怨：「媽媽只疼弟弟，只買玩具給弟弟，都不買給我。」我就會想：「嗯，我是獨生女，所以全部都是我的。」",
+    "current_output": "啊，我弟老說媽只喜歡他，只買玩具給他，都不買那種東西給我，但我可是獨生子，全部都是我的啊。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "主播前後明確說自己是獨生女，這裡是在轉述朋友抱怨「媽媽只疼弟弟」，再對比自己身為獨生女東西全是自己的；目前憑空替主播新增弟弟，且引號範圍錯誤。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 增加口語轉述邊界判斷：말해서／이런 식으로 앞的抱怨可為他人引語；若既有上下文明示외동，不可產生「我的弟弟」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 40,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 123,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_041",
+    "source_text": "어 맞아 우리 엄마도 옷 물려 입었다 그랬어 교복 같은 거 막 물려 입었다 그랬어",
+    "reference_output": "對啊，我媽也說她穿過姊姊傳下來的衣服，像制服之類的都是接著穿。",
+    "current_output": "對啊，我媽也穿過我姊姊的舊衣服，像校服之類的，都傳下來穿。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "主播是獨生女，這裡的姊姊是媽媽的姊姊；目前譯成「我姊姊」再次與既有家庭資訊衝突。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 在親屬鏈中保留所有格層級：우리 엄마도 옷 물려 입었다承接母親三姊妹背景時，언니是「媽媽的姊姊」，不可改成主播的姊姊。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 41,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 126,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [],
+    "forbidden_terms": [],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "Reference output is human-labeled. Automated evaluator checks structure only until case-specific assertions or human A/B review are supplied."
+  },
+  {
+    "id": "qa_20260801_042",
+    "source_text": "대신에 둘째이자 막내인 나는 건강하진 않았을까. 그런 생각을 해. 재능을 잃고 건강을 얻지 않았을까?",
+    "reference_output": "而我作為老二兼老么，或許反而會很健康吧？我會這樣想。也許是失去天賦，換來了健康？",
+    "current_output": "而我作為老二又是老小，身體反而沒那麼好？是不是我失去了天賦，卻換來了健康？",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "「건강하진 않았을까」是委婉推測「或許反而會很健康吧」，與下一句「失去天賦、得到健康」一致；目前把第一句翻成不健康，造成前後自相矛盾。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 補充反問推測「-지 않았을까」通常表示正向可能性「會不會其實……」，不可機械譯成否定。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 42,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 130,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "換來了健康"
+    ],
+    "forbidden_terms": [
+      "身體反而沒那麼好"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The negative-question inference is externally supported and has a bounded assertion. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  },
+  {
+    "id": "qa_20260801_043",
+    "source_text": "어? 맨날 혼냈지.\n아 맨날 혼냈지. 나 내 동생이면 가만 안 뒀지.",
+    "reference_output": "欸？我一定會天天罵他吧。\n啊，我一定天天罵他。如果是我弟弟，我可不會放過他。",
+    "current_output": "欸？不是天天被罵嗎？\n啊，天天都被罵，我要是我弟，我絕對不會放過他。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "translation_prompt"
+    ],
+    "note": "媽媽問「如果你有弟弟會怎樣」，回答是「我會天天罵他」；「내 동생이면」是「如果是我弟弟」，不是「我要是我弟」。目前第一句錯成被動，第二句條件主體也錯。",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "translation_prompt 強化省略主詞與條件句：혼냈지在此由說話者施事；N이면＝如果是N，不可改成「如果我是N」。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "human_semantic_label_from_runtime_source_and_output",
+    "source_annotation_id": 43,
+    "supplemental_annotation_ids": [],
+    "runtime_refs": [
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 134,
+        "profile_id": "url",
+        "profile_applied": true
+      },
+      {
+        "run_id": "20260801T194223Z-26476",
+        "sequence_id": 133,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "如果是我弟弟"
+    ],
+    "forbidden_terms": [
+      "被罵",
+      "我要是我弟"
+    ],
+    "max_korean_ratio": 1,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5,
+    "evaluation_note": "The conditional-subject and active-voice contrasts are externally supported and have bounded assertions. This is not full semantic or model-quality proof without matched controls or human A/B review."
+  }
+]

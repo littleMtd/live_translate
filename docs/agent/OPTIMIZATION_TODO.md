@@ -4,7 +4,7 @@ This is a binding routed extension of `AGENTS.md`. Read it completely for
 optimization planning, TODO selection/advancement, evidence-gate decisions, or
 progress updates.
 
-## Incremental Optimization TODO (2026-07-24)
+## Incremental Optimization TODO (historical sequence begun 2026-07-24)
 
 The user wants the remaining optimizations implemented slowly and
 sequentially. Do not combine several TODO cards into one implementation.
@@ -378,15 +378,26 @@ Ordered cards:
       and 879 missing forced candidates. After fixes, re-review PASS with
       6,613/6,613 forced candidates covered and no remaining finding.
 
-- [x] **T10 - Conservative fuzzy source normalization — record-only shadow**
+- [x] **T10 - Conservative fuzzy source normalization — retired record-only shadow**
   - Restrict candidates to the active profile glossary.
   - Require a strong, unique match; leave the source unchanged when candidates
     are close or ambiguous.
   - Begin in record-only shadow mode.
-  - Implemented 2026-07-25:
-    - Translation events now carry a fail-closed `source_fuzzy_shadow`
-      diagnostic. It is always `mode=record_only`, always `applied=false`, and
-      the original source remains the only text sent to the translator.
+  - Retired from production 2026-08-25:
+    - The record-only module, per-translation computation, telemetry producer,
+      environment kill switch, and shadow-only tests were removed. The shadow
+      never selected or changed source text and had no correctness/publication
+      consumer.
+    - Current translation events no longer carry `source_fuzzy_shadow`.
+      `scripts/analyze_runtime_events.py` retains read-only parsing solely for
+      historical logs; reports must accept zero observed shadow events.
+    - Reviewed deterministic source normalization in
+      `modules/translation_corrections.py` remains production-authoritative and
+      was not removed.
+  - Historical implementation from 2026-07-25:
+    - Translation events carried a fail-closed `source_fuzzy_shadow`
+      diagnostic. It was always `mode=record_only`, always `applied=false`, and
+      the original source remained the only text sent to the translator.
     - Production canonical targets are limited to the intersection of the
       active profile STT glossary and reviewed source-normalization/fan-term
       canonicals. Generic glossary entries and aliases cannot become fuzzy
@@ -399,7 +410,7 @@ Ordered cards:
       are exclusion-only. They cannot be reinterpreted as fuzzy misses or
       promoted as canonical targets. Korean vocative endings are also
       excluded from final-syllable name rewrites.
-    - `LIVE_TRANSLATE_SOURCE_FUZZY_SHADOW` is the kill switch. Any diagnostic
+    - `LIVE_TRANSLATE_SOURCE_FUZZY_SHADOW` was the kill switch. Any diagnostic
       exception returns a bounded `diagnostic_error` record and cannot block
       translation, including malformed profile input.
     - Runtime analysis reports coverage, eligibility, unique/ambiguous
@@ -1674,6 +1685,501 @@ Ordered cards:
       watcher and Cancel tests cover those pieces independently. JSON cloning
       also assumes `ConfigDto` remains JSON-native, as required by IPC.
 
+- [x] **T22 - Windows audio preflight and startup readiness (2026-08-02)**
+  - Configured-name candidates are checked against the exact requested
+    sample-rate/channel/dtype and retain sounddevice enumeration order; no
+    host-API preference is inferred. Matching-but-incompatible VB-CABLE
+    endpoints fail closed so the isolation boundary cannot silently fall back
+    to Stereo Mix. A missing configured name retains capability-filtered
+    auto-detection.
+  - `start()` now waits for bounded actual `InputStream` entry and propagates
+    open errors/timeouts synchronously. Silero loads afterward behind a
+    callback gate. PortAudio input overflow resets stream state before the next
+    processed frame, like internal callback backlog discontinuity.
+  - Startup log/event fields report the actual endpoint, host API, requested
+    format, and ready latency. Direct module execution is read-only preflight.
+  - Local gate selected CABLE Output MME at 16 kHz/2ch; stream entry completed
+    in 8.45 ms. The WASAPI CABLE endpoint and WDM-KS Stereo Mix both rejected
+    16 kHz with `PaErrorCode -9997`. A two-second capture smoke loaded Silero
+    and stopped with no live thread left behind.
+
+- [x] **T23 - Translation tail/deadline re-check (2026-08-02)**
+  - In the latest 327-translation run, 17 calls exceeded 3 seconds and nine
+    exceeded 5 seconds. Sixteen were single successful OpenRouter calls; one
+    hit the 8-second route deadline and DeepL recovered within the existing
+    10-second sentence budget. Queue wait, predecessor stall, source/body size,
+    context count, cut reason, and quality retry did not explain the group.
+  - Decision: retain the 8-second OpenRouter route deadline, 10-second total
+    deadline, 60-second cooldown, and two-success background probe contract.
+    Do not add workers, shorten history, change cut policy, or hedge from this
+    evidence.
+  - Natural run `runtime_events_20260729.jsonl` recorded circuit open, ten
+    consecutive DeepL successes, two successful probes, circuit close after
+    101.804 seconds, and the next user translation returning to OpenRouter.
+    This satisfies the requested at-least-90-second recovery observation.
+
+- [x] **T24 - Quality-flag audit and narrow diagnostic fixes (2026-08-02)**
+  - The 27 deduplicated flagged candidates were manually classified as ten
+    likely OK, eight translation issues, six STT-source issues, and three
+    unclear. This selected sample is not an overall error-rate estimate.
+    `target_high_latin`, low-CJK, and repetition flags were especially
+    candidate-oriented; Hangul residue was more precise but still not proof in
+    every case.
+  - One shipped provider placeholder, `（空）`, is now covered by the existing
+    bracketed whole-output fail-closed filter. Bare `空` and prose containing
+    `（空）` remain allowed. No placeholder reaches subtitle/history/cache or
+    triggers a fallback call.
+  - T04 now recognizes explicit active-profile canonical outputs and only the
+    source-proven `PVP` / `RP` telemetry cases. Unknown romanizations remain
+    unexpected. These changes do not alter flags, score, retry, route, prompt,
+    glossary, correction, or subtitle text.
+  - Seq 31-33 policy/concurrency reconstruction remains a separate diagnostic,
+    not a blocker for these independently reproducible fixes.
+  - Validation across T22-T24: focused audio/main/analyzer 82 passed; focused
+    quality 294 passed plus 173 subtests; frozen replay 750/750 with zero
+    divergence; post-review affected tests 377 passed plus 173 subtests;
+    translator core 413 passed plus 218 subtests; final full Python suite 1,158
+    passed, four skipped, plus 297 subtests.
+
+- [ ] **T25 - Human-labeled semantic-fidelity replay and fix selection**
+  - Evidence intake and the first evidence-expansion pass are complete;
+    production implementation has not started. The evidence classes, runtime
+    comparison, recurrence audit, external verification, ownership map, and
+    falsification gates are recorded in
+    `docs/agent/T25_EVIDENCE_20260802.md`.
+    A second 2026-08-02 intake is recorded in
+    `docs/agent/T25_RUNTIME_AUDIO_EVIDENCE_20260802.md`: 95 losslessly
+    preserved annotations join four effective runs with 657 successful-STT WAV
+    files. Its separate provenance manifest now resolves all eight
+    multi-candidate timestamps by frozen text evidence. A later attribution
+    audit showed that the remaining annotation-68 gap was an offline manifest
+    omission: the pure-residual live event has evidence IDs `utt-26,utt-27`,
+    but schema v1 imported only current IDs. Schema v2 now preserves the frozen
+    timestamp selections while rebuilding both current/evidence provenance;
+    annotation 68 joins both evidence WAVs and the selected missing-provenance
+    count is zero. It was not a live provenance loss. The intake keeps
+    multi-value label states and the actual active profile explicit, is not
+    merged into the 2026-08-01 evaluator, and authorizes no production change.
+    The owner supplied 47 annotations from the 2026-08-01 runs. The lossless
+    source is `data/manual_quality_annotations_20260801.json`; the canonical
+    evaluator view is `data/semantic_quality_eval_20260801.json` with 43
+    atomic cases (38 bad, five warn). Annotations 44-46 supplement existing
+    cases and annotation 47 is a cross-case quality-gate observation, so they
+    are linked rather than independently weighted.
+  - At least one runtime join exists for all 43 canonical cases across
+    `20260801T150947Z-25224` (`isegye_lilpa`) and
+    `20260801T194223Z-26476` (`url`). Forty-two cases match every supplied
+    source line; case 35 matches one of its two aggregated lines and remains a
+    partial provenance join. The set contains 16 mistranslations, 16
+    suspected STT mishears, seven glossary gaps, and four other error classes.
+    The runtime evidence verifies emitted source/output/profile paths; it does
+    not by itself verify the reconstructed words in the STT-mishear labels.
+    Neither run retained WAV assets, so those 16 remain human inferences.
+  - The 43 cases join to 71 unique translation events. All 71 recorded success,
+    active profile application, and empty activity metadata; 68/71 received
+    `quality_score=1.0`, while only eight carried any quality flag. The same-run
+    unreviewed pool contains 391 events and has nearly identical runtime
+    warn/bad and score-1.0 rates. It is a sampling frame, not an OK control set.
+    Forced cuts are enriched in the labeled sample (24/71 versus 52/391), but
+    47 labeled events are non-forced and STT confidence distributions overlap,
+    so neither cut mode nor `min_avg_logprob` is a sufficient semantic gate.
+  - Retained history provides cross-run recurrence for `랩업` (three events in
+    three runs) and `임마냥` (five events in five runs). The latter has mixed
+    meanings, directly arguing against a global replacement. Other game,
+    fandom, and entity variants repeat within a run and support prioritization,
+    not independent ground truth.
+  - External sources promote stable evidence for qa006, qa016, qa020, qa021,
+    qa034, qa042, and qa043, and partially validate Palworld/SOOP/H2H terms.
+    They do not validate near-sound STT reconstructions without audio. Official
+    Hearts2Hearts membership and birth-year data falsify qa033's supplied Yuri
+    reference; the canonical candidate is corrected to Yuha and explicitly
+    marked audio-pending, while the lossless annotation remains unchanged.
+  - Eight bounded assertions are now executable for qa006, qa010, qa016,
+    qa020, qa021, qa034, qa042, and qa043. The 43 references pass 43/43; the
+    captured known-bad outputs pass 35/43 and fail exactly those eight. The
+    other 35 cases remain structural/reference evidence rather than executable
+    semantic gates.
+  - The later 2026-08-02 intake has its own 16-case bounded evaluator:
+    references pass 16/16 and frozen current outputs fail 16/16. Its 21
+    audio-required cases are frozen as 31 current plus three evidence WAVs
+    (34 unique assets, 223.688 seconds). Both local engines completed all 21
+    cases with no empty current output. SenseVoice used 9.296 seconds of
+    per-chunk inference (RTF 0.046); faster-whisper large-v3-turbo CPU int8
+    used 196.002 seconds (RTF 0.976). Speed does not select an engine: the owner
+    explicitly chose to keep both. Current/evidence text stays separate and
+    ASR candidates are secondary evidence, not transcripts. Full case analysis
+    and reproducibility limits are in
+    `docs/agent/T25_DUAL_ASR_REPLAY_20260802.md`.
+  - A focused source-attribution audit is recorded in
+    `docs/agent/T25_ATTRIBUTION_AUDIT_20260802.md`. Existing propagation tests
+    pass 23/23. T25-056 is intentional forced-prefix residual carry with
+    `utt-94` retained as evidence, not lost attribution. T25-084 and T25-092
+    use only current chunks and therefore do not share that carry path. The
+    former is a one-chunk ASR/audio disagreement; the latter is a weak-signal
+    Groq/local-ASR disagreement with possible but unproven prompt-context
+    influence. All three annotation joins are unique.
+  - Annotation-68 provenance repair completed 2026-08-02:
+    - added the fail-closed offline
+      `scripts/rebuild_semantic_quality_provenance.py`; it treats existing
+      timestamp candidates/scores/selections as frozen and validates exact
+      schema-v3 translation identity before rebuilding attribution;
+    - schema v2 records both provenance lists and orders deduplicated audio
+      refs as current then unseen evidence, with current winning duplicate IDs;
+    - all 117 frozen runtime refs joined exactly one translation, every
+      effective source joined one successful STT event and existing WAV, and
+      the artifact contains 152 current plus 27 evidence audio refs;
+    - annotation 68 sequence 20 now retains evidence `utt-26,utt-27`, reports
+      `runtime_translation_candidates_linked`, and the selected missing count
+      is zero;
+    - 24 focused provenance/replay tests pass and fixed SHA-256 assertions
+      prove the T25 replay manifest plus both dual-ASR results are unchanged.
+      No live module, prompt, glossary, STT policy, or replay baseline changed.
+  - Code ownership review also falsifies simple prompt-only explanations for
+    qa008 and qa033: number preservation and the UR:L context guard already
+    exist in both prompt families. Source normalization, name rendering,
+    target rescue, persistent streamer STT terms, manual activity STT terms,
+    prompt behavior, and runtime quality must be evaluated as distinct cards.
+  - `suggested_rule` and `rule_target` are proposals, not confirmed root
+    causes. In particular, do not globally install contextual STT guesses,
+    copy Palworld terms into an unrelated profile, or treat a runtime quality
+    flag as a semantic oracle. Activity-scoped glossary injection, bounded
+    source normalization, target rendering, and prompt changes must be tested
+    as separate alternatives.
+  - The broad audio/evaluator evidence gate is complete. Next, choose one
+    owning-layer candidate and perform only the short token/entity listening or
+    visual check it needs, add matched OK controls, then record the current
+    production-model baseline. The dual replay prioritizes T25-074, T25-078,
+    T25-091, and T25-092. The attribution follow-up falsifies a shared
+    T25-056/T25-084 carry or source-ID defect. Cases T25-049, T25-055, T25-062,
+    T25-073, T25-087, and T25-090 demonstrate that two-ASR agreement or
+    reproduction of Groq text
+    cannot override contextual evidence. Second gate: compare
+    candidate changes with identical model/profile/context settings and human
+    review, requiring no high-severity control regression. Deterministic
+    `replay_eval.py` remains blast-radius hygiene only because it holds model
+    output fixed. Paid A/B calls require a separate explicit decision.
+  - Weak-signal dual-ASR follow-up completed 2026-08-03:
+    - the frozen four-run population contains 657 successful Groq STT/WAV
+      joins; ten chunks meet the pre-ASR weak-band, low-raw-RMS, low-no-speech,
+      and context-included contract and match ten unannotated high-confidence
+      controls within fixed run/profile/cut/overlap, duration, RMS, and Groq
+      comparability calipers;
+    - both local engines returned non-empty text for all 20 chunks. Six cases
+      per cohort are comparison-safe against Groq. Weak local/local similarity
+      median is 0.525 versus 0.899 for control candidates, but the strict
+      local-consensus/Groq-disagreement signal is zero of six in both cohorts;
+    - T25-092 remains a strong two-local-engine agreement candidate (0.939)
+      without safe single-WAV Groq text. It is optional blind-listen priority,
+      not ground truth. Two weaker chunks produce deterministic
+      faster-whisper repetition, and another has faster-whisper equal Groq
+      while SenseVoice diverges, so neither local engine is an automatic
+      oracle;
+    - faster-whisper's default temperature fallback changed low-signal output
+      between initial runs. The offline replay now freezes `temperature=0.0`,
+      records runtime/package versions, and an exact three-case repeat passes
+      3/3. This changes no live STT path;
+    - decision remains live no-go and no broad labeling task is opened. Full
+      method, hashes, performance, and limitations are in
+      `docs/agent/T25_WEAK_SIGNAL_DUAL_ASR_20260803.md`.
+    - the owner then completed the single requested hidden-candidate blind
+      listen for T25-092 / `utt-281` and labeled it `ok` as
+      `어차피 스토리 밀다보면 얘 뽑을 수 있어요? 질문하시면 지금 못 뽑아요 답변 올거에요`.
+      It matches faster-whisper at 0.971 and SenseVoice at 0.939 after the
+      frozen normalization, confirming their shared reading for that WAV and
+      contradicting the assembled Groq content. It does not establish a
+      per-WAV Groq transcript, speaker ownership, context causation, or a
+      population-level live gate; no additional labeling batch is opened.
+  - **T25-CX — recent-context provenance telemetry implemented 2026-08-03:**
+    - independent evidence reviews agreed that T25-092 confirms one Groq/WAV
+      recognition concern but does not support changing the `-0.7` context
+      threshold, suppressing low-RMS context, changing prompt content, or
+      loading a second live ASR. Among 657 successful Groq STT/WAV joins, only
+      25 accepted rows fall in `[-1.0,-0.7)`; rejecting the whole band would
+      trade one adjudicated error for 24 unadjudicated drops;
+    - each Groq attempt now freezes optional, text-free context provenance at
+      prompt construction: source utterance ID, request-time age, normalized/
+      truncated payload length, source engine, and available confidence. A
+      filtered response can clear future eligibility without erasing the
+      context attribution for the request already sent. Cross-key retries keep
+      source identity while age may increase; no-request or non-included rows
+      emit null provenance;
+    - `scripts/analyze_runtime_events.py` remains the single broad analyzer. It
+      separates legacy unavailable rows, non-Groq sources, exact earlier Groq
+      joins, and bounded text-free invariant candidates. It labels threshold
+      and expiry checks as current-policy diagnostics rather than historical
+      ground truth;
+    - this card changes no prompt bytes/content, request count, route, subtitle,
+      context eligibility rule, provider/model, or persisted speech text. Raw
+      context and reversible hashes are excluded. Pause/resume/reset leakage is
+      covered deterministically because the six fields alone cannot prove a
+      reset boundary at runtime;
+    - validation: focused STT/analyzer tests 111 passed; full Python suite 1,190
+      passed, four skipped, plus 297 subtests; frozen replay 750/750 with zero
+      divergence; module/analyzer compile and `git diff --check` passed. The
+      broad analyzer also read the latest pre-card live run successfully and
+      classified its missing optional fields as legacy unavailable. A fresh
+      independent read-only reviewer returned PASS with no blocker or major
+      finding in the isolated T25-CX hunks;
+    - post-card live acceptance remains observational: for one representative
+      run, every included Groq-sourced context row should join an earlier
+      successful same-run Groq STT event, with zero self/future, stale,
+      current-threshold-ineligible, missing-confidence, or metadata-mismatch
+      candidates. This gate authorizes no behavior change and no paid A/B.
+  - **T25-CX post-card live acceptance completed 2026-08-12:**
+    - four post-card live runs were checked at the `run_id` boundary. The
+      cross-midnight run `20260803T155107Z-10368` was joined across both
+      `runtime_events_20260803.jsonl` and `runtime_events_20260804.jsonl`
+      rather than treating either daily-file segment as a complete run;
+    - the four runs contain 762 STT events and 578 context-included requests.
+      All 578 rows carry provenance and all 578 join an earlier successful
+      same-run Groq STT event. Missing joins, self/future sources, invalid or
+      over-30-second ages, current-policy threshold-ineligible sources,
+      missing source confidence, and metadata mismatches are all zero;
+    - the largest run, `20260811T102058Z-6012`, independently contributes
+      344/344 exact joins with all invariants at zero. This closes the
+      observational T25-CX runtime gate; it does not authorize changing the
+      context threshold, prompt content, VAD, or live ASR routing.
+  - **T25-HG — Higedan entity-token verification selected 2026-08-12:**
+    - run `20260811T102058Z-6012` contains 14 emitted translations in one
+      concert discussion with a recurring apparent entity family rendered
+      from source variants including `희계단`, `희예다`, `희귀나`, `희계나`,
+      `히에다`, and `희귀다니는`. Outputs vary among literal staircase,
+      unrelated person-name, phonetic, omitted, and other inconsistent
+      renderings. Runtime context containing song titles such as `Same Blue`,
+      `Pretender`, and `Crybaby` supports an artist-entity hypothesis but is
+      not heard-source ground truth;
+    - six clean one-current-utterance rows (`utt-9`, `utt-22`, `utt-28`,
+      `utt-43`, `utt-57`, and `utt-278`) have existing WAVs, no evidence carry,
+      exact translation/STT text-length agreement, and accepted Groq
+      confidence. Recurrence spans context-included and context-free plus
+      forced and non-forced rows, so neither the recent-context policy nor
+      forced segmentation alone explains the family;
+    - next gate is a bounded blind token listen of only those six WAVs plus
+      matched ordinary-word/name controls. If the heard forms do not converge
+      on one referent, close the card with no implementation. If they do,
+      freeze the bad variants and controls, verify the canonical artist/title,
+      and compare separately scoped source-normalization, canonical rendering,
+      and STT-term alternatives under identical profile/context settings;
+    - until that gate passes, do not add a global replacement, generic prompt
+      example, persistent profile-wide glossary/STT term, confidence/VAD
+      change, or live second-ASR route. Local dual-ASR output may prioritize
+      listening but remains secondary evidence rather than a transcript.
+  - **T25-HG owner-assisted token gate completed 2026-08-12:**
+    - the lossless six-row annotation is preserved as
+      `data/t25_higedan_assisted_listen_annotations_20260812.json`; every
+      owner note is evidence and must be read with the selected label. Five
+      `different` labels identify omissions, sentence-level ASR differences,
+      or corrected wording rather than five claims that the referent is not
+      Higedan. In particular, row 2 says `히게단才對`, row 4 supplies a
+      corrected sentence beginning `행복한 히게단 분들이`, and row 6 states
+      that all six samples refer to `히게단 Official髭男dism`;
+    - SenseVoice 1.4.1 and faster-whisper 1.2.1/large-v3-turbo were run offline
+      on the six fingerprinted WAVs as listening aids. Together with Groq they
+      repeatedly produce the same near-sound family, but none is treated as a
+      reference transcript. The owner-heard text also corrects non-entity
+      details (`좋은 거라니까` versus `좋은 거 아니까`, `촥`, `주르륵
+      나고요`, and sentence omissions), proving that a whole-sentence or
+      model-output replacement would be unsafe;
+    - the artist's official discography independently joins the contemporaneous
+      `Same Blue`, `Pretender`, and `Cry Baby` references to
+      Official髭男dism. Combined with the six owner annotations, this passes
+      the bounded referent gate for the entity token only; it does not promote
+      either local ASR to transcript ground truth;
+    - exact retained-history audit finds `희계단` in seven original 2026-08-11
+      `isegye_lilpa` events, `희계나` in two, plus one each for `희예다`,
+      `희귀나`, and `희귀다니는`, and two `히에다` events. The six clean
+      reviewed rows cover `희계단` and `희계나`. Less direct variants remain
+      supporting evidence and must not all be normalized automatically from
+      this gate alone;
+    - while the owner used the review UI, its audio was captured by a still-
+      running live pipeline. Runs `20260812T082422Z-24676` and
+      `20260812T084207Z-28184` are annotation-playback contamination despite
+      their recorded `run_kind=live`; they are not independent recurrence,
+      production quality, or post-fix evidence and must be excluded from
+      future live baselines;
+    - implementation remains bounded to a separately reviewed entity-token
+      proposal with matched non-entity/profile controls. Profile-scoped exact
+      normalization, canonical target rendering, and STT prompt terms are
+      distinct alternatives; no whole-sentence correction, global fuzzy
+      replacement, confidence/VAD change, or route change is authorized.
+  - **T25-HG bounded correction implemented 2026-08-12:**
+    - the reviewed proposal compared prompt-only, prompt plus target-name
+      rendering, and boundary-aware source normalization plus a canonical
+      glossary. Claim review verified the six owner-assisted references, the
+      two covered Groq variants (`희계단`, `희계나`), heterogeneous target
+      failures, the existing unbounded `source_norm` collision risk, and the
+      fact that the omitted seq 16 translator input still contained
+      `희계단`. Round 2 returned YES with no blocker;
+    - the card decision renders the verified referent as its official spelling
+      `Official髭男dism`. A separate `boundary_source_norm` table applies only
+      while the `isegye_lilpa` profile is enabled and maps only the two reviewed
+      aliases plus their observed attached `님` / `분들` shapes to canonical
+      Korean `히게단`. It reuses the existing Korean name-boundary predicate
+      and longest-first ordering; the old unbounded `source_norm` behavior is
+      unchanged;
+    - the standard and Qwen profile glossaries both contain the single
+      canonical mapping `히게단 -> Official髭男dism`. No target sentence is
+      synthesized, and no generic target replacement was added. Unreviewed
+      variants (`희예다`, `희귀나`, `히에다`, `희귀다니는`) remain outside
+      the rule;
+    - retained-history collision audit found nine `isegye_lilpa` translation
+      events containing the covered aliases (seven `희계단`, two `희계나`),
+      all in the verified artist discussion and none in an observed non-artist
+      use. Tests cover embedded/prepended-Hangul controls, wrong profile,
+      disabled profile, suffixes, punctuation, repeated aliases, idempotence,
+      raw-source preservation, and the text actually sent to the engine;
+    - validation: prompt snapshot check passed; core JSON/eval passed 5/5 and
+      8/8; focused correction/prompt/source-fuzzy/translator tests passed 286 plus 173
+      subtests; full core passed 418 plus 218 subtests; the frozen deterministic
+      replay passed 750/750 with zero divergence; the full Python suite passed
+      1,195, skipped four, plus 297 subtests. The replay is blast-radius
+      evidence only and does not prove probabilistic prompt adherence;
+    - no paid A/B was run because that requires a separate owner decision.
+      Post-implementation natural runtime acceptance should verify that a new
+      `isegye_lilpa` event containing a covered alias records the boundary
+      source correction and emits `Official髭男dism`, while unrelated and
+      other-profile text remain unchanged. The two annotation-playback runs
+      named above remain excluded from that gate;
+    - the mandatory fresh-context read-only post-implementation reviewer
+      returned PASS with no scoped finding. It independently verified profile
+      and boundary safety, reviewed suffix handling, standard/Qwen glossary
+      parity, raw-source preservation, record-only fuzzy coupling, tests, and
+      documentation claims. Its residual risk matches the runtime gate above:
+      prompt adherence is probabilistic, and unreviewed variants intentionally
+      remain unchanged.
+  - **T25-IR — IRISÉ canonicalization and diagnostic QA implemented
+    2026-08-15:**
+    - the fixed-source translation benchmark
+      `scratch/analysis/stt_translation_model_ab_20260815_summary.json`
+      isolates a translation-layer instability: the Qwen route satisfied
+      17/26 audited canonical obligations, while Flash satisfied 25/26 and Pro
+      26/26. Qwen also emitted two Kana residues and one music `파트` as
+      `部門`. This is benchmark evidence for the selected owning layer, not a
+      claim that every subtitle defect has the same cause;
+    - because Claude Code was unavailable on this host, a fresh independent
+      read-only proposal agent was used as the documented substitute. Codex
+      round 1 returned REVISE on overly broad `파트` detection, undecided
+      group-name coverage, unsafe Latin source aliases, and an unclear
+      repair-vs-suspicion boundary. The round-2 response narrowed all four and
+      Codex re-review returned YES before implementation;
+    - four `irise` name-rendering rules now require exact Korean source
+      evidence and canonicalize only audited output variants to `KIIRI`,
+      `TIZ`, `Heart Crush`, or `IRISÉ`. Explicit Korean honorific aliases cover
+      the observed no-space `키리씨` / `티즈씨` forms. Latin source text does
+      not activate these rules, and wrong/disabled profiles remain unchanged;
+    - successful completed translation events add expected/missing canonical
+      terms, a profile QA disposition, and a conservative semantic candidate
+      only when bounded music/performance evidence accompanies Korean-token
+      `파트` and the output contains `部門`. Deterministic repairs remain in
+      the existing correction trace. Missing canonical and semantic
+      candidates are diagnostic-only classifications; legacy flags, score,
+      severity, retry, route, provider/model selection, and fuzzy source
+      handling are unchanged;
+    - tests cover all four rules, honorifics/particles/punctuation, repeated
+      forms, idempotence, trace shape/count, embedded-Hangul and unrelated
+      source controls, Latin-source non-activation, wrong/disabled profiles,
+      API plus memory-hit paths, missing-canonical diagnostics, script drift,
+      and positive/negative semantic controls. The independent reviewer then
+      found unbounded Latin/Hangul target replacements and overly loose cue
+      matching. The one permitted fix pass added Unicode-Latin and Hangul
+      target boundaries plus bounded cue tokens, local proximity, and nearby
+      business-use exclusions. Post-review validation passed 331 affected
+      tests plus 182 subtests, 446 translator-core tests plus 227 subtests,
+      frozen replay 750/750 with zero divergence, and the full Python suite
+      with 1,239 passed, four skipped, plus 306 subtests. The same independent
+      reviewer re-checked only its two prior blockers and returned YES with no
+      unresolved scoped blocker;
+    - no production translation model was switched and no paid API call was
+      made. A later model-adapter/shadow/default decision is a separate card.
+      Natural runtime acceptance should confirm `normalized` correction traces
+      for covered variants and no unrelated-source/profile changes; semantic
+      candidates remain review signals rather than automatic subtitle edits.
+  - No production prompt, glossary, correction, profile, STT policy, quality
+    gate, route, or deadline changes are authorized by evidence ingestion.
+  - **T25-DS — DeepSeek V4 Flash live translation shadow implemented
+    2026-08-15; natural-runtime gate pending:**
+    - user decision selected a direct Flash shadow against the unchanged
+      OpenRouter Qwen production route. The fixed 140-input artifact supported
+      this candidate but did not itself authorize cutover;
+    - proposal review verified that DeepSeek was not a registered route and
+      that production history/activity/correction state is shared and
+      order-sensitive. Independent safety review required a separate bounded
+      lane; analyzer review retained `scripts/analyze_runtime_events.py` as the
+      single owner. Official DeepSeek documentation verified the current
+      endpoint, `deepseek-v4-flash`, disabled-thinking request field, cache
+      usage fields, and 2026-08-15 price table before implementation;
+    - each eligible production Qwen API miss freezes one immutable role/content
+      tuple after policy/source normalization, cache miss, profile/activity
+      binding, and cohort-history selection. The same pure builder is used by
+      OpenRouter and the Flash request. Run-secret HMAC fingerprints prove
+      history/context equality without persisting prompt/history text or a
+      dictionary-reversible plain hash;
+    - Flash runs in one daemon child process behind a non-blocking queue of
+      eight and a 2,000-request run cap. It is absent from the engine registry,
+      chain, fallback, circuit, probe, quality retry, dashboard override, and
+      production metrics. Results return to a parent collector as schema-v5
+      `translation_shadow` events; no child writes the production JSONL;
+    - Flash applies the existing deterministic target normalization and QA only
+      inside the isolated process. Its output, failure, timeout, queue drop,
+      correction, or QA result cannot replace/suppress a subtitle or mutate
+      production memory/history/cache/health. Canonicalization rules were not
+      changed by this card;
+    - the broad analyzer now joins `(run_id, shadow_id)` pairs, verifies
+      sequence/sentence and HMAC fingerprints, and reports provider latency
+      mean/p50/p95, paired delta, cost/request, cost/paired-audio-hour with
+      unique-utterance coverage, Flash prompt-cache ratio, QA/canonicalization/
+      unexpected-Hangul/Japanese rates, output similarity, and bounded highest
+      disagreements. Multiple daily event files are accepted for cross-midnight
+      runs;
+    - live cutover remains unauthorized. Collect at least two uncontaminated
+      representative live runs and 500 comparable success pairs, with >=99%
+      terminal completeness, zero join/safety violations, candidate success no
+      worse by >1 percentage point, latency no worse by >10%, complete cost and
+      paired-audio coverage, no QA/canonical/script regression, and manual
+      review of at least 30 highest disagreements plus all candidate-only
+      regressions. The known annotation-playback runs remain excluded.
+
+  - **T25-DS production-promotion decision — implemented 2026-08-16;
+    natural-runtime validation pending:**
+    - the former pre-cutover gate required two representative runs and 500
+      comparable pairs with no QA/canonical/script regression. The owner
+      explicitly overrode that gate after 407 complete pairs (404 comparable),
+      zero pairing/safety violations, Flash success 100% versus Qwen 99.26%,
+      mean latency 10.4% lower, p95 55.5% lower, and cost 57.7% lower. This is a
+      user decision, not a claim that the old gate passed;
+    - the same evidence recorded higher candidate risk: QA flags 11.14% versus
+      7.43%, unexpected Hangul 2.72% versus 0.25%, Japanese residue 0.25%
+      versus zero, and 12 candidate-only regressions. Therefore only a
+      protected serial cutover is authorized: Flash -> Qwen -> DeepL -> Groq;
+    - Flash and Qwen must consume one immutable Qwen capsule for identical
+      sentence/profile/activity/history state. Unexpected non-approved Hangul,
+      any Kana, refusal/meta output, or an existing deterministic bad-output
+      signal rejects only the Flash candidate and immediately uses Qwen without
+      opening the provider circuit. Provider failures retain the existing
+      fallback/circuit path;
+    - rejected Flash output cannot reach subtitle, cache, history, selected
+      attribution, or production QA retry. Its candidate correction/guard trace
+      remains additive telemetry. DeepSeek shadow is unavailable while Flash is
+      production primary, including during a circuit-open Qwen interval;
+    - one startup-frozen `primary|off` setting is the rollback boundary. `off`
+      restores the exact OpenRouter Qwen -> DeepL -> Groq chain. The dashboard
+      remains unable to reorder the protected Flash route;
+    - post-cutover validation replaces the waived pre-cutover gate. Roll back
+      immediately on state/output contamination, attribution mismatch, content
+      rejection changing provider health, duplicate Flash requests, or failure
+      to reach Qwen while deadline remains. For the first controlled and next
+      two representative natural runs, report Flash provider failures, guard
+      rate/reasons, Qwen continuity, final success, mean/p95 latency,
+      all-attempt versus selected cost, cache/QA/canonicalization/script rates,
+      and manually review all guarded pairs plus at least 30 prioritized Flash
+      successes;
+    - implementation verification passed 462 focused tests plus 238 subtests,
+      translator-core checks (455 tests plus 230 subtests), frozen replay
+      750/750 with zero divergence, and the full Python suite with 1,266 passed,
+      four skipped, plus 310 subtests. The analyzer also processed the latest
+      pre-cutover live run and emitted the additive DeepSeek output-guard
+      section. No paid API request was made during implementation validation.
+
 Explicit non-priorities unless new runtime evidence changes the decision:
 - A text-normalization LLM on every sentence.
 - Replacing the primary/fallback path with an expensive GPT/Claude model.
@@ -1687,7 +2193,8 @@ Explicit non-priorities unless new runtime evidence changes the decision:
 
 The ordered T08-T12 Goal is complete. T08 remains deferred with 41 actionable
 post-T07 outcomes and zero strict useful merge; T09 remains offline-only with
-live integration rejected; T10 remains record-only; T11's NVIDIA-to-OpenRouter
+live integration rejected; T10's former record-only runtime was subsequently
+retired and removed; T11's NVIDIA-to-OpenRouter
 hedge is obsolete under the OpenRouter-primary route and no replacement hedge
 has passed its cost/quality/cancellation gate; and T12's explicit activity path
 remains opt-in. T13-A/T13-B are implemented and provider-backed LoL publication

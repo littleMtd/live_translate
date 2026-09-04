@@ -22,11 +22,14 @@ fn main() {
             handlers::python::start_python,
             handlers::python::stop_python,
             handlers::python::python_status,
+            handlers::profile::get_profile_status,
+            handlers::bundle::list_exportable_runs,
+            handlers::bundle::export_chatgpt_bundle,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let state = window.state::<state::AppState>();
-                let _ = handlers::python::do_stop_python(&state);
+                let _ = handlers::python::do_stop_python_and_export(&state);
             }
         })
         .run(tauri::generate_context!())

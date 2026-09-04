@@ -1,4 +1,4 @@
-use crate::paths::config_path;
+use crate::paths::{config_path, profile_registry_path};
 use crate::state::{AppState, ConfigDto};
 use std::fs;
 use tauri::State;
@@ -48,6 +48,31 @@ pub(crate) fn validate_config(cfg: &ConfigDto) -> Result<(), String> {
             .any(|value| value.is_control() || is_activity_format_character(value))
     {
         return Err("current_activity must be one line of at most 80 characters".to_string());
+    }
+    if cfg.translation.profile_mode != "auto" && cfg.translation.profile_mode != "manual" {
+        return Err("profile_mode must be auto or manual".to_string());
+    }
+    let registry_text = fs::read_to_string(profile_registry_path())
+        .map_err(|e| format!("Profile registry unavailable: {}", e))?;
+    let registry: serde_json::Value = serde_json::from_str(&registry_text)
+        .map_err(|e| format!("Invalid profile registry JSON: {}", e))?;
+    let requested = cfg.translation.streamer_profile.trim().to_lowercase();
+    let known = registry
+        .get("profiles")
+        .and_then(|value| value.as_array())
+        .map(|profiles| profiles.iter().any(|profile| {
+            profile.get("profile_id").and_then(|value| value.as_str())
+                .map(|value| value.to_lowercase() == requested)
+                .unwrap_or(false)
+                || profile.get("aliases").and_then(|value| value.as_array())
+                    .map(|aliases| aliases.iter().any(|alias| {
+                        alias.as_str().map(|value| value.to_lowercase() == requested).unwrap_or(false)
+                    }))
+                    .unwrap_or(false)
+        }))
+        .unwrap_or(false);
+    if !known {
+        return Err("streamer_profile must be a reviewed registry id or alias".to_string());
     }
     Ok(())
 }
@@ -126,6 +151,7 @@ mod tests {
                 avg_logprob_threshold: -1.0,
                 max_japanese_chars: 2,
                 max_repeat_ratio: 0.7,
+                use_profile_glossary: true,
             },
             splitter: SplitterConfig {
                 min_wait_seconds: 3,
@@ -143,6 +169,7 @@ mod tests {
                 translation_mode: "live".into(),
                 streamer_profile: "hades_chxxnnx".into(),
                 use_profile: true,
+                profile_mode: "auto".into(),
                 current_activity: String::new(),
                 slang: HashMap::new(),
             },

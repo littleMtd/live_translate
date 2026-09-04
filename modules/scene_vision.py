@@ -26,6 +26,8 @@ _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_USER_AGENT = "live_translate/scene-vision"
 _MAX_DIAGNOSTIC_INT = 10_000_000
 _MAX_RATE_RESET_SEC = 7 * 24 * 60 * 60
+_VISION_MAX_COMPLETION_TOKENS = 96
+_VISION_RESPONSE_FORMAT = {"type": "json_object"}
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class VisionAttemptDiagnostics:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     api_cost_usd: float | None = None
+    finish_reason: str = ""
     rate_limit_tpm: int | None = None
     rate_limit_remaining_tokens: int | None = None
     rate_limit_reset_tokens_sec: float | None = None
@@ -70,6 +73,7 @@ class VisionAttemptDiagnostics:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "api_cost_usd": self.api_cost_usd,
+            "finish_reason": self.finish_reason or None,
             "rate_limit_tpm": self.rate_limit_tpm,
             "rate_limit_remaining_tokens": self.rate_limit_remaining_tokens,
             "rate_limit_reset_tokens_sec": self.rate_limit_reset_tokens_sec,
@@ -96,6 +100,7 @@ class VisionDiagnostics:
     model: str = ""
     retryable: bool = False
     api_cost_usd: float | None = None
+    finish_reason: str = ""
     attempt_chain: tuple[VisionAttemptDiagnostics, ...] = ()
 
     def event_fields(self) -> dict[str, Any]:
@@ -119,6 +124,7 @@ class VisionDiagnostics:
             "vision_provider": self.provider or None,
             "vision_model": self.model or None,
             "vision_api_cost_usd": self.api_cost_usd,
+            "vision_finish_reason": self.finish_reason or None,
         }
         fields.update(
             (key, value) for key, value in optional.items() if value is not None
@@ -232,6 +238,7 @@ def _attempt(
     completion_tokens: object = None,
     total_tokens: object = None,
     api_cost_usd: object = None,
+    finish_reason: object = "",
     rate_limit_tpm: object = None,
     rate_limit_remaining_tokens: object = None,
     rate_limit_reset_tokens_sec: object = None,
@@ -248,6 +255,11 @@ def _attempt(
         completion_tokens=_nonnegative_int(completion_tokens),
         total_tokens=_nonnegative_int(total_tokens),
         api_cost_usd=_nonnegative_float(api_cost_usd, maximum=1000.0),
+        finish_reason=(
+            str(finish_reason).strip()[:32]
+            if isinstance(finish_reason, str)
+            else ""
+        ),
         rate_limit_tpm=_nonnegative_int(rate_limit_tpm),
         rate_limit_remaining_tokens=_nonnegative_int(
             rate_limit_remaining_tokens
@@ -279,6 +291,7 @@ def _diagnostics_for_attempt(
         model=attempt.model,
         retryable=attempt.retryable,
         api_cost_usd=attempt.api_cost_usd,
+        finish_reason=attempt.finish_reason,
         attempt_chain=(attempt,),
     )
 
@@ -304,6 +317,7 @@ def _merged_diagnostics(
         model=selected.model,
         retryable=selected.retryable,
         api_cost_usd=selected.api_cost_usd,
+        finish_reason=selected.finish_reason,
         attempt_chain=tuple(attempts),
     )
 
@@ -366,9 +380,10 @@ class GroqVisionProvider:
         try:
             raw_response = client.chat.completions.with_raw_response.create(
                 model=self.model_name,
-                max_tokens=20,
+                max_tokens=_VISION_MAX_COMPLETION_TOKENS,
                 temperature=0,
                 reasoning_effort="none",
+                response_format=_VISION_RESPONSE_FORMAT,
                 messages=[
                     {
                         "role": "user",
@@ -441,7 +456,9 @@ class GroqVisionProvider:
         try:
             response = raw_response.parse()
             usage = getattr(response, "usage", None)
-            content = str(response.choices[0].message.content or "").strip()
+            choice = response.choices[0]
+            content = str(choice.message.content or "").strip()
+            finish_reason = getattr(choice, "finish_reason", "")
         except Exception:
             attempt = _attempt(
                 route,
@@ -485,6 +502,7 @@ class GroqVisionProvider:
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
+            finish_reason=finish_reason,
             rate_limit_tpm=header("x-ratelimit-limit-tokens"),
             rate_limit_remaining_tokens=header(
                 "x-ratelimit-remaining-tokens"
@@ -547,7 +565,8 @@ class OpenRouterVisionProvider:
                 }
             ],
             "temperature": 0,
-            "max_tokens": 20,
+            "max_tokens": _VISION_MAX_COMPLETION_TOKENS,
+            "response_format": _VISION_RESPONSE_FORMAT,
         }
         request = Request(
             _OPENROUTER_URL,
@@ -582,6 +601,7 @@ class OpenRouterVisionProvider:
             message = choice["message"]
             if not isinstance(message, dict):
                 raise TypeError
+            finish_reason = choice.get("finish_reason", "")
             content_value = message.get("content")
             if content_value is None:
                 content = ""
@@ -671,6 +691,7 @@ class OpenRouterVisionProvider:
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
             api_cost_usd=usage.get("cost"),
+            finish_reason=finish_reason,
         )
         return VisionClassification(
             text=content,

@@ -70,15 +70,16 @@ describe('Dashboard', () => {
     vi.useRealTimers()
   })
 
-  it('renders three tab buttons', async () => {
+  it('renders four tab buttons', async () => {
     setupDefaultMocks()
     const wrapper = mount(Dashboard)
     await flushPromises()
     const tabs = wrapper.findAll('.tabs button')
-    expect(tabs).toHaveLength(3)
+    expect(tabs).toHaveLength(4)
     expect(tabs[0].text()).toBe('Settings')
     expect(tabs[1].text()).toBe('Cache')
     expect(tabs[2].text()).toBe('Stats')
+    expect(tabs[3].text()).toBe('Export')
   })
 
   it('shows Settings tab content by default', async () => {
@@ -111,6 +112,16 @@ describe('Dashboard', () => {
     mount(Dashboard)
     await flushPromises()
     expect(mockInvoke).toHaveBeenCalledWith('get_config')
+  })
+
+  it('switches to Export tab when clicked', async () => {
+    setupDefaultMocks()
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+    await wrapper.findAll('.tabs button')[3].trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ExportBundle' }).exists()).toBe(true)
+    expect(mockInvoke).toHaveBeenCalledWith('list_exportable_runs')
   })
 
   it('does not mount an editable settings form while config is loading', async () => {
@@ -303,7 +314,7 @@ describe('Dashboard', () => {
     expect((panel.props('config') as typeof fakeConfig).subtitle.font_size).toBe(35)
   })
 
-  it('shows restart notice after saving config while Python is online', async () => {
+  it('reports profile hot reload after saving config while Python is online', async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'get_config') return Promise.resolve(fakeConfig)
       if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
@@ -319,7 +330,7 @@ describe('Dashboard', () => {
     await flushPromises()
 
     expect(mockInvoke).toHaveBeenCalledWith('update_config', { newConfig: fakeConfig })
-    expect(wrapper.find('.notice-banner').text()).toContain('Restart Python')
+    expect(wrapper.find('.notice-banner').text()).toContain('Profile selection will hot-reload')
   })
 
   it('saves a stable snapshot even if the emitted object is mutated in flight', async () => {

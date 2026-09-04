@@ -1,0 +1,1648 @@
+{
+  "phase0_stt_replay_schema": 2,
+  "manifest": "scratch\\analysis\\t25_weak_signal_manifest_20260803.json",
+  "manifest_sha256": "dc5cc5a045829a76debafbcc26f1494c701e6fe05dc38dc251d522bccf944ae4",
+  "engine": "sensevoice",
+  "model": "iic/SenseVoiceSmall",
+  "device": "cpu",
+  "runtime_versions": {
+    "python": "3.13.14",
+    "numpy": "2.4.6",
+    "soundfile": "0.14.0",
+    "engine_package": "1.4.0",
+    "engine_runtime": "2.13.0+cpu"
+  },
+  "engine_parameters": {
+    "language": "ko",
+    "use_itn": true,
+    "batch_size_s": 60
+  },
+  "model_artifact_identity_limit": "Model name and runtime parameters are recorded; an immutable upstream artifact revision is not exposed uniformly by both engines.",
+  "groups": [
+    "matched_control",
+    "weak_signal"
+  ],
+  "case_count": 20,
+  "cases": [
+    {
+      "sample_id": "T25-WS-pair-001-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-42"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-42",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 2.816,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.9935883,
+            "no_speech_prob": 0.03325496,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.002921,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "음하세요.",
+      "candidate_current_text": "음하세요.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-42",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-42.wav",
+          "audio_seconds": 2.816,
+          "text": "음하세요.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>음하세요.",
+          "latency_ms": 187.9,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "음하세요.",
+      "sensevoice_current_text": "음하세요.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-42",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-42.wav",
+          "audio_seconds": 2.816,
+          "text": "음하세요.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>음하세요.",
+          "latency_ms": 187.9,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-001-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-85"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-85",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.264,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.23309702,
+            "no_speech_prob": 0.0075263097,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007931,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "이제 실루엣한 노래 입니다.",
+      "candidate_current_text": "이제 실루엣한 노래 입니다.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-85",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-85.wav",
+          "audio_seconds": 3.264,
+          "text": "이제 실루엣한 노래 입니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>이제 실루엣한 노래 입니다.",
+          "latency_ms": 186.4,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "이제 실루엣한 노래 입니다.",
+      "sensevoice_current_text": "이제 실루엣한 노래 입니다.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-85",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-85.wav",
+          "audio_seconds": 3.264,
+          "text": "이제 실루엣한 노래 입니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>이제 실루엣한 노래 입니다.",
+          "latency_ms": 186.4,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-002-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "마운트집게 유튜브에 있잖아 유튜브라 띠라잇",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-49"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-49",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.024,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.8072203,
+            "no_speech_prob": 0.03286743,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.008228,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+      "candidate_current_text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-49",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-49.wav",
+          "audio_seconds": 5.024,
+          "text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>망운지끼 유튜브 있잖아 유튜브랑듀래?",
+          "latency_ms": 329.4,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+      "sensevoice_current_text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-49",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-49.wav",
+          "audio_seconds": 5.024,
+          "text": "망운지끼 유튜브 있잖아 유튜브랑듀래?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>망운지끼 유튜브 있잖아 유튜브랑듀래?",
+          "latency_ms": 329.4,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-002-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "본인 오리지널리티가 살아있는 그런 보컬을 얘기하는 거죠",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-63"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-63",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.504,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.13280989,
+            "no_speech_prob": 0.020004272,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007297,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+      "candidate_current_text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-63",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-63.wav",
+          "audio_seconds": 5.504,
+          "text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+          "latency_ms": 283.6,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+      "sensevoice_current_text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-63",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-63.wav",
+          "audio_seconds": 5.504,
+          "text": "그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그니까 본인 그 오리지널리티가 살아있는 그런 부포를 얘기하는 거죠.",
+          "latency_ms": 283.6,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-003-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-16"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-16",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.808,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.8223789,
+            "no_speech_prob": 0.11253147,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006389,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "티리 디.",
+      "candidate_current_text": "티리 디.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-16",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-16.wav",
+          "audio_seconds": 3.808,
+          "text": "티리 디.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>티리 디.",
+          "latency_ms": 212.1,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "티리 디.",
+      "sensevoice_current_text": "티리 디.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-16",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-16.wav",
+          "audio_seconds": 3.808,
+          "text": "티리 디.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>티리 디.",
+          "latency_ms": 212.1,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-003-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-8"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-8",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.008,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.23100778,
+            "no_speech_prob": 0.0052126735,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003126,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "어 이 없기긴네.",
+      "candidate_current_text": "어 이 없기긴네.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-8",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-8.wav",
+          "audio_seconds": 3.008,
+          "text": "어 이 없기긴네.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>어 이 없기긴네.",
+          "latency_ms": 193.9,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "어 이 없기긴네.",
+      "sensevoice_current_text": "어 이 없기긴네.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-8",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-8.wav",
+          "audio_seconds": 3.008,
+          "text": "어 이 없기긴네.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>어 이 없기긴네.",
+          "latency_ms": 193.9,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-004-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "글랜스는 전... 채널도에서도 못 보긴 했었어.",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-137"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-137",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.744,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.7128817,
+            "no_speech_prob": 0.014801025,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003651,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "나는 전 천월도에서도 못 보긴 했었어.",
+      "candidate_current_text": "나는 전 천월도에서도 못 보긴 했었어.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-137",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-137.wav",
+          "audio_seconds": 3.744,
+          "text": "나는 전 천월도에서도 못 보긴 했었어.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>나는 전 천월도에서도 못 보긴 했었어.",
+          "latency_ms": 195.7,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "나는 전 천월도에서도 못 보긴 했었어.",
+      "sensevoice_current_text": "나는 전 천월도에서도 못 보긴 했었어.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-137",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-137.wav",
+          "audio_seconds": 3.744,
+          "text": "나는 전 천월도에서도 못 보긴 했었어.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>나는 전 천월도에서도 못 보긴 했었어.",
+          "latency_ms": 195.7,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-004-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "딜로는 많이 난다.",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-265"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-265",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.776,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.15313499,
+            "no_speech_prob": 0.0362854,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00444,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "딜로는 많이 난다.",
+      "candidate_current_text": "딜로는 많이 난다.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-265",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-265.wav",
+          "audio_seconds": 3.776,
+          "text": "딜로는 많이 난다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>딜로는 많이 난다.",
+          "latency_ms": 202.1,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "딜로는 많이 난다.",
+      "sensevoice_current_text": "딜로는 많이 난다.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-265",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-265.wav",
+          "audio_seconds": 3.776,
+          "text": "딜로는 많이 난다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>딜로는 많이 난다.",
+          "latency_ms": 202.1,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-005-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "... 와아아아 뭐야? ...",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-188"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-188",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.376,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.8384547000000001,
+            "no_speech_prob": 0.0,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006622,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+      "candidate_current_text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-188",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-188.wav",
+          "audio_seconds": 5.376,
+          "text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+          "latency_ms": 266.8,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+      "sensevoice_current_text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-188",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-188.wav",
+          "audio_seconds": 5.376,
+          "text": "낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>낫지 않은 법이죠 뭐 꼬 아가씨 기대할게.",
+          "latency_ms": 266.8,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-005-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "페롤드 정식 출시 이전, 제트래곤은 종결 날탈로 평가되었습니다.",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-99"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-99",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.568,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.21755779,
+            "no_speech_prob": 0.0078125,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.005955,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+      "candidate_current_text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-99",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-99.wav",
+          "audio_seconds": 5.568,
+          "text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+          "latency_ms": 270.2,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+      "sensevoice_current_text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-99",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-99.wav",
+          "audio_seconds": 5.568,
+          "text": "패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>패럴드 정식 출시 이전 제트래곤은 종결 날 탈로 평가되었습니다.",
+          "latency_ms": 270.2,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-006-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "좀... 이렇게 뜨면 좀... 어? 눈이 왜케... 크지? 이런 느낌이 드는... 시청자님의 자막이 필요하다면, 구독과 좋아요를 눌러주세요!",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-222"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-222",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.928,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.726193,
+            "no_speech_prob": 0.025711059999999997,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.00613,
+              "overlap_seconds": 0.4,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+      "candidate_current_text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-222",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-222.wav",
+          "audio_seconds": 6.928,
+          "text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+          "latency_ms": 301.4,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+      "sensevoice_current_text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-222",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-222.wav",
+          "audio_seconds": 6.928,
+          "text": "좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>좀 이렇게 뜨 좀 어 눈이 왜 이렇게 크지 이런 느낌이 드는 토아가씨 기대할게.",
+          "latency_ms": 301.4,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-006-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "그래? 그러면 그 완전 초창기에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-241"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-241",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.28,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.05746465,
+            "no_speech_prob": 0.0020179749,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.007698,
+              "overlap_seconds": 0.4,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+      "candidate_current_text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-241",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-241.wav",
+          "audio_seconds": 7.28,
+          "text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+          "latency_ms": 314.0,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+      "sensevoice_current_text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-241",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-241.wav",
+          "audio_seconds": 7.28,
+          "text": "그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그래 그래 그러면 그 완전 초창기에에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+          "latency_ms": 314.0,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-007-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-281"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-281",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.392,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.7371297,
+            "no_speech_prob": 0.04522705,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.002603,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+      "candidate_current_text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-281",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-281.wav",
+          "audio_seconds": 7.392,
+          "text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+          "latency_ms": 303.0,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+      "sensevoice_current_text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-281",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-281.wav",
+          "audio_seconds": 7.392,
+          "text": "어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>어차피 스토리 밀다 보면 예 뽑을 수 있어요 질문하시면 지금 못 뽑아요 답변 올거.",
+          "latency_ms": 303.0,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-007-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-232"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-232",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.29554978,
+            "no_speech_prob": 0.0019426346,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.006461,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+      "candidate_current_text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-232",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-232.wav",
+          "audio_seconds": 7.52,
+          "text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|HAPPY|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|HAPPY|><|Speech|><|withitn|>그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+          "latency_ms": 308.3,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+      "sensevoice_current_text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-232",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-232.wav",
+          "audio_seconds": 7.52,
+          "text": "그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|HAPPY|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|HAPPY|><|Speech|><|withitn|>그거 본 위로로는 에이 진짜 그거겠어 하면서 안 피어버렸네 아이유 참",
+          "latency_ms": 308.3,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-008-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-294"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-294",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.984,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.834581,
+            "no_speech_prob": 0.011978149,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006774,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "와 예쁘다!",
+      "candidate_current_text": "와 예쁘다!",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-294",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-294.wav",
+          "audio_seconds": 5.984,
+          "text": "와 예쁘다!",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>와 예쁘다!",
+          "latency_ms": 259.6,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "와 예쁘다!",
+      "sensevoice_current_text": "와 예쁘다!",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-294",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-294.wav",
+          "audio_seconds": 5.984,
+          "text": "와 예쁘다!",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>와 예쁘다!",
+          "latency_ms": 259.6,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-008-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-41"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-41",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.472,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.22374551,
+            "no_speech_prob": 0.0070228577,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003942,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "그러게 뭔가 이거에서.",
+      "candidate_current_text": "그러게 뭔가 이거에서.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-41",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-41.wav",
+          "audio_seconds": 5.472,
+          "text": "그러게 뭔가 이거에서.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그러게 뭔가 이거에서.",
+          "latency_ms": 252.9,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "그러게 뭔가 이거에서.",
+      "sensevoice_current_text": "그러게 뭔가 이거에서.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-41",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-41.wav",
+          "audio_seconds": 5.472,
+          "text": "그러게 뭔가 이거에서.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그러게 뭔가 이거에서.",
+          "latency_ms": 252.9,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-009-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "감사합니다.",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-307"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-307",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.9721163,
+            "no_speech_prob": 0.00881958,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.005143,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+      "candidate_current_text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-307",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-307.wav",
+          "audio_seconds": 7.52,
+          "text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|> 상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+          "latency_ms": 321.5,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+      "sensevoice_current_text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-307",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-307.wav",
+          "audio_seconds": 7.52,
+          "text": "상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|> 상인 를 믿어 주신 덕 에 저수가 이번 만0 기준회 주체 를 맡 게 되 었습니다.",
+          "latency_ms": 321.5,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-009-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "더위 사냥 이렇게 쪽쪽쪽 먹는 걸로 이제 손에 안 묻히고 먹는다! 짜 먹는 더위 사냥 출시!",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-28"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-28",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.2552123,
+            "no_speech_prob": 0.005722046,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.008151,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+      "candidate_current_text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-28",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-28.wav",
+          "audio_seconds": 7.52,
+          "text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+          "latency_ms": 320.9,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+      "sensevoice_current_text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-28",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-28.wav",
+          "audio_seconds": 7.52,
+          "text": "그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>그냥 이렇게 이쪽쭉쭉 먹는 걸로 이제 손에 안 묻히고 먹는다 짜 먹는 더위선냥 출시.",
+          "latency_ms": 320.9,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-010-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "고사도 또 나서 진에서...",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-316"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-316",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.136,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.9980583,
+            "no_speech_prob": 0.10748291,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007854,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "고사도 떨어 떨어지지겠어.",
+      "candidate_current_text": "고사도 떨어 떨어지지겠어.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-316",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-316.wav",
+          "audio_seconds": 3.136,
+          "text": "고사도 떨어 떨어지지겠어.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>고사도 떨어 떨어지지겠어.",
+          "latency_ms": 190.8,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "고사도 떨어 떨어지지겠어.",
+      "sensevoice_current_text": "고사도 떨어 떨어지지겠어.",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-316",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-316.wav",
+          "audio_seconds": 3.136,
+          "text": "고사도 떨어 떨어지지겠어.",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|Speech|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>고사도 떨어 떨어지지겠어.",
+          "latency_ms": 190.8,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-010-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "어디서 봤는데 얼굴을?",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-334"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-334",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.104,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.14160345,
+            "no_speech_prob": 0.036071777,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.008961,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "sensevoice",
+      "candidate_text": "어디서 봤는데 얼굴을?",
+      "candidate_current_text": "어디서 봤는데 얼굴을?",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-334",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-334.wav",
+          "audio_seconds": 3.104,
+          "text": "어디서 봤는데 얼굴을?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>어디서 봤는데 얼굴을?",
+          "latency_ms": 178.5,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "sensevoice_text": "어디서 봤는데 얼굴을?",
+      "sensevoice_current_text": "어디서 봤는데 얼굴을?",
+      "sensevoice_evidence_text": "",
+      "sensevoice_chunks": [
+        {
+          "utterance_id": "utt-334",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-334.wav",
+          "audio_seconds": 3.104,
+          "text": "어디서 봤는데 얼굴을?",
+          "metadata_tags": [
+            "<|ko|>",
+            "<|EMO_UNKNOWN|>",
+            "<|BGM|>",
+            "<|withitn|>"
+          ],
+          "raw_text": "<|ko|><|EMO_UNKNOWN|><|BGM|><|withitn|>어디서 봤는데 얼굴을?",
+          "latency_ms": 178.5,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    }
+  ]
+}

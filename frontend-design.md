@@ -15,19 +15,24 @@ This document describes the desktop application architecture using Tauri (Rust b
 
 ---
 
-## Implementation Status (Phase 2 🚧)
+## Implementation Status (current implementation; tutorial sections may lag)
 
 The dashboard is **in development**, not a green-field design:
 
-- Tauri Rust handlers exist under `src-tauri/src/` (`config.rs`, `cache.rs`, `stats.rs`, `python.rs`, `state.rs`, `paths.rs`, `main.rs`).
-- Vue components exist under `src-frontend/src/` (`Dashboard.vue`, `ConfigPanel.vue`, `CacheStats.vue`, `SystemStats.vue`, `client.ts`, `config.ts`) plus matching `*.test.ts` files.
+- Tauri Rust handlers exist under `src-tauri/src/handlers/` with shared
+  `state.rs`, `paths.rs`, and `main.rs` at `src-tauri/src/`.
+- Vue components live under `src-frontend/src/components/`, API code under
+  `src-frontend/src/api/`, types under `src-frontend/src/types/`, and tests
+  under `src-frontend/src/__tests__/`.
 - The Python side already writes `logs/live_translate_config.json` on startup via `utils/config_export.py` (called from `main.py`); see "Python Config Bridge" below.
 
 **This document is therefore a hybrid spec + tutorial.** Code samples illustrate the intended architecture for readers new to Tauri/Rust/Vue — the actual files in the repo may diverge from these snippets as the implementation evolves. When the two disagree, the source files under `src-tauri/` and `src-frontend/` win.
 
-Two known gaps between this document and reality:
+Two interpretation rules for the tutorial below:
 
-1. **Tauri version** — examples below use Tauri v1 `invoke` paths (`@tauri-apps/api/tauri`). The current scaffolding may already be on Tauri v2 (`@tauri-apps/api`); double-check `src-frontend/package.json` and `src-tauri/Cargo.toml` before copying any snippet.
+1. **Tauri version** — current code is Tauri v2. Any v1
+   `@tauri-apps/api/tauri` snippet below is historical tutorial syntax and must
+   not be copied into current code.
 2. **DTO subsets** — the `ConfigDto` Rust struct and TypeScript `ConfigDto` interface in this doc list only the fields the dashboard renders. `utils/config_export.py` actually writes every non-secret field of `cfg` (including `database`, `live_engine`, `clip_engine`, `ollama`, `nvidia`, and the full `_Translation` / `_Subtitle` schema). Treat the DTOs below as the UI-facing slice, not the full JSON shape.
 
 ---
@@ -42,7 +47,7 @@ User (Vue Dashboard)
 Tauri Runtime
     ↓ (Rust handler)
 Rust Backend (src-tauri)
-    ├─ Config Handler → read/write config.json
+    ├─ Config Handler → read/write logs/live_translate_config.json
     ├─ Cache Handler → query SQLite via subprocess
     └─ Python Bridge → spawn Python subprocess
     ↓ (stdout/stderr)
@@ -65,17 +70,30 @@ Python startup
   → .env                             ← API keys stay here only
 ```
 
-Tauri 修改 config 後寫回同一 JSON 檔。Python 透過輪詢（或 `watchdog` 套件）偵測檔案變更並熱重載。
+Tauri 修改 config 後寫回同一 JSON 檔。Most allowlisted overrides apply on
+the next process start; profile control fields are the explicit hot-reload
+exception described below.
 
 > **Tauri v2 注意**：本文件範例使用 Tauri v1 API（`@tauri-apps/api/tauri`）。
-> Tauri v2 的 invoke 路徑改為 `@tauri-apps/api`，請在建立專案時確認版本。
+> Current Tauri v2 code imports `invoke` from `@tauri-apps/api/core`.
 
-Current implementation uses restart semantics, not hot reload: Tauri persists
-the dashboard JSON, and its Python launcher opts into the strict
-`config.py` whitelist on the next process start. The UI exposes only the
+Current implementation uses restart semantics for general settings: Tauri
+persists the dashboard JSON, and its Python launcher opts into the strict
+`config.py` whitelist on the next process start. The UI also exposes the
 dedicated default-on `scene.publish_open_set_activity` kill switch for
 automatic open-set publication; provider/model, capture, cadence, consensus,
 and STT settings remain outside that scene override surface.
+
+The Settings panel exposes Auto and Manual content-profile modes. Auto displays the configured source profile, confirmed scene-detected content profile, effective profile, generation/state, and current activity. Manual is an effective-profile hard lock, not merely a source hint. Saving the mode, source profile, or profile-application flag writes the existing dashboard config and the running Python control watcher validates and atomically applies it; invalid values retain the previous runtime generation.
+
+The Export tab lists persisted runtime `run_id` values and invokes the
+Python-owned ChatGPT bundle exporter through a thin Tauri command. Rust does
+not duplicate JSONL filtering or sanitization; the UI exposes only the selected
+run and optional retained-WAV toggle, then reports path, file count, and size.
+Dashboard-launched Python receives a stable run ID from Tauri. Stop and window
+close currently force-terminate the child, so Tauri performs the automatic
+default no-audio export for that exact ID after termination; normal Python
+signal/teardown paths export themselves.
 
 ### Directory Structure (actual)
 
@@ -84,14 +102,16 @@ live_translate/
 ├── src-tauri/                          # Rust backend (Tauri)
 │   ├── Cargo.toml                      # Rust dependencies
 │   ├── tauri.conf.json                 # Tauri config
-│   ├── src/                            # Flat layout — no handlers/ subdir
+│   ├── src/
+│   │   ├── handlers/
+│   │   │   ├── mod.rs
+│   │   │   ├── config.rs              # get_config / update_config commands
+│   │   │   ├── cache.rs               # get_cache_stats / clear_cache commands
+│   │   │   ├── stats.rs               # get_system_stats command
+│   │   │   └── python.rs              # start_python / stop_python commands
 │   │   ├── main.rs                     # Tauri app entry + command setup
 │   │   ├── state.rs                    # AppState, shared mutex-protected state
-│   │   ├── paths.rs                    # Resolve config / db / venv paths
-│   │   ├── config.rs                   # get_config / update_config commands
-│   │   ├── cache.rs                    # get_cache_stats / clear_cache commands
-│   │   ├── stats.rs                    # get_system_stats command
-│   │   └── python.rs                   # start_python / stop_python commands
+│   │   └── paths.rs                    # Resolve config / db / venv paths
 │   ├── gen/                            # Tauri-generated artifacts
 │   └── icons/
 │
@@ -100,13 +120,10 @@ live_translate/
 │   ├── src/
 │   │   ├── main.ts                     # Vue entry
 │   │   ├── App.vue                     # Root component
-│   │   ├── Dashboard.vue               # Main layout
-│   │   ├── ConfigPanel.vue             # Settings editor
-│   │   ├── CacheStats.vue              # Cache hit/miss display
-│   │   ├── SystemStats.vue             # CPU/memory/uptime
-│   │   ├── client.ts                   # Tauri command caller
-│   │   ├── config.ts                   # Config helpers + types
-│   │   └── *.test.ts                   # Vitest component tests
+│   │   ├── components/                  # Dashboard and panels
+│   │   ├── api/client.ts               # Tauri command caller
+│   │   ├── types/config.ts             # Config types
+│   │   └── __tests__/                  # Vitest tests
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── vitest.config.ts
@@ -119,7 +136,9 @@ live_translate/
 └── frontend-design.md                  # This file
 ```
 
-> The sample handler files later in this document (sections 1–6) describe one **possible** layout with a `handlers/` submodule and a dedicated `errors.rs`. The real `src-tauri/src/` keeps handlers at the top level and does not (yet) have a separate `errors.rs` — each handler uses `Result<T, String>` directly. Treat the samples as illustrative.
+> The sample handler files later in this document are illustrative. Current
+> handlers live under `src-tauri/src/handlers/`; there is no separate
+> `errors.rs`, and handlers use `Result<T, String>` directly.
 
 ---
 
@@ -249,7 +268,7 @@ pub struct SplitterConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TranslationConfig {
-    pub engine_chain:   Vec<String>,  // current default: ["claude", "gemini", "google_translate"]
+    pub engine_chain:   Vec<String>,  // configurable non-protected chain: ["openrouter", "deepl", "groq"]
     pub target_lang:    String,       // "zh-TW"
     pub max_tokens:     u32,
     pub temperature:    f32,
@@ -681,7 +700,7 @@ export interface SttConfig {
 }
 
 export interface TranslationConfig {
-    engine_chain: string[];   // current default: ["claude", "gemini", "google_translate"]
+    engine_chain: string[];   // configurable non-protected chain: ["openrouter", "deepl", "groq"]
     max_tokens: number;
 }
 

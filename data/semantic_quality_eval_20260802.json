@@ -1,0 +1,630 @@
+[
+  {
+    "id": "qa_20260802_050",
+    "source_text": "세구님 시점",
+    "reference_output": "Gosegu的視角。",
+    "current_output": "塞古的視角",
+    "categories": [
+      "bad",
+      "name_error",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: profile_alias_bounded.",
+    "severity": "bad",
+    "issue_type": "name_error",
+    "confidence": 0.99,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "streamer_profiles新增 세구→Gosegu。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 50,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 32,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "Gosegu"
+    ],
+    "forbidden_terms": [
+      "塞古"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_051",
+    "source_text": "왜 이렇게 짜쳐 짜쳐서 웃겨",
+    "reference_output": "怎麼會這麼遜，遜到超好笑。",
+    "current_output": "幹嘛這麼刻意，笑死人了。",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: lexical_sense_bounded.",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 0.97,
+    "rule_target": "target_replacement",
+    "proposed_rule": "直播口語 짜치다／짜쳐→很遜／掉價。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 51,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 37,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "遜"
+    ],
+    "forbidden_terms": [
+      "刻意"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_052",
+    "source_text": "뚱한 아이예요.",
+    "reference_output": "是個有點悶、表情呆呆的孩子。",
+    "current_output": "是個胖小孩。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: lexical_sense_bounded.",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 1.0,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "뚱하다→悶悶的／冷著臉；뚱뚱하다才是胖。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 52,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 44,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "悶"
+    ],
+    "forbidden_terms": [
+      "胖"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_058",
+    "source_text": "레이버 이외의 용속성, 어둠속성의 패레 수 곱하기 2.",
+    "reference_output": "雷文以外的龍屬性、暗屬性帕魯數量乘以2。",
+    "current_output": "其他非雷文、非暗屬性的帕雷數量乘以2。",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: polarity_phrase_bounded.",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "A 이외의 B,C 속성의 수需正確處理排除範圍。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 58,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 84,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "龍屬性",
+      "暗屬性"
+    ],
+    "forbidden_terms": [
+      "非暗屬性"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_060",
+    "source_text": "수수",
+    "reference_output": "수수。",
+    "current_output": "好簡單",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: entity_preservation_negative.",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.94,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "相關遊戲profile加入수수；正式中文名未確認前保留韓文。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 60,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 148,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "수수"
+    ],
+    "forbidden_terms": [
+      "好簡單"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_065",
+    "source_text": "이번에 나온 제 아내 볼래요. 제 딸도 보실래요.",
+    "reference_output": "要看看這次出現的我老婆嗎？也要看看我女兒嗎？",
+    "current_output": "這次登場的《想看看我的妻子》您想看嗎？我的女兒您也想看嗎？",
+    "categories": [
+      "bad",
+      "hallucination",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: hallucinated_title_bounded.",
+    "severity": "bad",
+    "issue_type": "hallucination",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "只有原文明確為作品名時才加書名號。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 65,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 243,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "女兒"
+    ],
+    "forbidden_terms": [
+      "《想看看我的妻子》"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_066",
+    "source_text": "우리 지원님 너무 마음이 복잡하실 것 같은데 생일 미리 축하드리고",
+    "reference_output": "지원님現在心情一定很複雜，先祝你生日快樂。",
+    "current_output": "我們支援哥心裡一定很複雜，先提前祝你生日快樂",
+    "categories": [
+      "bad",
+      "name_error",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: person_address_negative.",
+    "severity": "bad",
+    "issue_type": "name_error",
+    "confidence": 0.92,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "本次直播profile將지원님視為人名並保留。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 66,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 253,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "지원님"
+    ],
+    "forbidden_terms": [
+      "支援哥"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_071",
+    "source_text": "거의 고모가 아빠 딸래미 수준으로 막 울었다는 거. 막내가 아빠는 지금도 그걸 생각하면 너무 슬프다.",
+    "reference_output": "姑姑幾乎像爸爸的女兒；姑姑是老么，爸爸現在想起來仍然很難過。",
+    "current_output": "老么說，老爸到現在一想到那事還是難過得要命",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: speaker_insertion_negative.",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 0.85,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "同位補充名詞不要自動補成發話者。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 71,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T090406Z-7548",
+        "sequence_id": 55,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "姑姑"
+    ],
+    "forbidden_terms": [
+      "老么說"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_072",
+    "source_text": "어느 날은 매직시키고",
+    "reference_output": "有時又把頭髮拉直。",
+    "current_output": "隔天又給我染個髮",
+    "categories": [
+      "bad",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: lexical_sense_bounded.",
+    "severity": "bad",
+    "issue_type": "mistranslation",
+    "confidence": 1.0,
+    "rule_target": "target_replacement",
+    "proposed_rule": "미용실語境 매직→離子燙／拉直。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 72,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T090406Z-7548",
+        "sequence_id": 72,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "拉直"
+    ],
+    "forbidden_terms": [
+      "染"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_077",
+    "source_text": "한결님이 처음에 노래 방송 시작했을 때",
+    "reference_output": "한결剛開始做唱歌直播時。",
+    "current_output": "一結姐剛開始做唱歌直播時",
+    "categories": [
+      "warn",
+      "glossary_gap",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: person_name_preservation.",
+    "severity": "warn",
+    "issue_type": "glossary_gap",
+    "confidence": 0.98,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "streamer_profiles加入한결及固定輸出。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 77,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T090406Z-7548",
+        "sequence_id": 188,
+        "profile_id": "url",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "한결"
+    ],
+    "forbidden_terms": [
+      "一結"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_080",
+    "source_text": "460시간 찍먹 뉴비.",
+    "reference_output": "玩了460小時、只是淺嘗一下的新手。",
+    "current_output": "460小時打卡的新手",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: game_slang_bounded.",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 0.98,
+    "rule_target": "target_replacement",
+    "proposed_rule": "遊戲口語 찍먹→淺嘗／試玩一下。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 80,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 59,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "淺嘗"
+    ],
+    "forbidden_terms": [
+      "打卡"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_082",
+    "source_text": "0티어 고트",
+    "reference_output": "T0、最強級的選擇。",
+    "current_output": "0階的高特",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: game_slang_bounded.",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 1.0,
+    "rule_target": "target_replacement",
+    "proposed_rule": "遊戲固定譯法：0티어→T0；고트→公認最強。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 82,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 74,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "T0",
+      "最強"
+    ],
+    "forbidden_terms": [
+      "0階",
+      "高特"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_085",
+    "source_text": "뚫기님, 아 초록뚫기님 너무 좋습니다.",
+    "reference_output": "뚫기님，啊，초록뚫기님，真的很棒。",
+    "current_output": "闖哥，啊，綠色闖哥，太棒了。",
+    "categories": [
+      "warn",
+      "glossary_gap",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: single_contributor_negative.",
+    "severity": "warn",
+    "issue_type": "glossary_gap",
+    "confidence": 0.82,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "確認畫面帳號後建立canonical與aliases。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 85,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 125,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "초록뚫기님"
+    ],
+    "forbidden_terms": [
+      "闖哥",
+      "綠色闖哥"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_091",
+    "source_text": "부가땅 절찌 그리는 광고 할 때 유입해서",
+    "reference_output": "我是在부가땅畫角色的廣告時入坑的。",
+    "current_output": "那些「附贈地」廣告",
+    "categories": [
+      "bad",
+      "glossary_gap",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: entity_literalization_negative.",
+    "severity": "bad",
+    "issue_type": "glossary_gap",
+    "confidence": 0.8,
+    "rule_target": "streamer_profile",
+    "proposed_rule": "確認暱稱後加入부가땅；遊戲詞加入절찌→절지→折枝。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 91,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 216,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "부가땅"
+    ],
+    "forbidden_terms": [
+      "附贈地"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_093",
+    "source_text": "오, 쏘쏘!",
+    "reference_output": "喔，普普通通！",
+    "current_output": "喔，帥！",
+    "categories": [
+      "warn",
+      "mistranslation",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: lexical_sense_bounded.",
+    "severity": "warn",
+    "issue_type": "mistranslation",
+    "confidence": 1.0,
+    "rule_target": "target_replacement",
+    "proposed_rule": "쏘쏘→一般般／還行。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 93,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 229,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "普普通通"
+    ],
+    "forbidden_terms": [
+      "喔，帥"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  },
+  {
+    "id": "qa_20260802_094",
+    "source_text": "사랑해 나이다.",
+    "reference_output": "愛你喔。",
+    "current_output": "愛你喔，奈達。",
+    "categories": [
+      "bad",
+      "hallucination",
+      "bounded_assertion"
+    ],
+    "note": "Atomic single-runtime assertion approved for T25; full suggested translation and proposed rule remain hypotheses. Basis: morphology_hallucination_bounded.",
+    "severity": "bad",
+    "issue_type": "hallucination",
+    "confidence": 0.99,
+    "rule_target": "translation_prompt",
+    "proposed_rule": "句尾 -나이다／-옵나이다不得切分音譯成人名。",
+    "proposed_rule_status": "hypothesis_not_implemented",
+    "evidence_scope": "single_runtime_excerpt_plus_independent_review_and_user_execution_decision",
+    "source_annotation_id": 94,
+    "runtime_refs": [
+      {
+        "run_id": "20260802T093732Z-30160",
+        "sequence_id": 254,
+        "profile_id": "isegye_lilpa",
+        "profile_applied": true
+      }
+    ],
+    "incomplete": false,
+    "expected_terms": [
+      "愛你"
+    ],
+    "forbidden_terms": [
+      "奈達"
+    ],
+    "max_korean_ratio": 1.0,
+    "max_japanese_chars": 20,
+    "max_output_ratio": 5.0,
+    "evaluation_note": "This is a bounded substring contrast, not full-reference ground truth or proof of a production fix."
+  }
+]

@@ -83,6 +83,16 @@ def _has_strong_garbage_keyword(text: str) -> bool:
                 after = text[match.end()] if match.end() < len(text) else ""
                 if KOREAN_CHAR_RE.match(before) or KOREAN_CHAR_RE.match(after):
                     continue
+                # A lone standalone `클릭` is common in coherent UI/download
+                # instructions.  Keep it as corroborating evidence when another
+                # strong commercial keyword is present, but do not let this one
+                # token suppress a substantial Korean utterance by itself.
+                other_strong_keyword = any(
+                    other != keyword and other in text
+                    for other in STT_GARBAGE_STRONG_KEYWORDS
+                )
+                if _hangul_syllable_count(text) >= 24 and not other_strong_keyword:
+                    continue
                 return True
             continue
 
@@ -164,6 +174,11 @@ class TranslationPolicy:
             return None
 
         if reason == "stt_song_fragment":
+            sanitized = self.strip_stt_song_fragment_tail(text)
+            if sanitized and sanitized != text and self.rejection_reason(sanitized) is None:
+                log.debug("Rescued speech before STT song tail: %.40s -> %.40s", text, sanitized)
+                self.last_input = sanitized
+                return sanitized
             log.debug("Filtering STT song/lyrics fragment: %.40s", text)
             return None
 
@@ -306,7 +321,11 @@ class TranslationPolicy:
                 for word in ENGLISH_WORD_RE.findall(text)
                 if word.upper() not in STT_ALLOWED_SHORT_ENGLISH_WORDS
             ]
-            if len(english_words) >= 3 and all(len(word) < 4 for word in english_words):
+            distinct_english_words = {word.casefold() for word in english_words}
+            if (
+                len(distinct_english_words) >= 3
+                and all(len(word) < 4 for word in distinct_english_words)
+            ):
                 log.debug("STT garbage detected: random english mixed with korean in '%s'", text[:50])
                 return True
 
@@ -424,6 +443,39 @@ class TranslationPolicy:
     @staticmethod
     def is_stt_low_value_fragment(text: str) -> bool:
         return TranslationPolicy.strip_stt_low_value_fragments(text) != " ".join(text.split())
+
+    @staticmethod
+    def strip_stt_song_fragment_tail(text: str) -> str | None:
+        """Preserve substantial speech followed only by a bounded song/vocable tail."""
+        normalized = " ".join(text.split())
+        marker_indexes = [
+            index
+            for marker in STT_SONG_FRAGMENT_MARKERS
+            if (index := normalized.find(marker)) >= 0
+        ]
+        if not marker_indexes:
+            return normalized
+
+        start = min(marker_indexes)
+        prefix = normalized[:start].rstrip()
+        suffix = normalized[start:]
+        if _hangul_syllable_count(prefix) < 12:
+            return normalized
+
+        marker_hits = sum(suffix.count(marker) for marker in STT_SONG_FRAGMENT_MARKERS)
+        if marker_hits < 2:
+            return normalized
+
+        residue = suffix
+        for marker in sorted(STT_SONG_FRAGMENT_MARKERS, key=len, reverse=True):
+            residue = residue.replace(marker, " ")
+        residue = re.sub(r"[\s.,!?~…。．！？，、]+", "", residue)
+        if any(not ("\uac00" <= char <= "\ud7a3") for char in residue):
+            return normalized
+        residue_hangul = [char for char in residue if "\uac00" <= char <= "\ud7a3"]
+        if len(residue_hangul) > 8 or len(set(residue_hangul)) > 2:
+            return normalized
+        return prefix
 
     @staticmethod
     def strip_stt_template_fragments(text: str) -> str | None:

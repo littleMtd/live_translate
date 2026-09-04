@@ -1,0 +1,1246 @@
+{
+  "phase0_replay_manifest_schema": 2,
+  "experiment_schema": 1,
+  "batch_id": "T25-weak-signal-dual-asr-20260803",
+  "speaker_policy": "observed-mixed-audio; no speaker ground truth asserted",
+  "runtime_events": "logs\\runtime_events_20260802.jsonl",
+  "source_provenance": "data\\semantic_quality_evidence_20260802.json",
+  "effective_runs": [
+    "20260802T084530Z-30796",
+    "20260802T090406Z-7548",
+    "20260802T093732Z-30160",
+    "20260802T103625Z-29500"
+  ],
+  "population_count": 657,
+  "weak_count": 10,
+  "control_count": 10,
+  "case_count": 20,
+  "root_cause_group_counts": {
+    "matched_control": 10,
+    "weak_signal": 10
+  },
+  "selection_contract": {
+    "weak_avg_logprob": "-1.0 <= x < -0.7",
+    "control_avg_logprob": "x >= -0.3",
+    "raw_audio_rms": "x < 0.01",
+    "no_speech_prob": "x <= 0.3",
+    "context_included": true,
+    "control_excludes_annotated_audio": true,
+    "exact_match_fields": [
+      "run_id",
+      "profile_id",
+      "model",
+      "vad_cut_reason",
+      "overlap_zero_or_positive",
+      "groq_comparison_eligible"
+    ],
+    "duration_caliper_seconds": 1.5,
+    "raw_rms_caliper": 0.006,
+    "matching": "one-to-one without replacement; duration delta, RMS delta, created_at, utterance number"
+  },
+  "interpretation_limit": "Matched controls are unreviewed candidates, not known-correct transcripts. ASR agreement is a prioritization signal and cannot authorize live changes.",
+  "matches": [
+    {
+      "pair_id": "pair-001",
+      "weak_key": [
+        "20260802T084530Z-30796",
+        "utt-42"
+      ],
+      "control_key": [
+        "20260802T084530Z-30796",
+        "utt-85"
+      ],
+      "duration_delta_seconds": 0.448,
+      "raw_rms_delta": 0.00501,
+      "groq_comparison_eligible": false
+    },
+    {
+      "pair_id": "pair-002",
+      "weak_key": [
+        "20260802T084530Z-30796",
+        "utt-49"
+      ],
+      "control_key": [
+        "20260802T084530Z-30796",
+        "utt-63"
+      ],
+      "duration_delta_seconds": 0.48,
+      "raw_rms_delta": 0.000931,
+      "groq_comparison_eligible": true
+    },
+    {
+      "pair_id": "pair-003",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-16"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-8"
+      ],
+      "duration_delta_seconds": 0.8,
+      "raw_rms_delta": 0.003263,
+      "groq_comparison_eligible": false
+    },
+    {
+      "pair_id": "pair-004",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-137"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-265"
+      ],
+      "duration_delta_seconds": 0.032,
+      "raw_rms_delta": 0.000789,
+      "groq_comparison_eligible": true
+    },
+    {
+      "pair_id": "pair-005",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-188"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-99"
+      ],
+      "duration_delta_seconds": 0.192,
+      "raw_rms_delta": 0.000667,
+      "groq_comparison_eligible": true
+    },
+    {
+      "pair_id": "pair-006",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-222"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-241"
+      ],
+      "duration_delta_seconds": 0.352,
+      "raw_rms_delta": 0.001568,
+      "groq_comparison_eligible": true
+    },
+    {
+      "pair_id": "pair-007",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-281"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-232"
+      ],
+      "duration_delta_seconds": 0.128,
+      "raw_rms_delta": 0.003858,
+      "groq_comparison_eligible": false
+    },
+    {
+      "pair_id": "pair-008",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-294"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-41"
+      ],
+      "duration_delta_seconds": 0.512,
+      "raw_rms_delta": 0.002832,
+      "groq_comparison_eligible": false
+    },
+    {
+      "pair_id": "pair-009",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-307"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-28"
+      ],
+      "duration_delta_seconds": 0.0,
+      "raw_rms_delta": 0.003008,
+      "groq_comparison_eligible": true
+    },
+    {
+      "pair_id": "pair-010",
+      "weak_key": [
+        "20260802T093732Z-30160",
+        "utt-316"
+      ],
+      "control_key": [
+        "20260802T093732Z-30160",
+        "utt-334"
+      ],
+      "duration_delta_seconds": 0.032,
+      "raw_rms_delta": 0.001107,
+      "groq_comparison_eligible": true
+    }
+  ],
+  "cases": [
+    {
+      "sample_id": "T25-WS-pair-001-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-001",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "translation_unavailable",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-42",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-42.wav",
+          "size_bytes": 90156,
+          "sha256": "18007a7bc607de22805250b0d0fed10a45cbdb5ca78d9647365ed0c6fe203227",
+          "audio_seconds": 2.816
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T084530Z-30796",
+        "profile_ids": [
+          "hades_chxxnnx"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-42"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-42",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 2.816,
+            "avg_logprob": -0.9935883,
+            "no_speech_prob": 0.03325496,
+            "stt_event_line": 1309,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.002921,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-001-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-001",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "multi_source_or_ineligible_translation",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-85",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-85.wav",
+          "size_bytes": 104492,
+          "sha256": "71a599bb4528a7916cd4c95a4b1041cf174ca067861bee4365fc79b5da3d2bbd",
+          "audio_seconds": 3.264
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T084530Z-30796",
+        "profile_ids": [
+          "hades_chxxnnx"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-85"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-85",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.264,
+            "avg_logprob": -0.23309702,
+            "no_speech_prob": 0.0075263097,
+            "stt_event_line": 1494,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007931,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-002-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-002",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-49",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-49.wav",
+          "size_bytes": 160812,
+          "sha256": "1afa4725ad6eb79c8bcc8451ab12068fc3aaaf82f84e506ddcda1b74ebe4d307",
+          "audio_seconds": 5.024
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T084530Z-30796",
+        "profile_ids": [
+          "hades_chxxnnx"
+        ],
+        "source_text": "마운트집게 유튜브에 있잖아 유튜브라 띠라잇",
+        "source_utterance_ids": [
+          "utt-49"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-49",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.024,
+            "avg_logprob": -0.8072203,
+            "no_speech_prob": 0.03286743,
+            "stt_event_line": 1336,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.008228,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-002-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-002",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-63",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-63.wav",
+          "size_bytes": 176172,
+          "sha256": "717cb3381655c5462bfd94590b5eb279bc314a3ab3a85e263edf3d82f93bc593",
+          "audio_seconds": 5.504
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T084530Z-30796",
+        "profile_ids": [
+          "hades_chxxnnx"
+        ],
+        "source_text": "본인 오리지널리티가 살아있는 그런 보컬을 얘기하는 거죠",
+        "source_utterance_ids": [
+          "utt-63"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-63",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.504,
+            "avg_logprob": -0.13280989,
+            "no_speech_prob": 0.020004272,
+            "stt_event_line": 1409,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007297,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-003-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-003",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "translation_unavailable",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-16",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-16.wav",
+          "size_bytes": 121900,
+          "sha256": "e27887e1af2217bb25858a0fc4a7fa171afd245eda3b933721c48266065cf39c",
+          "audio_seconds": 3.808
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-16"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-16",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.808,
+            "avg_logprob": -0.8223789,
+            "no_speech_prob": 0.11253147,
+            "stt_event_line": 2562,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006389,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-003-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-003",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "multi_source_or_ineligible_translation",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-8",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-8.wav",
+          "size_bytes": 96300,
+          "sha256": "ef2a6fcd0125c43de50cee8f6265e1e5a86a98edb48ce7dedbaf83b3a9b11982",
+          "audio_seconds": 3.008
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-8"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-8",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.008,
+            "avg_logprob": -0.23100778,
+            "no_speech_prob": 0.0052126735,
+            "stt_event_line": 2525,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003126,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-004-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-004",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-137",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-137.wav",
+          "size_bytes": 119852,
+          "sha256": "f3e265100cb13400f257b7684cde00e2d1c0d2dcce457fe27e12d428a515c5fc",
+          "audio_seconds": 3.744
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "글랜스는 전... 채널도에서도 못 보긴 했었어.",
+        "source_utterance_ids": [
+          "utt-137"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-137",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.744,
+            "avg_logprob": -0.7128817,
+            "no_speech_prob": 0.014801025,
+            "stt_event_line": 3033,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003651,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-004-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-004",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-265",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-265.wav",
+          "size_bytes": 120876,
+          "sha256": "1beef8998fe36bb3e12823519cbbae527952c7074e1075c239e0cf653506eb9e",
+          "audio_seconds": 3.776
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "딜로는 많이 난다.",
+        "source_utterance_ids": [
+          "utt-265"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-265",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.776,
+            "avg_logprob": -0.15313499,
+            "no_speech_prob": 0.0362854,
+            "stt_event_line": 3536,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00444,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-005-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-005",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-188",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-188.wav",
+          "size_bytes": 172076,
+          "sha256": "d981f55da386fdec24bdd3593cc4e5db6f252c18b89b64206c3b3ec478137076",
+          "audio_seconds": 5.376
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "... 와아아아 뭐야? ...",
+        "source_utterance_ids": [
+          "utt-188"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-188",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.376,
+            "avg_logprob": -0.8384547000000001,
+            "no_speech_prob": 0.0,
+            "stt_event_line": 3236,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006622,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-005-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-005",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-99",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-99.wav",
+          "size_bytes": 178220,
+          "sha256": "937d1b1e3dc56d049c968611d5e39a67d4644753c08456de92f87628bfbed0f7",
+          "audio_seconds": 5.568
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "페롤드 정식 출시 이전, 제트래곤은 종결 날탈로 평가되었습니다.",
+        "source_utterance_ids": [
+          "utt-99"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-99",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.568,
+            "avg_logprob": -0.21755779,
+            "no_speech_prob": 0.0078125,
+            "stt_event_line": 2889,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.005955,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-006-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-006",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-222",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-222.wav",
+          "size_bytes": 221740,
+          "sha256": "5b409c031d937e7e294e7b2a11e21aaade1b8af9f16f9d75e0c0afac50efab27",
+          "audio_seconds": 6.928
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "좀... 이렇게 뜨면 좀... 어? 눈이 왜케... 크지? 이런 느낌이 드는... 시청자님의 자막이 필요하다면, 구독과 좋아요를 눌러주세요!",
+        "source_utterance_ids": [
+          "utt-222"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-222",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.928,
+            "avg_logprob": -0.726193,
+            "no_speech_prob": 0.025711059999999997,
+            "stt_event_line": 3372,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.00613,
+              "overlap_seconds": 0.4,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-006-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-006",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-241",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-241.wav",
+          "size_bytes": 233004,
+          "sha256": "00a8c829ebe4d8f2f67be3be77ffdd4e606a2b6fc370e03634391e5925a972cd",
+          "audio_seconds": 7.28
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "그래? 그러면 그 완전 초창기에 나온 빨간색 채찍 언니도 지금 못 뽑아요?",
+        "source_utterance_ids": [
+          "utt-241"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-241",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.28,
+            "avg_logprob": -0.05746465,
+            "no_speech_prob": 0.0020179749,
+            "stt_event_line": 3438,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.007698,
+              "overlap_seconds": 0.4,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-007-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-007",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "multi_source_or_ineligible_translation",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-281",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-281.wav",
+          "size_bytes": 236588,
+          "sha256": "192831418c43769ee7bab737644c68de1ba15e344fd66d805a515601a9be2396",
+          "audio_seconds": 7.392
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-281"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-281",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.392,
+            "avg_logprob": -0.7371297,
+            "no_speech_prob": 0.04522705,
+            "stt_event_line": 3600,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.002603,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-007-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-007",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "multi_source_or_ineligible_translation",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-232",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-232.wav",
+          "size_bytes": 240684,
+          "sha256": "09d76b59ca3a1d346a47c6a01cfd3670965bded61bc7319ba4d569318f687c16",
+          "audio_seconds": 7.52
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-232"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-232",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "avg_logprob": -0.29554978,
+            "no_speech_prob": 0.0019426346,
+            "stt_event_line": 3404,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.006461,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-008-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-008",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "translation_unavailable",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-294",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-294.wav",
+          "size_bytes": 191532,
+          "sha256": "61b79eca699fc9d22d510297627747d7951d71f524b93b138bc29d160aefb6c1",
+          "audio_seconds": 5.984
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-294"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-294",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.984,
+            "avg_logprob": -0.834581,
+            "no_speech_prob": 0.011978149,
+            "stt_event_line": 3651,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006774,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-008-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-008",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": false,
+      "groq_comparison_reason": "multi_source_or_ineligible_translation",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-41",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-41.wav",
+          "size_bytes": 175148,
+          "sha256": "98e4f5000d5fdcae48908aae2b02b0dd2b3ce5adb70432a480a3195be4ba200e",
+          "audio_seconds": 5.472
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "",
+        "source_utterance_ids": [
+          "utt-41"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-41",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.472,
+            "avg_logprob": -0.22374551,
+            "no_speech_prob": 0.0070228577,
+            "stt_event_line": 2662,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.003942,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-009-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-009",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-307",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-307.wav",
+          "size_bytes": 240684,
+          "sha256": "6ecde10855390225c63d434a3da21c1d304bf0d790088e8593aa3f0c8ffec324",
+          "audio_seconds": 7.52
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "감사합니다.",
+        "source_utterance_ids": [
+          "utt-307"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-307",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "avg_logprob": -0.9721163,
+            "no_speech_prob": 0.00881958,
+            "stt_event_line": 3701,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.005143,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-009-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-009",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-28",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-28.wav",
+          "size_bytes": 240684,
+          "sha256": "c187adaa0fa3ae181931762c1a0f49fabaf52cc51209440cb32c0af5f30ebde0",
+          "audio_seconds": 7.52
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "더위 사냥 이렇게 쪽쪽쪽 먹는 걸로 이제 손에 안 묻히고 먹는다! 짜 먹는 더위 사냥 출시!",
+        "source_utterance_ids": [
+          "utt-28"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-28",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "avg_logprob": -0.2552123,
+            "no_speech_prob": 0.005722046,
+            "stt_event_line": 2613,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.008151,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-010-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-010",
+      "cohort": "weak_signal",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-316",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-316.wav",
+          "size_bytes": 100396,
+          "sha256": "0c8a67e3eef295a0dec31a7e65e1ffa29debaa1990a133ea202d3cded8277026",
+          "audio_seconds": 3.136
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "고사도 또 나서 진에서...",
+        "source_utterance_ids": [
+          "utt-316"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-316",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.136,
+            "avg_logprob": -0.9980583,
+            "no_speech_prob": 0.10748291,
+            "stt_event_line": 3745,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007854,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-WS-pair-010-matched_control",
+      "root_cause_group": "matched_control",
+      "ground_truth_status": "unlabeled_candidate",
+      "pair_id": "pair-010",
+      "cohort": "matched_control",
+      "groq_comparison_eligible": true,
+      "groq_comparison_reason": "single_source_length_match",
+      "annotation": null,
+      "audio_assets": [
+        {
+          "utterance_id": "utt-334",
+          "chunk_role": "single_stt_chunk",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-334.wav",
+          "size_bytes": 99372,
+          "sha256": "9bc223deb254f7105741e936accd69522f6cc23f86cf1fa75793c62e514cd5a9",
+          "audio_seconds": 3.104
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_text": "어디서 봤는데 얼굴을?",
+        "source_utterance_ids": [
+          "utt-334"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-334",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.104,
+            "avg_logprob": -0.14160345,
+            "no_speech_prob": 0.036071777,
+            "stt_event_line": 3819,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.008961,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

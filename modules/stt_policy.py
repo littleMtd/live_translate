@@ -121,11 +121,11 @@ def should_reject_language(
         if allow_japanese:
             logger.info("Groq STT accepted coherent foreign speech (lang=%s)", detected_lang)
             return False
-        logger.warning("Groq STT rejected (lang=%s): %s", detected_lang, text[:40])
+        logger.warning("Groq STT rejected (lang=%s)", detected_lang)
         return True
 
     if lang_lower not in ("ko", "korean"):
-        logger.warning("Groq STT unexpected lang=%s (passing through): %s", detected_lang, text[:40])
+        logger.warning("Groq STT unexpected lang=%s (passing through)", detected_lang)
 
     return False
 
@@ -181,13 +181,13 @@ def segment_rejection_reason(
         stats.compression_ratio,
     )
     if stats.no_speech > no_speech_threshold:
-        logger.warning("Groq STT rejected (no_speech_prob=%.2f): %s", stats.no_speech, text[:40])
+        logger.warning("Groq STT rejected (no_speech_prob=%.2f)", stats.no_speech)
         return "no_speech_prob", stats
     if stats.logprob < avg_logprob_threshold:
-        logger.warning("Groq STT rejected (avg_logprob=%.2f): %s", stats.logprob, text[:40])
+        logger.warning("Groq STT rejected (avg_logprob=%.2f)", stats.logprob)
         return "avg_logprob", stats
     if stats.compression_ratio > max_compression_ratio:
-        logger.warning("Groq STT rejected (compression_ratio=%.2f): %s", stats.compression_ratio, text[:40])
+        logger.warning("Groq STT rejected (compression_ratio=%.2f)", stats.compression_ratio)
         return "compression_ratio", stats
 
     return None, stats

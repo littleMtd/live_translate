@@ -79,6 +79,26 @@ describe('TauriClient', () => {
     expect(result).toBe(true)
   })
 
+  it('getProfileStatus calls get_profile_status command', async () => {
+    const status = { effective_profile_id: 'isegye_lilpa', profile_generation: 4 }
+    mockInvoke.mockResolvedValueOnce(status)
+    const result = await client.getProfileStatus()
+    expect(mockInvoke).toHaveBeenCalledWith('get_profile_status')
+    expect(result).toBe(status)
+  })
+
+  it('listExportableRuns calls list_exportable_runs command', async () => {
+    mockInvoke.mockResolvedValueOnce([])
+    await client.listExportableRuns()
+    expect(mockInvoke).toHaveBeenCalledWith('list_exportable_runs')
+  })
+
+  it('exportChatgptBundle passes run and audio arguments', async () => {
+    mockInvoke.mockResolvedValueOnce({ output_path: 'C:/bundle' })
+    await client.exportChatgptBundle('run-a', true)
+    expect(mockInvoke).toHaveBeenCalledWith('export_chatgpt_bundle', { runId: 'run-a', includeAudio: true })
+  })
+
   it('propagates invoke rejection', async () => {
     mockInvoke.mockRejectedValueOnce(new Error('Tauri error'))
     await expect(client.getCacheStats()).rejects.toThrow('Tauri error')

@@ -21,6 +21,8 @@ import re
 import sys
 import urllib.error
 import urllib.request
+import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,10 +41,14 @@ if load_dotenv is not None:
     load_dotenv(PROJECT_ROOT / ".env")
 
 from scripts.suggest_corrections import build_hangul_allowlist
+from utils.chatgpt_bundle import bundle_event_paths
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "scratch" / "analysis" / "llm_quality"
 DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_MODEL = os.getenv("OPENROUTER_QA_MODEL", "anthropic/claude-sonnet-4.6")
+API_CALL_METRICS: list[dict[str, Any]] = []
+CALIBRATION_POPULATION = {"known_good": 0, "known_failure": 0}
 _FAN_TERMS_PATH = PROJECT_ROOT / "data" / "fan_terms.json"
 _HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _HANGUL_RUN_RE = re.compile(r"[\uac00-\ud7a3]{2,}")
@@ -90,6 +96,29 @@ class ReviewCase:
     matched_fan_terms: list[dict[str, Any]]
     context_before: list[dict[str, Any]]
     context_after: list[dict[str, Any]]
+    source_utterance_ids: list[str]
+    evidence_source_utterance_ids: list[str]
+    profile_generation: int | None
+    profile_cache_identity: str
+    profile_evidence_source: str
+    activity_id: str
+    activity_kind: str
+    activity_source: str
+    history_cohort_id: str
+    history_candidate_count: int
+    history_cross_cohort_excluded_count: int
+    history_reconstruction: str
+    model: str
+    route_id: str
+    prompt_version: str
+    result_source: str
+    cache_status: str
+    attempts: list[dict[str, Any]]
+    subtitle_emitted: bool | None
+    subtitle_suppressed_reason: str
+    deterministic_failures: list[str]
+    calibration_label: str
+    calibration_pair_id: str
 
     def to_prompt_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +146,32 @@ class ReviewCase:
                 "allowed_hangul_terms": self.allowed_hangul_terms,
                 "unallowed_hangul_terms": self.unallowed_hangul_terms,
                 "matched_fan_terms": self.matched_fan_terms,
+                "source_utterance_ids": self.source_utterance_ids,
+                "evidence_source_utterance_ids": self.evidence_source_utterance_ids,
+                "profile_generation": self.profile_generation,
+                "profile_cache_identity": self.profile_cache_identity,
+                "profile_evidence_source": self.profile_evidence_source,
+                "activity_id": self.activity_id,
+                "activity_kind": self.activity_kind,
+                "activity_source": self.activity_source,
+                "history_cohort_id": self.history_cohort_id,
+                "history_candidate_count": self.history_candidate_count,
+                "history_cross_cohort_excluded_count": self.history_cross_cohort_excluded_count,
+                "history_reconstruction": self.history_reconstruction,
+                "provider": {
+                    "engine": self.engine,
+                    "model": self.model,
+                    "route_id": self.route_id,
+                    "prompt_version": self.prompt_version,
+                    "result_source": self.result_source,
+                    "cache_status": self.cache_status,
+                    "attempts": self.attempts,
+                },
+                "publication": {
+                    "subtitle_emitted": self.subtitle_emitted,
+                    "subtitle_suppressed_reason": self.subtitle_suppressed_reason,
+                },
+                "deterministic_failures": self.deterministic_failures,
             },
         }
 
@@ -147,6 +202,29 @@ class ReviewCase:
             "matched_fan_terms": self.matched_fan_terms,
             "context_before": self.context_before,
             "context_after": self.context_after,
+            "source_utterance_ids": self.source_utterance_ids,
+            "evidence_source_utterance_ids": self.evidence_source_utterance_ids,
+            "profile_generation": self.profile_generation,
+            "profile_cache_identity": self.profile_cache_identity,
+            "profile_evidence_source": self.profile_evidence_source,
+            "activity_id": self.activity_id,
+            "activity_kind": self.activity_kind,
+            "activity_source": self.activity_source,
+            "history_cohort_id": self.history_cohort_id,
+            "history_candidate_count": self.history_candidate_count,
+            "history_cross_cohort_excluded_count": self.history_cross_cohort_excluded_count,
+            "history_reconstruction": self.history_reconstruction,
+            "model": self.model,
+            "route_id": self.route_id,
+            "prompt_version": self.prompt_version,
+            "result_source": self.result_source,
+            "cache_status": self.cache_status,
+            "attempts": self.attempts,
+            "subtitle_emitted": self.subtitle_emitted,
+            "subtitle_suppressed_reason": self.subtitle_suppressed_reason,
+            "deterministic_failures": self.deterministic_failures,
+            "calibration_label": self.calibration_label,
+            "calibration_pair_id": self.calibration_pair_id,
         }
 
 
@@ -156,10 +234,13 @@ def resolve_event_paths(event_args: list[str]) -> list[Path]:
         pattern = str(PROJECT_ROOT / raw) if not Path(raw).is_absolute() else raw
         matches = sorted(glob.glob(pattern))
         if matches:
-            paths.extend(Path(match) for match in matches)
+            for match in matches:
+                path = Path(match)
+                paths.extend(bundle_event_paths(path) if path.is_dir() else [path])
         else:
             path = Path(raw)
-            paths.append(path if path.is_absolute() else PROJECT_ROOT / path)
+            path = path if path.is_absolute() else PROJECT_ROOT / path
+            paths.extend(bundle_event_paths(path) if path.is_dir() else [path])
     return paths
 
 
@@ -186,6 +267,62 @@ def iter_translation_events(paths: list[Path], run_ids: set[str] | None = None):
                 yield event
 
 
+def load_calibration_events(paths: list[Path]) -> list[dict[str, Any]]:
+    """Create blinded known-good/known-failure contrasts from reviewed fixtures."""
+    events: list[dict[str, Any]] = []
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError(f"calibration file must be a JSON list: {path}")
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            source = str(row.get("source_text") or "")
+            reference = str(row.get("reference_output") or "")
+            current = str(row.get("current_output") or "")
+            if not source or not reference or not current:
+                continue
+            # Only bounded assertion rows are defensible known failures. The
+            # remaining references are smoke/reference material, not labels.
+            if not (row.get("expected_terms") or row.get("forbidden_terms")):
+                continue
+            runtime_ref = next(
+                (item for item in row.get("runtime_refs", []) if isinstance(item, dict)),
+                {},
+            )
+            base = {
+                "event_type": "translation",
+                "created_at": "",
+                "run_id": str(runtime_ref.get("run_id") or "calibration"),
+                "profile_id": str(runtime_ref.get("profile_id") or ""),
+                "current_activity": str(row.get("current_activity") or ""),
+                "status": "success",
+                "quality_severity": "ok",
+                "quality_flags": [],
+                "source_text": source,
+                "engine": "frozen_fixture",
+                "model": "human_reference_or_captured_production",
+                "subtitle_emitted": True,
+                "history_candidate_count": 0,
+            }
+            pair_id = str(row.get("id") or f"pair-{len(events)}")
+            events.append({
+                **base,
+                "sequence_id": len(events),
+                "target_text": reference,
+                "_calibration_label": "known_good",
+                "_calibration_pair_id": pair_id,
+            })
+            events.append({
+                **base,
+                "sequence_id": len(events),
+                "target_text": current,
+                "_calibration_label": "known_failure",
+                "_calibration_pair_id": pair_id,
+            })
+    return events
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -194,6 +331,73 @@ def _string_list(value: Any) -> list[str]:
 
 def _generic_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _bounded_attempts(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Retain reconstructable provider evidence without transport/error prose."""
+    rows: list[dict[str, Any]] = []
+    for attempt in _generic_list(event.get("attempts")):
+        if not isinstance(attempt, dict):
+            continue
+        guard = attempt.get("output_guard")
+        bounded_guard: dict[str, Any] = {}
+        if isinstance(guard, dict):
+            for key in (
+                "candidate_raw_output", "candidate_output", "candidate_corrections",
+                "candidate_quality_flags", "candidate_quality_classifications", "reason",
+            ):
+                if key in guard:
+                    bounded_guard[key] = guard[key]
+        rows.append({
+            "chain_attempt_index": attempt.get("chain_attempt_index"),
+            "phase": str(attempt.get("phase") or ""),
+            "engine": str(attempt.get("engine") or ""),
+            "model": str(attempt.get("model") or ""),
+            "route_id": str(attempt.get("route_id") or ""),
+            "status": str(attempt.get("status") or ""),
+            "selected_for_output": bool(attempt.get("selected_for_output")),
+            "token_prompt": _optional_int(attempt.get("token_prompt")),
+            "token_output": _optional_int(attempt.get("token_output")),
+            "api_cost_usd": attempt.get("api_cost_usd"),
+            "output_guard": bounded_guard,
+        })
+    return rows
+
+
+def deterministic_failures(event: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if event.get("status") != "success":
+        failures.append("publication_status")
+    if not str(event.get("target_text") or "").strip():
+        failures.append("empty_target")
+    if event.get("subtitle_emitted") is False:
+        failures.append("subtitle_not_emitted")
+    if event.get("amount_mismatch_candidate"):
+        failures.append("number_or_value_mismatch_candidate")
+    obligation = event.get("canonical_obligation_evaluation")
+    if isinstance(obligation, dict) and obligation.get("passed") is False:
+        failures.append("canonical_obligation_missing")
+    for classification in _string_list(event.get("quality_classifications")):
+        if classification in {"target_has_unexpected_hangul", "target_has_japanese"}:
+            failures.append(classification)
+    attempts = _generic_list(event.get("attempts"))
+    if any(
+        isinstance(attempt, dict)
+        and attempt.get("selected_for_output")
+        and attempt.get("status") not in {"success", None, ""}
+        for attempt in attempts
+    ):
+        failures.append("selected_attempt_not_successful")
+    return list(dict.fromkeys(failures))
 
 
 def load_fan_terms(path: Path = _FAN_TERMS_PATH) -> list[dict[str, Any]]:
@@ -250,9 +454,11 @@ def matching_fan_terms(
         entry_profile = str(entry.get("profile_id") or "")
         profile_matches = not entry_profile or entry_profile == profile_id
         text_matches = any(value in haystack for value in _fan_term_search_values(entry))
-        if profile_matches or text_matches:
-            if text_matches:
-                matched.append(entry)
+        if text_matches:
+            matched.append({
+                **entry,
+                "active_for_effective_profile": profile_matches,
+            })
     return matched
 
 
@@ -418,6 +624,54 @@ def _compact_context_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _production_history_context(
+    events: list[dict[str, Any]], index: int, limit: int
+) -> tuple[list[dict[str, Any]], str]:
+    """Best-effort reconstruction from earlier published same-cohort rows only.
+
+    Runtime telemetry does not retain the byte-exact provider history payload.
+    The returned label makes that limitation explicit and prevents future
+    subtitles from leaking into review context.
+    """
+    if limit <= 0:
+        return [], "not_requested"
+    current = events[index]
+    available = max(0, _optional_int(current.get("history_candidate_count")) or 0)
+    if available <= 0:
+        return [], "telemetry_reports_no_history"
+    cohort = str(current.get("history_cohort_id") or "")
+    profile_identity = str(
+        current.get("history_profile_id")
+        or current.get("profile_cache_identity")
+        or current.get("profile_id")
+        or ""
+    )
+    if not cohort and not profile_identity:
+        return [], "insufficient_cohort_identity"
+    candidates: list[dict[str, Any]] = []
+    for prior in reversed(events[:index]):
+        if prior.get("run_id") != current.get("run_id"):
+            continue
+        prior_cohort = str(prior.get("history_cohort_id") or "")
+        prior_profile = str(
+            prior.get("history_profile_id")
+            or prior.get("profile_cache_identity")
+            or prior.get("profile_id")
+            or ""
+        )
+        if cohort and prior_cohort != cohort:
+            continue
+        if not cohort and profile_identity and prior_profile != profile_identity:
+            continue
+        if prior.get("status") != "success" or prior.get("subtitle_emitted") is False:
+            continue
+        candidates.append(_compact_context_event(prior))
+        if len(candidates) >= min(limit, available):
+            break
+    candidates.reverse()
+    return candidates, "approximate_prior_published_same_cohort"
+
+
 def _even_sample(indices: list[int], limit: int) -> list[int]:
     if limit <= 0 or not indices:
         return []
@@ -510,14 +764,12 @@ def select_review_cases(
         source_text = str(event.get("source_text") or "")
         target_text = str(event.get("target_text") or "")
         profile_id = str(event.get("profile_id") or "")
-        before = [
-            _compact_context_event(events[i])
-            for i in range(max(0, index - context_window), index)
-        ]
-        after = [
-            _compact_context_event(events[i])
-            for i in range(index + 1, min(len(events), index + context_window + 1))
-        ]
+        before, history_reconstruction = _production_history_context(
+            events, index, context_window
+        )
+        # Future subtitles were not available to production and must never be
+        # supplied as reviewer evidence.
+        after: list[dict[str, Any]] = []
         cases.append(
             ReviewCase(
                 case_id=f"case_{position:04d}",
@@ -550,31 +802,62 @@ def select_review_cases(
                 ),
                 context_before=before,
                 context_after=after,
+                source_utterance_ids=_string_list(event.get("source_utterance_ids")),
+                evidence_source_utterance_ids=_string_list(event.get("evidence_source_utterance_ids")),
+                profile_generation=_optional_int(event.get("profile_generation")),
+                profile_cache_identity=str(event.get("profile_cache_identity") or ""),
+                profile_evidence_source=str(event.get("profile_evidence_source") or ""),
+                activity_id=str(event.get("activity_id") or ""),
+                activity_kind=str(event.get("activity_kind") or ""),
+                activity_source=str(event.get("activity_source") or ""),
+                history_cohort_id=str(event.get("history_cohort_id") or ""),
+                history_candidate_count=max(0, _optional_int(event.get("history_candidate_count")) or 0),
+                history_cross_cohort_excluded_count=max(0, _optional_int(event.get("history_cross_cohort_excluded_count")) or 0),
+                history_reconstruction=history_reconstruction,
+                model=str(event.get("model") or ""),
+                route_id=str(event.get("route_id") or ""),
+                prompt_version=str(event.get("prompt_version") or ""),
+                result_source=str(event.get("result_source") or ""),
+                cache_status=str(event.get("cache_status") or ""),
+                attempts=_bounded_attempts(event),
+                subtitle_emitted=(event.get("subtitle_emitted") if isinstance(event.get("subtitle_emitted"), bool) else None),
+                subtitle_suppressed_reason=str(event.get("subtitle_suppressed_reason") or ""),
+                deterministic_failures=deterministic_failures(event),
+                calibration_label=str(event.get("_calibration_label") or ""),
+                calibration_pair_id=str(event.get("_calibration_pair_id") or ""),
             )
         )
     return cases
 
 
 def build_messages(cases: list[ReviewCase]) -> list[dict[str, str]]:
+    relevant_terms: list[dict[str, Any]] = []
+    seen_terms: set[tuple[str, str]] = set()
+    for case in cases:
+        for term in case.matched_fan_terms:
+            identity = (str(term.get("profile_id") or ""), str(term.get("term") or ""))
+            if identity not in seen_terms:
+                seen_terms.add(identity)
+                relevant_terms.append(term)
     payload = {
         "task": "review_ko_to_zh_tw_live_subtitles",
         "project_context": {
-            "known_fan_terms": load_fan_terms(),
+            "known_fan_terms": relevant_terms,
         },
         "cases": [case.to_prompt_dict() for case in cases],
         "required_output": {
-            "type": "json_array",
+            "type": "json_object_with_reviews_array",
             "schema": {
                 "id": "case id from input",
-                "severity": "ok | warn | bad",
-                "issue_type": (
-                    "no_issue | stt_mishear | mistranslation | name_error | "
-                    "glossary_gap | amount_error | unnatural_zh | context_error"
-                ),
-                "confidence": "number from 0 to 1",
-                "suggested_translation": "Traditional Chinese subtitle, empty when no change needed",
-                "suggested_correction_rule": "short candidate rule, empty when not applicable",
-                "reason_zh": "brief Traditional Chinese reason",
+                "verdict": "ok | suspicious | wrong",
+                "severity": "integer 0..3",
+                "categories": [
+                    "meaning", "context", "role_direction", "number_quantity",
+                    "terminology", "entity", "negation_modality", "incomplete_meaning",
+                    "naturalness", "source_uncertain", "other",
+                ],
+                "brief_reason": "short evidence-based Traditional Chinese explanation",
+                "source_needs_verification": "boolean",
             },
         },
     }
@@ -586,12 +869,12 @@ def build_messages(cases: list[ReviewCase]) -> list[dict[str, str]]:
         "contexts, and often includes platform slang, streamer names, fan names, "
         "donations, chat reactions, game titles, game mechanics, memes, and "
         "rapid casual speech. Your job is not to make every subtitle prettier; "
-        "your job is to find errors worth fixing in code, STT hints, profiles, "
-        "or correction glossaries. Focus on real subtitle quality problems: STT "
-        "mishears, mistranslations, context misunderstandings, proper-name/"
-        "fan-name/platform-term errors, game-term errors, amount/number errors, "
-        "speaker/subject mistakes, negation mistakes, and zh-TW that is unnatural "
-        "enough to affect understanding. "
+        "your job is to judge whether the final Traditional Chinese preserves "
+        "the defensible meaning of the Korean source with only the evidence in "
+        "the payload. Do not retranslate the sentence and do not propose code "
+        "changes. Fluent-looking Chinese can still be semantically wrong. Focus "
+        "on word sense, context, roles/direction, entity identity, numbers, "
+        "negation/modality, omitted meaning, and meaning-affecting naturalness. "
         "Platform names and Korean platform terms may need exact handling: SOOP "
         "may appear as SOOP/숲; CHZZK may appear as CHZZK/치지직. Do not confuse "
         "platform names with ordinary words, and suggest glossary_gap when a "
@@ -602,18 +885,28 @@ def build_messages(cases: list[ReviewCase]) -> list[dict[str, str]]:
         "The payload includes project_context.known_fan_terms and per-case "
         "metadata.matched_fan_terms. Use those fields to understand which group, "
         "streamer, or fandom a fan name belongs to before deciding whether a "
-        "Korean token is an error. "
+        "Korean token is an error. A matched term is an active glossary rule only "
+        "when active_for_effective_profile is true; false means cross-profile "
+        "reference evidence and must not be treated as a production obligation. "
         "If an unallowed Korean token looks like a proper noun, fan name, title, "
         "or streamer-specific term that should be preserved, use issue_type "
         "glossary_gap and suggest a profile/allowlist rule instead of forcing a "
         "Chinese translation. "
-        "Use the surrounding context, but do not invent missing facts. "
-        "Return only valid JSON, with no markdown."
+        "The context_before field contains only earlier published same-cohort "
+        "rows reconstructed from telemetry; context_after is deliberately empty "
+        "because future subtitles were unavailable to production. Attempt output "
+        "guards may expose actual raw provider candidates and correction traces. "
+        "Do not invent missing prompt/history/profile facts. If source truth is "
+        "not defensible without listening to audio, use category source_uncertain, "
+        "set source_needs_verification true, and do not blame translation. Mark "
+        "ok when meaning is defensibly preserved. Return exactly one object per "
+        "case ID, in input order, wrapped as {\"reviews\":[...]}; valid JSON only, "
+        "no markdown or chain-of-thought."
     )
     user = (
-        "Review these compact runtime cases. Do not rewrite every line; mark ok "
-        "when the subtitle is acceptable. Prefer concise Traditional Chinese in "
-        "suggestions.\n\n"
+        "Review these reconstructed runtime cases for semantic fidelity. Keep "
+        "brief_reason non-empty, short, and evidence-based for every verdict, "
+        "including ok.\n\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )
     return [
@@ -631,16 +924,21 @@ def call_openrouter(
     timeout: float = 60.0,
     temperature: float = 0.1,
     max_tokens: int = 4000,
+    _rate_retry: int = 1,
 ) -> str:
     body = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
     }
+    if "api.groq.com" in endpoint:
+        body["reasoning_effort"] = "low"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "User-Agent": "live_translate/semantic-review",
         "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://github.com/local/live_translate"),
         "X-Title": os.getenv("OPENROUTER_X_TITLE", "live_translate offline QA"),
     }
@@ -650,11 +948,26 @@ def call_openrouter(
         headers=headers,
         method="POST",
     )
+    started = time.monotonic()
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 429 and _rate_retry > 0:
+            match = re.search(r"try again in ([0-9.]+)s", error_body, re.IGNORECASE)
+            delay = min(60.0, max(1.0, float(match.group(1)) + 1.0)) if match else 30.0
+            time.sleep(delay)
+            return call_openrouter(
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                endpoint=endpoint,
+                timeout=timeout,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                _rate_retry=_rate_retry - 1,
+            )
         raise RuntimeError(f"OpenRouter HTTP {exc.code}: {error_body[:1000]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
@@ -664,6 +977,17 @@ def call_openrouter(
     if not choices:
         raise RuntimeError(f"OpenRouter response has no choices: {raw[:1000]}")
     message = choices[0].get("message", {})
+    usage = data.get("usage") if isinstance(data, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+    API_CALL_METRICS.append({
+        "model": model,
+        "latency_ms": round((time.monotonic() - started) * 1000, 2),
+        "prompt_tokens": _optional_int(usage.get("prompt_tokens")),
+        "completion_tokens": _optional_int(usage.get("completion_tokens")),
+        "total_tokens": _optional_int(usage.get("total_tokens")),
+        "cost_usd": usage.get("cost"),
+    })
     content = message.get("content", "")
     if isinstance(content, list):
         return "".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in content)
@@ -683,29 +1007,16 @@ def _strip_json_fence(text: str) -> str:
 
 
 def parse_llm_reviews(text: str) -> list[dict[str, Any]]:
-    stripped = _strip_json_fence(text)
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        array_start = stripped.find("[")
-        array_end = stripped.rfind("]")
-        object_start = stripped.find("{")
-        object_end = stripped.rfind("}")
-        if array_start >= 0 and array_end > array_start:
-            parsed = json.loads(stripped[array_start: array_end + 1])
-        elif object_start >= 0 and object_end > object_start:
-            parsed = json.loads(stripped[object_start: object_end + 1])
-        else:
-            raise
-
-    if isinstance(parsed, dict):
-        if isinstance(parsed.get("reviews"), list):
-            parsed = parsed["reviews"]
-        else:
-            parsed = [parsed]
-    if not isinstance(parsed, list):
-        raise ValueError("LLM review response must be a JSON array or object")
-    return [item for item in parsed if isinstance(item, dict)]
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        raise ValueError("semantic review response must not use markdown fences")
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict) or set(parsed) != {"reviews"}:
+        raise ValueError("semantic review response must be exactly {'reviews': [...]}")
+    reviews = parsed["reviews"]
+    if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
+        raise ValueError("semantic review reviews must be an array of objects")
+    return reviews
 
 
 def _float_between_zero_and_one(value: Any) -> float:
@@ -744,6 +1055,85 @@ def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_SEMANTIC_VERDICTS = {"ok", "suspicious", "wrong"}
+_SEMANTIC_CATEGORIES = {
+    "meaning", "context", "role_direction", "number_quantity", "terminology",
+    "entity", "negation_modality", "incomplete_meaning", "naturalness",
+    "source_uncertain", "other",
+}
+_SEMANTIC_REVIEW_KEYS = {
+    "id", "verdict", "severity", "categories", "brief_reason",
+    "source_needs_verification",
+}
+
+
+def _model_family(value: str) -> str:
+    text = value.casefold()
+    for family in ("deepseek", "qwen", "gpt-oss", "claude", "gemini", "llama"):
+        if family in text:
+            return family
+    return text.rsplit("/", 1)[-1].split(":", 1)[0]
+
+
+def validate_reviewer_independence(cases: list[ReviewCase], reviewer_model: str) -> None:
+    reviewer_family = _model_family(reviewer_model)
+    if "deepseek" in reviewer_model.casefold():
+        raise ValueError("DeepSeek reviewers are excluded from semantic triage")
+    conflicts = sorted({
+        case.case_id
+        for case in cases
+        if case.model and _model_family(case.model) == reviewer_family
+    })
+    if conflicts:
+        raise ValueError(
+            f"reviewer model family matches candidate producer for cases: {conflicts}"
+        )
+
+
+def validate_semantic_reviews(
+    raw_reviews: list[dict[str, Any]], cases: list[ReviewCase]
+) -> list[dict[str, Any]]:
+    """Fail closed on malformed, incomplete, duplicate, or contradictory review output."""
+    expected = [case.case_id for case in cases]
+    if len(raw_reviews) != len(expected):
+        raise ValueError(
+            f"semantic review coverage mismatch: expected={len(expected)} actual={len(raw_reviews)}"
+        )
+    seen: set[str] = set()
+    validated: list[dict[str, Any]] = []
+    for position, review in enumerate(raw_reviews):
+        if set(review) != _SEMANTIC_REVIEW_KEYS:
+            raise ValueError(f"semantic review keys invalid at index {position}: {sorted(review)}")
+        case_id = review.get("id")
+        if case_id != expected[position] or case_id in seen:
+            raise ValueError(f"semantic review id/order mismatch at index {position}: {case_id!r}")
+        seen.add(str(case_id))
+        verdict = review.get("verdict")
+        severity = review.get("severity")
+        categories = review.get("categories")
+        reason = review.get("brief_reason")
+        verify = review.get("source_needs_verification")
+        if verdict not in _SEMANTIC_VERDICTS:
+            raise ValueError(f"invalid semantic verdict for {case_id}: {verdict!r}")
+        if isinstance(severity, bool) or not isinstance(severity, int) or not 0 <= severity <= 3:
+            raise ValueError(f"invalid semantic severity for {case_id}: {severity!r}")
+        if not isinstance(categories, list) or any(
+            not isinstance(item, str) or item not in _SEMANTIC_CATEGORIES
+            for item in categories
+        ) or len(categories) != len(set(categories)):
+            raise ValueError(f"invalid semantic categories for {case_id}")
+        if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 500:
+            raise ValueError(f"invalid semantic reason for {case_id}")
+        if not isinstance(verify, bool):
+            raise ValueError(f"invalid source verification flag for {case_id}")
+        if verdict == "ok" and (severity != 0 or categories or verify):
+            raise ValueError(f"contradictory ok review for {case_id}")
+        if verdict != "ok" and severity == 0:
+            raise ValueError(f"non-ok review requires severity for {case_id}")
+        validated.append(dict(review))
+    return validated
+
+
 def review_cases_with_openrouter(
     cases: list[ReviewCase],
     *,
@@ -754,21 +1144,57 @@ def review_cases_with_openrouter(
     timeout: float,
     temperature: float,
     max_tokens: int,
+    inter_call_gap_sec: float = 0.0,
 ) -> list[dict[str, Any]]:
     reviews: list[dict[str, Any]] = []
-    for start in range(0, len(cases), batch_size):
-        batch = cases[start: start + batch_size]
-        content = call_openrouter(
-            api_key=api_key,
-            model=model,
-            messages=build_messages(batch),
-            endpoint=endpoint,
-            timeout=timeout,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        for review in parse_llm_reviews(content):
-            reviews.append(normalize_review(review))
+    validate_reviewer_independence(cases, model)
+    groups = [cases]
+    if any(case.calibration_label for case in cases):
+        # Never expose a known-good reference beside its paired captured output.
+        groups = [
+            [case for case in cases if case.calibration_label == label]
+            for label in ("known_good", "known_failure")
+        ]
+    for group in groups:
+        for start in range(0, len(group), batch_size):
+            batch = group[start: start + batch_size]
+            if not batch:
+                continue
+            last_error: Exception | None = None
+            for schema_attempt in range(2):
+                messages = build_messages(batch)
+                if schema_attempt:
+                    messages[0]["content"] += (
+                        " Previous output failed the declared schema. Recheck every "
+                        "invariant, especially: ok requires severity=0, no categories, "
+                        "and source_needs_verification=false."
+                    )
+                content = call_openrouter(
+                    api_key=api_key,
+                    model=model,
+                    messages=messages,
+                    endpoint=endpoint,
+                    timeout=timeout,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                try:
+                    parsed = parse_llm_reviews(content)
+                    reviews.extend(validate_semantic_reviews(parsed, batch))
+                    if API_CALL_METRICS:
+                        API_CALL_METRICS[-1]["schema_retry"] = bool(schema_attempt)
+                    last_error = None
+                    break
+                except (ValueError, json.JSONDecodeError) as exc:
+                    last_error = exc
+                    if API_CALL_METRICS:
+                        API_CALL_METRICS[-1]["schema_validation_failed"] = True
+            if last_error is not None:
+                raise last_error
+            if inter_call_gap_sec > 0 and (
+                group is not groups[-1] or start + batch_size < len(group)
+            ):
+                time.sleep(inter_call_gap_sec)
     return reviews
 
 
@@ -785,7 +1211,102 @@ def merge_reviews(cases: list[ReviewCase], reviews: list[dict[str, Any]]) -> lis
             item["review_status"] = "reviewed"
             item["llm_review"] = review
         merged.append(item)
+    severity_order = {"wrong": 2, "suspicious": 1, "ok": 0}
+    merged.sort(key=lambda row: (
+        -int(row.get("llm_review", {}).get("severity") or 0),
+        -severity_order.get(str(row.get("llm_review", {}).get("verdict") or ""), -1),
+        -len(row.get("deterministic_failures") or []),
+        -int(row.get("suspicion_score") or 0),
+        str(row.get("run_id") or ""),
+        int(row.get("sequence_id") or 0),
+    ))
+    for rank, item in enumerate(merged, start=1):
+        item["rank"] = rank
     return merged
+
+
+def build_run_summary(
+    rows: list[dict[str, Any]], model: str, provider: str = "openrouter"
+) -> dict[str, Any]:
+    verdicts = Counter(
+        str(row.get("llm_review", {}).get("verdict") or "missing") for row in rows
+    )
+    categories = Counter(
+        category
+        for row in rows
+        for category in row.get("llm_review", {}).get("categories", [])
+    )
+    prompt_tokens = sum(metric.get("prompt_tokens") or 0 for metric in API_CALL_METRICS)
+    completion_tokens = sum(metric.get("completion_tokens") or 0 for metric in API_CALL_METRICS)
+    costs = [metric.get("cost_usd") for metric in API_CALL_METRICS]
+    numeric_costs = [float(value) for value in costs if isinstance(value, (int, float))]
+    latencies = [float(metric["latency_ms"]) for metric in API_CALL_METRICS]
+    result = {
+        "schema_version": 1,
+        "reviewer_model": model,
+        "reviewer_provider": provider,
+        "cases_reviewed": len(rows),
+        "run_ids": sorted({str(row.get("run_id") or "") for row in rows}),
+        "verdict_counts": dict(verdicts),
+        "category_counts": dict(categories),
+        "suspicious_rate": round(
+            sum(verdicts[key] for key in ("suspicious", "wrong")) / max(1, len(rows)), 4
+        ),
+        "source_verification_required": sum(
+            bool(row.get("llm_review", {}).get("source_needs_verification")) for row in rows
+        ),
+        "deterministic_failure_cases": sum(bool(row.get("deterministic_failures")) for row in rows),
+        "review_calls": len(API_CALL_METRICS),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "cost_usd": round(sum(numeric_costs), 8) if numeric_costs else None,
+        "review_latency_ms_total": round(sum(latencies), 2),
+        "review_latency_ms_mean": round(sum(latencies) / len(latencies), 2) if latencies else None,
+        "api_calls": list(API_CALL_METRICS),
+    }
+    labeled = [row for row in rows if row.get("calibration_label")]
+    if labeled:
+        positives = [row for row in labeled if row["calibration_label"] == "known_failure"]
+        negatives = [row for row in labeled if row["calibration_label"] == "known_good"]
+        population_positives = CALIBRATION_POPULATION["known_failure"] or len(positives)
+        population_negatives = CALIBRATION_POPULATION["known_good"] or len(negatives)
+        is_flagged = lambda row: row.get("llm_review", {}).get("verdict") in {"suspicious", "wrong"}
+        result["calibration"] = {
+            "known_failure_count": population_positives,
+            "known_good_count": population_negatives,
+            "reviewed_failure_count": len(positives),
+            "reviewed_good_count": len(negatives),
+            "selection_coverage": round(len(labeled) / max(1, population_positives + population_negatives), 4),
+            "known_failure_recall": round(sum(is_flagged(row) for row in positives) / max(1, population_positives), 4),
+            "known_good_false_positive_rate": round(sum(is_flagged(row) for row in negatives) / max(1, population_negatives), 4),
+            "top_k": {},
+        }
+        for k in (10, 20, 40):
+            selected = labeled[: min(k, len(labeled))]
+            failures = sum(row.get("calibration_label") == "known_failure" for row in selected)
+            result["calibration"]["top_k"][str(k)] = {
+                "reviewed": len(selected),
+                "precision": round(failures / max(1, len(selected)), 4),
+                "recall": round(failures / max(1, population_positives), 4),
+            }
+        by_pair: dict[str, dict[str, int]] = {}
+        for row in labeled:
+            pair_id = str(row.get("calibration_pair_id") or "")
+            if pair_id:
+                by_pair.setdefault(pair_id, {})[str(row["calibration_label"])] = int(row.get("rank") or 0)
+        complete_pairs = [pair for pair in by_pair.values() if set(pair) == {"known_good", "known_failure"}]
+        result["calibration"]["pairwise_discrimination"] = {
+            "complete_pairs": len(complete_pairs),
+            "failure_ranked_above_reference": sum(
+                pair["known_failure"] < pair["known_good"] for pair in complete_pairs
+            ),
+            "rate": round(
+                sum(pair["known_failure"] < pair["known_good"] for pair in complete_pairs)
+                / max(1, len(complete_pairs)), 4
+            ),
+        }
+    return result
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -806,15 +1327,14 @@ def build_markdown_report(rows: list[dict[str, Any]], *, dry_run: bool, model: s
     lines.append("")
 
     def sort_key(row: dict[str, Any]):
-        severity = row.get("llm_review", {}).get("severity") if not dry_run else ""
-        rank = {"bad": 0, "warn": 1, "ok": 2, "": 3}.get(severity, 3)
-        return (rank, -int(row.get("suspicion_score") or 0), row.get("case_id") or "")
+        severity = row.get("llm_review", {}).get("severity") if not dry_run else -1
+        return (-int(severity if isinstance(severity, int) else -1), -int(row.get("suspicion_score") or 0), row.get("case_id") or "")
 
     for row in sorted(rows, key=sort_key):
         review = row.get("llm_review", {}) if not dry_run else {}
-        heading = row.get("case_id", "")
+        heading = f"{row.get('rank', '-')}. {row.get('case_id', '')}"
         if review:
-            heading += f" - {review.get('severity')} / {review.get('issue_type')}"
+            heading += f" - {review.get('verdict')} / severity {review.get('severity')}"
         lines.append(f"## {heading}")
         lines.append("")
         lines.append(f"- score: {row.get('suspicion_score')} ({', '.join(row.get('suspicion_reasons') or [])})")
@@ -827,23 +1347,26 @@ def build_markdown_report(rows: list[dict[str, Any]], *, dry_run: bool, model: s
         lines.append(f"ZH: {row.get('target_text')}")
         if review:
             lines.append("")
-            lines.append(f"Reason: {review.get('reason_zh')}")
-            if review.get("suggested_translation"):
-                lines.append("")
-                lines.append(f"Suggested: {review.get('suggested_translation')}")
-            if review.get("suggested_correction_rule"):
-                lines.append("")
-                lines.append(f"Rule: `{review.get('suggested_correction_rule')}`")
+            lines.append(f"Categories: {', '.join(review.get('categories') or [])}")
+            lines.append(f"Reason: {review.get('brief_reason')}")
+            lines.append(f"Source/STT verification: {review.get('source_needs_verification')}")
+        lines.append(f"Deterministic flags: {', '.join(row.get('deterministic_failures') or [])}")
         lines.append("")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--events", required=True, nargs="+", help="runtime-event JSONL file(s) or glob(s)")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--events", nargs="+", help="runtime-event JSONL file(s) or glob(s)")
+    source.add_argument(
+        "--calibration-cases", nargs="+",
+        help="reviewed semantic eval JSON files; reviews bounded reference/current contrasts blindly",
+    )
     parser.add_argument("--run-id", action="append", default=None, help="only include this run_id; repeatable")
     parser.add_argument("--mode", choices=("suspicious", "broad"), default="suspicious")
     parser.add_argument("--max-cases", type=int, default=80)
+    parser.add_argument("--case-offset", type=int, default=0, help="resume from this stable selected-case offset")
     parser.add_argument("--control-cases", type=int, default=8)
     parser.add_argument("--context-window", type=int, default=1)
     parser.add_argument("--min-score", type=int, default=1)
@@ -854,34 +1377,57 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--provider", choices=("openrouter", "groq"), default="openrouter")
     parser.add_argument("--endpoint", default=os.getenv("OPENROUTER_ENDPOINT", DEFAULT_OPENROUTER_ENDPOINT))
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--max-output-tokens", type=int, default=4000)
+    parser.add_argument("--inter-call-gap-sec", type=float, default=0.0)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--dry-run", action="store_true", help="select cases and write report without API calls")
     args = parser.parse_args(argv)
+    API_CALL_METRICS.clear()
+    CALIBRATION_POPULATION.update(known_good=0, known_failure=0)
 
-    paths = resolve_event_paths(args.events)
+    paths = resolve_event_paths(args.events or args.calibration_cases)
     missing = [str(path) for path in paths if not path.exists()]
     if missing:
         print(f"Event file(s) not found: {missing}", file=sys.stderr)
         return 2
 
-    events = list(iter_translation_events(paths, set(args.run_id) if args.run_id else None))
+    events = (
+        load_calibration_events(paths)
+        if args.calibration_cases
+        else list(iter_translation_events(paths, set(args.run_id) if args.run_id else None))
+    )
+    if args.calibration_cases:
+        CALIBRATION_POPULATION.update(
+            known_good=sum(event.get("_calibration_label") == "known_good" for event in events),
+            known_failure=sum(event.get("_calibration_label") == "known_failure" for event in events),
+        )
     if not events:
         print("No translation events matched.", file=sys.stderr)
         return 2
+    events.sort(key=lambda event: (
+        str(event.get("run_id") or ""),
+        int(event.get("sequence_id") or 0),
+        str(event.get("created_at") or ""),
+    ))
 
+    case_offset = max(0, args.case_offset)
+    selection_limit = (
+        len(events) if args.mode == "broad" and case_offset else max(0, args.max_cases) + case_offset
+    )
     cases = select_review_cases(
         events,
         mode=args.mode,
-        max_cases=max(0, args.max_cases),
+        max_cases=selection_limit,
         context_window=max(0, args.context_window),
         control_cases=max(0, args.control_cases),
         min_score=max(0, args.min_score),
         include_filtered=args.include_filtered,
     )
+    cases = cases[case_offset: case_offset + max(0, args.max_cases)]
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_ROOT / stamp
@@ -897,9 +1443,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"selected {len(cases)} cases (dry run): {output_dir}")
         return 0
 
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    api_key_name = "GROQ_API_KEY_fall_back" if args.provider == "groq" else "OPENROUTER_API_KEY"
+    api_key = os.getenv(api_key_name, "").strip()
     if not api_key:
-        print("OPENROUTER_API_KEY is required unless --dry-run is used.", file=sys.stderr)
+        print(f"{api_key_name} is required unless --dry-run is used.", file=sys.stderr)
         return 2
     if not cases:
         report = build_markdown_report(selected_rows, dry_run=True, model=args.model)
@@ -913,10 +1460,11 @@ def main(argv: list[str] | None = None) -> int:
             api_key=api_key,
             model=args.model,
             batch_size=max(1, args.batch_size),
-            endpoint=args.endpoint,
+            endpoint=(DEFAULT_GROQ_ENDPOINT if args.provider == "groq" else args.endpoint),
             timeout=args.timeout,
             temperature=args.temperature,
             max_tokens=max(1, args.max_output_tokens),
+            inter_call_gap_sec=max(0.0, args.inter_call_gap_sec),
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)
@@ -924,6 +1472,10 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = merge_reviews(cases, reviews)
     write_jsonl(output_dir / "reviews.jsonl", rows)
+    summary = build_run_summary(rows, args.model, args.provider)
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     report = build_markdown_report(rows, dry_run=False, model=args.model)
     (output_dir / "report.md").write_text(report, encoding="utf-8")
     print(f"reviewed {len(rows)} cases with {args.model}: {output_dir}")

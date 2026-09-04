@@ -114,6 +114,34 @@ def test_validate_config_warns_when_deepl_key_is_missing(
     assert warnings == ["Engine 'deepl' skipped - API key not set"]
 
 
+def test_protected_deepseek_route_requires_flash_and_qwen_keys(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "anthropic")
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "deepseek")
+    with pytest.raises(SystemExit) as captured:
+        main_module._validate_config(stt_only=False)
+    assert captured.value.code == 1
+
+
+def test_protected_deepseek_route_accepts_flash_and_qwen_keys(
+    monkeypatch,
+    isolate_scene_vision_startup_validation,
+):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "anthropic")
+    monkeypatch.setattr(
+        main_module,
+        "engine_is_configured",
+        lambda name: name in {"deepseek", "openrouter"},
+    )
+    main_module._validate_config(stt_only=False)
+
+
 def test_scene_vision_startup_validation_rejects_missing_route_key(monkeypatch):
     import main as main_module
     import modules.scene_vision as scene_vision
@@ -277,3 +305,131 @@ def test_stt_printer_exits_on_stop_event_when_queue_idle(tmp_path, monkeypatch):
     t.join(timeout=3.0)
 
     assert not t.is_alive(), "STT printer did not exit after stop_event with empty queue"
+
+
+def test_downstream_start_failure_cleans_up_started_stages(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    audio_thread = MagicMock()
+    audio_thread.name = "AudioCapture"
+    audio_thread.is_alive.return_value = False
+
+    main_module.stop_event.clear()
+    main_module.pause_event.clear()
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(main_module.audio_capture, "start", lambda *_args: audio_thread)
+    exported = MagicMock()
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+    monkeypatch.setattr(
+        main_module.stt,
+        "start",
+        MagicMock(side_effect=RuntimeError("STT startup failed")),
+    )
+
+    try:
+        with pytest.raises(SystemExit) as captured:
+            main_module.main()
+    finally:
+        main_module.stop_event.clear()
+
+    assert captured.value.code == 1
+    audio_thread.join.assert_called_once()
+    exported.assert_called_once_with(status="failed")
+
+
+def test_pre_audio_startup_failure_exports_and_preserves_exit(monkeypatch):
+    import main as main_module
+
+    exported = MagicMock()
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(
+        main_module,
+        "_validate_config",
+        MagicMock(side_effect=SystemExit(7)),
+    )
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    with pytest.raises(SystemExit) as captured:
+        main_module.main()
+
+    assert captured.value.code == 7
+    exported.assert_called_once_with(status="startup_failed")
+
+
+def test_audio_start_failure_exports_and_preserves_exit(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    exported = MagicMock()
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(main_module.profile_state, "configure_source", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        main_module.audio_capture,
+        "start",
+        MagicMock(side_effect=RuntimeError("device unavailable")),
+    )
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    with pytest.raises(SystemExit) as captured:
+        main_module.main()
+
+    assert captured.value.code == 1
+    exported.assert_called_once_with(status="startup_failed")
+
+
+def test_shutdown_bundle_export_emits_terminal_event_before_export(tmp_path, monkeypatch):
+    import main as main_module
+    import utils.chatgpt_bundle as bundle_module
+    import utils.runtime_events as events_module
+
+    calls = []
+    monkeypatch.setattr(main_module, "_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(main_module, "_CHATGPT_BUNDLE_OUTPUT_ROOT", tmp_path / "exports")
+    monkeypatch.setattr(
+        events_module.runtime_events,
+        "emit",
+        lambda event_type, **fields: calls.append(("emit", event_type, fields)),
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "export_bundle",
+        lambda **kwargs: calls.append(("export", kwargs)) or {
+            "output_path": str(tmp_path / "bundle"),
+            "file_count": 6,
+            "total_bytes": 123,
+        },
+    )
+
+    result = main_module._export_chatgpt_bundle_on_shutdown(status="completed")
+
+    assert calls[0] == (
+        "emit",
+        "runtime_lifecycle",
+        {"action": "shutdown", "status": "completed"},
+    )
+    assert calls[1][0] == "export"
+    assert calls[1][1]["run_id"] == events_module.runtime_events.run_id
+    assert calls[1][1]["include_audio"] is False
+    assert result["file_count"] == 6
+
+
+def test_shutdown_bundle_export_is_fail_soft(monkeypatch):
+    import main as main_module
+    import utils.chatgpt_bundle as bundle_module
+    import utils.runtime_events as events_module
+
+    monkeypatch.setattr(events_module.runtime_events, "emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bundle_module,
+        "export_bundle",
+        MagicMock(side_effect=OSError("disk full")),
+    )
+
+    assert main_module._export_chatgpt_bundle_on_shutdown(status="failed") is None

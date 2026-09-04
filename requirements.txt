@@ -3,8 +3,10 @@ sounddevice
 soundfile
 numpy
 Pillow
+certifi
 anthropic
 groq
+elevenlabs>=2.52,<3
 funasr
 modelscope
 torch

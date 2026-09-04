@@ -22,6 +22,7 @@ except ImportError:
 
 from modules.stt import (
     _CONSECUTIVE_NONE_WARN,
+    _ContextSource,
     _NOISE_TAGS,
     _SENSEVOICE_PROBE_EVERY,
     _TAG_RE,
@@ -94,6 +95,8 @@ def _make_engine_sv() -> STTEngine:
     eng._last_transcript = ""
     eng._last_context_transcript = ""
     eng._last_context_updated_at = None
+    eng._last_context_source = None
+    eng._current_context_provenance = None
     eng._last_context_gate_reason = ""
     eng._last_prompt_context_gated = False
     eng._last_prompt_context_gate_reason = ""
@@ -210,6 +213,8 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._last_transcript = ""
     eng._last_context_transcript = ""
     eng._last_context_updated_at = None
+    eng._last_context_source = None
+    eng._current_context_provenance = None
     eng._last_context_gate_reason = ""
     eng._last_prompt_context_gated = False
     eng._last_prompt_context_gate_reason = ""
@@ -324,6 +329,15 @@ class TestTranscribeGroq(unittest.TestCase):
         # No request sent → no prompt was built → budget fields are None.
         self.assertIsNone(kwargs["prompt_bytes"])
         self.assertIsNone(kwargs["glossary_truncated"])
+        for field in (
+            "context_source_utterance_id",
+            "context_age_ms",
+            "context_text_len",
+            "context_source_engine",
+            "context_source_avg_logprob",
+            "context_source_no_speech_prob",
+        ):
+            self.assertIsNone(kwargs[field])
 
     def test_returns_none_for_empty_response(self):
         eng = _make_engine_groq("")
@@ -372,6 +386,16 @@ class TestTranscribeGroq(unittest.TestCase):
         fallback_client.audio.transcriptions.create.return_value = _make_groq_resp("fallback result")
         eng._groq_fallback_client = fallback_client
         eng._groq_client.audio.transcriptions.create.side_effect = RateLimitError()
+        eng._last_transcript = "private previous transcript"
+        eng._last_context_transcript = "private previous transcript"
+        eng._last_context_updated_at = time.monotonic()
+        eng._last_context_source = _ContextSource(
+            utterance_id="utt-7",
+            engine="groq",
+            avg_logprob=-0.2,
+            no_speech_prob=0.1,
+            updated_at=eng._last_context_updated_at,
+        )
 
         with self.assertLogs("stt", level="WARNING") as cm:
             with patch("modules.stt.runtime_events.emit") as emit:
@@ -394,6 +418,18 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
         self.assertLessEqual(eng._groq_fallback_rate_limited_until, time.monotonic())
         self.assertTrue(eng._groq_prefer_fallback_key)
+        first_provenance = emit.call_args_list[0].kwargs
+        second_provenance = emit.call_args_list[1].kwargs
+        self.assertEqual(first_provenance["context_source_utterance_id"], "utt-7")
+        self.assertEqual(second_provenance["context_source_utterance_id"], "utt-7")
+        self.assertEqual(first_provenance["context_source_engine"], "groq")
+        self.assertEqual(second_provenance["context_source_avg_logprob"], -0.2)
+        self.assertGreaterEqual(
+            second_provenance["context_age_ms"],
+            first_provenance["context_age_ms"],
+        )
+        self.assertNotIn("private previous transcript", repr(first_provenance))
+        self.assertFalse(any("hash" in key for key in first_provenance))
 
     def test_primary_error_does_not_retry_with_fallback_key(self):
         eng = _make_engine_groq()
@@ -679,6 +715,55 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual(second.utterance_id, "utt-2")
         self.assertEqual(second_emit_id, "utt-2")
 
+    def test_zero_overlap_keeps_legitimate_repeated_utterance(self):
+        eng = _make_engine_groq("same repeated lyric")
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp("same repeated lyric"),
+            _make_groq_resp("same repeated lyric"),
+        ]
+        chunk = AudioChunk(audio=self._audio(), overlap_seconds=0.0)
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = ""
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            first = eng.transcribe_event(chunk)
+            second = eng.transcribe_event(chunk)
+
+        self.assertEqual(first.text, "same repeated lyric")
+        self.assertEqual(second.text, "same repeated lyric")
+
+    def test_full_text_overlap_is_recorded_as_filtered_not_success(self):
+        eng = _make_engine_groq("same repeated lyric")
+        eng._last_transcript = "same repeated lyric"
+        eng._last_represented_audio = self._audio().copy()
+        chunk = AudioChunk(audio=self._audio(), overlap_seconds=0.05)
+
+        with patch("modules.stt.cfg") as mock_cfg, \
+                patch("modules.stt.runtime_events.emit") as emit:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = ""
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(chunk)
+
+        self.assertIsNone(event)
+        self.assertEqual(emit.call_args.kwargs["status"], "filtered")
+        self.assertEqual(emit.call_args.kwargs["reason"], "overlap_duplicate")
+
     def test_transcribe_event_includes_groq_confidence_metadata(self):
         eng = _make_engine_groq("Groq result")
         eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
@@ -724,6 +809,8 @@ class TestTranscribeFallback(unittest.TestCase):
 
     def test_timestamp_dedupe_drops_fully_overlapped_segments(self):
         eng = _make_engine_groq("old words new words")
+        audio = np.full(32000, 0.1, dtype=np.float32)
+        eng._last_represented_audio = audio.copy()
         eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
             "old words new words",
             segments=[
@@ -750,7 +837,7 @@ class TestTranscribeFallback(unittest.TestCase):
             mock_cfg.stt.dedupe_by_timestamp = True
             mock_cfg.stt.max_japanese_chars = 2
             event = eng.transcribe_event(
-                AudioChunk(audio=self._audio(), overlap_seconds=1.2, vad_cut_reason="soft_max_pause")
+                AudioChunk(audio=audio, overlap_seconds=1.2, vad_cut_reason="soft_max_pause")
             )
 
         self.assertIsNotNone(event)
@@ -758,6 +845,43 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual([segment.text for segment in event.segments], ["new", "words"])
         self.assertEqual(emit.call_args.kwargs["timestamp_deduped_segments"], 1)
         self.assertEqual(emit.call_args.kwargs["timestamp_deduped_chars"], len("old words"))
+
+    def test_timestamp_dedupe_preserves_unrepresented_overlap_prefix(self):
+        eng = _make_engine_groq("old words new words")
+        eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
+            "old words new words",
+            segments=[
+                {"start": 0.0, "end": 0.8, "text": "old words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+                {"start": 0.9, "end": 1.4, "text": "new words", "avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0},
+            ],
+        )
+        audio = np.full(32000, 0.1, dtype=np.float32)
+
+        with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.active_streamer_profile = "hades_chxxnnx"
+            mock_cfg.stt.groq_prompt = ""
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.dedupe_by_timestamp = True
+            mock_cfg.stt.max_japanese_chars = 2
+            event = eng.transcribe_event(
+                AudioChunk(audio=audio, overlap_seconds=1.2, vad_cut_reason="soft_max_pause")
+            )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.text, "old words new words")
+        self.assertEqual([segment.text for segment in event.segments], ["old words", "new words"])
+        self.assertEqual(emit.call_args.kwargs["timestamp_deduped_segments"], 0)
+        self.assertEqual(emit.call_args.kwargs["timestamp_deduped_chars"], 0)
 
     def test_timestamp_dedupe_can_be_disabled(self):
         eng = _make_engine_groq("old words new words")
@@ -796,6 +920,7 @@ class TestTranscribeFallback(unittest.TestCase):
     def test_transcribe_event_dedupes_overlap_against_previous_text(self):
         eng = _make_engine_groq("여기 기지를 우리가 이제 막아야 돼요")
         eng._last_transcript = "선택하면은 여기 기지를 우리가"
+        eng._last_represented_audio = self._audio().copy()
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
@@ -808,7 +933,9 @@ class TestTranscribeFallback(unittest.TestCase):
             mock_cfg.stt.no_speech_threshold = 0.6
             mock_cfg.stt.avg_logprob_threshold = -1.0
             mock_cfg.stt.max_japanese_chars = 2
-            event = eng.transcribe_event(self._audio())
+            event = eng.transcribe_event(
+                AudioChunk(audio=self._audio(), overlap_seconds=0.05)
+            )
 
         self.assertIsNotNone(event)
         self.assertEqual(event.text, "이제 막아야 돼요")
@@ -993,6 +1120,7 @@ class TestSttThread(unittest.TestCase):
             stop.set()
 
         self.assertTrue(text_q.empty())
+        self.assertTrue(instance.reset_stream_context.called)
 
     def test_stop_event_exits_cleanly(self):
         from modules.stt import start as stt_start
@@ -1023,8 +1151,128 @@ class TestSttThread(unittest.TestCase):
         self.assertTrue(stop.is_set(), "STT thread should signal shutdown")
         self.assertTrue(text_q.empty())
 
+    def test_thread_exception_stops_pipeline(self):
+        from modules.stt import start as stt_start
+        audio_q: queue.Queue = queue.Queue()
+        text_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        with patch("modules.stt.STTEngine") as MockEngine:
+            instance = MockEngine.return_value
+            instance.available = True
+            instance.transcribe_event.side_effect = RuntimeError("provider exploded")
+            thread = stt_start(audio_q, text_q, stop)
+            audio_q.put(self._audio())
+            thread.join(timeout=3)
+
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(stop.is_set(), "uncaught STT failures must stop the pipeline")
+        self.assertTrue(text_q.empty())
+
 
 class TestGroqPromptBuilder(unittest.TestCase):
+
+    def test_prompt_freezes_text_free_context_provenance(self):
+        eng = _make_engine_groq("ignored")
+        secret = "  private   Korean context  "
+        eng._last_transcript = secret
+        eng._last_context_transcript = secret
+        eng._last_context_updated_at = 100.0
+        eng._last_context_source = _ContextSource(
+            utterance_id="utt-7",
+            engine="groq",
+            avg_logprob=-0.2,
+            no_speech_prob=0.1,
+            updated_at=100.0,
+        )
+
+        with patch("modules.stt.time.monotonic", return_value=100.25), \
+                patch("modules.stt.build_stt_glossary", return_value=""), \
+                patch("modules.stt.runtime_events.emit") as emit:
+            prompt = eng._build_groq_prompt()
+            eng._emit_stt_runtime_event(
+                audio=np.full(160, 0.1, dtype=np.float32),
+                started=100.0,
+                status="success",
+                reason="",
+                request_sent=True,
+            )
+
+        self.assertIn("Recent Korean transcript context: private Korean context", prompt)
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["context_source_utterance_id"], "utt-7")
+        self.assertEqual(kwargs["context_age_ms"], 250.0)
+        self.assertEqual(kwargs["context_text_len"], len("private Korean context"))
+        self.assertEqual(kwargs["context_source_engine"], "groq")
+        self.assertEqual(kwargs["context_source_avg_logprob"], -0.2)
+        self.assertEqual(kwargs["context_source_no_speech_prob"], 0.1)
+        self.assertNotIn(secret, repr(kwargs))
+        self.assertNotIn("context_text", kwargs)
+        self.assertFalse(any("hash" in key for key in kwargs))
+
+    def test_sensevoice_context_has_source_identity_without_confidence(self):
+        eng = _make_engine_groq("ignored")
+        eng._current_utterance_id = "utt-3"
+        eng._update_context_transcript("sense voice context", "sensevoice")
+
+        with patch("modules.stt.build_stt_glossary", return_value=""), \
+                patch("modules.stt.runtime_events.emit") as emit:
+            eng._build_groq_prompt()
+            eng._emit_stt_runtime_event(
+                audio=np.full(160, 0.1, dtype=np.float32),
+                started=time.monotonic(),
+                status="success",
+                reason="",
+                request_sent=True,
+            )
+
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["context_source_utterance_id"], "utt-3")
+        self.assertEqual(kwargs["context_source_engine"], "sensevoice")
+        self.assertIsNone(kwargs["context_source_avg_logprob"])
+        self.assertIsNone(kwargs["context_source_no_speech_prob"])
+
+    def test_reset_clears_context_source_and_next_attempt_snapshot(self):
+        eng = _make_engine_groq("ignored")
+        eng._current_utterance_id = "utt-3"
+        eng._last_avg_logprob = -0.2
+        eng._last_no_speech_prob = 0.1
+        eng._update_context_transcript("eligible context", "groq")
+        eng.reset_stream_context("pipeline_paused")
+
+        with patch("modules.stt.build_stt_glossary", return_value=""):
+            eng._build_groq_prompt()
+
+        self.assertIsNone(eng._last_context_source)
+        self.assertIsNone(eng._current_context_provenance)
+
+    def test_low_confidence_and_too_short_updates_clear_provenance(self):
+        eng = _make_engine_groq("ignored")
+
+        with patch("modules.stt.cfg") as mock_cfg:
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+
+            eng._current_utterance_id = "utt-1"
+            eng._last_avg_logprob = -0.2
+            eng._last_no_speech_prob = 0.1
+            eng._update_context_transcript("eligible context", "groq")
+            self.assertEqual(eng._last_context_source.utterance_id, "utt-1")
+
+            eng._current_utterance_id = "utt-2"
+            eng._last_avg_logprob = -0.8
+            eng._last_no_speech_prob = 0.1
+            eng._update_context_transcript("low confidence context", "groq")
+            self.assertIsNone(eng._last_context_source)
+            self.assertEqual(eng._last_context_gate_reason, "avg_logprob")
+
+            eng._last_avg_logprob = -0.2
+            eng._last_no_speech_prob = 0.1
+            eng._update_context_transcript("eligible again", "groq")
+            eng._update_context_transcript("a", "groq")
+            self.assertIsNone(eng._last_context_source)
+            self.assertEqual(eng._last_context_gate_reason, "too_short")
 
     def test_build_groq_prompt_includes_seed_glossary_and_recent_context(self):
         eng = _make_engine_groq("ignored")
@@ -1083,6 +1331,13 @@ class TestGroqPromptBuilder(unittest.TestCase):
         eng._last_transcript = "old transcript"
         eng._last_context_transcript = "old transcript"
         eng._last_context_updated_at = time.monotonic() - 60
+        eng._last_context_source = _ContextSource(
+            utterance_id="utt-1",
+            engine="groq",
+            avg_logprob=-0.2,
+            no_speech_prob=0.1,
+            updated_at=eng._last_context_updated_at,
+        )
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.stt.groq_prompt = "seed prompt"
@@ -1092,6 +1347,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
 
         self.assertEqual(prompt, "seed prompt")
         self.assertEqual(eng._last_context_transcript, "")
+        self.assertIsNone(eng._last_context_source)
         self.assertTrue(eng._last_prompt_context_gated)
         self.assertEqual(eng._last_prompt_context_gate_reason, "expired")
 
@@ -1212,12 +1468,20 @@ class TestGroqPromptBuilder(unittest.TestCase):
         eng._last_transcript = "좋은 이전 문장"
         eng._last_context_transcript = "좋은 이전 문장"
         eng._last_context_updated_at = time.monotonic()
+        eng._last_context_source = _ContextSource(
+            utterance_id="utt-0",
+            engine="groq",
+            avg_logprob=-0.2,
+            no_speech_prob=0.1,
+            updated_at=eng._last_context_updated_at,
+        )
         eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(
             "잡음",
             segments=[{"avg_logprob": -0.1, "no_speech_prob": 0.9, "compression_ratio": 1.0}],
         )
 
-        with patch("modules.stt.cfg") as mock_cfg:
+        with patch("modules.stt.cfg") as mock_cfg, \
+                patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
@@ -1237,6 +1501,10 @@ class TestGroqPromptBuilder(unittest.TestCase):
         self.assertIsNone(event)
         self.assertEqual(eng._last_context_transcript, "")
         self.assertEqual(eng._last_context_gate_reason, "filtered_no_speech_prob")
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["context_source_utterance_id"], "utt-0")
+        self.assertEqual(kwargs["context_source_engine"], "groq")
+        self.assertEqual(kwargs["context_source_avg_logprob"], -0.2)
 
 
 class TestStreamerSttGlossary(unittest.TestCase):

@@ -239,6 +239,37 @@ class TestTranslationPolicy(unittest.TestCase):
             TranslationPolicy.is_stt_garbage("ABC DEF GHI 같은 이상한 한국어 조각")
         )
 
+    def test_aug23_repeated_gpt_acronym_reaches_translation(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "근데 GPT를 온전히 믿으시면 안 됩니다, 여러분들. "
+            "내가 느꼈는데 GPT, GPT가 가끔 그런 게 있어."
+        )
+
+        self.assertEqual(policy.prepare_input(text), text)
+
+    def test_aug23_coherent_click_instructions_reach_translation(self):
+        policy = TranslationPolicy(slang={})
+        cases = (
+            "여러분 좋아요를 눌러랍니다. 좋아요 업버튼. 딱 5분에 플레- 눌렀어염. "
+            "아 5분 안됐다. 부터 오십오분까지 클릭 다운 해주시면 됩니다.",
+            "클릭 다운하고 삭제하신 다음에 휴지통에도 남아 있으면 그것도 지워주세요. "
+            "네, 휴지통, 휴지통도 비워주세요.",
+        )
+
+        for text in cases:
+            with self.subTest(text=text):
+                policy.reset_last_input()
+                self.assertEqual(policy.prepare_input(text), text)
+
+    def test_standalone_click_rescue_requires_substantial_speech(self):
+        self.assertTrue(TranslationPolicy.is_stt_garbage("지금 클릭 해주세요"))
+        self.assertTrue(
+            TranslationPolicy.is_stt_garbage(
+                "자세한 설명을 보려면 사이트에서 여기를 클릭 해주세요"
+            )
+        )
+
     # ---- max_translate_chars (#6) ----
 
     def test_rejection_reason_returns_too_long_for_oversized_input(self):
@@ -630,6 +661,29 @@ class TestSttLowValueFragmentGuard(unittest.TestCase):
 
 
 class TestSttSongFragmentGuard(unittest.TestCase):
+    def test_aug23_coherent_speech_preserves_prefix_before_humming_tail(self):
+        policy = TranslationPolicy(slang={})
+        text = (
+            "너무 감동적이다. 이따가 이러고 한 칠분 뒤에 노래 나오는데 이따 들어보고 "
+            "진짜 제 거 한번 생각해 보세요. 진짜. 한번 생각해 보세요. 저 똑같이 했습니다. "
+            "여러분의 판단에 맡기겠습니다. 따단딴따단 딴! 딴딴딴."
+        )
+        expected = text.split(" 따단딴따단", 1)[0]
+
+        self.assertEqual(policy.rejection_reason(text), "stt_song_fragment")
+        self.assertEqual(policy.prepare_input(text), expected)
+
+    def test_song_tail_rescue_does_not_strip_non_vocable_residue(self):
+        policy = TranslationPolicy(slang={})
+        prefix = "이 노래 이야기는 충분히 길고 정상적인 설명입니다"
+
+        for tail in ("따단 따단 DOWNLOAD THIS FILE", "따단 따단 1234567890"):
+            with self.subTest(tail=tail):
+                text = f"{prefix} {tail}"
+                policy.reset_last_input()
+                self.assertEqual(policy.rejection_reason(text), "stt_song_fragment")
+                self.assertIsNone(policy.prepare_input(text))
+
     def test_song_like_repeated_vocables_are_rejected(self):
         policy = TranslationPolicy(slang={})
 

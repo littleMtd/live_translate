@@ -16,7 +16,9 @@ from pathlib import Path
 from config import cfg
 from utils.logger import get_logger
 from modules import audio_capture, stt, sentence_splitter, translator, subtitle_display
-from modules.translation_engines import engine_is_configured
+from modules.profile_context import profile_state
+from modules import profile_control
+from modules.translation_engines import effective_engine_chain_names, engine_is_configured
 
 log = get_logger("main")
 
@@ -25,11 +27,13 @@ audio_queue    = queue.Queue(maxsize=cfg.audio.queue_maxsize)
 text_queue     = queue.Queue(maxsize=cfg.stt.queue_maxsize)
 sentence_queue = queue.Queue(maxsize=cfg.translation.queue_maxsize)
 subtitle_queue = queue.Queue(maxsize=cfg.subtitle.queue_maxsize)
+provisional_queue = queue.Queue(maxsize=cfg.splitter.provisional_queue_maxsize)
 
 stop_event  = threading.Event()
 pause_event = threading.Event()   # set = pipeline paused
 
 _LOG_DIR = Path(__file__).parent / "logs"
+_CHATGPT_BUNDLE_OUTPUT_ROOT = Path(__file__).parent / "scratch" / "chatgpt_bundles"
 
 
 def _selected_translation_backend() -> str:
@@ -39,9 +43,14 @@ def _selected_translation_backend() -> str:
 
 
 def _warn_missing_engine_chain_keys() -> list[str]:
-    available = [name for name in cfg.translation.engine_chain
+    chain = (
+        effective_engine_chain_names()
+        if _selected_translation_backend() == "anthropic"
+        else tuple(cfg.translation.engine_chain)
+    )
+    available = [name for name in chain
                  if engine_is_configured(name)]
-    missing = [name for name in cfg.translation.engine_chain if name not in available]
+    missing = [name for name in chain if name not in available]
     for name in missing:
         log.warning("Engine %r skipped - API key not set", name)
     return available
@@ -72,6 +81,20 @@ def _validate_config(stt_only: bool):
         if backend == "nvidia":
             _warn_missing_engine_chain_keys()
     else:
+        if (
+            cfg.translation.translation_mode == "live"
+            and cfg.translation.deepseek_route == "primary"
+        ):
+            required = [
+                name for name in ("deepseek", "openrouter")
+                if not engine_is_configured(name)
+            ]
+            if required:
+                log.error(
+                    "Startup error: protected DeepSeek route requires API keys for %s",
+                    ", ".join(required),
+                )
+                sys.exit(1)
         available = _warn_missing_engine_chain_keys()
         if not available:
             log.error("Startup error: no API key set for any engine in engine_chain %s",
@@ -88,6 +111,42 @@ def _donation_ocr_command(app_path: Path) -> list[str]:
 def _handle_signal(sig, frame):
     log.info("Shutdown requested (signal %s)", sig)
     stop_event.set()
+
+
+def _export_chatgpt_bundle_on_shutdown(*, status: str) -> dict | None:
+    """Persist a terminal marker, then export this process's completed run.
+
+    Export is deliberately fail-soft: shutdown outcome and exit status remain
+    authoritative even if local artifact creation fails.
+    """
+    try:
+        from utils.chatgpt_bundle import export_bundle
+        from utils.runtime_events import runtime_events
+
+        runtime_events.emit(
+            "runtime_lifecycle",
+            action="shutdown",
+            status=status,
+        )
+        result = export_bundle(
+            run_id=runtime_events.run_id,
+            log_dir=_LOG_DIR,
+            output_root=_CHATGPT_BUNDLE_OUTPUT_ROOT,
+            project_root=Path(__file__).parent,
+            config_path=_LOG_DIR / "live_translate_config.json",
+            audio_root=_LOG_DIR / "audio_dump",
+            include_audio=False,
+        )
+        log.info(
+            "ChatGPT runtime bundle exported: %s (%s files, %s bytes)",
+            result["output_path"],
+            result["file_count"],
+            result["total_bytes"],
+        )
+        return result
+    except Exception as exc:
+        log.error("Automatic ChatGPT runtime bundle export failed: %s", exc)
+        return None
 
 
 def _shutdown_threads(
@@ -176,9 +235,20 @@ def main():
     args = parser.parse_args()
 
     stt_only = args.stt_only or args.listen
-    _validate_config(stt_only)
-    if args.listen:
-        _apply_listen_mode_config()
+    try:
+        _validate_config(stt_only)
+        if args.listen:
+            _apply_listen_mode_config()
+
+        profile_state.configure_source(
+            cfg.active_streamer_profile,
+            mode=str(getattr(cfg.translation, "profile_mode", "auto")),
+            translation_profile_applied=bool(cfg.translation.use_profile),
+            stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+        )
+    except (Exception, SystemExit):
+        _export_chatgpt_bundle_on_shutdown(status="startup_failed")
+        raise
 
     try:
         from utils.config_export import write as _write_config_json
@@ -202,42 +272,77 @@ def main():
         ocr_proc = subprocess.Popen(_donation_ocr_command(app_path))
         log.info("Donation OCR panel launched (pid=%s)", ocr_proc.pid)
 
-    all_queues = [audio_queue, text_queue, sentence_queue, subtitle_queue]
+    all_queues = [
+        audio_queue,
+        text_queue,
+        sentence_queue,
+        provisional_queue,
+        subtitle_queue,
+    ]
 
     try:
         audio_thread = audio_capture.start(audio_queue, stop_event, pause_event)
     except Exception as exc:
         log.error("Audio capture failed to start: %s", exc)
+        stop_event.set()
+        if ocr_proc is not None and ocr_proc.poll() is None:
+            ocr_proc.terminate()
+            log.info("Donation OCR panel terminated")
+        _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         sys.exit(1)
 
-    threads = [
-        audio_thread,
-        stt.start(audio_queue, text_queue, stop_event, pause_event),
-        sentence_splitter.start(text_queue, sentence_queue, stop_event, pause_event),
-    ]
+    threads = [audio_thread, profile_control.start(stop_event)]
+    pipeline_error: Exception | None = None
+    try:
+        threads.append(stt.start(audio_queue, text_queue, stop_event, pause_event))
+        threads.append(
+            sentence_splitter.start(
+                text_queue,
+                sentence_queue,
+                stop_event,
+                pause_event,
+                None if stt_only else provisional_queue,
+            )
+        )
 
-    if stt_only:
-        if args.listen:
-            threads.append(_stt_printer(sentence_queue, stop_event, "listen", "listen"))
-            log.info("Listen mode — press Ctrl+C to stop")
+        if stt_only:
+            if args.listen:
+                threads.append(_stt_printer(sentence_queue, stop_event, "listen", "listen"))
+                log.info("Listen mode — press Ctrl+C to stop")
+            else:
+                threads.append(_stt_printer(sentence_queue, stop_event))
+                log.info("STT-only mode — press Ctrl+C to stop")
+            while not stop_event.is_set():
+                stop_event.wait(1.0)
         else:
-            threads.append(_stt_printer(sentence_queue, stop_event))
-            log.info("STT-only mode — press Ctrl+C to stop")
-        while not stop_event.is_set():
-            stop_event.wait(1.0)
-    else:
-        threads.append(translator.start(sentence_queue, subtitle_queue, stop_event, pause_event))
-        if cfg.scene.enabled:
-            from modules import scene_context
-            threads.append(scene_context.start(stop_event, pause_event))
-        log.info("All background threads started. Opening subtitle window (Ctrl+C to quit).")
-        subtitle_display.start(subtitle_queue, stop_event, pause_event, all_queues)
-
-    _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
-    if ocr_proc is not None and ocr_proc.poll() is None:
-        ocr_proc.terminate()
-        log.info("Donation OCR panel terminated")
+            threads.append(
+                translator.start(
+                    sentence_queue,
+                    subtitle_queue,
+                    stop_event,
+                    pause_event,
+                    provisional_queue=provisional_queue,
+                )
+            )
+            if cfg.scene.enabled:
+                from modules import scene_context
+                threads.append(scene_context.start(stop_event, pause_event))
+            log.info("All background threads started. Opening subtitle window (Ctrl+C to quit).")
+            subtitle_display.start(subtitle_queue, stop_event, pause_event, all_queues)
+    except Exception as exc:
+        pipeline_error = exc
+        log.error("Pipeline aborted: %s", exc, exc_info=True)
+    finally:
+        _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
+        if ocr_proc is not None and ocr_proc.poll() is None:
+            ocr_proc.terminate()
+            log.info("Donation OCR panel terminated")
+        _export_chatgpt_bundle_on_shutdown(
+            status="failed" if pipeline_error is not None else "completed"
+        )
     log.info("Shutdown complete")
+    if pipeline_error is not None:
+        raise SystemExit(1) from pipeline_error
 
 
 if __name__ == "__main__":

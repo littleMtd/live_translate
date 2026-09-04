@@ -24,6 +24,14 @@ pub fn config_path() -> PathBuf {
     app_root().join("logs").join("live_translate_config.json")
 }
 
+pub fn profile_status_path() -> PathBuf {
+    app_root().join("logs").join("profile_status.json")
+}
+
+pub fn profile_registry_path() -> PathBuf {
+    app_root().join("data").join("streamer_profiles.json")
+}
+
 pub fn db_path() -> PathBuf {
     app_root().join("logs").join("live_translate.db")
 }

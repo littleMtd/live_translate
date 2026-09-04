@@ -54,6 +54,20 @@
         "주르르",
         "비챤"
       ],
+      "identity_markers": [
+        {"marker_id": "isegye_member_ine", "visible_names": ["아이네"]},
+        {"marker_id": "isegye_member_jingburger", "visible_names": ["징버거"]},
+        {"marker_id": "isegye_member_lilpa", "visible_names": ["릴파", "Lilpa"]},
+        {"marker_id": "isegye_member_gosegu", "visible_names": ["고세구", "Gosegu"]},
+        {"marker_id": "isegye_member_jururu", "visible_names": ["주르르", "Jururu"]},
+        {"marker_id": "isegye_member_viichan", "visible_names": ["비챤"]},
+        {
+          "marker_id": "isegye_brand_group",
+          "visible_names": ["이세계아이돌", "이세돌"],
+          "strength": "medium",
+          "kind": "group_brand"
+        }
+      ],
       "aliases": []
     },
     {
@@ -126,6 +140,19 @@
         "슈의 라면가게",
         "피맛"
       ],
+      "identity_markers": [
+        {"marker_id": "hades_member_sompunch", "visible_names": ["솜주먹", "솜펀치", "Sompunch"]},
+        {"marker_id": "hades_member_yeon_chorok", "visible_names": ["연초록", "Yeon Chorok"]},
+        {"marker_id": "hades_member_chaenna", "visible_names": ["챈나", "Chxxnnx", "CHXXNNX", "Chaenna"]},
+        {"marker_id": "hades_member_singgyul", "visible_names": ["띵귤", "싱귤", "TINGGYUL", "Singgyul"]},
+        {"marker_id": "hades_member_kyma", "visible_names": ["키마", "큐마", "Kyma"]},
+        {
+          "marker_id": "hades_brand_group",
+          "visible_names": ["HADES", "하데스"],
+          "strength": "medium",
+          "kind": "group_brand"
+        }
+      ],
       "aliases": ["hades"]
     },
     {
@@ -169,6 +196,35 @@
       "aliases": []
     },
     {
+      "profile_id": "irise",
+      "label": "IRISÉ",
+      "stt_terms": [
+        "아이리제",
+        "아이리즈",
+        "IRISÉ",
+        "IRISE",
+        "키리",
+        "KIIRI",
+        "티즈",
+        "TIZ",
+        "이제들",
+        "이재들",
+        "이재 여러분",
+        "이재희 여러분",
+        "IZÉ",
+        "IZE",
+        "패러블",
+        "Parable Entertainment",
+        "날개",
+        "Wings",
+        "IRIDESCENT",
+        "LOVEGAME",
+        "하트 크러쉬",
+        "Heart Crush"
+      ],
+      "aliases": []
+    },
+    {
       "profile_id": "url",
       "label": "UR:L",
       "stt_terms": [
@@ -199,6 +255,18 @@
         "조금 더 가까이",
         "사계",
         "ORIGINAL 3D SHOWCASE"
+      ],
+      "identity_markers": [
+        {"marker_id": "url_member_moka", "visible_names": ["모카", "Moka"]},
+        {"marker_id": "url_member_ranko", "visible_names": ["랑코", "Ranko"]},
+        {"marker_id": "url_member_manyang", "visible_names": ["마냥", "Manyang"]},
+        {"marker_id": "url_member_sommyang", "visible_names": ["솜먕", "Sommyang", "솜명", "솜명이", "솜명은"]},
+        {
+          "marker_id": "url_brand_group",
+          "visible_names": ["UR:L", "유아렐", "유아엘", "YOU ARE LINKED", "결속아이돌", "결속 아이돌"],
+          "strength": "medium",
+          "kind": "group_brand"
+        }
       ],
       "aliases": [
         "유아렐",

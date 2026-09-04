@@ -28,6 +28,10 @@ def _event(
         "profile_id": "hades_chxxnnx",
         "current_activity": "Hades",
         "engine": "groq",
+        "history_candidate_count": index - 1,
+        "history_cohort_id": "cohort-1",
+        "history_profile_id": "profile-cache-1",
+        "subtitle_emitted": True,
         **extra,
     }
 
@@ -173,7 +177,7 @@ def test_select_review_cases_uses_compact_translation_cases_with_context():
     assert len(cases) == 1
     assert cases[0].source_text == "만 5천원 받았어"
     assert cases[0].context_before[0]["source"] == "앞 문장"
-    assert cases[0].context_after[0]["source"] == "뒤 문장"
+    assert cases[0].context_after == []
     prompt_case = cases[0].to_prompt_dict()
     assert "source" in prompt_case
     assert "translation" in prompt_case
@@ -244,6 +248,20 @@ def test_review_case_matches_url_member_terms():
 
     assert {"랑코", "모카"} <= terms
     assert all(term["group"] == "UR:L" for term in matched)
+    assert all(term["active_for_effective_profile"] is True for term in matched)
+
+
+def test_cross_profile_term_match_is_reference_not_active_obligation():
+    case = reviewer.select_review_cases(
+        [_event("마냥이가 왔어", "馬良來了", profile_id="stellive_hina")],
+        mode="broad",
+        max_cases=1,
+    )[0]
+
+    matched = case.to_prompt_dict()["metadata"]["matched_fan_terms"]
+
+    assert matched[0]["term"] == "마냥"
+    assert matched[0]["active_for_effective_profile"] is False
 
 
 def test_build_messages_includes_live_stream_platform_background():
@@ -305,9 +323,9 @@ def test_select_review_cases_skips_filtered_empty_targets_by_default():
     assert cases[0].source_text == "찬나미들 천재야"
 
 
-def test_parse_llm_reviews_accepts_fenced_json_and_normalizes():
-    raw = """```json
-[
+def test_parse_llm_reviews_requires_exact_envelope_and_normalizes_legacy_helper():
+    raw = """{
+"reviews": [
   {
     "id": "case_0001",
     "severity": "BAD",
@@ -318,7 +336,7 @@ def test_parse_llm_reviews_accepts_fenced_json_and_normalizes():
     "reason_zh": "韓文是萬五千，不是五千。"
   }
 ]
-```"""
+}"""
 
     parsed = reviewer.parse_llm_reviews(raw)
     normalized = reviewer.normalize_review(parsed[0])
@@ -327,6 +345,10 @@ def test_parse_llm_reviews_accepts_fenced_json_and_normalizes():
     assert normalized["severity"] == "bad"
     assert normalized["issue_type"] == "amount_error"
     assert normalized["confidence"] == 1.0
+
+    import pytest
+    with pytest.raises(ValueError, match="must not use markdown"):
+        reviewer.parse_llm_reviews("```json\n" + raw + "\n```")
 
 
 def test_normalize_review_accepts_glossary_gap_issue_type():
@@ -383,17 +405,16 @@ def test_main_reviews_with_mocked_openrouter(tmp_path, monkeypatch):
     output_dir = tmp_path / "qa"
 
     def fake_call_openrouter(**kwargs):
-        return json.dumps([
+        return json.dumps({"reviews": [
             {
                 "id": "case_0001",
-                "severity": "bad",
-                "issue_type": "amount_error",
-                "confidence": 0.95,
-                "suggested_translation": "收到一萬五千元",
-                "suggested_correction_rule": "review amount_mismatch_candidate",
-                "reason_zh": "金額少了萬位。",
+                "verdict": "wrong",
+                "severity": 3,
+                "categories": ["number_quantity"],
+                "brief_reason": "來源與譯文金額不一致。",
+                "source_needs_verification": False,
             }
-        ], ensure_ascii=False)
+        ]}, ensure_ascii=False)
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(reviewer, "call_openrouter", fake_call_openrouter)
@@ -415,5 +436,135 @@ def test_main_reviews_with_mocked_openrouter(tmp_path, monkeypatch):
         for line in (output_dir / "reviews.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert rows[0]["review_status"] == "reviewed"
-    assert rows[0]["llm_review"]["severity"] == "bad"
-    assert "收到一萬五千元" in (output_dir / "report.md").read_text(encoding="utf-8")
+    assert rows[0]["llm_review"]["verdict"] == "wrong"
+    assert "來源與譯文金額不一致" in (output_dir / "report.md").read_text(encoding="utf-8")
+    assert (output_dir / "summary.json").exists()
+
+
+def test_semantic_review_contract_rejects_missing_duplicate_and_contradictory_rows():
+    cases = reviewer.select_review_cases(
+        [_event("문장 하나", "句子一", index=1), _event("문장 둘", "句子二", index=2)],
+        mode="broad",
+        max_cases=2,
+    )
+    valid = {
+        "id": "case_0001",
+        "verdict": "ok",
+        "severity": 0,
+        "categories": [],
+        "brief_reason": "語意一致。",
+        "source_needs_verification": False,
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="coverage mismatch"):
+        reviewer.validate_semantic_reviews([valid], cases)
+    duplicate = [valid, dict(valid)]
+    with pytest.raises(ValueError, match="id/order mismatch"):
+        reviewer.validate_semantic_reviews(duplicate, cases)
+    contradictory = [dict(valid, severity=1), dict(valid, id="case_0002")]
+    with pytest.raises(ValueError, match="contradictory ok"):
+        reviewer.validate_semantic_reviews(contradictory, cases)
+
+
+def test_review_context_uses_only_prior_published_same_cohort_and_never_future():
+    events = [
+        _event("앞 문장", "前一句", index=1),
+        _event("현재 문장", "現在這句", index=2),
+        _event("미래 문장", "未來一句", index=3),
+    ]
+    case = reviewer.select_review_cases(
+        events, mode="broad", max_cases=3, context_window=2
+    )[1]
+
+    assert [row["source"] for row in case.context_before] == ["앞 문장"]
+    assert case.context_after == []
+    assert case.history_reconstruction == "approximate_prior_published_same_cohort"
+
+
+def test_review_case_preserves_profile_attempt_and_publication_provenance():
+    event = _event(
+        "원문", "譯文", index=1,
+        source_utterance_ids=["utt-1"],
+        profile_generation=7,
+        profile_cache_identity="profiles:7:hades",
+        route_id="deepseek:model",
+        model="model",
+        prompt_version="p1",
+        attempts=[{
+            "chain_attempt_index": 1,
+            "engine": "deepseek",
+            "model": "model",
+            "status": "success",
+            "selected_for_output": True,
+            "output_guard": {"candidate_raw_output": "原始候選"},
+        }],
+    )
+    row = reviewer.select_review_cases([event], mode="broad", max_cases=1)[0].to_output_dict()
+
+    assert row["source_utterance_ids"] == ["utt-1"]
+    assert row["profile_generation"] == 7
+    assert row["attempts"][0]["output_guard"]["candidate_raw_output"] == "原始候選"
+    assert row["subtitle_emitted"] is True
+
+
+def test_calibration_loader_blinds_only_bounded_good_bad_contrasts(tmp_path):
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps([
+        {
+            "id": "bounded",
+            "source_text": "세구님 시점",
+            "reference_output": "Gosegu的視角。",
+            "current_output": "塞古的視角",
+            "expected_terms": ["Gosegu"],
+            "forbidden_terms": ["塞古"],
+            "runtime_refs": [{"run_id": "run-1", "profile_id": "isegye_lilpa"}],
+        },
+        {
+            "id": "smoke-only",
+            "source_text": "안녕",
+            "reference_output": "你好",
+            "current_output": "您好",
+            "expected_terms": [],
+            "forbidden_terms": [],
+        },
+    ], ensure_ascii=False), encoding="utf-8")
+
+    events = reviewer.load_calibration_events([path])
+    cases = reviewer.select_review_cases(events, mode="broad", max_cases=10)
+
+    assert [event["_calibration_label"] for event in events] == ["known_good", "known_failure"]
+    assert len(cases) == 2
+    assert "calibration_label" not in cases[0].to_prompt_dict()["metadata"]
+
+
+def test_run_summary_reports_calibration_recall_false_positives_and_cost():
+    rows = [
+        {"run_id": "r", "rank": 1, "calibration_pair_id": "p", "calibration_label": "known_failure", "llm_review": {"verdict": "wrong", "categories": ["meaning"]}},
+        {"run_id": "r", "rank": 2, "calibration_pair_id": "p", "calibration_label": "known_good", "llm_review": {"verdict": "ok", "categories": []}},
+    ]
+    reviewer.API_CALL_METRICS[:] = [{
+        "prompt_tokens": 10, "completion_tokens": 5, "cost_usd": 0.01, "latency_ms": 20,
+    }]
+    reviewer.CALIBRATION_POPULATION.update(known_failure=1, known_good=1)
+
+    summary = reviewer.build_run_summary(rows, "reviewer")
+
+    assert summary["calibration"]["known_failure_recall"] == 1.0
+    assert summary["calibration"]["known_good_false_positive_rate"] == 0.0
+    assert summary["cost_usd"] == 0.01
+    assert summary["calibration"]["pairwise_discrimination"]["rate"] == 1.0
+
+
+def test_reviewer_independence_rejects_same_family_and_deepseek():
+    qwen_case = reviewer.select_review_cases(
+        [_event("원문", "譯文", model="qwen/qwen3-next-80b-a3b-instruct")],
+        mode="broad", max_cases=1,
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="matches candidate producer"):
+        reviewer.validate_reviewer_independence(qwen_case, "qwen/qwen3-vl-32b")
+    with pytest.raises(ValueError, match="DeepSeek reviewers are excluded"):
+        reviewer.validate_reviewer_independence(qwen_case, "deepseek/deepseek-chat")
+    reviewer.validate_reviewer_independence(qwen_case, "anthropic/claude-haiku-4.5")

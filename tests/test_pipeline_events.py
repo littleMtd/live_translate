@@ -1,6 +1,9 @@
 """Unit tests for pipeline event carriers, focused on utterance_id propagation."""
 import unittest
 
+from modules.activity_context import capture_activity_snapshot
+from modules.profile_context import profile_state
+
 from modules.pipeline_events import (
     AudioChunk,
     SentenceEvent,
@@ -13,6 +16,38 @@ from modules.pipeline_events import (
 
 
 class TestUtteranceIdPropagation(unittest.TestCase):
+    def test_sentence_event_carries_immutable_profile_snapshot(self):
+        profile_snapshot = profile_state.legacy_snapshot("url")
+        source = TranscriptionEvent(
+            text="x",
+            engine="test",
+            profile_id="url",
+            profile_snapshot=profile_snapshot,
+        )
+        sentence = transcription_to_sentence("x", incomplete=False, source=source)
+        self.assertIs(sentence.profile_snapshot, profile_snapshot)
+        self.assertIs(sentence_metadata(sentence)["profile_snapshot"], profile_snapshot)
+        with self.assertRaises(AttributeError):
+            profile_snapshot.effective_profile_id = "isegye_lilpa"
+
+    def test_sentence_event_carries_immutable_activity_snapshot_and_identity(self):
+        snapshot = capture_activity_snapshot("StarCraft", source="manual")
+        sentence = transcription_to_sentence(
+            "x",
+            incomplete=False,
+            sentence_id="sentence-000001",
+            created_at_utc="2026-08-12T00:00:00+00:00",
+            enqueued_at_utc="2026-08-12T00:00:00+00:00",
+            enqueued_at_monotonic=12.5,
+            activity_snapshot=snapshot,
+        )
+
+        meta = sentence_metadata(sentence)
+        self.assertEqual(meta["sentence_id"], "sentence-000001")
+        self.assertIs(meta["activity_snapshot"], snapshot)
+        with self.assertRaises(AttributeError):
+            snapshot.activity_id = "hades"
+
     def test_audio_chunk_proxies_legacy_audio_shape_access(self):
         audio = [1, 2, 3]
         chunk = AudioChunk(audio=audio, overlap_seconds=0.5, vad_cut_reason="silence")

@@ -1,0 +1,2189 @@
+{
+  "phase0_replay_manifest_schema": 2,
+  "batch_id": "T25-runtime-audio-20260802",
+  "speaker_policy": "observed-mixed-audio; no speaker ground truth asserted",
+  "source_evidence": "data/semantic_quality_evidence_20260802.json",
+  "source_annotations": "data/manual_quality_annotations_20260802.json",
+  "runtime_events": "logs/runtime_events_20260802.jsonl",
+  "root_cause_group_counts": {
+    "audio_replay_required": 21
+  },
+  "case_count": 21,
+  "current_asset_count": 31,
+  "evidence_asset_count": 3,
+  "asset_count": 34,
+  "audio_seconds": 223.688,
+  "audio_bytes": 7159512,
+  "aggregation_contract": "Aggregate and compare only source_kind=current assets. Evidence assets are reported separately and never concatenated into candidate current text.",
+  "ground_truth_limit": "ASR candidates and human annotations are secondary evidence, not automatic ground truth or authorization for production changes.",
+  "known_gap": {
+    "source_annotation_id": 68,
+    "reason": "selected translation has no source_utterance_ids; outside the 21 audio cases"
+  },
+  "cases": [
+    {
+      "sample_id": "T25-049",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 49,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:43:33] 도미선양은 그냥 뭐 이렇게...",
+        "current_translation": "道美善那種……",
+        "reason": "同一冰淇淋話題中，도미선양明顯是 더위사냥 的STT誤聽。",
+        "suggested_translation": "더위사냥只要撕幾張衛生紙包起來，就能直接拿著吃。",
+        "suggested_rule": "source_norm：도미선양→더위사냥；加入STT熱詞。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-35",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-35.wav",
+          "size_bytes": 320556,
+          "sha256": "8ff53d33d13f5ba4fc36a300d8f7926584573bc007d098c7280dc7248d1f1883",
+          "audio_seconds": 10.016
+        },
+        {
+          "utterance_id": "utt-36",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-36.wav",
+          "size_bytes": 178732,
+          "sha256": "e3b7e611fbd645c37ac257213ee824434f5db01987da78d54fb59ce48a2d567f",
+          "audio_seconds": 5.584
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          27
+        ],
+        "source_text": "난 이것도 손에 묻는다고 생각하는데? 도미선양은 그냥 뭐 이렇게 휴지 몇 개 뜯어가지고 휴지로 돌돌돌 말아가지고 냠냠냠냠 먹으면 돼. 얘는 울퉁불퉁해가지고 그 휴지로 말아지지도 안해. 계속 만져줘야 돼. 마사지 해줘야 돼. 어우 불편해.",
+        "target_text": "我覺得這也會弄髒手啊？道美善那種，直接撕幾張衛生紙，捲起來噠噠噠吃掉就完事了。這個凹凸不平，根本捲不進衛生紙裡，得一直用手摸，還得按摩，喔～真麻煩。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-35",
+          "utt-36"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-35",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-36",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-35",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-35.wav",
+            "stt_event_line": 2639,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 10.016,
+            "stt_latency_ms": 694.57,
+            "avg_logprob": -0.24803597,
+            "no_speech_prob": 0.023117065,
+            "audio_context": {
+              "vad_cut_reason": "hard_max",
+              "audio_rms": 0.008134,
+              "audio_peak": 0.046997,
+              "normalized_rms": 0.032537,
+              "normalized_peak": 0.187988,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-36",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-36.wav",
+            "stt_event_line": 2642,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.584,
+            "stt_latency_ms": 424.42,
+            "avg_logprob": -0.26830432,
+            "no_speech_prob": 0.018676758,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.005005,
+              "audio_peak": 0.039307,
+              "normalized_rms": 0.020021,
+              "normalized_peak": 0.157227,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-053",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 53,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:48:36] 언걸 릴파 인정해드리겠습니다. 언걸파.",
+        "current_translation": "我承認言哥是Lilpa。言哥派。",
+        "reason": "承接「엉뚱걸」，언걸疑似其截斷／誤聽，不是人名。",
+        "suggested_translation": "我承認Lilpa就是怪咖女孩。怪咖Lilpa。",
+        "suggested_rule": "source_norm：언걸／엉걸→엉뚱걸；不成句音節不得直接音譯成人名。",
+        "rule_target": "source_norm",
+        "confidence": 0.87,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-62",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-62.wav",
+          "size_bytes": 122924,
+          "sha256": "4aca798055bc62286c2dec52aa80f26c43f0201fdc180b6c9beba8ec5fd7e853",
+          "audio_seconds": 3.84
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          46
+        ],
+        "source_text": "언걸 릴파 인정해드리겠습니다. 언걸파.",
+        "target_text": "我承認言哥是Lilpa。言哥派。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-62"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-62",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-62",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-62.wav",
+            "stt_event_line": 2753,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.84,
+            "stt_latency_ms": 551.65,
+            "avg_logprob": -0.30056873,
+            "no_speech_prob": 0.034301758,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.004608,
+              "audio_peak": 0.039383,
+              "normalized_rms": 0.018431,
+              "normalized_peak": 0.157532,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-055",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 55,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:49:10] 내 눈에 혁미경이 있다.",
+        "current_translation": "我眼睛裡有雷射鏡。",
+        "reason": "혁미경不是常見詞，應是 현미경（顯微鏡）的誤聽。",
+        "suggested_translation": "我的眼睛裡可是裝了顯微鏡。",
+        "suggested_rule": "source_norm：혁미경→현미경。",
+        "rule_target": "source_norm",
+        "confidence": 0.96,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-67",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-67.wav",
+          "size_bytes": 108588,
+          "sha256": "7ea7bf8b27189a33a893398c69bbfabf90e66fc4c747ab3aadc27d3d384ff9e7",
+          "audio_seconds": 3.392
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          50
+        ],
+        "source_text": "내 눈에 혁미경이 있다.",
+        "target_text": "我眼睛裡有雷射鏡。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-67"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-67",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-67",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-67.wav",
+            "stt_event_line": 2771,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.392,
+            "stt_latency_ms": 385.2,
+            "avg_logprob": -0.21007484,
+            "no_speech_prob": 0.04434204,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.008283,
+              "audio_peak": 0.043182,
+              "normalized_rms": 0.033132,
+              "normalized_peak": 0.172729,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-056",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 56,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:52:31] 일부 소환의 재단 레이드... 꺼드렁용",
+        "current_translation": "召喚的階層突襲……還有當誘餌。",
+        "reason": "소환의 재단應是제단；꺼드렁용疑似거드럭용，意為炫耀，不是誘餌。",
+        "suggested_translation": "適合用在召喚祭壇Raid、據點防禦，或單純拿來炫耀。",
+        "suggested_rule": "Palworld source_norm：소환의 재단→소환의 제단、꺼드렁용→거드럭용。",
+        "rule_target": "source_norm",
+        "confidence": 0.86,
+        "label_states": [
+          "candidate_assertion",
+          "partial_assertion",
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-95",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-95.wav",
+          "size_bytes": 358956,
+          "sha256": "c353c54f73f908e9c81467936bf7b4ab741346c0f249e0e228ba20c8bbfc1453",
+          "audio_seconds": 11.216
+        },
+        {
+          "utterance_id": "utt-96",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-96.wav",
+          "size_bytes": 215596,
+          "sha256": "587f626cbf29abd586f95fed8fdb9e8c1caa66f1a023ab688b180091797fadcf",
+          "audio_seconds": 6.736
+        },
+        {
+          "utterance_id": "utt-94",
+          "chunk_role": "context_evidence",
+          "source_kind": "evidence",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-94.wav",
+          "size_bytes": 292908,
+          "sha256": "dcd2a925aa9535dfc6eff9e2bc56be5aa27e7d6e91f0ea9cacad08367df3918c",
+          "audio_seconds": 9.152
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          73
+        ],
+        "source_text": "그러나 세고급 사이즈라서 다양한 상황에 활용하기 어렵고, 선회 속도가 느려서 불편감이 있어 자주 채택되지는 않습니다. 그래서 이 친구는 일부 소환의 재단 레이드, 거점 방어용, 꺼드렁용으로 쓰는 게 효율적입니다. 소환의 재단 레이드에도 꽤 괜찮구나.",
+        "target_text": "但因為是S級尺寸，應用在各種狀況上比較困難，轉向速度又慢，用起來很不順手，所以很少被選用。這傢伙比較適合用在召喚的階層突襲、據點防禦，還有當誘餌。用在召喚的階層突襲也還不錯嘛。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-95",
+          "utt-96"
+        ],
+        "evidence_source_utterance_ids": [
+          "utt-94"
+        ],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-95",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-96",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-94",
+            "usage": "evidence"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-95",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-95.wav",
+            "stt_event_line": 2877,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 11.216,
+            "stt_latency_ms": 697.89,
+            "avg_logprob": -0.12605527,
+            "no_speech_prob": 0.0025310516,
+            "audio_context": {
+              "vad_cut_reason": "hard_max",
+              "audio_rms": 0.007112,
+              "audio_peak": 0.041626,
+              "normalized_rms": 0.028449,
+              "normalized_peak": 0.166504,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          },
+          {
+            "utterance_id": "utt-96",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-96.wav",
+            "stt_event_line": 2879,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.736,
+            "stt_latency_ms": 644.39,
+            "avg_logprob": -0.22685733,
+            "no_speech_prob": 0.018804494,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007385,
+              "audio_peak": 0.040558,
+              "normalized_rms": 0.029538,
+              "normalized_peak": 0.162231,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          },
+          {
+            "utterance_id": "utt-94",
+            "chunk_role": "context_evidence",
+            "source_kind": "evidence",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-94.wav",
+            "stt_event_line": 2873,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 9.152,
+            "stt_latency_ms": 639.15,
+            "avg_logprob": -0.2719379,
+            "no_speech_prob": 0.021331787,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.009267,
+              "audio_peak": 0.043243,
+              "normalized_rms": 0.037067,
+              "normalized_peak": 0.172974,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-057",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 57,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:53:06] 제노드란은 호술할 단점 때문에",
+        "current_translation": "因為澤諾蘭有難以駕馭的缺點",
+        "reason": "호술할是후술할（下文將提到）的誤聽，原文沒有「難駕馭」。",
+        "suggested_translation": "但제노드란因為下文將提到的缺點而被擠了下去。",
+        "suggested_rule": "source_norm：解說語境 호술할→후술할。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-100",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-100.wav",
+          "size_bytes": 301612,
+          "sha256": "1e3f2dde4cb6efa7c7b0fe449c5405444eef0f9646ae0adea55635b052bdb512",
+          "audio_seconds": 9.424
+        },
+        {
+          "utterance_id": "utt-101",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-101.wav",
+          "size_bytes": 134444,
+          "sha256": "d4a4e822a77faa44c66cd3d4abf61ef5d74eba2cacbe9b9b58ba6cfbc4a63f09",
+          "audio_seconds": 4.2
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          76
+        ],
+        "source_text": "날탈 종결 포지션에서 제노드란과 경쟁 관계였으나 제노드란은 호술할 단점 때문에 밀려났고 결국 제트래곤이 순수하게 비행선으로 봤을 때 날탈 종결이 되었다.",
+        "target_text": "在終極坐騎的位置上，澤諾蘭曾與傑特拉貢競爭，但因為澤諾蘭有難以駕馭的缺點，最終被擠下去，結果傑特拉貢純粹從飛船角度來看，成了終極坐騎。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-100",
+          "utt-101"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-100",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-101",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-100",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-100.wav",
+            "stt_event_line": 2893,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 9.424,
+            "stt_latency_ms": 872.76,
+            "avg_logprob": -0.026339155,
+            "no_speech_prob": 0.26293945,
+            "audio_context": {
+              "vad_cut_reason": "hard_max",
+              "audio_rms": 0.006389,
+              "audio_peak": 0.041107,
+              "normalized_rms": 0.025557,
+              "normalized_peak": 0.164429,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.4
+            }
+          },
+          {
+            "utterance_id": "utt-101",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-101.wav",
+            "stt_event_line": 2895,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 4.2,
+            "stt_latency_ms": 426.81,
+            "avg_logprob": -0.20056199,
+            "no_speech_prob": 5.9604645e-08,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.004678,
+              "audio_peak": 0.031693,
+              "normalized_rms": 0.018712,
+              "normalized_peak": 0.12677,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-061",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 61,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:09:44] 이거 약간 자괴같이... 빛나는 거?",
+        "current_translation": "有點像自虐一樣……會閃光的！",
+        "reason": "描述閃亮服飾裝飾時，자괴應是자개（螺鈿）。",
+        "suggested_translation": "這裡有點像螺鈿一樣，有看到它在發亮嗎？",
+        "suggested_rule": "source_norm：빛나다語境 자괴같이→자개같이。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-212",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-212.wav",
+          "size_bytes": 208940,
+          "sha256": "8f2dc8019f0e90fb2f2582f892c9c9eb1af8c619273ec9384665bafb47d6e6fa",
+          "audio_seconds": 6.528
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          164
+        ],
+        "source_text": "이거 약간 자괴같이 요기 요기! 봤어? 빛나는 거?",
+        "target_text": "這個有點像自虐一樣，就在這邊這邊！看到了嗎？會閃光的！",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-212"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-212",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-212",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-212.wav",
+            "stt_event_line": 3336,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.528,
+            "stt_latency_ms": 633.36,
+            "avg_logprob": -0.43406793,
+            "no_speech_prob": 0.007118225,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.007409,
+              "audio_peak": 0.041824,
+              "normalized_rms": 0.029634,
+              "normalized_peak": 0.167297,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-062",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 62,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:15:31] 그게 풀 그거요?",
+        "current_translation": "那是草嗎？",
+        "reason": "突破、課金語境中疑似「풀돌이요」＝滿突破，不是草。",
+        "suggested_translation": "那是滿突破嗎？",
+        "suggested_rule": "source_norm：풀 그거요→풀돌이요；풀돌→滿突破。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-259",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-259.wav",
+          "size_bytes": 84012,
+          "sha256": "57bf0c82c53aaa80deaa90612f7a819ea21ce74d19c59dae638cfb24b97c645c",
+          "audio_seconds": 2.624
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          202
+        ],
+        "source_text": "그게 풀 그거요?",
+        "target_text": "那是草嗎？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-259"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-259",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-259",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-259.wav",
+            "stt_event_line": 3513,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 2.624,
+            "stt_latency_ms": 384.85,
+            "avg_logprob": -0.15123501,
+            "no_speech_prob": 0.022705078,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.004977,
+              "audio_peak": 0.035629,
+              "normalized_rms": 0.019909,
+              "normalized_peak": 0.142517,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-063",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 63,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:16:15] 명조코들 개만나보네 채팅 왜 이렇게 빨라?",
+        "current_translation": "明조코們也太猛了吧",
+        "reason": "개만나보네應是개많나 보네，指人很多。",
+        "suggested_translation": "《鳴潮》玩家也太多了吧？聊天室怎麼這麼快？",
+        "suggested_rule": "source_norm：채팅語境 개만나 보네→개많나 보네。",
+        "rule_target": "source_norm",
+        "confidence": 0.97,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-266",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-266.wav",
+          "size_bytes": 151084,
+          "sha256": "5c661035ab466ad076c67f647f5b2cca2054e947efaa8c32fee267052f3c473a",
+          "audio_seconds": 4.72
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          208
+        ],
+        "source_text": "아니 명조코들 개만나보네 채팅 왜 이렇게 빨라?",
+        "target_text": "靠，明조코們也太猛了吧，聊天怎麼這麼快？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-266"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-266",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-266",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-266.wav",
+            "stt_event_line": 3540,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 4.72,
+            "stt_latency_ms": 450.49,
+            "avg_logprob": -0.27216318,
+            "no_speech_prob": 0.08154297,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007952,
+              "audio_peak": 0.045135,
+              "normalized_rms": 0.031808,
+              "normalized_peak": 0.180542,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.4
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-067",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 67,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:26:23] 징거부가님의...",
+        "current_translation": "徵古布加尼姆的……",
+        "reason": "高度疑似징버거님의；現有징버거熱詞但未命中，且님被音譯進人名。",
+        "suggested_translation": "好，징버거的……",
+        "suggested_rule": "source_norm：징거부가님→징버거님，固定保留징버거。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-331",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-331.wav",
+          "size_bytes": 191532,
+          "sha256": "f417dfa6a4e74b1af86e66cacc98ffe4345e891271cd103fb5175053e2b42680",
+          "audio_seconds": 5.984
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          259
+        ],
+        "source_text": "자, 징거부가님의... 우와, 뭐야, 핑크 머리?",
+        "target_text": "好，徵古布加尼姆的… 哇，幹嘛，粉紅頭髮？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-331"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-331",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-331",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-331.wav",
+            "stt_event_line": 3804,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.984,
+            "stt_latency_ms": 879.09,
+            "avg_logprob": -0.2743302,
+            "no_speech_prob": 0.015095586,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.007088,
+              "audio_peak": 0.042053,
+              "normalized_rms": 0.028351,
+              "normalized_peak": 0.168213,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-070",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 70,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:11:02] 나 엄마랑 표새 살 건데?",
+        "current_translation": "我不是要跟媽一起住嗎？",
+        "reason": "표새不成詞，應是평생；目前漏掉「一輩子」。",
+        "suggested_translation": "我要跟媽媽住一輩子啊。",
+        "suggested_rule": "source_norm：엄마랑 표새 살다→엄마랑 평생 살다。",
+        "rule_target": "source_norm",
+        "confidence": 0.96,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-55",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-55.wav",
+          "size_bytes": 332076,
+          "sha256": "3b60186a1ad47bc8492bfff30f2d11f787cbf135120024f27f10c417b502a6f8",
+          "audio_seconds": 10.376
+        },
+        {
+          "utterance_id": "utt-54",
+          "chunk_role": "context_evidence",
+          "source_kind": "evidence",
+          "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-54.wav",
+          "size_bytes": 223788,
+          "sha256": "8dc0d44eae929e5feb8fe751ef6b576b592229acc127fc3df266537eaf0f771f",
+          "audio_seconds": 6.992
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T090406Z-7548",
+        "translation_sequence_ids": [
+          39
+        ],
+        "source_text": "엄마 근처에 살아서 이게 집이 좀 엄마랑 집이 가까워야 된다. 그래서 그때 얘기했었어. 나는 자취 안 할 건데? 나 엄마랑 표새 살 건데?",
+        "target_text": "要住在媽附近，這樣家離媽才近，那時候我就說了：「我不會自己住啦？我不是要跟媽一起住嗎？」",
+        "profile_ids": [
+          "url"
+        ],
+        "source_utterance_ids": [
+          "utt-55"
+        ],
+        "evidence_source_utterance_ids": [
+          "utt-54"
+        ],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-55",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-54",
+            "usage": "evidence"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-55",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-55.wav",
+            "stt_event_line": 1710,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 10.376,
+            "stt_latency_ms": 1024.89,
+            "avg_logprob": -0.15059984,
+            "no_speech_prob": 0.002866745,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.023862,
+              "audio_peak": 0.115616,
+              "normalized_rms": 0.08,
+              "normalized_peak": 0.387615,
+              "normalization_gain": 3.353,
+              "overlap_seconds": 1.0
+            }
+          },
+          {
+            "utterance_id": "utt-54",
+            "chunk_role": "context_evidence",
+            "source_kind": "evidence",
+            "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-54.wav",
+            "stt_event_line": 1706,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.992,
+            "stt_latency_ms": 644.4,
+            "avg_logprob": -0.13022755,
+            "no_speech_prob": 0.029143242,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.024254,
+              "audio_peak": 0.116257,
+              "normalized_rms": 0.08,
+              "normalized_peak": 0.383471,
+              "normalization_gain": 3.298,
+              "overlap_seconds": 0.4
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-073",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 73,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:20:56] 나는 내 몸도 느껴서",
+        "current_translation": "我因為能感受到自己的身體",
+        "reason": "應是「내가 몸소 느껴서」＝親身體會。",
+        "suggested_translation": "我是自己親身體會過，所以現在會努力聽媽媽的話。",
+        "suggested_rule": "source_norm：내 몸도 느껴서→내가 몸소 느껴서。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-131",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-131.wav",
+          "size_bytes": 240684,
+          "sha256": "dea33a38bd45357a5d67f8836021065e5c3eaed48b42e016be5bd5e2c680501f",
+          "audio_seconds": 7.52
+        },
+        {
+          "utterance_id": "utt-132",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-132.wav",
+          "size_bytes": 279084,
+          "sha256": "f64c78a5dc3e216855348679371710a30e13327797af17bc2693d30353f6ea26",
+          "audio_seconds": 8.72
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T090406Z-7548",
+        "translation_sequence_ids": [
+          97
+        ],
+        "source_text": "나는 내 몸도 느껴서 나는 이제 잘 들으려고 노력을 하는데, 아빠는 뭐 병원 간다던지 수술을 한다던지 이런 큰 일이 있을 때도 엄마 얘기 안 들어가지고 수술 끝나고 나면",
+        "target_text": "我因為能感受到自己的身體，所以現在努力想聽進去，但爸爸就算要去看醫生、做手術這種大事，還是不聽媽媽的話，等手術做完之後",
+        "profile_ids": [
+          "url"
+        ],
+        "source_utterance_ids": [
+          "utt-131",
+          "utt-132"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-131",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-132",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-131",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-131.wav",
+            "stt_event_line": 2001,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.52,
+            "stt_latency_ms": 617.36,
+            "avg_logprob": -0.12821633,
+            "no_speech_prob": 0.00061273575,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.019593,
+              "audio_peak": 0.114014,
+              "normalized_rms": 0.07837,
+              "normalized_peak": 0.456055,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-132",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-132.wav",
+            "stt_event_line": 2003,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 8.72,
+            "stt_latency_ms": 658.48,
+            "avg_logprob": -0.19252367,
+            "no_speech_prob": 0.0018844604,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.017339,
+              "audio_peak": 0.113663,
+              "normalized_rms": 0.069354,
+              "normalized_peak": 0.454651,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-074",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 74,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:25:10] 어떤 오늘 타고 날까",
+        "current_translation": "今天該跟著誰買？",
+        "reason": "應是「어떤 운을 타고날까」＝天生帶著什麼運。",
+        "suggested_translation": "他們是天生帶著什麼好運啊？",
+        "suggested_rule": "source_norm：어떤 오늘 타고 날까→어떤 운을 타고날까。",
+        "rule_target": "source_norm",
+        "confidence": 0.97,
+        "label_states": [
+          "candidate_assertion",
+          "partial_assertion",
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-166",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-166.wav",
+          "size_bytes": 233516,
+          "sha256": "e0f6e99ca4d58fa9b159fa6da7172d380fa4a5bef53d491d944a052a4780b1df",
+          "audio_seconds": 7.296
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T090406Z-7548",
+        "translation_sequence_ids": [
+          122
+        ],
+        "source_text": "주식 잘 되는 사람들 뭘까 어떤 오늘 타고 날까",
+        "target_text": "那些股票賺錢的人，到底在搞什麼？今天該跟著誰買？",
+        "profile_ids": [
+          "url"
+        ],
+        "source_utterance_ids": [
+          "utt-166"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-166",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-166",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T090406Z-7548/utt-166.wav",
+            "stt_event_line": 2130,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.296,
+            "stt_latency_ms": 562.58,
+            "avg_logprob": -0.46594304,
+            "no_speech_prob": 2.3782253e-05,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.009941,
+              "audio_peak": 0.098633,
+              "normalized_rms": 0.039765,
+              "normalized_peak": 0.394531,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-078",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 78,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:40:09] 조정도야? 괜찮아?",
+        "current_translation": "是調音嗎？沒問題嗎？",
+        "reason": "片段長度語境中應是「저 정도야?」而非調音。",
+        "suggested_translation": "要到那麼長嗎？這樣可以嗎？",
+        "suggested_rule": "source_norm：片段長度語境 조정도야→저 정도야。",
+        "rule_target": "source_norm",
+        "confidence": 0.95,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-12",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-12.wav",
+          "size_bytes": 75820,
+          "sha256": "8a72468fa4f81f567924df528a48e13417e52ac63bb72d7f1507ed02189d092e",
+          "audio_seconds": 2.368
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          7
+        ],
+        "source_text": "조정도야? 괜찮아?",
+        "target_text": "是調音嗎？沒問題嗎？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-12"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-12",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-12",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-12.wav",
+            "stt_event_line": 2542,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 2.368,
+            "stt_latency_ms": 386.73,
+            "avg_logprob": -0.43065032,
+            "no_speech_prob": 0.0236969,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.004686,
+              "audio_peak": 0.029297,
+              "normalized_rms": 0.018743,
+              "normalized_peak": 0.117188,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-081",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 81,
+        "severity": "bad",
+        "issue_type": "name_error",
+        "source": "[17:51:05] 제트래곤 비찬의 모험 3편 / [17:51:27] 비챤의 모음 2편",
+        "current_translation": "Jetragon的冒險第三集／涅提奧斯·比安的第二集",
+        "reason": "都應是節目名「비챤의 모험」；비챤既有熱詞未命中。",
+        "suggested_translation": "在《비챤의 모험》第3集／第2集首次捕獲……",
+        "suggested_rule": "source_norm：비찬의 모험、비챤의 모음→비챤의 모험；提高비챤熱詞權重。",
+        "rule_target": "source_norm",
+        "confidence": 0.96,
+        "label_states": [
+          "candidate_assertion",
+          "partial_assertion",
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-83",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-83.wav",
+          "size_bytes": 208940,
+          "sha256": "95828bc2ca6de121a169f80d3919fecd3dd8ce9e91c2a5bbdfb82e80dfd9d741",
+          "audio_seconds": 6.528
+        },
+        {
+          "utterance_id": "utt-84",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-84.wav",
+          "size_bytes": 164908,
+          "sha256": "9fe57c2efe2ad940099ea9da2733c552074b80a8298c191e750225c198370c24",
+          "audio_seconds": 5.152
+        },
+        {
+          "utterance_id": "utt-88",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-88.wav",
+          "size_bytes": 273964,
+          "sha256": "4124f41de644032031563a0dfb5df3d47f3423008badfe95f3b36e8a9c205a94",
+          "audio_seconds": 8.56
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          63,
+          67
+        ],
+        "source_text": "울산에서 가차로 최초 포획 제트래곤 비찬의 모험 3편에서 최초 포획 레이번 비찬의 모험 3편에서 최초 포획\n넵티오스 비챤의 모음 2편에서 최초 포획 빙천마 비챤의 모음 1편 아니 찬이가 다 잡은 거잖아요 뭐야",
+        "target_text": "在蔚山以車輛首次捕獲 Jetragon 的冒險第三集，首次捕獲 Rayven 的冒險第三集。\n在涅提奧斯·比安的第二集裡，第一次抓到冰天馬，不是第一集嗎？明明是燦全抓到了啊，搞什麼啊。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-83",
+          "utt-84",
+          "utt-88"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-83",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-84",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-88",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-83",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-83.wav",
+            "stt_event_line": 2830,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.528,
+            "stt_latency_ms": 572.32,
+            "avg_logprob": -0.18013006,
+            "no_speech_prob": 0.16064453,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.008742,
+              "audio_peak": 0.04422,
+              "normalized_rms": 0.034966,
+              "normalized_peak": 0.17688,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-84",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-84.wav",
+            "stt_event_line": 2833,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.152,
+            "stt_latency_ms": 558.93,
+            "avg_logprob": -0.28243935,
+            "no_speech_prob": 0.0,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006561,
+              "audio_peak": 0.042236,
+              "normalized_rms": 0.026244,
+              "normalized_peak": 0.168945,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-88",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-88.wav",
+            "stt_event_line": 2849,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 8.56,
+            "stt_latency_ms": 639.04,
+            "avg_logprob": -0.31354952,
+            "no_speech_prob": 0.047302246,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.005761,
+              "audio_peak": 0.04245,
+              "normalized_rms": 0.023043,
+              "normalized_peak": 0.1698,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.4
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-083",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 83,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:57:48] 섭취 압박... 윙팬",
+        "current_translation": "採集壓力……翼包",
+        "reason": "應是섭종 압박（伺服器結束壓力）與윙팩。",
+        "suggested_translation": "在伺服器即將結束的進度壓力下……根本用不上윙팩。",
+        "suggested_rule": "source_norm：섭취 압박→섭종 압박、윙팬→윙팩。",
+        "rule_target": "source_norm",
+        "confidence": 0.94,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-135",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-135.wav",
+          "size_bytes": 323116,
+          "sha256": "5c27c3f3424012aa9bd5ac90e6eba7ebe28de117f5611d8ca35f56dbddf8dca0",
+          "audio_seconds": 10.096
+        },
+        {
+          "utterance_id": "utt-136",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-136.wav",
+          "size_bytes": 106540,
+          "sha256": "f75d7beb1ab5359240a711451bea39c6b9959eff5e4fcd61fdb9002b4e4690f3",
+          "audio_seconds": 3.328
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          105
+        ],
+        "source_text": "그 중에 재료의 하나는 극후반 지역에서만 나옵니다. 따라서 섭취 압박으로 인해 윙셀을 판매하게 패치하지 않는다면 윙팬을 쳐다보지도 못할 것입니다. 기글라와. 역시 이거 나는 것도 개빡이구나.",
+        "target_text": "當中有一種材料只出現在極後期區域。所以如果沒靠補丁開放翼塞的販售，光是採集壓力就夠你連翼包長怎樣都沒空看。吉格拉啊，這玩意兒自己搞也真他媽累人。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-135",
+          "utt-136"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-135",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-136",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-135",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-135.wav",
+            "stt_event_line": 3023,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 10.096,
+            "stt_latency_ms": 1091.14,
+            "avg_logprob": -0.19830808,
+            "no_speech_prob": 0.0064630443,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.008605,
+              "audio_peak": 0.041443,
+              "normalized_rms": 0.034419,
+              "normalized_peak": 0.165771,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          },
+          {
+            "utterance_id": "utt-136",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-136.wav",
+            "stt_event_line": 3027,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.328,
+            "stt_latency_ms": 405.96,
+            "avg_logprob": -0.327487,
+            "no_speech_prob": 0.010574341,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00467,
+              "audio_peak": 0.031586,
+              "normalized_rms": 0.018681,
+              "normalized_peak": 0.126343,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-084",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 84,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[17:59:24] 시청자 롤러가 챙겼다고요?",
+        "current_translation": "觀眾的滾輪有收嗎？",
+        "reason": "後文直接提주르르，疑似「주르르가 찜했다고요」，現譯無意義。",
+        "suggested_translation": "Jururu已經先看上這個了嗎？",
+        "suggested_rule": "source_norm：시청자 롤러가→주르르가；加入常見句型。",
+        "rule_target": "source_norm",
+        "confidence": 0.86,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-148",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-148.wav",
+          "size_bytes": 100396,
+          "sha256": "1c5e3abf70ade39cd5e28b6db86409f76d110d29e382b9fff5d585ab7acb7bd2",
+          "audio_seconds": 3.136
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          115
+        ],
+        "source_text": "시청자 롤러가 챙겼다고요? 에이.",
+        "target_text": "觀眾的滾輪有收嗎？欸。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-148"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-148",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-148",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-148.wav",
+            "stt_event_line": 3076,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.136,
+            "stt_latency_ms": 556.69,
+            "avg_logprob": -0.49114376,
+            "no_speech_prob": 0.01537323,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00476,
+              "audio_peak": 0.039719,
+              "normalized_rms": 0.019039,
+              "normalized_peak": 0.158875,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-086",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 86,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:02:42] 르르 주의 바지에 어울리는 게 맞지 않을까요?",
+        "current_translation": "跟Jururu的褲子搭的嗎？",
+        "reason": "此段在討論影片歸屬，沒有褲子／穿搭；疑似「르르 쪽이 가져가는 게」。",
+        "suggested_translation": "既然收到Jururu的回饋，不是應該由Jururu拿走嗎？",
+        "suggested_rule": "加入該段source_norm候選並配合音訊人工確認。",
+        "rule_target": "source_norm",
+        "confidence": 0.76,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-170",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-170.wav",
+          "size_bytes": 208940,
+          "sha256": "581f6a86127040a2ab2782f355f481c6b73cb1b92b0b40b5df112b9483d9d3e8",
+          "audio_seconds": 6.528
+        },
+        {
+          "utterance_id": "utt-171",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-171.wav",
+          "size_bytes": 219436,
+          "sha256": "edcd5c461c206c2aea07e4082d3cc206e0a719ece29b808b547dfeadf7182cfa",
+          "audio_seconds": 6.856
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          132
+        ],
+        "source_text": "수정 버전을 안 봤다고? 아 근데 르르한테 피드백까지 받았으면은 르르 주의 바지에 어울리는 게 맞지 않을까요?",
+        "target_text": "你說沒看過修改版？啊，但既然都跟Jururu拿過回饋了，那不就該是跟Jururu的褲子搭的嗎？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-170",
+          "utt-171"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-170",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-171",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-170",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-170.wav",
+            "stt_event_line": 3164,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.528,
+            "stt_latency_ms": 807.65,
+            "avg_logprob": -0.2076792,
+            "no_speech_prob": 0.2088623,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.007501,
+              "audio_peak": 0.043289,
+              "normalized_rms": 0.030003,
+              "normalized_peak": 0.173157,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-171",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-171.wav",
+            "stt_event_line": 3167,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.856,
+            "stt_latency_ms": 744.75,
+            "avg_logprob": -0.28899413,
+            "no_speech_prob": 0.38219818,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006241,
+              "audio_peak": 0.045212,
+              "normalized_rms": 0.024964,
+              "normalized_peak": 0.180847,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-087",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 87,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:04:17] 쇼똥부에 그림 그리시는 분들",
+        "current_translation": "「釘堡」畫圖的那群人",
+        "reason": "承接징버거 쇼츠 팀，쇼똥부應是쇼츠부，不是釘堡。",
+        "suggested_translation": "Shorts組裡負責畫圖的人……",
+        "suggested_rule": "source_norm：쇼똥부→쇼츠부；쇼츠부→Shorts組。",
+        "rule_target": "source_norm",
+        "confidence": 0.96,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-181",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-181.wav",
+          "size_bytes": 279084,
+          "sha256": "9fbdaa1ac9f27b9bac0df49dbddc1ae180a9bd6b4c8e3e0bcb09a07c7745096b",
+          "audio_seconds": 8.72
+        },
+        {
+          "utterance_id": "utt-183",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-183.wav",
+          "size_bytes": 142380,
+          "sha256": "90f16579e9fccc7bd465945b50254a80cd920a67cfc10422f8b73f0f6c57568c",
+          "audio_seconds": 4.448
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          141
+        ],
+        "source_text": "그래서 사실상 쇼똥부에 그림 그리시는 분들 거의 그냥 유령 회원 같은. 이거라도... 초록돌기님 거라도...",
+        "target_text": "所以實際上，「釘堡」畫圖的那群人簡直像幽靈會員一樣。至少……至少綠刺大大的那張……",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-181",
+          "utt-183"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-181",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-183",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-181",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-181.wav",
+            "stt_event_line": 3208,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 8.72,
+            "stt_latency_ms": 1566.33,
+            "avg_logprob": -0.30502167,
+            "no_speech_prob": 0.007868381,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.009075,
+              "audio_peak": 0.04274,
+              "normalized_rms": 0.036301,
+              "normalized_peak": 0.170959,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.2
+            }
+          },
+          {
+            "utterance_id": "utt-183",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-183.wav",
+            "stt_event_line": 3213,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 4.448,
+            "stt_latency_ms": 771.49,
+            "avg_logprob": -0.3542986,
+            "no_speech_prob": 0.113363124,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00476,
+              "audio_peak": 0.044342,
+              "normalized_rms": 0.01904,
+              "normalized_peak": 0.177368,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-090",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 90,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:15:56] 취향 크지 않아요. 차이는 많이 난다 하네.",
+        "current_translation": "喜好沒那麼大吧，但說差別很大。",
+        "reason": "性能差距語境中취향應是차이。",
+        "suggested_translation": "差距沒有很大吧？不過有人說其實差很多。",
+        "suggested_rule": "source_norm：性能語境 취향 크지 않아요→차이 크지 않아요。",
+        "rule_target": "source_norm",
+        "confidence": 0.98,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-263",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-263.wav",
+          "size_bytes": 191532,
+          "sha256": "9a9a18d9378ca1db2f42aaf5d59a60de4869f70e574ff52ee80ab2f0905a163b",
+          "audio_seconds": 5.984
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          205
+        ],
+        "source_text": "취향 크지 않아요. 차이는 많이 난다 하네.",
+        "target_text": "喜好沒那麼大吧，但說差別很大。",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-263"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-263",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-263",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-263.wav",
+            "stt_event_line": 3527,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 5.984,
+            "stt_latency_ms": 718.58,
+            "avg_logprob": -0.42395,
+            "no_speech_prob": 0.035312094,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.004251,
+              "audio_peak": 0.039185,
+              "normalized_rms": 0.017004,
+              "normalized_peak": 0.156738,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-091",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 91,
+        "severity": "bad",
+        "issue_type": "glossary_gap",
+        "source": "[18:17:16] 부가땅 절찌 그리는 광고...",
+        "current_translation": "「附贈地」廣告……",
+        "reason": "부가땅是人物暱稱，절찌疑似《鳴潮》角色절지（折枝）；現譯把專名拆成普通名詞。",
+        "suggested_translation": "我是在부가땅畫折枝的廣告時入坑的……",
+        "suggested_rule": "確認暱稱後加入부가땅；遊戲詞加入절찌→절지→折枝。",
+        "rule_target": "streamer_profile",
+        "confidence": 0.8,
+        "label_states": [
+          "audio_replay_required",
+          "entity_visual_confirmation_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-274",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-274.wav",
+          "size_bytes": 311596,
+          "sha256": "14b1d45076b450756096174ccc7a295629d39ce6dc7fb307f29c452ad448a71c",
+          "audio_seconds": 9.736
+        },
+        {
+          "utterance_id": "utt-273",
+          "chunk_role": "context_evidence",
+          "source_kind": "evidence",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-273.wav",
+          "size_bytes": 212012,
+          "sha256": "27a80e1152ebb96b62666e226c766564511720b0812fa87361a95c0aaeb5900b",
+          "audio_seconds": 6.624
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          216
+        ],
+        "source_text": "아 그거 무조건 하시는 말씀인데 저는 이제 게임을 하면 무조건 돈을 쓸 것 같아서 시청자 부가땅 절찌 그리는 광고 할 때 유입해서 아직도 하는데 부가땅 언제와?",
+        "target_text": "啊，那種話你當然會說啦，但我一打遊戲就忍不住要花錢，所以才一直看那些「附贈地」廣告來引流，但附贈地到底什麼時候才來啊？",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-274"
+        ],
+        "evidence_source_utterance_ids": [
+          "utt-273"
+        ],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-274",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-273",
+            "usage": "evidence"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-274",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-274.wav",
+            "stt_event_line": 3573,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 9.736,
+            "stt_latency_ms": 778.06,
+            "avg_logprob": -0.32363468,
+            "no_speech_prob": 0.0053901672,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.004484,
+              "audio_peak": 0.043167,
+              "normalized_rms": 0.017935,
+              "normalized_peak": 0.172668,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.0
+            }
+          },
+          {
+            "utterance_id": "utt-273",
+            "chunk_role": "context_evidence",
+            "source_kind": "evidence",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-273.wav",
+            "stt_event_line": 3570,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 6.624,
+            "stt_latency_ms": 616.05,
+            "avg_logprob": -0.32015857,
+            "no_speech_prob": 0.15710449,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.005686,
+              "audio_peak": 0.042618,
+              "normalized_rms": 0.022742,
+              "normalized_peak": 0.170471,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "T25-092",
+      "root_cause_group": "audio_replay_required",
+      "ground_truth_status": "human_candidate_audio_pending",
+      "annotation": {
+        "source_annotation_id": 92,
+        "severity": "bad",
+        "issue_type": "stt_mishear",
+        "source": "[18:17:56] 스토리를 뽑을 수 있나요?",
+        "current_translation": "能抽劇情嗎？",
+        "reason": "前文一直在找수수且談限定卡池，應是「수수를 뽑을 수 있나요」。",
+        "suggested_translation": "觀眾若問「現在能抽到수수嗎？」，答案是現在抽不到。",
+        "suggested_rule": "source_norm：角色卡池語境 스토리를 뽑다→수수를 뽑다。",
+        "rule_target": "source_norm",
+        "confidence": 0.94,
+        "label_states": [
+          "audio_replay_required"
+        ],
+        "interpretation_limit": "Human text is a candidate interpretation; compare ASR outputs against audio and context before treating it as ground truth."
+      },
+      "audio_assets": [
+        {
+          "utterance_id": "utt-281",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-281.wav",
+          "size_bytes": 236588,
+          "sha256": "192831418c43769ee7bab737644c68de1ba15e344fd66d805a515601a9be2396",
+          "audio_seconds": 7.392
+        },
+        {
+          "utterance_id": "utt-282",
+          "chunk_role": "translation_source",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-282.wav",
+          "size_bytes": 125228,
+          "sha256": "2baee53412ac29b8126f59906abfd480d6e0ceeccfd6f678bbecd082ec153730",
+          "audio_seconds": 3.912
+        }
+      ],
+      "sample": {
+        "run_id": "20260802T093732Z-30160",
+        "translation_sequence_ids": [
+          222
+        ],
+        "source_text": "시청자님께서는 스토리를 뽑을 수 있나요? 질문하시면 지금 못 뽑아요 답변 올거에요. 전투모션!",
+        "target_text": "觀眾朋友能抽劇情嗎？現在不能抽，提問的話我會回覆的。戰鬥動作！",
+        "profile_ids": [
+          "isegye_lilpa"
+        ],
+        "source_utterance_ids": [
+          "utt-281",
+          "utt-282"
+        ],
+        "evidence_source_utterance_ids": [],
+        "source_chunk_usages": [
+          {
+            "utterance_id": "utt-281",
+            "usage": "current"
+          },
+          {
+            "utterance_id": "utt-282",
+            "usage": "current"
+          }
+        ],
+        "source_chunks": [
+          {
+            "utterance_id": "utt-281",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-281.wav",
+            "stt_event_line": 3600,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.392,
+            "stt_latency_ms": 636.0,
+            "avg_logprob": -0.7371297,
+            "no_speech_prob": 0.04522705,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.002603,
+              "audio_peak": 0.040054,
+              "normalized_rms": 0.010411,
+              "normalized_peak": 0.160217,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 0.0
+            }
+          },
+          {
+            "utterance_id": "utt-282",
+            "chunk_role": "translation_source",
+            "source_kind": "current",
+            "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-282.wav",
+            "stt_event_line": 3602,
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.912,
+            "stt_latency_ms": 369.18,
+            "avg_logprob": -0.4565987,
+            "no_speech_prob": 0.19726562,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.00506,
+              "audio_peak": 0.040054,
+              "normalized_rms": 0.020238,
+              "normalized_peak": 0.160217,
+              "normalization_gain": 4.0,
+              "overlap_seconds": 1.0
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

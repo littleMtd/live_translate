@@ -32,6 +32,40 @@ def _engine(name: str = "engine", model: str = "model") -> MagicMock:
 
 
 class TestTranslationMemory(unittest.TestCase):
+    def test_recent_history_is_isolated_by_profile_activity_and_episode(self):
+        memory, _, _ = self._memory()
+        chat_a = ("profile-a", "chatting", 1)
+        lol_a = ("profile-a", "league_of_legends", 2)
+        chat_b = ("profile-b", "chatting", 1)
+        chat_return = ("profile-a", "chatting", 3)
+
+        memory.record_recent_context("chat", "聊天", False, chat_a)
+        memory.record_recent_context("lol", "遊戲", False, lol_a)
+        memory.record_recent_context("other", "另一人", False, chat_b)
+
+        self.assertEqual(memory.context(chat_a), [("chat", "聊天")])
+        self.assertEqual(memory.context(lol_a), [("lol", "遊戲")])
+        self.assertEqual(memory.context(chat_b), [("other", "另一人")])
+        self.assertEqual(memory.context(chat_return), [])
+        self.assertEqual(memory.context(("profile-a", "unknown", 4)), [])
+
+    def test_recent_cohort_map_is_lru_bounded(self):
+        fake_db = _FakeDB()
+        memory = TranslationMemory(
+            recent_window=2,
+            max_recent_cohorts=2,
+            db_factory=lambda: fake_db,
+            history_writer=lambda _source, _result: None,
+        )
+        for epoch in range(1, 4):
+            memory.record_recent_context(
+                f"source-{epoch}", f"翻譯-{epoch}", False,
+                ("profile", "unknown", epoch),
+            )
+
+        self.assertEqual(memory.context(("profile", "unknown", 1)), [])
+        self.assertEqual(len(memory._recent_by_cohort), 2)
+
     def _memory(
         self,
         db: _FakeDB | None = None,

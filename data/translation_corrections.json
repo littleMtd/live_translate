@@ -122,6 +122,29 @@
       }
     }
   },
+  "boundary_source_norm": {
+    "shared": {},
+    "profiles": {
+      "hades_chxxnnx": {
+        "롤게임": "LoL 게임",
+        "롤랭크": "LoL 랭크",
+        "롤에서는": "LoL에서는",
+        "롤에서": "LoL에서",
+        "롤이나": "LoL이나",
+        "롤인데": "LoL인데",
+        "롤처럼": "LoL처럼",
+        "롤로": "LoL로",
+        "롤": "LoL"
+      },
+      "isegye_lilpa": {
+        "희계단분들": "히게단분들",
+        "희계단님": "히게단님",
+        "희계나님": "히게단님",
+        "희계단": "히게단",
+        "희계나": "히게단"
+      }
+    }
+  },
   "conditional_source_norm": {
     "shared": [],
     "profiles": {
@@ -154,6 +177,17 @@
     }
   },
   "source_aware_target_replacements": [
+    {
+      "source_terms": [
+        "휴방"
+      ],
+      "replacements": [
+        {
+          "wrong": "長期休眠",
+          "right": "長期休播"
+        }
+      ]
+    },
     {
       "source_terms": [
         "오버쿡드 2",
@@ -1082,14 +1116,16 @@
         "啦可",
         "啦科"
       ],
-      "canonical": "랑코"
+      "canonical": "랑코",
+      "publication_policy": "required"
     },
     {
       "scope": "url",
       "source_aliases": [
         "모카",
         "목화",
-        "Moka"
+        "Moka",
+        "모카랑은"
       ],
       "wrong_forms": [
         "모카",
@@ -1098,9 +1134,11 @@
         "模卡",
         "木華",
         "木华",
-        "木花"
+        "木花",
+        "모카랑"
       ],
-      "canonical": "모카"
+      "canonical": "모카",
+      "publication_policy": "required"
     },
     {
       "scope": "url",
@@ -1118,7 +1156,9 @@
         "马朗",
         "馬尼亞"
       ],
-      "canonical": "마냥"
+      "canonical": "마냥",
+      "publication_policy": "required",
+      "activation_policy": "name_context_required"
     },
     {
       "scope": "url",
@@ -1152,7 +1192,8 @@
         "孫明",
         "孙明"
       ],
-      "canonical": "솜먕"
+      "canonical": "솜먕",
+      "publication_policy": "required"
     },
     {
       "scope": "url",
@@ -1172,7 +1213,9 @@
         "奧峰",
         "奥峰"
       ],
-      "canonical": "오아"
+      "canonical": "오아",
+      "activation_policy": "name_context_required",
+      "repair_requires_name_context": true
     },
     {
       "scope": "stellive_hina",
@@ -1359,6 +1402,23 @@
     {
       "scope": "isegye_lilpa",
       "source_aliases": [
+        "주르르",
+        "주르르님",
+        "Jururu"
+      ],
+      "wrong_forms": [
+        "주르르",
+        "朱嚕嚕",
+        "朱噜噜",
+        "珠露露",
+        "Jururu"
+      ],
+      "canonical": "Jururu",
+      "publication_policy": "required"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
         "릴파",
         "릴파님",
         "늘파님",
@@ -1396,7 +1456,8 @@
         "Neulpa",
         "Lilpa"
       ],
-      "canonical": "Lilpa"
+      "canonical": "Lilpa",
+      "publication_policy": "required"
     },
     {
       "scope": "isegye_lilpa",
@@ -1617,6 +1678,98 @@
         "Lize"
       ],
       "canonical": "리제"
+    },
+    {
+      "scope": "irise",
+      "source_aliases": [
+        "키리",
+        "키리씨"
+      ],
+      "wrong_forms": [
+        "키리",
+        "キリ",
+        "基里",
+        "Kiri",
+        "Kiiri",
+        "Kkiri"
+      ],
+      "canonical": "KIIRI",
+      "publication_policy": "required"
+    },
+    {
+      "scope": "irise",
+      "source_aliases": [
+        "티즈",
+        "티즈씨"
+      ],
+      "wrong_forms": [
+        "티즈",
+        "蒂茲",
+        "提茲",
+        "Tees",
+        "Teas",
+        "ティズ"
+      ],
+      "canonical": "TIZ"
+    },
+    {
+      "scope": "irise",
+      "source_aliases": [
+        "하트 크러쉬",
+        "하트크러쉬"
+      ],
+      "wrong_forms": [
+        "하트 크러쉬",
+        "하트크러쉬",
+        "哈特克魯什",
+        "哈特克拉什"
+      ],
+      "canonical": "Heart Crush",
+      "publication_policy": "required"
+    },
+    {
+      "scope": "irise",
+      "source_aliases": [
+        "아이리제",
+        "아이리즈"
+      ],
+      "wrong_forms": [
+        "아이리제",
+        "아이리즈",
+        "Iris",
+        "Iris Z",
+        "IrisZ",
+        "Irises"
+      ],
+      "canonical": "IRISÉ"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "치지직"
+      ],
+      "wrong_forms": [
+        "치지직",
+        "チジ직",
+        "chzzk",
+        "Chzzk"
+      ],
+      "canonical": "CHZZK",
+      "publication_policy": "required"
+    },
+    {
+      "scope": "hades_chxxnnx",
+      "source_aliases": [
+        "멤논",
+        "멤논급",
+        "멤논급이야"
+      ],
+      "wrong_forms": [
+        "멤논",
+        "成員"
+      ],
+      "canonical": "Memnon",
+      "publication_policy": "required"
     }
   ]
 }

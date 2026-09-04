@@ -18,6 +18,13 @@ from modules.translation_engines import (
     _build_engine_chain, _build_user_message, TranslationEngine, ClaudeEngine, GoogleTranslateEngine,
     DeepLEngine, GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine, _deepl_base_url,
     get_last_engine_api_diagnostics, get_last_engine_diagnostics, get_last_token_usage,
+    build_effective_deepseek_messages,
+    build_effective_qwen_messages,
+)
+from modules.provisional_subtitles import (
+    ProvisionalCandidate,
+    ProvisionalRequest,
+    provisional_fingerprint,
 )
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -26,11 +33,14 @@ from modules.translation_prompts import (
     translation_profile_ids,
 )
 from modules.translation_policy import RepetitionEvidence
+from modules.unknown_name_escrow import resolve_unknown_name_escrow
+from modules.semantic_terminology import resolve_semantic_terminology
 from modules.translator import (
     _apply_source_aware_corrections,
     _is_legitimate_preserve_as_is,
     _looks_like_meta_garbage_output,
     _looks_untranslated,
+    _translation_output_guard,
     _normalize_source_before_matching,
     _new_translation_memory,
     _token_usage_for_outcome,
@@ -41,6 +51,14 @@ from modules.translator import (
     Translator,
 )
 import modules.db as _db_module
+from modules.activity_context import (
+    bind_activity_snapshot,
+    bind_profile_id,
+    capture_activity_snapshot,
+    effective_activity_value,
+    effective_profile_id,
+)
+from modules.pipeline_events import SentenceEvent
 
 
 class _NoOpDB:
@@ -76,6 +94,18 @@ def tearDownModule():
 
 
 class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
+    def test_telemetry_only_terms_do_not_expand_publication_preservation(self):
+        publication_terms = translator_module._publication_approved_terms("isegye_lilpa")
+        telemetry_terms = translator_module._quality_telemetry_approved_terms(
+            "isegye_lilpa",
+            "PVP에서 주르르가 이겼어요",
+        )
+
+        self.assertNotIn("Jururu", publication_terms)
+        self.assertNotIn("PVP", publication_terms)
+        self.assertIn("Jururu", telemetry_terms)
+        self.assertIn("PVP", telemetry_terms)
+
     def test_known_common_acronym_is_approved_without_profile(self):
         outcome = TranslationOutcome(
             source_text="SOOP",
@@ -149,6 +179,448 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             unapproved["quality_severity"],
         )
 
+    def test_profile_canonical_output_is_approved_only_when_applied(self):
+        outcome = TranslationOutcome(
+            source_text="주르르가 방송을 시작했어요",
+            target_text="Jururu開始直播了。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        )
+
+        approved = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "isegye_lilpa", "profile_applied": True},
+        )
+        unapproved = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "isegye_lilpa", "profile_applied": False},
+        )
+
+        self.assertEqual(approved["target_unexpected_latin_spans"], [])
+        self.assertIn(
+            "target_high_latin_approved_only",
+            approved["quality_classifications"],
+        )
+        self.assertEqual(unapproved["target_unexpected_latin_spans"], ["Jururu"])
+        self.assertIn(
+            "target_high_latin_unexpected",
+            unapproved["quality_classifications"],
+        )
+
+    def test_profile_name_telemetry_uses_same_collision_policy_as_publication(self):
+        member = TranslationOutcome(
+            source_text="랑코 어딨어? 야 랑코야.",
+            target_text="랑코在哪？喂，랑코啊。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        ).as_event_fields(
+            10.0,
+            {"profile_id": "url", "profile_applied": True},
+        )
+        interjection = TranslationOutcome(
+            source_text="오아 진짜요?",
+            target_text="오아真的嗎？",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        ).as_event_fields(
+            10.0,
+            {"profile_id": "url", "profile_applied": True},
+        )
+
+        self.assertEqual(member["target_unexpected_hangul_spans"], [])
+        self.assertEqual(
+            interjection["target_unexpected_hangul_spans"], ["오아"]
+        )
+    def test_irise_corrected_canonical_is_normalized_not_suspicious(self):
+        reset_corrections()
+        with _active_translation_profile("irise"):
+            corrected = _apply_source_aware_corrections(
+                "키리씨가 왔어요",
+                "基里來了。",
+            )
+        corrections = get_corrections()
+        outcome = TranslationOutcome(
+            source_text="키리씨가 왔어요",
+            target_text=corrected,
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        )
+
+        fields = outcome.as_event_fields(
+            10.0,
+            {
+                "profile_id": "irise",
+                "profile_applied": True,
+                "corrections": corrections,
+                "correction_count": len(corrections),
+            },
+        )
+
+        self.assertEqual(corrected, "KIIRI來了。")
+        self.assertEqual(fields["target_expected_canonical_terms"], ["KIIRI"])
+        self.assertEqual(fields["target_missing_canonical_terms"], [])
+        self.assertEqual(fields["translation_qa_flags"], [])
+        self.assertEqual(fields["translation_qa_disposition"], "normalized")
+        self.assertEqual(fields["correction_count"], 1)
+        self.assertEqual(fields["corrections"][0]["stage"], "name_render")
+
+    def test_irise_missing_canonical_is_diagnostic_only(self):
+        outcome = TranslationOutcome(
+            source_text="키리가 왔어요",
+            target_text="她今天到了。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+            engine="openrouter",
+            model="example-model",
+        )
+
+        baseline = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "irise", "profile_applied": False},
+        )
+        suspicious = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "irise", "profile_applied": True},
+        )
+
+        self.assertEqual(suspicious["target_expected_canonical_terms"], ["KIIRI"])
+        self.assertEqual(suspicious["target_missing_canonical_terms"], ["KIIRI"])
+        self.assertEqual(
+            suspicious["translation_qa_flags"],
+            ["target_missing_profile_canonical"],
+        )
+        self.assertIn(
+            "target_missing_profile_canonical",
+            suspicious["quality_classifications"],
+        )
+        self.assertEqual(suspicious["translation_qa_disposition"], "suspicious")
+        self.assertEqual(suspicious["route_id"], "openrouter:example-model")
+        self.assertEqual(suspicious["quality_flags"], baseline["quality_flags"])
+        self.assertEqual(suspicious["quality_score"], baseline["quality_score"])
+        self.assertEqual(
+            suspicious["quality_severity"],
+            baseline["quality_severity"],
+        )
+
+    def test_irise_music_part_department_candidate_is_narrow_and_diagnostic(self):
+        positive_sources = (
+            "저의 고음 파트가 가장 매력적이에요",
+            "브릿지 파트를 다시 녹음했어요",
+            "이 파트는 보컬 하모니가 좋아요",
+            "저희 파트를 수정했어요",
+        )
+        for source in positive_sources:
+            with self.subTest(source=source):
+                outcome = TranslationOutcome(
+                    source_text=source,
+                    target_text="我的部門最有魅力。",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=False,
+                )
+                fields = outcome.as_event_fields(
+                    10.0,
+                    {"profile_id": "irise", "profile_applied": True},
+                )
+                self.assertEqual(
+                    fields["target_profile_semantic_candidates"],
+                    ["music_part_rendered_as_department"],
+                )
+                self.assertIn(
+                    "target_profile_semantic_candidate",
+                    fields["quality_classifications"],
+                )
+                self.assertEqual(fields["translation_qa_disposition"], "suspicious")
+
+        negative_sources = (
+            "사업 파트를 맡았어요",
+            "담당 파트가 바뀌었어요",
+            "고음 파트너를 만났어요",
+            "랩탑 사업 파트를 맡았어요",
+            "노래를 들으며 사업 파트를 맡았어요",
+        )
+        for source in negative_sources:
+            with self.subTest(source=source):
+                outcome = TranslationOutcome(
+                    source_text=source,
+                    target_text="這個部門變了。",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=False,
+                )
+                fields = outcome.as_event_fields(
+                    10.0,
+                    {"profile_id": "irise", "profile_applied": True},
+                )
+                self.assertEqual(fields["target_profile_semantic_candidates"], [])
+
+        outcome = TranslationOutcome(
+            source_text="고음 파트가 좋아요",
+            target_text="高音部門很棒。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        )
+        for metadata in (
+            {"profile_id": "url", "profile_applied": True},
+            {"profile_id": "irise", "profile_applied": False},
+        ):
+            fields = outcome.as_event_fields(10.0, metadata)
+            self.assertEqual(fields["target_profile_semantic_candidates"], [])
+
+    def test_script_drift_uses_existing_quality_evidence_in_qa_disposition(self):
+        outcome = TranslationOutcome(
+            source_text="오늘 무대가 예뻐요",
+            target_text="今天的舞台很キレイ。",
+            status="success",
+            result_source="api",
+            cache_status="miss",
+            incomplete=False,
+        )
+
+        fields = outcome.as_event_fields(
+            10.0,
+            {"profile_id": "irise", "profile_applied": True},
+        )
+
+        self.assertIn("target_has_japanese", fields["quality_flags"])
+        self.assertEqual(fields["translation_qa_disposition"], "suspicious")
+
+    def test_translation_output_guard_rejects_any_kana_or_unapproved_hangul(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        self.assertEqual(
+            _translation_output_guard(engine, "這是キリ", "키리")["reason"],
+            "unexpected_japanese",
+        )
+        self.assertEqual(
+            _translation_output_guard(engine, "這是느졋", "늦었어")["reason"],
+            "unexpected_hangul",
+        )
+
+    def test_source_gated_name_render_can_rescue_its_raw_script_violation(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("isegye_lilpa"):
+            guard = _translation_output_guard(engine, "릴파", "릴파")
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["accepted_after_name_render"], ["unexpected_hangul"])
+        self.assertEqual(guard["candidate_raw_output"], "릴파")
+        self.assertEqual(guard["candidate_output"], "Lilpa")
+        self.assertEqual(guard["candidate_corrections"][0]["stage"], "name_render")
+        self.assertIn(
+            "target_has_unexpected_hangul",
+            guard["candidate_raw_quality_classifications"],
+        )
+        self.assertNotIn(
+            "target_has_unexpected_hangul",
+            guard["candidate_quality_classifications"],
+        )
+
+    def test_live23_chzzk_primary_is_repaired_before_fallback(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        source = "몇몇 애들은 치지직 가기도 하고"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            guard = _translation_output_guard(
+                engine,
+                "有些人去 치지직 了。",
+                source,
+            )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["candidate_output"], "有些人去 CHZZK 了。")
+        self.assertEqual(guard["accepted_after_name_render"], ["unexpected_hangul"])
+        self.assertEqual(guard["canonical_obligations"]["satisfied"], ["CHZZK"])
+
+    def test_live23_memnon_repairs_known_fallback_but_not_unrelated_hangul(self):
+        engine = MagicMock()
+        source = "아가 멤논급이야."
+
+        with _active_translation_profile("hades_chxxnnx"):
+            engine.engine_name = "deepseek"
+            primary = _translation_output_guard(
+                engine,
+                "아가 是 Memnon 等級的。",
+                source,
+            )
+            fallback = _translation_output_guard(engine, "啊，是成員級的。", source)
+
+        self.assertEqual(primary["reason"], "unexpected_hangul")
+        self.assertEqual(fallback["candidate_output"], "啊，是Memnon級的。")
+        self.assertNotIn("reason", fallback)
+        self.assertEqual(fallback["canonical_obligations"]["satisfied"], ["Memnon"])
+
+    def test_live23_repeated_moka_particle_is_repaired_without_hard_obligation(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        source = "모카랑은 모카랑은 나루토 노래 부르면서 뛰어다니고."
+
+        with _active_translation_profile("url"):
+            guard = _translation_output_guard(
+                engine,
+                "모카랑是邊唱火影忍者的歌邊跑。",
+                source,
+            )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["candidate_output"], "모카是邊唱火影忍者的歌邊跑。")
+        self.assertEqual(guard["canonical_obligations"]["expected"], [])
+
+    def test_name_render_without_source_evidence_cannot_rescue_raw_hangul(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("isegye_lilpa"):
+            guard = _translation_output_guard(
+                engine,
+                "릴파",
+                "오늘 방송 재미있다",
+            )
+
+        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertEqual(guard["candidate_output"], "릴파")
+        self.assertEqual(guard["candidate_corrections"], [])
+
+    def test_name_render_rescue_is_authoritative_for_fallback_providers(self):
+        with _active_translation_profile("isegye_lilpa"):
+            for engine_name in ("openrouter", "deepl", "groq"):
+                engine = MagicMock()
+                engine.engine_name = engine_name
+                with self.subTest(engine=engine_name):
+                    guard = _translation_output_guard(
+                        engine,
+                        "릴파",
+                        "릴파",
+                    )
+                    self.assertNotIn("reason", guard)
+                    self.assertEqual(guard["candidate_output"], "Lilpa")
+                    self.assertEqual(
+                        guard["accepted_after_name_render"],
+                        ["unexpected_hangul"],
+                    )
+
+    def test_partial_name_render_rejects_unrelated_script_residue(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("isegye_lilpa"):
+            guard = _translation_output_guard(
+                engine,
+                "릴파와 느졋",
+                "릴파가 왔어요",
+            )
+
+        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertEqual(guard["candidate_output"], "Lilpa와 느졋")
+        self.assertIn(
+            "target_has_unexpected_hangul",
+            guard["candidate_quality_classifications"],
+        )
+
+    def test_non_name_target_correction_cannot_rescue_flash_raw_script(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        replacement = (("문장",), (("느졋", "太晚"),), False)
+
+        with patch.object(
+            translator_module,
+            "_SOURCE_AWARE_TARGET_REPLACEMENTS",
+            (replacement,),
+        ):
+            guard = _translation_output_guard(
+                engine,
+                "這是느졋",
+                "이 문장입니다",
+            )
+
+        self.assertEqual(guard["candidate_output"], "這是太晚")
+        self.assertEqual(
+            guard["candidate_corrections"][0]["stage"],
+            "target_correction",
+        )
+        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertNotIn("accepted_after_name_render", guard)
+
+    def test_corrected_script_boundary_is_provider_independent(self):
+        for engine_name in ("openrouter", "deepl", "groq"):
+            engine = MagicMock()
+            engine.engine_name = engine_name
+            with self.subTest(engine=engine_name, script="hangul"):
+                self.assertEqual(
+                    _translation_output_guard(
+                        engine,
+                        "這是느졋",
+                        "늦었어",
+                    )["reason"],
+                    "unexpected_hangul",
+                )
+            with self.subTest(engine=engine_name, script="japanese"):
+                self.assertEqual(
+                    _translation_output_guard(
+                        engine,
+                        "這是テスト",
+                        "테스트예요",
+                    )["reason"],
+                    "unexpected_japanese",
+                )
+
+    def test_production_fallback_hiatus_mistranslation_is_repaired(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        hiatus = _translation_output_guard(
+            engine,
+            "現在Lilpa正在長期休眠，還特地來了。",
+            "릴파님은 장기 휴방 중이신데 또 찾아와 주셔서.",
+        )
+        self.assertNotIn("reason", hiatus)
+        self.assertEqual(
+            hiatus["candidate_output"],
+            "現在Lilpa正在長期休播，還特地來了。",
+        )
+
+
+    def test_protected_guard_allows_approved_hangul_and_preserves_trace(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        reset_corrections()
+        translator_module._record_correction("seed", "seed", "before", "after")
+        before = get_corrections()
+
+        with patch.object(
+            translator_module,
+            "_publication_approved_terms",
+            return_value=frozenset({"해둥이"}),
+        ):
+            guard = _translation_output_guard(
+                engine,
+                "今天是해둥이的直播",
+                "오늘은 해둥이 방송이에요",
+            )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["candidate_output"], "今天是해둥이的直播")
+        self.assertEqual(guard["candidate_corrections"], [])
+        self.assertEqual(get_corrections(), before)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -161,6 +633,17 @@ def _mock_engine(name: str, return_value: str = "你好") -> MagicMock:
     engine.model_name = f"{name}-test-model"
     engine.available = True
     engine.translate.return_value = return_value
+    return engine
+
+
+def _route_engine(name: str, return_value: str) -> MagicMock:
+    """Mock either a frozen-capsule or ordinary fallback route."""
+    engine = MagicMock()
+    engine.engine_name = name
+    engine.model_name = f"{name}-model"
+    engine.available = True
+    engine.translate.return_value = return_value
+    engine.translate_messages.return_value = return_value
     return engine
 
 
@@ -190,7 +673,6 @@ def _make_translator() -> Translator:
     from config import cfg
     t = Translator.__new__(Translator)
     t._active_idx = 0
-    t._probe_counter = 0
     t._consecutive_primary_failures = 0
     t._last_input = ""
     t._engines = [_mock_engine(name) for name in ("gemini", "claude")]
@@ -612,6 +1094,34 @@ class TestDeepLEngine(unittest.TestCase):
         self.assertIn("Recent subtitle: 방송 시작 -> 直播開始.", payload["context"])
         self.assertNotIn("custom_instructions", payload)
 
+    def test_uses_certifi_ssl_context(self):
+        engine = self._engine()
+        ssl_context = object()
+        with patch.object(
+            translation_engines_module,
+            "_deepl_ssl_context",
+            return_value=ssl_context,
+        ), patch(
+            "urllib.request.urlopen",
+            return_value=self._response("ok"),
+        ) as urlopen:
+            self.assertEqual(engine.translate("hello", "system", False), "ok")
+
+        self.assertIs(urlopen.call_args.kwargs["context"], ssl_context)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 4.0)
+
+    def test_certifi_ssl_context_keeps_verification_enabled(self):
+        import ssl
+
+        translation_engines_module._deepl_ssl_context.cache_clear()
+        try:
+            context = translation_engines_module._deepl_ssl_context()
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
+        finally:
+            translation_engines_module._deepl_ssl_context.cache_clear()
+
     def test_pro_key_uses_pro_endpoint(self):
         self.assertEqual(_deepl_base_url("fake-key"), "https://api.deepl.com/v2")
 
@@ -913,8 +1423,84 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
         self.assertNotIn("source-1-", str(messages))
         self.assertIn("source-2-", messages[1]["content"])
         self.assertIn("source-3-", messages[3]["content"])
-        self.assertLessEqual(len(messages[1]["content"]), len("input: ") + 163)
+        self.assertIn("[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]", messages[1]["content"])
+        self.assertNotIn("[CONTEXT", messages[2]["content"])
+        self.assertTrue(messages[2]["content"].startswith("target-2-"))
+        self.assertIn("[CURRENT INPUT — TRANSLATE ONLY THIS]", messages[-1]["content"])
+        self.assertLessEqual(
+            len(messages[1]["content"]),
+            len("[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]\nsource: ") + 163,
+        )
         self.assertLessEqual(len(messages[2]["content"]), 223)
+
+    def test_incomplete_current_input_forbids_clause_completion(self):
+        import json
+
+        e = self._engine()
+        with patch("urllib.request.urlopen", return_value=self._response("片段")) as urlopen:
+            result = e.translate("제가 저거 예전에...", "system", True)
+
+        self.assertEqual(result, "片段")
+        req = urlopen.call_args.args[0]
+        current = json.loads(req.data.decode())["messages"][-1]["content"]
+        self.assertIn("[CURRENT INPUT — TRANSLATE ONLY THIS]", current)
+        self.assertIn("translate only the meaning that is present", current)
+        self.assertIn("do not complete the missing clause", current)
+        self.assertNotIn("translate as best as possible", current)
+
+    def test_published_activity_reaches_production_openrouter_capsule(self):
+        import json
+        import time
+        from config import cfg
+        from modules.activity_context import (
+            AutomaticActivityPublication,
+            activity_publication_store,
+        )
+        from modules.translation_engines import engine_chain_config_key
+
+        e = self._engine()
+        translator = Translator()
+        translator._engines = [e]
+        translator._engines_key = engine_chain_config_key()
+        original_manual = cfg.translation.current_activity
+        original_enabled = cfg.scene.publish_translation_activity
+        activity_publication_store.replace(
+            AutomaticActivityPublication(
+                activity_id="league_of_legends",
+                display_label="League of Legends",
+                confirmed_at_utc="2026-08-12T00:00:00+00:00",
+                fresh_until_monotonic=time.monotonic() + 60,
+                confidence=1.0,
+                evidence_count=2,
+                activity_kind="game",
+            )
+        )
+        object.__setattr__(cfg.translation, "current_activity", "")
+        object.__setattr__(cfg.scene, "publish_translation_activity", True)
+        try:
+            with patch(
+                "urllib.request.urlopen",
+                return_value=self._response("現在回城吧"),
+            ) as urlopen:
+                outcome = translator.translate_event("집 가자, 지금은 귀환이야")
+        finally:
+            object.__setattr__(
+                cfg.scene,
+                "publish_translation_activity",
+                original_enabled,
+            )
+            object.__setattr__(cfg.translation, "current_activity", original_manual)
+            activity_publication_store.replace(None)
+
+        self.assertEqual(outcome.status, "success")
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        system = payload["messages"][0]["content"]
+        current = payload["messages"][-1]["content"]
+        self.assertEqual(system.count("Current stream activity: League of Legends"), 1)
+        self.assertIn("집=recall/base", system)
+        self.assertIn("Never translate, mention, or copy it", system)
+        self.assertNotIn("League of Legends", current)
+        self.assertIn("집 가자, 지금은 귀환이야", current)
 
     def test_returns_none_for_reasoning_only_or_empty_content(self):
         e = self._engine()
@@ -946,7 +1532,523 @@ class TestOpenRouterTranslationEngine(unittest.TestCase):
 
 
 class TestOpenRouterFallbackChain(unittest.TestCase):
-    def test_default_backend_builds_openrouter_chain_without_nvidia(self):
+    def test_unknown_name_escrow_rejects_invention_and_reuses_mapping_on_fallback(self):
+        primary = _route_engine("deepseek", "這件事跟師玉老師談的話。")
+        fallback = _route_engine(
+            "openrouter",
+            "這件事跟__LT_UNK_1__談的話，他會說你還不行。",
+        )
+        translator = _make_translator()
+        translator._engines = [primary, fallback]
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event(
+            "\uadf8\ub7f0 \uac70\ub97c \uc0ac\uc625\uc324\uc774\ub791 \uc598\uae30\ud558\uba74 \ub10c \uc544\uc9c1 \uc548 \ub3fc",
+            False,
+        )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertIn("\uc0ac\uc625\uc324", outcome.target_text)
+        self.assertNotIn("師玉", outcome.target_text)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "unknown_name_placeholder_invalid",
+        )
+        self.assertEqual(attempts[1]["status"], "success")
+        self.assertEqual(translator._active_idx, 0)
+        current_message = fallback.translate_messages.call_args.args[0][-1][1]
+        self.assertIn("__LT_UNK_1__", current_message)
+        self.assertNotIn("\uc0ac\uc625\uc324", current_message)
+
+    def test_mixed_known_canonical_and_unknown_escrow_both_remain_required(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine(
+                "deepseek",
+                "랑코和__LT_UNK_1__今天都吃了牛肉。",
+            )
+        ]
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event(
+                "랑코가 푸코도 오늘 소 먹었네요",
+                False,
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "랑코和푸코今天都吃了牛肉。")
+        self.assertEqual(
+            outcome.canonical_obligation_evaluation.satisfied,
+            ("랑코",),
+        )
+        event = outcome.as_event_fields(
+            1.0,
+            {"profile_id": "url", "profile_applied": True},
+        )
+        self.assertEqual(event["target_unknown_name_escrow_terms"], ["푸코"])
+        self.assertNotIn(
+            "target_has_unexpected_hangul",
+            event["quality_classifications"],
+        )
+
+    def test_all_placeholder_mutations_fail_without_weakening_script_guard(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "得去找莫奇。"),
+            _route_engine("openrouter", "得去找Mochi。"),
+            _route_engine("deepl", "得去找__LT_UNKNOWN_1__。"),
+            _route_engine("groq", "得去找__LT_UNK_1____LT_UNK_1__。"),
+        ]
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event("모찌한테 가야 돼", False)
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertIsNone(outcome.target_text)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
+        self.assertTrue(
+            all(
+                row["output_guard"]["reason"]
+                == "unknown_name_placeholder_invalid"
+                for row in attempts
+            )
+        )
+
+    def test_confirmed_unknown_name_matrix_restores_exact_source_spelling(self):
+        cases = (
+            ("그런 거를 사옥쌤이랑 얘기하면", "跟__LT_UNK_1__說的話", "사옥쌤"),
+            ("푸코도 같이 가요", "__LT_UNK_1__也一起去", "푸코"),
+            ("저는 푸순이에요", "我是__LT_UNK_1__", "푸순"),
+            ("모찌한테 가야 돼", "得去找__LT_UNK_1__", "모찌"),
+        )
+        for source, candidate, expected_name in cases:
+            with self.subTest(source=source):
+                translator = _make_translator()
+                translator._engines = [_route_engine("deepseek", candidate)]
+
+                outcome = translator.translate_event(source, False)
+
+                self.assertEqual(outcome.status, "success")
+                self.assertIn(expected_name, outcome.target_text)
+                self.assertNotIn("__LT_", outcome.target_text)
+
+    def test_placeholder_plus_invented_alias_is_content_rejection(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "去找__LT_UNK_1__，也叫Mochi。"),
+            _route_engine("openrouter", "去找__LT_UNK_1__，也叫莫奇。"),
+        ]
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event("모찌한테 가야 돼", False)
+
+        self.assertEqual(outcome.status, "failed")
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
+        self.assertEqual(
+            [row["output_guard"]["unknown_name_escrow"]["invented_aliases"] for row in attempts],
+            [["Mochi"], ["莫奇"]],
+        )
+
+    def test_canonical_obligation_rejects_primary_and_accepts_fallback_without_health_change(self):
+        primary = _route_engine("deepseek", "她來了。")
+        fallback = _route_engine("openrouter", "모카來了。")
+        translator = _make_translator()
+        translator._engines = [primary, fallback]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카가 왔어", False)
+
+        self.assertEqual(outcome.target_text, "모카來了。")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(translator._active_idx, 0)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(attempts[0]["failure_scope"], "content")
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "canonical_obligation_missing",
+        )
+        evidence = attempts[0]["output_guard"]["canonical_obligations"]
+        self.assertEqual(evidence["expected"], ["모카"])
+        self.assertEqual(evidence["missing"], ["모카"])
+        self.assertEqual(evidence["obligations"][0]["matched_alias"], "모카")
+        self.assertEqual(evidence["obligations"][0]["source_spans"], [[0, 2]])
+
+    def test_arbitrary_unknown_rendering_cannot_satisfy_required_canonical(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "Moqaa來了。"),
+            _route_engine("openrouter", "她來了。"),
+        ]
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카가 왔어", False)
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertIsNone(outcome.target_text)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
+        self.assertTrue(all(row["failure_scope"] == "content" for row in attempts))
+        self.assertFalse(any(row["selected_for_output"] for row in attempts))
+
+    def test_known_wrong_form_is_repaired_before_obligation_acceptance(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "摩卡來了。"),
+            _route_engine("openrouter", "不應被呼叫"),
+        ]
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카가 왔어", False)
+
+        self.assertEqual(outcome.target_text, "모카來了。")
+        translator._engines[1].translate_messages.assert_not_called()
+        guard = translation_engines_module.get_translation_attempts()[0]["output_guard"]
+        self.assertTrue(guard["canonical_obligations"]["passed"])
+        self.assertEqual(guard["candidate_output"], "모카來了。")
+
+    def test_wrong_profile_boundary_and_repeated_source_do_not_activate_v1(self):
+        cases = (
+            ("irise", "모카가 왔어"),
+            ("url", "마냥히 웃었어"),
+            ("url", "모카랑 모카가 왔어"),
+        )
+        for profile_id, source in cases:
+            with self.subTest(profile=profile_id, source=source):
+                translator = _make_translator()
+                translator._engines = [_route_engine("deepseek", "她來了。")]
+                translation_engines_module.reset_translation_call_trace()
+                with _active_translation_profile(profile_id):
+                    outcome = translator.translate_event(source, False)
+                self.assertEqual(outcome.status, "success")
+                self.assertEqual(
+                    outcome.canonical_obligation_evaluation.expected,
+                    (),
+                )
+
+    def test_collision_prone_ordinary_word_does_not_create_hard_obligation(self):
+        translator = _make_translator()
+        natural_target = "所以就隨意一點，用『Let's go』那種感覺就好。"
+        translator._engines = [_route_engine("deepseek", natural_target)]
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event(
+                "그러니까 마냥 그냥 렛츠고 이런 느낌으로 해요.",
+                False,
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, natural_target)
+        self.assertEqual(outcome.canonical_obligation_evaluation.expected, ())
+        attempt = translation_engines_module.get_translation_attempts()[0]
+        self.assertEqual(attempt["status"], "success")
+        self.assertEqual(
+            attempt["output_guard"]["canonical_obligations"]["expected"],
+            [],
+        )
+
+    def test_cache_with_missing_canonical_is_invalidated_and_falls_through(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "모카來了。")]
+        invalidator = MagicMock()
+        translator._invalidate_cached_translation = invalidator
+        translator._lookup_existing_translation_event = MagicMock(
+            return_value=translator_module.MemoryLookup("她來了。", "memory_hit")
+        )
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카가 왔어", False)
+
+        invalidator.assert_called_once()
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "모카來了。")
+
+    def test_slang_missing_canonical_falls_through_to_provider(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "모카來了。")]
+        translator._translate_slang = MagicMock(return_value="她來了。")
+
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카가 왔어", False)
+
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "모카來了。")
+        translator._engines[0].translate_messages.assert_called_once()
+
+    def test_required_canonical_matrix_resolves_and_accepts(self):
+        cases = (
+            ("url", "모카가 왔어", "모카來了。", "모카"),
+            ("url", "랑코가 왔어", "랑코來了。", "랑코"),
+            ("url", "마냥이 왔어", "마냥來了。", "마냥"),
+            ("url", "솜먕이 왔어", "솜먕來了。", "솜먕"),
+            ("isegye_lilpa", "주르르가 왔어", "Jururu來了。", "Jururu"),
+            ("isegye_lilpa", "릴파가 왔어", "Lilpa來了。", "Lilpa"),
+            ("irise", "키리가 왔어", "KIIRI來了。", "KIIRI"),
+            ("irise", "하트 크러쉬 좋아", "Heart Crush很好聽。", "Heart Crush"),
+        )
+        for profile_id, source, target, canonical in cases:
+            with self.subTest(canonical=canonical):
+                translator = _make_translator()
+                translator._engines = [_route_engine("deepseek", target)]
+                with _active_translation_profile(profile_id):
+                    outcome = translator.translate_event(source, False)
+                self.assertEqual(outcome.status, "success")
+                self.assertEqual(
+                    outcome.canonical_obligation_evaluation.satisfied,
+                    (canonical,),
+                )
+
+    def test_active_profile_does_not_globally_allow_unrelated_hangul_name(self):
+        engine = _route_engine("deepseek", "今天是모카的直播")
+        with _active_translation_profile("url"):
+            guard = _translation_output_guard(
+                engine,
+                "今天是모카的直播",
+                "오늘 방송이야",
+            )
+        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertEqual(guard["canonical_obligations"]["expected"], [])
+
+    def test_obligation_preview_telemetry_does_not_contaminate_selected_trace(self):
+        engine = _route_engine("deepseek", "摩卡來了。")
+        reset_corrections()
+        translator_module._record_correction("seed", "seed", "before", "after")
+        before = get_corrections()
+        with _active_translation_profile("url"):
+            guard = _translation_output_guard(
+                engine,
+                "摩卡來了。",
+                "모카가 왔어",
+            )
+        self.assertTrue(guard["canonical_obligations"]["passed"])
+        self.assertEqual(guard["candidate_corrections"][0]["stage"], "name_render")
+        self.assertEqual(get_corrections(), before)
+
+    def test_flash_name_render_rescue_is_selected_and_keeps_raw_telemetry(self):
+        flash = _route_engine("deepseek", "릴파")
+        qwen = _route_engine("openrouter", "不應被呼叫")
+        translator = _make_translator()
+        translator._engines = [flash, qwen]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("isegye_lilpa"):
+            outcome = translator.translate_event("릴파", False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "Lilpa")
+        self.assertEqual(outcome.engine, "deepseek")
+        qwen.translate_messages.assert_not_called()
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["selected_for_output"])
+        guard = attempts[0]["output_guard"]
+        self.assertEqual(guard["candidate_raw_output"], "릴파")
+        self.assertEqual(guard["candidate_output"], "Lilpa")
+        self.assertEqual(
+            guard["accepted_after_name_render"],
+            ["unexpected_hangul"],
+        )
+        self.assertIn(
+            "target_has_unexpected_hangul",
+            guard["candidate_raw_quality_classifications"],
+        )
+        self.assertNotIn(
+            "target_has_unexpected_hangul",
+            guard["candidate_quality_classifications"],
+        )
+
+    def test_clean_flash_output_is_selected_without_calling_qwen(self):
+        class CapsuleEngine(TranslationEngine):
+            def __init__(self, name: str, model: str, result: str):
+                self._name = name
+                self._model = model
+                self._result = result
+                self.messages = []
+
+            @property
+            def engine_name(self):
+                return self._name
+
+            @property
+            def model_name(self):
+                return self._model
+
+            @property
+            def available(self):
+                return True
+
+            def translate(self, text, system_prompt, incomplete, history=None):
+                raise AssertionError("Qwen capsule route must use frozen messages")
+
+            def translate_messages(self, messages):
+                self.messages.append(messages)
+                return self._result
+
+        flash = CapsuleEngine(
+            "deepseek",
+            "deepseek-v4-flash",
+            "這是乾淨的繁體中文結果",
+        )
+        qwen = CapsuleEngine(
+            "openrouter",
+            "qwen/qwen3-next-80b-a3b-instruct",
+            "不應被呼叫",
+        )
+        translator = _make_translator()
+        translator._engines = [flash, qwen]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event("이것은 깨끗한 테스트 문장입니다", False)
+
+        self.assertEqual(outcome.target_text, "這是乾淨的繁體中文結果")
+        self.assertEqual(outcome.engine, "deepseek")
+        self.assertEqual(len(flash.messages), 1)
+        self.assertEqual(qwen.messages, [])
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["selected_for_output"])
+
+        cached = translator._memory.cache_lookup(
+            "이것은 깨끗한 테스트 문장입니다",
+            False,
+            outcome.prompt_version,
+            flash,
+        )
+
+        self.assertEqual(cached, "這是乾淨的繁體中文結果")
+        self.assertEqual(len(flash.messages), 1)
+        self.assertEqual(qwen.messages, [])
+
+    def test_flash_script_guard_selects_qwen_without_candidate_state_leak(self):
+        class CapsuleEngine(TranslationEngine):
+            def __init__(self, name: str, model: str, result: str):
+                self._name = name
+                self._model = model
+                self._result = result
+                self.messages = []
+
+            @property
+            def engine_name(self):
+                return self._name
+
+            @property
+            def model_name(self):
+                return self._model
+
+            @property
+            def available(self):
+                return True
+
+            def translate(self, text, system_prompt, incomplete, history=None):
+                raise AssertionError("Qwen capsule route must use frozen messages")
+
+            def translate_messages(self, messages):
+                self.messages.append(messages)
+                return self._result
+
+        flash = CapsuleEngine("deepseek", "deepseek-v4-flash", "這是느졋")
+        qwen = CapsuleEngine(
+            "openrouter",
+            "qwen/qwen3-next-80b-a3b-instruct",
+            "這是正式的繁體中文結果",
+        )
+        translator = _make_translator()
+        translator._engines = [flash, qwen]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+        reset_corrections()
+
+        outcome = translator.translate_event("이것은 테스트 문장입니다", False)
+
+        self.assertEqual(outcome.target_text, "這是正式的繁體中文結果")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(len(flash.messages), 1)
+        self.assertNotEqual(flash.messages, qwen.messages)
+        self.assertIn("overwhelmingly more likely", flash.messages[0][0][1])
+        self.assertIn(
+            "You translate noisy live-stream subtitles",
+            qwen.messages[0][0][1],
+        )
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "unexpected_hangul",
+        )
+        self.assertFalse(attempts[0]["selected_for_output"])
+        self.assertTrue(attempts[1]["selected_for_output"])
+        self.assertEqual(get_corrections(), [])
+
+    def test_invalid_qwen_and_deepl_script_residue_continue_to_valid_groq(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "Flash느졋"),
+            _route_engine("openrouter", "Qwen느졋"),
+            _route_engine("deepl", "DeepLテスト"),
+            _route_engine("groq", "Groq提供的有效繁體中文"),
+        ]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event("이것은 테스트 문장입니다", False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.engine, "groq")
+        self.assertEqual(outcome.target_text, "Groq提供的有效繁體中文")
+        self.assertEqual(translator._active_idx, 0)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(
+            [(row["engine"], row["status"]) for row in attempts],
+            [
+                ("deepseek", "rejected_output"),
+                ("openrouter", "rejected_output"),
+                ("deepl", "rejected_output"),
+                ("groq", "success"),
+            ],
+        )
+        self.assertEqual(
+            [row["output_guard"]["reason"] for row in attempts[:3]],
+            ["unexpected_hangul", "unexpected_hangul", "unexpected_japanese"],
+        )
+        self.assertTrue(attempts[-1]["selected_for_output"])
+
+    def test_invalid_groq_final_fallback_is_not_emitted(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "Flash느졋"),
+            _route_engine("openrouter", "Qwen느졋"),
+            _route_engine("deepl", "DeepLテスト"),
+            _route_engine("groq", "Groq느졋"),
+        ]
+        translator._active_idx = 0
+        translation_engines_module.reset_translation_call_trace()
+
+        outcome = translator.translate_event("이것은 테스트 문장입니다", False)
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertIsNone(outcome.target_text)
+        self.assertEqual(translator._active_idx, 0)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(
+            [row["engine"] for row in attempts],
+            ["deepseek", "openrouter", "deepl", "groq"],
+        )
+        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
+        self.assertFalse(any(row["selected_for_output"] for row in attempts))
+
+    def test_default_backend_builds_protected_deepseek_chain_without_nvidia(self):
         class FakeEngine:
             def __init__(self, name: str):
                 self._name = name
@@ -987,6 +2089,27 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             )
 
         self.assertEqual(translator_module.cfg.live_engine, "anthropic")
+        self.assertEqual(
+            [engine.engine_name for engine in engines],
+            ["deepseek", "openrouter", "deepl", "groq"],
+        )
+
+    def test_deepseek_route_off_restores_exact_previous_chain(self):
+        original_route = translator_module.cfg.translation.deepseek_route
+        try:
+            object.__setattr__(translator_module.cfg.translation, "deepseek_route", "off")
+            with patch.object(
+                translation_engines_module,
+                "_make_engine",
+                side_effect=lambda name: _mock_engine(name),
+            ):
+                engines = _build_engine_chain()
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "deepseek_route",
+                original_route,
+            )
         self.assertEqual(
             [engine.engine_name for engine in engines],
             ["openrouter", "deepl", "groq"],
@@ -1401,6 +2524,69 @@ class TestNvidiaEngine(unittest.TestCase):
 
 
 class TestRuntimeRetryAttribution(unittest.TestCase):
+    def test_production_worker_uses_event_snapshot_and_profile_after_switch(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        observed = []
+
+        class _ObservingTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
+            def translate_event(self, text, incomplete=False, *, repetition_evidence=None):
+                observed.append((effective_activity_value(), effective_profile_id()))
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text="固定場景",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=False,
+                    engine="fake",
+                    model="fake-model",
+                )
+
+        snapshot = capture_activity_snapshot("StarCraft", source="manual")
+        event = SentenceEvent(
+            text="현재 문장",
+            profile_id="url",
+            sentence_id="sentence-000001",
+            enqueued_at_monotonic=time.monotonic(),
+            activity_snapshot=snapshot,
+        )
+        original_activity = translator_module.cfg.translation.current_activity
+        original_profile = translator_module.cfg.translation.streamer_profile
+        object.__setattr__(translator_module.cfg.translation, "current_activity", "Hades")
+        object.__setattr__(
+            translator_module.cfg.translation, "streamer_profile", "hades_chxxnnx"
+        )
+        try:
+            with patch.object(translator_module, "Translator", _ObservingTranslator), \
+                    patch.object(translator_module, "runtime_events") as events:
+                thread = translator_module.start(sentence_q, subtitle_q, stop)
+                sentence_q.put(event)
+                self.assertEqual(subtitle_q.get(timeout=3), "固定場景")
+                deadline = time.monotonic() + 3
+                while not events.emit.called and time.monotonic() < deadline:
+                    stop.wait(0.005)
+                stop.set()
+                thread.join(timeout=2)
+        finally:
+            object.__setattr__(translator_module.cfg.translation, "current_activity", original_activity)
+            object.__setattr__(
+                translator_module.cfg.translation, "streamer_profile", original_profile
+            )
+
+        self.assertEqual(observed, [("StarCraft", "url")])
+        fields = events.emit.call_args.kwargs
+        self.assertEqual(fields["sentence_id"], "sentence-000001")
+        self.assertEqual(fields["activity_id"], "starcraft")
+        self.assertTrue(fields["activity_bound_snapshot_used"])
+        self.assertFalse(fields["activity_snapshot_fallback_used"])
+        self.assertEqual(fields["profile_id"], "url")
+        self.assertTrue(fields["activity_capsule_applied"])
+
     def _emit_outcome_with_stale_nvidia_diagnostics(
         self,
         outcome: TranslationOutcome,
@@ -1446,45 +2632,6 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
 
         events.emit.assert_called_once()
         return events.emit.call_args.kwargs
-
-    def test_translation_event_carries_record_only_source_fuzzy_shadow(self):
-        outcome = TranslationOutcome(
-            source_text="채나",
-            target_text="測試",
-            status="success",
-            result_source="api",
-            cache_status="miss",
-            incomplete=False,
-            engine="fake",
-            model="fake-model",
-        )
-        shadow = {
-            "schema": 1,
-            "mode": "record_only",
-            "enabled": True,
-            "eligible": True,
-            "applied": False,
-            "profile_id": "hades_chxxnnx",
-            "candidate_count": 1,
-            "unique_match_count": 1,
-            "ambiguous_count": 0,
-            "would_change": True,
-            "proposed_text": "챈나",
-            "candidates": [],
-        }
-
-        with patch.object(
-            translator_module,
-            "safe_source_fuzzy_shadow",
-            return_value=shadow,
-        ) as fuzzy:
-            fields = self._emit_outcome_with_stale_nvidia_diagnostics(outcome)
-
-        fuzzy.assert_called_once()
-        self.assertEqual(fuzzy.call_args.args[0], "채나")
-        self.assertEqual(fields["source_text"], "채나")
-        self.assertEqual(fields["source_fuzzy_shadow"], shadow)
-        self.assertFalse(fields["source_fuzzy_shadow"]["applied"])
 
     def test_translation_event_records_normalized_activity_metadata(self):
         outcome = TranslationOutcome(
@@ -1573,7 +2720,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(fields["current_activity"], "StarCraft")
         self.assertEqual(fields["activity_id"], "starcraft")
         self.assertEqual(fields["activity_source"], "manual")
-        self.assertEqual(fields["activity_context_schema_version"], 2)
+        self.assertEqual(fields["activity_context_schema_version"], 3)
 
     def test_translation_worker_uses_published_auto_only_when_enabled(self):
         from modules.activity_context import (
@@ -1634,7 +2781,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(fields["current_activity"], "Minecraft")
         self.assertEqual(fields["activity_id"], "minecraft")
         self.assertEqual(fields["activity_source"], "automatic")
-        self.assertEqual(fields["activity_context_schema_version"], 2)
+        self.assertEqual(fields["activity_context_schema_version"], 3)
         self.assertEqual(fields["activity_kind"], "game")
 
     def test_translation_workers_share_translator_state(self):
@@ -1701,6 +2848,281 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertCountEqual(_SharedFakeTranslator.calls, ["first", "second"])
         self.assertEqual(events.emit.call_count, 2)
 
+    def test_success_state_commits_in_sentence_sequence_order(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        first_started = threading.Event()
+        second_finished = threading.Event()
+        release_first = threading.Event()
+        committed = []
+
+        class _OutOfOrderTranslator:
+            shared = None
+
+            def __init__(self, shared_state=None):
+                self.__class__.shared = shared_state
+                self._last_input = ""
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                self._last_input = text
+                if text == "first":
+                    first_started.set()
+                    second_finished.wait(timeout=3)
+                    release_first.wait(timeout=3)
+                else:
+                    second_finished.set()
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=f"out-{text}",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                    deferred_success=lambda value=text: committed.append(value),
+                )
+
+        with patch.object(translator_module, "Translator", _OutOfOrderTranslator), \
+                patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                sentence_q.put({"text": "first", "incomplete": False})
+                self.assertTrue(first_started.wait(timeout=3))
+                sentence_q.put({"text": "second", "incomplete": False})
+                self.assertTrue(second_finished.wait(timeout=3))
+                self.assertEqual(committed, [])
+                release_first.set()
+                deadline = time.monotonic() + 3
+                while len(committed) < 2 and time.monotonic() < deadline:
+                    stop.wait(0.005)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertEqual(committed, ["first", "second"])
+        self.assertEqual(events.emit.call_count, 2)
+        self.assertEqual(_OutOfOrderTranslator.shared.policy.last_input, "second")
+
+    def test_inflight_duplicate_can_succeed_when_first_attempt_fails(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        first_started = threading.Event()
+        second_finished = threading.Event()
+        calls = 0
+
+        class _DuplicateTranslator:
+            shared = None
+
+            def __init__(self, shared_state=None):
+                self.shared_state = shared_state
+                self.__class__.shared = shared_state
+                self._last_input = ""
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                nonlocal calls
+                with self.shared_state.lock:
+                    reason = self.shared_state.policy.rejection_reason(text)
+                    prepared = self.shared_state.policy.prepare_input(
+                        text,
+                        initial_rejection_reason=reason,
+                    )
+                    self._last_input = self.shared_state.policy.last_input
+                if prepared is None:
+                    return TranslationOutcome(
+                        source_text=text,
+                        target_text=None,
+                        status="filtered",
+                        result_source="policy",
+                        cache_status="skipped",
+                        incomplete=incomplete,
+                        filter_reason=reason or "unknown",
+                    )
+                calls += 1
+                if calls == 1:
+                    first_started.set()
+                    second_finished.wait(timeout=3)
+                    with self.shared_state.lock:
+                        if self.shared_state.policy.last_input == self._last_input:
+                            self.shared_state.policy.reset_last_input()
+                        self._last_input = ""
+                    return TranslationOutcome(
+                        source_text=text,
+                        target_text=None,
+                        status="failed",
+                        result_source="none",
+                        cache_status="miss",
+                        incomplete=incomplete,
+                    )
+                second_finished.set()
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text="retry-success",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                )
+
+        with patch.object(translator_module, "Translator", _DuplicateTranslator):
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                item = {"text": "same source", "incomplete": False}
+                sentence_q.put(item)
+                self.assertTrue(first_started.wait(timeout=3))
+                sentence_q.put(item.copy())
+                result = subtitle_q.get(timeout=3)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertEqual(result, "retry-success")
+        self.assertEqual(calls, 2)
+        self.assertEqual(_DuplicateTranslator.shared.policy.last_input, "same source")
+        self.assertEqual(
+            _DuplicateTranslator.shared.policy.rejection_reason("same source"),
+            "duplicate",
+        )
+
+    def test_worker_exception_after_prepare_input_allows_identical_retry(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        first_failed = threading.Event()
+        calls = 0
+
+        class _RaisingTranslator:
+            shared = None
+
+            def __init__(self, shared_state=None):
+                self.shared_state = shared_state
+                self.__class__.shared = shared_state
+                self._last_input = ""
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                nonlocal calls
+                with self.shared_state.lock:
+                    reason = self.shared_state.policy.rejection_reason(text)
+                    prepared = self.shared_state.policy.prepare_input(
+                        text,
+                        initial_rejection_reason=reason,
+                    )
+                    self._last_input = self.shared_state.policy.last_input
+                if prepared is None:
+                    return TranslationOutcome(
+                        source_text=text,
+                        target_text=None,
+                        status="filtered",
+                        result_source="policy",
+                        cache_status="skipped",
+                        incomplete=incomplete,
+                        filter_reason=reason or "unknown",
+                    )
+                calls += 1
+                if calls == 1:
+                    first_failed.set()
+                    raise RuntimeError("unexpected provider failure")
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text="retry-success",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                )
+
+        with patch.object(translator_module, "Translator", _RaisingTranslator), \
+                patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                item = {"text": "same source", "incomplete": False}
+                sentence_q.put(item)
+                self.assertTrue(first_failed.wait(timeout=3))
+                deadline = time.monotonic() + 3
+                while events.emit.call_count < 1 and time.monotonic() < deadline:
+                    stop.wait(0.005)
+                sentence_q.put(item.copy())
+                result = subtitle_q.get(timeout=3)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertEqual(result, "retry-success")
+        self.assertEqual(calls, 2)
+
+    def test_actual_api_and_memory_hit_defer_context_in_sequence_order(self):
+        t = _make_translator()
+        t._defer_success_record = True
+        t._engines[0].translate.return_value = "第一筆翻譯"
+        first = t.translate_event("first source text")
+
+        cached_source = "cached source text"
+        system_prompt = t._build_system_prompt()
+        prompt_ver = t._prompt_version_for_engine(t._engines[0], system_prompt)
+        t._memory.cache_store(
+            cached_source,
+            False,
+            "第二筆快取翻譯",
+            prompt_ver,
+            t._engines[0],
+        )
+        second = t.translate_event(cached_source)
+
+        self.assertEqual(t._memory.context(), [])
+        self.assertIsNotNone(first.deferred_success)
+        self.assertIsNotNone(second.deferred_success)
+        first.deferred_success()
+        second.deferred_success()
+
+        self.assertEqual(
+            t._memory.context(),
+            [
+                ("first source text", "第一筆翻譯"),
+                (cached_source, "第二筆快取翻譯"),
+            ],
+        )
+        t._memory._history_writer.assert_called_once_with(
+            "first source text",
+            "第一筆翻譯",
+        )
+
+    def test_actual_api_and_slang_defer_history_in_sequence_order(self):
+        t = _make_translator()
+        t._defer_success_record = True
+        t._engines[0].translate.return_value = "第一筆翻譯"
+
+        first = t.translate_event("first source text")
+        second = t.translate_event("대박")
+
+        self.assertEqual(t._memory.context(), [])
+        self.assertEqual(t._memory._history_writer.call_count, 0)
+        first.deferred_success()
+        second.deferred_success()
+
+        self.assertEqual(
+            t._memory.context(),
+            [("first source text", "第一筆翻譯"), ("대박", "太狂了")],
+        )
+        self.assertEqual(
+            t._memory._history_writer.call_args_list,
+            [
+                unittest.mock.call("first source text", "第一筆翻譯"),
+                unittest.mock.call("대박", "太狂了"),
+            ],
+        )
+
     def test_stale_translation_skips_subtitle_display(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
@@ -1749,6 +3171,142 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
         self.assertEqual(events.emit.call_args.kwargs["subtitle_suppressed_reason"], "stale_output_delay")
         self.assertGreater(events.emit.call_args.kwargs["output_delay_ms"], 1)
+
+    def test_final_publication_rejects_unexpected_script_before_memory_commit(self):
+        for target_text, expected_reason in (
+            ("오아真的嗎？", "unexpected_hangul"),
+            ("それ真的嗎？", "unexpected_japanese"),
+        ):
+            with self.subTest(target_text=target_text):
+                sentence_q = queue.Queue()
+                subtitle_q = queue.Queue()
+                stop = threading.Event()
+                committed = MagicMock()
+
+                class _UnsafeTranslator:
+                    def __init__(self, shared_state=None):
+                        pass
+
+                    def translate_event(
+                        self, text: str, incomplete: bool = False, *, repetition_evidence=None
+                    ) -> TranslationOutcome:
+                        return TranslationOutcome(
+                            source_text=text,
+                            target_text=target_text,
+                            status="success",
+                            result_source="api",
+                            cache_status="miss",
+                            incomplete=incomplete,
+                            engine="fake",
+                            model="fake-model",
+                            deferred_success=committed,
+                        )
+
+                with patch.object(
+                    translator_module, "Translator", _UnsafeTranslator
+                ), patch.object(translator_module, "runtime_events") as events:
+                    thread = translator_module.start(sentence_q, subtitle_q, stop)
+                    try:
+                        sentence_q.put({"text": "우와 진짜요?", "incomplete": False})
+                        deadline = time.monotonic() + 3
+                        while not events.emit.called and time.monotonic() < deadline:
+                            stop.wait(0.005)
+                    finally:
+                        stop.set()
+                        thread.join(timeout=2)
+
+                self.assertTrue(subtitle_q.empty())
+                committed.assert_not_called()
+                event = events.emit.call_args.kwargs
+                self.assertEqual(event["status"], "failed")
+                self.assertIsNone(event["target_text"])
+                self.assertEqual(event["filter_reason"], expected_reason)
+                self.assertFalse(event["subtitle_emitted"])
+                self.assertEqual(
+                    event["subtitle_suppressed_reason"], "final_script_invariant"
+                )
+
+    def test_final_publication_allows_explicit_source_grounded_hangul(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        committed = MagicMock()
+
+        class _ApprovedTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text="모카來了。",
+                    status="success",
+                    result_source="api",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    engine="fake",
+                    model="fake-model",
+                    unknown_name_approved_terms=("모카",),
+                    deferred_success=committed,
+                )
+
+        with patch.object(
+            translator_module, "Translator", _ApprovedTranslator
+        ), patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                sentence_q.put({"text": "모카가 왔어요.", "incomplete": False})
+                deadline = time.monotonic() + 3
+                while not events.emit.called and time.monotonic() < deadline:
+                    stop.wait(0.005)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertEqual(subtitle_q.get_nowait(), "모카來了。")
+        committed.assert_called_once_with()
+        self.assertTrue(events.emit.call_args.kwargs["subtitle_emitted"])
+
+    def test_all_provider_canonical_rejection_outcome_emits_no_subtitle(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+
+        class _CanonicalRejectedTranslator:
+            def __init__(self, shared_state=None):
+                pass
+
+            def translate_event(
+                self, text: str, incomplete: bool = False, *, repetition_evidence=None
+            ) -> TranslationOutcome:
+                return TranslationOutcome(
+                    source_text=text,
+                    target_text=None,
+                    status="failed",
+                    result_source="none",
+                    cache_status="miss",
+                    incomplete=incomplete,
+                    filter_reason="canonical_obligation_missing",
+                )
+
+        with patch.object(
+            translator_module, "Translator", _CanonicalRejectedTranslator
+        ), patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            try:
+                sentence_q.put({"text": "모카가 왔어", "incomplete": False})
+                deadline = time.monotonic() + 3
+                while not events.emit.called and time.monotonic() < deadline:
+                    stop.wait(0.005)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+
+        self.assertTrue(subtitle_q.empty())
+        events.emit.assert_called_once()
+        self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
 
     def test_memory_hit_ignores_stale_nvidia_retry_diagnostics(self):
         event = self._emit_outcome_with_stale_nvidia_diagnostics(
@@ -1974,6 +3532,29 @@ class TestPreserveAsIsAcceptance(unittest.TestCase):
 
 
 class TestFallbackProbe(unittest.TestCase):
+    def test_primary_and_fallback_receive_same_selected_history_cohort(self):
+        from dataclasses import replace
+
+        t = _make_translator()
+        primary = _mock_engine("nvidia", None)
+        fallback = _mock_engine("groq", "成功")
+        t._engines = [primary, fallback]
+        snapshot = replace(
+            capture_activity_snapshot("League of Legends", source="manual"),
+            cohort_epoch=7,
+        )
+        cohort = ("hades_chxxnnx", "league_of_legends", 7)
+        t._memory.record_recent_context("前句", "先前", False, cohort)
+        t._memory.record_recent_context(
+            "聊天", "聊天內容", False, ("hades_chxxnnx", "chatting", 6)
+        )
+
+        with bind_profile_id("hades_chxxnnx"), bind_activity_snapshot(snapshot):
+            self.assertEqual(t.translate("현재 문장"), "成功")
+
+        self.assertEqual(primary.translate.call_args.args[3], [("前句", "先前")])
+        self.assertEqual(fallback.translate.call_args.args[3], [("前句", "先前")])
+
 
     def test_dotted_acronym_identical_output_stops_at_primary(self):
         t = _make_translator()
@@ -1993,10 +3574,8 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(t._active_idx, 0)
 
     def test_user_translation_path_does_not_probe_primary_after_recovery(self):
-        from modules.translator import _FALLBACK_PROBE_EVERY
         t = _make_translator()
         t._active_idx = 1                            # currently on fallback
-        t._probe_counter = _FALLBACK_PROBE_EVERY - 1 # one away from probe
         t._engines[0].translate.return_value = "你好"  # primary recovered
         t._engines[1].translate.return_value = "fallback"
 
@@ -2006,10 +3585,8 @@ class TestFallbackProbe(unittest.TestCase):
         t._engines[0].translate.assert_not_called()
 
     def test_user_translation_path_stays_on_fallback_without_probe(self):
-        from modules.translator import _FALLBACK_PROBE_EVERY
         t = _make_translator()
         t._active_idx = 1
-        t._probe_counter = _FALLBACK_PROBE_EVERY - 1
         t._engines[0].translate.return_value = None   # primary still down
         t._engines[1].translate.return_value = "fallback result"
 
@@ -2077,12 +3654,12 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(shared.fallback.active_idx, 0)
         self.assertGreaterEqual(engines[0].translate.call_count, 2)
         for call in engines[0].translate.call_args_list:
-            self.assertEqual(call.args[3], [("이전 문장", "先前句子")])
+            self.assertEqual(call.args[3], [])
         self.assertEqual(
             [event["action"] for event in fallback_events],
             ["probe_succeeded", "probe_succeeded", "circuit_closed"],
         )
-        self.assertTrue(all(event["probe_history_items"] == 1 for event in fallback_events))
+        self.assertTrue(all(event["probe_history_items"] == 0 for event in fallback_events))
 
     def test_background_probe_thread_respects_cooldown(self):
         fallback_events = []
@@ -2272,17 +3849,14 @@ class TestFallbackProbe(unittest.TestCase):
     def test_concurrent_state_merge_does_not_regress_failures(self):
         shared = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=2,
         )
         before = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
         after = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
 
@@ -2294,17 +3868,14 @@ class TestFallbackProbe(unittest.TestCase):
     def test_concurrent_state_merge_preserves_hard_switch(self):
         shared = translator_module.FallbackState(
             active_idx=1,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
         before = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
         after = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
 
@@ -2316,17 +3887,14 @@ class TestFallbackProbe(unittest.TestCase):
     def test_stale_worker_cannot_advance_past_newer_shared_engine(self):
         shared = translator_module.FallbackState(
             active_idx=1,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
         before = translator_module.FallbackState(
             active_idx=0,
-            probe_counter=0,
             consecutive_primary_failures=0,
         )
         after = translator_module.FallbackState(
             active_idx=2,
-            probe_counter=0,
             consecutive_primary_failures=0,
             primary_cooldown_until=time.monotonic() + 60.0,
         )
@@ -2354,11 +3922,6 @@ class TestTranslateOptimizations(unittest.TestCase):
         t.translate("a")
         for engine in t._engines:
             engine.translate.assert_not_called()
-
-    def test_prepare_input_strips_and_suppresses_duplicate(self):
-        t = _make_translator()
-        self.assertEqual(t._prepare_input("  안녕하세요  "), "안녕하세요")
-        self.assertIsNone(t._prepare_input("안녕하세요"))
 
     def test_slang_returns_direct_without_api(self):
         from config import cfg
@@ -2447,6 +4010,12 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertIsNone(outcome.target_text)
         t._record_success.assert_not_called()
 
+        t._engines[0].translate.return_value = "valid retry"
+        retry = t.translate_event("?月? 諻拖 鴔? ?禺站???渥?")
+        self.assertEqual(retry.status, "success")
+        self.assertEqual(retry.target_text, "valid retry")
+        self.assertEqual(t._engines[0].translate.call_count, 2)
+
     def test_cached_meta_garbage_output_is_filtered(self):
         t = _make_translator()
         engine = t._active_engine()
@@ -2470,6 +4039,12 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(list(t._memory.recent), [])
         for engine in t._engines:
             engine.translate.assert_not_called()
+
+        t._engines[0].translate.return_value = "valid retry"
+        retry = t.translate_event(source)
+        self.assertEqual(retry.status, "success")
+        self.assertEqual(retry.target_text, "valid retry")
+        t._engines[0].translate.assert_called_once()
 
     def test_source_aware_corrections_fix_runtime_term_misfires(self):
         source = (
@@ -2949,6 +4524,22 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(second.target_text, "Kim Bongjun")
         self.assertEqual(t._engines[0].translate.call_count, 1)
 
+    def test_irise_canonical_rendering_covers_api_and_memory_hit_paths(self):
+        t = _make_translator()
+        source = "키리씨가 왔어요"
+        with _active_translation_profile("irise"):
+            t._engines[0].translate.return_value = "基里來了。"
+
+            first = t.translate_event(source)
+            t._policy_state().reset_last_input()
+            second = t.translate_event(source)
+
+        self.assertEqual(first.result_source, "api")
+        self.assertEqual(first.target_text, "KIIRI來了。")
+        self.assertEqual(second.result_source, "memory_hit")
+        self.assertEqual(second.target_text, "KIIRI來了。")
+        self.assertEqual(t._engines[0].translate.call_count, 1)
+
     def test_translation_memory_honors_context_window_config(self):
         from config import cfg
 
@@ -3026,7 +4617,7 @@ class TestTranslateOptimizations(unittest.TestCase):
     def test_placeholder_echo_is_meta_garbage(self):
         # Audit §15.4: 17x "（留空）" shipped as subtitles on 2026-07-11.
         for output in (
-            "（留空）", "(留空)", "（留空）。", "[留空]", "（空白）",
+            "（空）", "(空)", "[空]。", "（留空）", "(留空)", "（留空）。", "[留空]", "（空白）",
             "（無輸出）", "（无输出）", "（零個字元）", "無輸出", "无输出。",
             "空字串", "沒有輸出", "（無翻譯）",
             "（輸出零個字元）",
@@ -3040,8 +4631,9 @@ class TestTranslateOptimizations(unittest.TestCase):
         # Bare 留空/空白 can be real translations (비워 둬 → 留空, 공백 → 空白),
         # and sentences merely containing the words are never placeholders.
         for output in (
-            "留空", "空白",
+            "空", "留空", "空白",
             "請把名字欄留空",
+            "欄位顯示（空）",
             "畫面一片空白",
             "這裡沒有輸出孔",
             "這個函式會輸出零個字元",
@@ -3050,13 +4642,18 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_placeholder_engine_output_is_filtered_not_cached(self):
         t = _make_translator()
-        t._engines[0].translate.return_value = "（留空）"
+        t._engines[0].translate.return_value = "（空）"
 
-        outcome = t.translate_event("Another word")
+        with patch.object(t, "_record_success") as record_success:
+            outcome = t.translate_event("Another word")
 
         self.assertEqual(outcome.status, "filtered")
+        self.assertEqual(outcome.result_source, "post_policy")
         self.assertEqual(outcome.filter_reason, "meta_garbage_output")
         self.assertIsNone(outcome.target_text)
+        record_success.assert_not_called()
+        for fallback in t._engines[1:]:
+            fallback.translate.assert_not_called()
         # A later identical input must not resurrect the placeholder from cache.
         t._engines[0].translate.return_value = "另一個詞"
         second = t.translate_event("Another word 2")
@@ -3482,6 +5079,30 @@ class TestSourceNormBeforeMatching(unittest.TestCase):
 
 
 class TestSourceNormIntegration(unittest.TestCase):
+    def test_hades_lol_engine_receives_canonical_game_name(self):
+        with _active_translation_profile("hades_chxxnnx"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = "真的沒有治療《英雄聯盟》成癮的方法嗎？"
+
+            outcome = t.translate_event("아니 롤 중독 치료하는 건 없나?")
+
+            self.assertEqual(outcome.source_text, "아니 롤 중독 치료하는 건 없나?")
+            self.assertEqual(outcome.target_text, "真的沒有治療《英雄聯盟》成癮的方法嗎？")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "아니 LoL 중독 치료하는 건 없나?")
+
+    def test_higedan_boundary_alias_engine_receives_canonical_source(self):
+        with _active_translation_profile("isegye_lilpa"):
+            t = _make_translator()
+            t._engines[0].translate.return_value = "Official髭男dism的現場演出很棒"
+
+            outcome = t.translate_event("희계단분들이 공연했어요")
+
+            self.assertEqual(outcome.source_text, "희계단분들이 공연했어요")
+            self.assertEqual(outcome.target_text, "Official髭男dism的現場演出很棒")
+            call_text = t._engines[0].translate.call_args[0][0]
+            self.assertEqual(call_text, "히게단분들이 공연했어요")
+
     def test_standalone_hanja_hangul_hits_slang(self):
         """translate_event("服주") under HADES → slang hit, engine not called, raw source preserved."""
         with _active_translation_profile("hades_chxxnnx"):
@@ -3659,708 +5280,361 @@ class TestDbCacheGating(unittest.TestCase):
             self._set_mode(original)
 
 
-class TestQualityRetry(unittest.TestCase):
-    """Runtime action on the QE signal: bad output -> one second opinion."""
+class TestProvisionalPromotion(unittest.TestCase):
+    def test_route_off_defensively_rejects_queued_provisional_work(self):
+        sentence_q = queue.Queue()
+        provisional_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        request = ProvisionalRequest(
+            provisional_id="provisional:route-off",
+            text="queued before emergency off",
+            incomplete=True,
+            profile_id="url",
+            source_utterance_ids=("utt-route-off",),
+            evidence_source_utterance_ids=("utt-route-off",),
+            activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+            requested_at_monotonic=time.monotonic(),
+            first_stt_ready_at_monotonic=time.monotonic(),
+        )
+        original_route = translator_module.cfg.translation.deepseek_route
+        object.__setattr__(translator_module.cfg.translation, "deepseek_route", "off")
+        deepseek_cls = MagicMock()
+        try:
+            with patch.object(translator_module, "DeepSeekTranslationEngine", deepseek_cls):
+                thread = translator_module.start(
+                    sentence_q,
+                    subtitle_q,
+                    stop,
+                    provisional_queue=provisional_q,
+                )
+                provisional_q.put(request)
+                deadline = time.monotonic() + 2
+                while not provisional_q.empty() and time.monotonic() < deadline:
+                    stop.wait(0.005)
+                stop.wait(0.05)
+                stop.set()
+                thread.join(timeout=2)
+        finally:
+            object.__setattr__(
+                translator_module.cfg.translation,
+                "deepseek_route",
+                original_route,
+            )
 
-    _SRC = "텐나 텐나 텐나입니다"
-    _BAD = "Tennna Tennna"           # repetitive + high latin, no Hangul -> actionable bad
-    _HANGUL_BAD = "초은和Chiikawa"    # bad, but Hangul may be an intentional keep
-    _GOOD = "是Tenna，Tenna來了"
+        deepseek_cls.assert_not_called()
+        self.assertTrue(subtitle_q.empty())
 
-    class _FakeEngine:
-        def __init__(self, name, reply):
-            self._name, self._reply, self.calls = name, reply, 0
-
-        @property
-        def engine_name(self):
-            return self._name
-
-        @property
-        def model_name(self):
-            return f"{self._name}-model"
-
-        @property
-        def available(self):
-            return True
-
-        def translate(self, text, system_prompt, incomplete, history=None):
-            self.calls += 1
-            return self._reply
-
-    def _translator_with(self, engines):
-        from modules.translation_engines import reset_translation_call_trace
-
-        reset_translation_call_trace()
-        t = Translator()
-        t._engines = engines
-        return t
-
-    def _retry(self, t, result, *, engine, incomplete=False):
-        return t._maybe_quality_retry(
-            self._SRC, self._SRC, result, "sys", incomplete, None, engine, "pv0")
-
-    def test_precondition_bad_and_good_severities(self):
-        from utils.runtime_events import translation_quality
-        self.assertEqual(
-            translation_quality(self._SRC, self._BAD)["quality_severity"], "bad")
-        self.assertEqual(
-            translation_quality(self._SRC, self._HANGUL_BAD)["quality_severity"], "bad")
-        # acceptance only needs strictly-better-than-bad
-        self.assertIn(
-            translation_quality(self._SRC, self._GOOD)["quality_severity"],
-            ("ok", "warn"))
-
-    def test_hangul_bearing_bad_is_ambiguous_and_never_retried(self):
-        # mwmeu-style outputs keep Korean canonicals by design; the heuristics
-        # cannot tell a leak from an intentional keep, so no runtime action.
-        primary = self._FakeEngine("nvidia", self._HANGUL_BAD)
-        alt = self._FakeEngine("groq", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, _e, _pv = self._retry(t, self._HANGUL_BAD, engine=primary)
-        self.assertEqual(result, self._HANGUL_BAD)
-        self.assertEqual(alt.calls, 0)
-
-    def test_generic_bad_result_does_not_trigger_retry(self):
-        primary = self._FakeEngine("nvidia", self._BAD)
-        alt = self._FakeEngine("groq", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, engine, _pv = self._retry(t, self._BAD, engine=primary)
-        self.assertEqual(result, self._BAD)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-
-    def test_amount_mismatch_triggers_quality_retry(self):
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        good = "收到一萬五千元"
-        primary = self._FakeEngine("nvidia", bad)
-        alt = self._FakeEngine("groq", good)
-        t = self._translator_with([primary, alt])
-
-        result, engine, _pv = t._maybe_quality_retry(
+    def _candidate(
+        self,
+        translator: Translator,
+        source: str,
+        target: str,
+        *,
+        source_ids=("utt-preview",),
+        evidence_ids=("utt-preview",),
+        incomplete=True,
+    ) -> ProvisionalCandidate:
+        snapshot = translator_module.bound_activity_snapshot()
+        self.assertIsNotNone(snapshot)
+        cohort = translator._history_cohort()
+        history = translator._memory_state().context(cohort)
+        system_prompt = translator._build_system_prompt()
+        obligations = translator_module._resolve_active_canonical_obligations(source)
+        known_source_spans = tuple(
+            span
+            for obligation in obligations
+            for span in obligation.source_spans
+        )
+        escrow = resolve_unknown_name_escrow(
             source,
-            source,
-            bad,
-            "sys",
-            False,
-            None,
-            primary,
-            "pv0",
+            known_source_spans=known_source_spans,
+        )
+        semantic_terminology = resolve_semantic_terminology(escrow.provider_source)
+        messages = build_effective_deepseek_messages(
+            semantic_terminology.provider_source, system_prompt, incomplete, history
+        )
+        return ProvisionalCandidate(
+            provisional_id="provisional:utt-preview",
+            raw_target=target,
+            display_target=target,
+            fingerprint=provisional_fingerprint(
+                prepared_source=source,
+                source_utterance_ids=source_ids,
+                evidence_source_utterance_ids=evidence_ids,
+                profile_id=cohort[0],
+                activity_cache_identity=snapshot.cache_identity,
+                history_cohort=cohort,
+                messages=messages,
+                incomplete=incomplete,
+            ),
+            engine="deepseek",
+            model="deepseek-v4-flash",
+            requested_at_monotonic=1.0,
+            completed_at_monotonic=2.0,
+            usage={},
+            diagnostics={},
         )
 
-        self.assertEqual(result, good)
-        self.assertEqual(engine.engine_name, "groq")
-        self.assertEqual(alt.calls, 1)
+    def test_unchanged_exact_fingerprint_promotes_without_provider_call(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "不應呼叫")
+        translator._engines = [engine]
+        source = "오늘 방송 재미있어요"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
 
-    def test_model_refusal_variants_trigger_one_retry(self):
-        source = "오늘 방송에서 새 노래를 소개할게요"
-        good = "今天直播要介紹新歌"
-        for refusal in (
-            "I'm sorry, I cannot translate this",
-            "Sorry, I cannot translate this",
-            "Sorry, but I cannot translate this",
-            "I'm sorry, but I cannot translate this",
-            "I cannot provide a translation",
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(translator, source, "今天直播很有趣")
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-preview",),
+                evidence_source_utterance_ids=("utt-preview",),
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "今天直播很有趣")
+        self.assertEqual(outcome.result_source, "provisional_promotion")
+        engine.translate_messages.assert_not_called()
+        self.assertTrue(translator._last_provisional_trace["promotion_passed"])
+
+    def test_changed_evidence_identity_discards_preview_and_translates_normally(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "最終翻譯")
+        translator._engines = [engine]
+        source = "오늘 방송 재미있어요"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(translator, source, "暫定翻譯")
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-changed",),
+                evidence_source_utterance_ids=("utt-changed",),
+            )
+
+        self.assertEqual(outcome.target_text, "最終翻譯")
+        engine.translate_messages.assert_called_once()
+        self.assertTrue(translator._last_provisional_trace["fingerprint_mismatch"])
+        self.assertTrue(translator._last_provisional_trace["final_retranslation"])
+
+    def test_promotion_still_enforces_canonical_obligations(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "모카來了")
+        translator._engines = [engine]
+        source = "모카가 왔어요"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(translator, source, "她來了")
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-preview",),
+                evidence_source_utterance_ids=("utt-preview",),
+            )
+
+        self.assertEqual(outcome.target_text, "모카來了")
+        engine.translate_messages.assert_called_once()
+        self.assertEqual(
+            translator._last_provisional_trace["guard_rejection"],
+            "canonical_obligation_missing",
+        )
+        self.assertTrue(translator._last_provisional_trace["final_retranslation"])
+
+    def test_promoted_raw_candidate_receives_normal_final_corrections(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "不應呼叫")
+        translator._engines = [engine]
+        source = "모카가 왔어요"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(
+                translator, source, "\u6469\u5361\u4f86\u4e86"
+            )
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-preview",),
+                evidence_source_utterance_ids=("utt-preview",),
+            )
+
+        self.assertEqual(outcome.result_source, "provisional_promotion")
+        self.assertEqual(outcome.target_text, "\ubaa8\uce74\u4f86\u4e86")
+        engine.translate_messages.assert_not_called()
+
+    def test_unknown_name_placeholder_promotes_and_restores_exact_hangul(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "不應呼叫")
+        translator._engines = [engine]
+        source = "모찌한테 가야 돼"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("hades_chxxnnx"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(
+                translator,
+                source,
+                "得去找__LT_UNK_1__。",
+            )
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-preview",),
+                evidence_source_utterance_ids=("utt-preview",),
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.result_source, "provisional_promotion")
+        self.assertEqual(outcome.target_text, "得去找모찌。")
+        engine.translate_messages.assert_not_called()
+
+    def test_semantic_terminology_placeholder_promotes_and_restores(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "不應呼叫")
+        translator._engines = [engine]
+        source = "내가 좀 사패가 되는 것 같아"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(
+                translator,
+                source,
+                "我好像變得很__LT_SEM_1__了",
+            )
+            outcome = translator.translate_event(
+                source,
+                True,
+                provisional_candidate=candidate,
+                source_utterance_ids=("utt-preview",),
+                evidence_source_utterance_ids=("utt-preview",),
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.result_source, "provisional_promotion")
+        self.assertEqual(outcome.target_text, "我好像變得很反社會人格了")
+        engine.translate_messages.assert_not_called()
+
+
+class TestSemanticTerminologyIntegration(unittest.TestCase):
+    def test_final_terminology_rejection_allows_identical_input_retry(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "我變成__LT_SEM_1__了")
+        translator._engines = [engine]
+        source = "내가 좀 사패가 되는 것 같아"
+
+        with patch.object(
+            translator_module.SemanticTerminologyEscrow,
+            "evaluate_final",
+            return_value=(False, "semantic_terminology_cardinality_mismatch"),
         ):
-            with self.subTest(refusal=refusal):
-                primary = self._FakeEngine("nvidia", refusal)
-                alt = self._FakeEngine("groq", good)
-                t = self._translator_with([primary, alt])
+            first = translator.translate_event(source)
+            second = translator.translate_event(source)
 
-                result, engine, _pv = t._maybe_quality_retry(
-                    source, source, refusal, "sys", False, None, primary, "pv0")
+        self.assertEqual(first.status, "failed")
+        self.assertEqual(second.status, "failed")
+        self.assertEqual(engine.translate_messages.call_count, 2)
 
-                self.assertEqual(result, good)
-                self.assertEqual(engine.engine_name, "groq")
-                self.assertEqual(alt.calls, 1)
-
-    def test_amount_parser_candidates_without_strong_proof_do_not_retry(self):
+    def test_confirmed_semantics_are_restored_before_publication(self):
         cases = (
-            (
-                "보니까 5만 9천 9백원이라고 했어요",
-                "價格是五萬九千九百元",
-            ),
-            (
-                "백만 원에 한 마리 뽑았대",
-                "花了一百萬抽到一隻",
-            ),
-            (
-                "보니까 5만 9천 9백원이고 10만원도 있어",
-                "價格是五萬九千九百元，也有十萬元",
-            ),
-            (
-                "만 5천원과 5만 9천 9백원이야",
-                "是一萬五千元和五萬九千九百元",
-            ),
-            (
-                "백만 5천원 받았어",
-                "收到一百萬五千元",
-            ),
+            ("내가 좀 사패가 되는 것 같아", "我好像變得很__LT_SEM_1__了", "反社會人格"),
+            ("닉, 닉값 하시면 안 되나요?", "不可以__LT_SEM_1__嗎？", "名副其實"),
+            ("준회가 짬 때린 것 같으면 연락해", "如果俊會像是__LT_SEM_1__就聯絡我", "把事情丟給別人"),
         )
-        for source, target in cases:
-            with self.subTest(source=source):
-                primary = self._FakeEngine("nvidia", target)
-                alt = self._FakeEngine("groq", "不應呼叫")
-                t = self._translator_with([primary, alt])
+        for source, provider_output, expected in cases:
+            translator = _make_translator()
+            engine = _route_engine("deepseek", provider_output)
+            translator._engines = [engine]
 
-                result, engine, _pv = t._maybe_quality_retry(
-                    source, source, target, "sys", False, None, primary, "pv0")
+            outcome = translator.translate_event(source)
 
-                self.assertEqual(result, target)
-                self.assertEqual(engine.engine_name, "nvidia")
-                self.assertEqual(alt.calls, 0)
+            self.assertEqual(outcome.status, "success")
+            self.assertIn(expected, outcome.target_text)
+            sent = engine.translate_messages.call_args.args[0][-1][1]
+            self.assertIn("__LT_SEM_1__", sent)
+            self.assertNotIn(expected, sent)
 
-    def test_quoted_i_cant_breathe_is_not_a_refusal_trigger(self):
-        source = "그 부분은 I can't breathe라고 불러요"
-        target = "那個部分唱的是「I can't breathe」"
-        primary = self._FakeEngine("nvidia", target)
-        alt = self._FakeEngine("groq", "不應呼叫")
-        t = self._translator_with([primary, alt])
+    def test_semantics_share_frozen_mapping_across_fallback(self):
+        translator = _make_translator()
+        primary = _route_engine("deepseek", "我變成小廢物了")
+        fallback = _route_engine("openrouter", "我變成__LT_SEM_1__了")
+        translator._engines = [primary, fallback]
 
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, target, "sys", False, None, primary, "pv0")
+        outcome = translator.translate_event("我看了之後有點 사패가 되는 것 같아")
 
-        self.assertEqual(result, target)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-
-    def test_long_complete_source_reduced_to_placeholder_retries(self):
-        source = "오늘 방송에서 준비한 새로운 노래를 여러분께 자세히 소개해 드릴게요"
-        placeholder = "無輸出"
-        good = "今天直播要向大家介紹新歌"
-        primary = self._FakeEngine("nvidia", placeholder)
-        alt = self._FakeEngine("groq", good)
-        t = self._translator_with([primary, alt])
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, placeholder, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, good)
-        self.assertEqual(engine.engine_name, "groq")
-        self.assertEqual(alt.calls, 1)
-
-    def test_unlisted_hangul_remains_record_only_without_leakage_proof(self):
-        source = "오늘 방송에서 새로운 노래를 소개할게요"
-        leaked = "안녕하세요반갑습니다"
-        good = "今天直播要介紹新歌"
-        primary = self._FakeEngine("nvidia", leaked)
-        alt = self._FakeEngine("groq", good)
-        t = self._translator_with([primary, alt])
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, leaked, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, leaked)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-
-    def test_repetitive_hangul_noise_does_not_make_placeholder_retryable(self):
-        source = "등등등등등등등등등등등등등등등등등등등등등등등등"
-        placeholder = "無輸出"
-        primary = self._FakeEngine("nvidia", placeholder)
-        alt = self._FakeEngine("groq", "等等等等")
-        t = self._translator_with([primary, alt])
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, placeholder, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, placeholder)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-
-    def test_profile_approved_hangul_does_not_retry(self):
-        source = "모카랑 랑코랑 마냥이랑 솜먕이 같이 왔어"
-        preserved = "모카、랑코、마냥、솜먕都來了"
-        primary = self._FakeEngine("nvidia", preserved)
-        alt = self._FakeEngine("groq", "大家都來了")
-        t = self._translator_with([primary, alt])
-
-        with _active_translation_profile("url"):
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, preserved, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, preserved)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-
-    def test_quality_retry_does_not_recall_an_engine_tried_by_fallback(self):
-        from modules.translation_engines import (
-            get_translation_attempts,
-            record_translation_attempt,
-            select_translation_attempt,
-        )
-        from modules.translator import get_quality_retry_trace
-
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        primary = self._FakeEngine("nvidia", None)
-        fallback = self._FakeEngine("deepl", bad)
-        t = self._translator_with([primary, fallback])
-        record_translation_attempt(primary, phase="fallback_chain", result=None)
-        fallback_attempt = record_translation_attempt(
-            fallback, phase="fallback_chain", result=bad)
-        select_translation_attempt(fallback_attempt)
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, bad, "sys", False, None, fallback, "pv0")
-
-        self.assertEqual(result, bad)
-        self.assertEqual(engine.engine_name, "deepl")
-        self.assertEqual(len(get_translation_attempts()), 2)
-        self.assertEqual(
-            get_quality_retry_trace()["reason"],
-            "no_untried_alternate_engine",
-        )
-
-    def test_retry_rejected_when_second_opinion_is_also_bad(self):
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        primary = self._FakeEngine("nvidia", bad)
-        alt = self._FakeEngine("groq", bad)
-        t = self._translator_with([primary, alt])
-        result, engine, pv = t._maybe_quality_retry(
-            source, source, bad, "sys", False, None, primary, "pv0")
-        self.assertEqual(result, bad)          # keep original
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(pv, "pv0")
-        self.assertEqual(alt.calls, 1)
-
-    def test_selective_retry_rejects_japanese_candidate(self):
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        japanese_candidate = "收到一萬五千です"
-        primary = self._FakeEngine("nvidia", bad)
-        alt = self._FakeEngine("groq", japanese_candidate)
-        t = self._translator_with([primary, alt])
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, bad, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, bad)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-
-    def test_japanese_only_retry_rejects_japanese_candidate(self):
-        from config import cfg
-
-        source = "오늘 방송은 정말 재미있어요"
-        original = "ヤダヤダヤダヤダヤダヤダ"
-        japanese_candidate = "今天直播有です"
-        primary = self._FakeEngine("nvidia", original)
-        alt = self._FakeEngine("groq", japanese_candidate)
-        t = self._translator_with([primary, alt])
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "active")
-        try:
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, original, "sys", False, None, primary, "pv0")
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        self.assertEqual(result, original)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-
-    def test_retry_candidate_must_preserve_profile_approved_term(self):
-        source = "모카가 만 5천원 받았어"
-        original = "莫卡收到五千"
-        candidate = "Moka收到一萬五千元"
-        primary = self._FakeEngine("nvidia", original)
-        alt = self._FakeEngine("groq", candidate)
-        t = self._translator_with([primary, alt])
-
-        with _active_translation_profile("url"):
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, original, "sys", False, None, primary, "pv0")
-
-        self.assertEqual(result, original)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-
-    def test_japanese_shadow_locks_selective_amount_mismatch(self):
-        from config import cfg
-        from modules.translator import get_quality_retry_trace
-
-        source = "만 5천원 받았어"
-        composite = "收到五千です"
-        good = "收到一萬五千元"
-        primary = self._FakeEngine("nvidia", composite)
-        alt = self._FakeEngine("groq", good)
-        t = self._translator_with([primary, alt])
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
-        try:
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, composite, "sys", False, None, primary, "pv0")
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        trace = get_quality_retry_trace()
-        self.assertEqual(result, composite)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-        self.assertEqual(trace["trigger"], "target_has_japanese")
-        self.assertEqual(
-            trace["co_triggers"],
-            ["amount_mismatch", "target_has_japanese"],
-        )
-        self.assertTrue(trace["would_replace"])
-        self.assertFalse(trace["applied"])
-        self.assertEqual(trace["reason"], "shadow_only")
-
-    def test_japanese_off_skips_selective_amount_mismatch(self):
-        from config import cfg
-        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
-
-        source = "만 5천원 받았어"
-        composite = "收到五千です"
-        good = "收到一萬五千元"
-        primary = self._FakeEngine("nvidia", composite)
-        alt = self._FakeEngine("groq", good)
-        t = self._translator_with([primary, alt])
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "off")
-        reset_quality_retry_trace()
-        try:
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, composite, "sys", False, None, primary, "pv0"
-            )
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        self.assertEqual(result, composite)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-        self.assertEqual(get_quality_retry_trace(), {})
-
-    def test_rejected_retry_keeps_primary_token_attribution(self):
-        from modules.translation_engines import (
-            _log_token_usage,
-            record_translation_attempt,
-            reset_translation_call_trace,
-            select_translation_attempt,
-        )
-
-        class _TokenEngine(self._FakeEngine):
-            def translate(self, *args, **kwargs):
-                self.calls += 1
-                _log_token_usage(self.engine_name, {"prompt_tokens": 20, "completion_tokens": 2})
-                return self._reply
-
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        primary = self._FakeEngine("nvidia", bad)
-        alt = _TokenEngine("groq", bad)
-        t = self._translator_with([primary, alt])
-        reset_translation_call_trace()
-        _log_token_usage("nvidia", {"prompt_tokens": 10, "completion_tokens": 1})
-        primary_attempt = record_translation_attempt(
-            primary, phase="fallback_chain", result=bad
-        )
-        select_translation_attempt(primary_attempt)
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, bad, "sys", False, None, primary, "pv0")
-        outcome = TranslationOutcome(
-            source_text=source,
-            target_text=result,
-            status="success",
-            result_source="api",
-            cache_status="miss",
-            incomplete=False,
-            engine=engine.engine_name,
-            model=engine.model_name,
-        )
-
-        self.assertEqual(_token_usage_for_outcome(outcome)["prompt"], 10)
-
-    def test_ok_result_never_triggers_retry(self):
-        primary = self._FakeEngine("nvidia", self._GOOD)
-        alt = self._FakeEngine("groq", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, _e, _pv = self._retry(t, self._GOOD, engine=primary)
-        self.assertEqual(result, self._GOOD)
-        self.assertEqual(alt.calls, 0)
-
-    def test_incomplete_fragments_are_skipped(self):
-        primary = self._FakeEngine("nvidia", self._BAD)
-        alt = self._FakeEngine("groq", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, _e, _pv = self._retry(t, self._BAD, engine=primary, incomplete=True)
-        self.assertEqual(result, self._BAD)
-        self.assertEqual(alt.calls, 0)
-
-    def test_kill_switch_disables_retry(self):
-        from config import cfg
-        primary = self._FakeEngine("nvidia", self._BAD)
-        alt = self._FakeEngine("groq", self._GOOD)
-        t = self._translator_with([primary, alt])
-        original = cfg.translation.quality_retry_enabled
-        object.__setattr__(cfg.translation, "quality_retry_enabled", False)
-        try:
-            result, _e, _pv = self._retry(t, self._BAD, engine=primary)
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_enabled", original)
-        self.assertEqual(result, self._BAD)
-        self.assertEqual(alt.calls, 0)
-
-    def test_japanese_retry_default_mode_does_not_call_alternate(self):
-        # Japanese residue remains observable, but the production default
-        # must not delay a subtitle for a diagnostic-only second opinion.
-        from config import cfg
-        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
-        from utils.runtime_events import translation_quality
-
-        source = "오늘 방송은 정말 재미있어요"
-        original = "今天直播很好です"
-        candidate = "今天的直播真的很有趣"
-        primary = self._FakeEngine("nvidia", original)
-        alt = self._FakeEngine("groq", candidate)
-        t = self._translator_with([primary, alt])
-        reset_quality_retry_trace()
-
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, original, "sys", False, None, primary, "pv0"
-        )
-
-        self.assertEqual(cfg.translation.quality_retry_japanese_mode, "off")
-        self.assertEqual(result, original)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-        self.assertEqual(get_quality_retry_trace(), {})
+        self.assertEqual(outcome.target_text, "我變成反社會人格了")
+        self.assertEqual(outcome.engine, "openrouter")
         self.assertIn(
-            "target_has_japanese",
-            translation_quality(source, original)["quality_flags"],
+            "__LT_SEM_1__", fallback.translate_messages.call_args.args[0][-1][1]
         )
 
-    def test_japanese_shadow_records_better_candidate_without_replacing(self):
-        from config import cfg
-        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
+    def test_action_direction_anchor_survives_name_rejection_and_fallback(self):
+        translator = _make_translator()
+        primary = _route_engine(
+            "deepseek",
+            "打賢님按右鍵後__LT_SEM_1__即可。",
+        )
+        fallback = _route_engine(
+            "openrouter",
+            "塔賢按右鍵後__LT_SEM_1__即可。",
+        )
+        translator._engines = [primary, fallback]
 
-        source = "오늘 방송은 정말 재미있어요"
-        original = "今天直播很好です"
-        candidate = "今天的直播真的很有趣"
-        primary = self._FakeEngine("nvidia", original)
-        alt = self._FakeEngine("groq", candidate)
-        t = self._translator_with([primary, alt])
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
-        reset_quality_retry_trace()
-        try:
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, original, "sys", False, None, primary, "pv0"
-            )
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        trace = get_quality_retry_trace()
-        self.assertEqual(result, original)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-        self.assertTrue(trace["would_replace"])
-        self.assertFalse(trace["applied"])
-        self.assertEqual(trace["reason"], "shadow_only")
-
-    def test_japanese_active_replaces_only_on_strict_improvement(self):
-        from config import cfg
-        from modules.translator import get_quality_retry_trace, reset_quality_retry_trace
-
-        source = "오늘 방송은 정말 재미있어요"
-        original = "今天直播很好です"
-        candidate = "今天的直播真的很有趣"
-        primary = self._FakeEngine("nvidia", original)
-        alt = self._FakeEngine("groq", candidate)
-        t = self._translator_with([primary, alt])
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "active")
-        reset_quality_retry_trace()
-        try:
-            result, engine, _pv = t._maybe_quality_retry(
-                source, source, original, "sys", False, None, primary, "pv0"
-            )
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        self.assertEqual(result, candidate)
-        self.assertEqual(engine.engine_name, "groq")
-        self.assertTrue(get_quality_retry_trace()["applied"])
-
-    def test_alternate_engine_exception_keeps_original(self):
-        class _Boom(self._FakeEngine):
-            def translate(self, *a, **k):
-                self.calls += 1
-                raise RuntimeError("api down")
-        source = "만 5천원 받았어"
-        bad = "收到五千"
-        primary = self._FakeEngine("nvidia", bad)
-        alt = _Boom("groq", "")
-        t = self._translator_with([primary, alt])
-        result, engine, _pv = t._maybe_quality_retry(
-            source, source, bad, "sys", False, None, primary, "pv0")
-        self.assertEqual(result, bad)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 1)
-
-
-class TestJapaneseShadowPrecedence(unittest.TestCase):
-    """§17 contract: with mode=shadow, Japanese-flagged outputs are absolutely
-    record-only even when a selective trigger also matches."""
-
-    _SRC = "야하다 야하다 진짜야"
-    # Japanese + repetitive + low CJK => severity bad.
-    _JP_BAD = "ヤダヤダヤダヤダヤダヤダ"
-    _JP_BAD_ALT = "ラララララララララララ"
-    _LATIN_BAD = "Light Light Light Light Light Light"
-    _GOOD = "真的很有趣"
-
-    _FakeEngine = TestQualityRetry._FakeEngine
-
-    def _translator_with(self, engines):
-        from modules.translation_engines import reset_translation_call_trace
-
-        reset_translation_call_trace()
-        t = Translator()
-        t._engines = engines
-        return t
-
-    def _retry_with_mode(self, t, result, *, engine, mode):
-        from config import cfg
-        from modules.translator import reset_quality_retry_trace
-
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", mode)
-        reset_quality_retry_trace()
-        try:
-            return t._maybe_quality_retry(
-                self._SRC, self._SRC, result, "sys", False, None, engine, "pv0")
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-    def test_precondition_composite_output_is_japanese_and_bad(self):
-        from utils.runtime_events import translation_quality
-
-        quality = translation_quality(self._SRC, self._JP_BAD)
-        self.assertEqual(quality["quality_severity"], "bad")
-        self.assertIn("target_has_japanese", quality["quality_flags"])
-        latin = translation_quality(self._SRC, self._LATIN_BAD)
-        self.assertEqual(latin["quality_severity"], "bad")
-        self.assertNotIn("target_has_japanese", latin["quality_flags"])
-
-    def test_1_composite_with_improving_candidate_stays_record_only(self):
-        from modules.translator import get_quality_retry_trace
-
-        primary = self._FakeEngine("nvidia", self._JP_BAD)
-        alt = self._FakeEngine("deepl", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, engine, pv = self._retry_with_mode(
-            t, self._JP_BAD, engine=primary, mode="shadow")
-
-        trace = get_quality_retry_trace()
-        self.assertEqual(result, self._JP_BAD)          # original ships
-        self.assertEqual(engine.engine_name, "nvidia")  # engine unchanged
-        self.assertEqual(pv, "pv0")
-        self.assertEqual(alt.calls, 1)                  # candidate still recorded
-        self.assertTrue(trace["would_replace"])         # counterfactual kept
-        self.assertFalse(trace["applied"])
-        self.assertEqual(trace["reason"], "shadow_only")
-        self.assertEqual(trace["trigger"], "target_has_japanese")
-        self.assertEqual(trace["co_triggers"], ["target_has_japanese"])
-
-    def test_2_composite_with_non_improving_candidate(self):
-        from modules.translator import get_quality_retry_trace
-
-        primary = self._FakeEngine("nvidia", self._JP_BAD)
-        alt = self._FakeEngine("deepl", self._JP_BAD_ALT)
-        t = self._translator_with([primary, alt])
-        result, engine, _pv = self._retry_with_mode(
-            t, self._JP_BAD, engine=primary, mode="shadow")
-
-        trace = get_quality_retry_trace()
-        self.assertEqual(result, self._JP_BAD)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertFalse(trace["would_replace"])
-        self.assertFalse(trace["applied"])
-        self.assertEqual(trace["reason"], "shadow_only")
-
-    def test_3_generic_bad_without_japanese_does_not_retry(self):
-        from modules.translator import get_quality_retry_trace
-
-        primary = self._FakeEngine("nvidia", self._LATIN_BAD)
-        alt = self._FakeEngine("deepl", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, engine, _pv = self._retry_with_mode(
-            t, self._LATIN_BAD, engine=primary, mode="shadow")
-
-        trace = get_quality_retry_trace()
-        self.assertEqual(result, self._LATIN_BAD)
-        self.assertEqual(engine.engine_name, "nvidia")
-        self.assertEqual(alt.calls, 0)
-        self.assertEqual(trace, {})
-
-    def test_4_active_mode_composite_can_still_replace(self):
-        from modules.translator import get_quality_retry_trace
-
-        primary = self._FakeEngine("nvidia", self._JP_BAD)
-        alt = self._FakeEngine("deepl", self._GOOD)
-        t = self._translator_with([primary, alt])
-        result, engine, _pv = self._retry_with_mode(
-            t, self._JP_BAD, engine=primary, mode="active")
-
-        self.assertEqual(result, self._GOOD)            # Phase C not locked out
-        self.assertEqual(engine.engine_name, "deepl")
-        self.assertTrue(get_quality_retry_trace()["applied"])
-
-    def test_5_placeholder_suppression_not_bypassed_by_shadow(self):
-        from config import cfg
-
-        t = _make_translator()
-        t._engines[0].translate.return_value = "（留空）"
-        old_mode = cfg.translation.quality_retry_japanese_mode
-        object.__setattr__(cfg.translation, "quality_retry_japanese_mode", "shadow")
-        try:
-            outcome = t.translate_event("Another word")
-        finally:
-            object.__setattr__(cfg.translation, "quality_retry_japanese_mode", old_mode)
-
-        self.assertEqual(outcome.status, "filtered")
-        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
-        self.assertIsNone(outcome.target_text)
-
-    def test_6_shadow_candidate_attempt_chain_and_token_attribution(self):
-        from modules.translation_engines import (
-            _log_token_usage,
-            get_last_token_usage,
-            get_translation_attempts,
-            record_translation_attempt,
-            reset_translation_call_trace,
-            select_translation_attempt,
+        outcome = translator.translate_event(
+            "타현님 우클릭 누르셔서 증폭 풀어주시면 풀어주시면 됩니다."
         )
 
-        class _TokenEngine(self._FakeEngine):
-            def translate(self, *args, **kwargs):
-                self.calls += 1
-                _log_token_usage(self.engine_name, {"prompt_tokens": 20, "completion_tokens": 2})
-                return self._reply
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.target_text, "塔賢按右鍵後解除增幅即可。")
+        for engine in (primary, fallback):
+            sent = engine.translate_messages.call_args.args[0][-1][1]
+            self.assertIn("__LT_SEM_1__", sent)
+            self.assertNotIn("증폭 풀어주시면", sent)
 
-        primary = self._FakeEngine("nvidia", self._JP_BAD)
-        alt = _TokenEngine("deepl", self._GOOD)
-        t = self._translator_with([primary, alt])
-        reset_translation_call_trace()
-        _log_token_usage("nvidia", {"prompt_tokens": 10, "completion_tokens": 1})
-        primary_attempt = record_translation_attempt(
-            primary, phase="fallback_chain", result=self._JP_BAD)
-        select_translation_attempt(primary_attempt)
+    def test_known_canonical_unknown_name_and_terminology_are_independent(self):
+        translator = _make_translator()
+        engine = _route_engine(
+            "deepseek", "모카和__LT_UNK_1__都很__LT_SEM_1__"
+        )
+        translator._engines = [engine]
 
-        result, _engine, _pv = self._retry_with_mode(
-            t, self._JP_BAD, engine=primary, mode="shadow")
+        with _active_translation_profile("url"):
+            outcome = translator.translate_event("모카와 모찌한테 좀 사패가 됐다고 했어")
 
-        self.assertEqual(result, self._JP_BAD)
-        attempts = get_translation_attempts()
-        self.assertEqual(len(attempts), 2)
-        by_phase = {a["phase"]: a for a in attempts}
-        self.assertTrue(by_phase["fallback_chain"]["selected_for_output"])
-        self.assertFalse(by_phase["quality_retry"]["selected_for_output"])
-        self.assertEqual(by_phase["quality_retry"]["engine"], "deepl")
-        # Candidate cost stays visible in the chain; selected attribution
-        # remains the primary's.
-        self.assertEqual(by_phase["quality_retry"].get("token_prompt"), 20)
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "모카和모찌都很反社會人格")
+
+class TestDaemonWorkerPool(unittest.TestCase):
+    def test_running_provider_call_cannot_keep_process_alive(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked_call():
+            started.set()
+            release.wait()
+
+        pool = translator_module._DaemonWorkerPool(
+            1,
+            thread_name_prefix="TranslationWorkerTest",
+        )
+        future = pool.submit(blocked_call)
+        self.assertTrue(started.wait(timeout=1.0))
+        try:
+            before = time.monotonic()
+            pool.shutdown(wait=False, cancel_futures=False)
+            elapsed = time.monotonic() - before
+
+            self.assertLess(elapsed, 0.5)
+            self.assertTrue(all(thread.daemon for thread in pool._threads))
+            self.assertFalse(future.cancel(), "a running future remains non-cancellable")
+        finally:
+            release.set()
+            for thread in pool._threads:
+                thread.join(timeout=1.0)

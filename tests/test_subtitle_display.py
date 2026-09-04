@@ -2,6 +2,7 @@ import queue
 import threading
 
 from modules.subtitle_display import SubtitleWindow
+from modules.provisional_subtitles import SubtitlePayload
 
 
 class _FakeRoot:
@@ -67,4 +68,24 @@ def test_toggle_discards_subtitle_held_for_reading_speed_guard():
 
     window._toggle_translation()
 
+    assert window._pending_text is None
+
+
+def test_final_revision_replaces_visible_provisional_without_duplicate_hold():
+    window, _root, _drawn = _window_with_fake_root()
+    shown = []
+    window._show = shown.append
+    subtitle_id = "provisional:utt-1"
+
+    window._queue.put(
+        SubtitlePayload("暫定字幕", subtitle_id, revision=0, phase="provisional")
+    )
+    window._poll()
+    window._queue.put(
+        SubtitlePayload("最終字幕", subtitle_id, revision=1, phase="final")
+    )
+    window._poll()
+
+    assert shown == ["暫定字幕", "最終字幕"]
+    assert window._current_subtitle_id == subtitle_id
     assert window._pending_text is None

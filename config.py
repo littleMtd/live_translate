@@ -16,6 +16,12 @@ class _Keys:
     anthropic:        str = os.environ.get("ANTHROPIC_API_KEY", "")
     groq:             str = os.environ.get("GROQ_API_KEY", "")
     groq_fallback:    str = os.environ.get("GROQ_API_KEY_fall_back", "")
+    # Prefer ElevenLabs' documented spelling, while accepting the spelling
+    # already used by this workspace for a migration-safe rollout.
+    elevenlabs:       str = (
+        os.environ.get("ELEVENLABS_API_KEY", "")
+        or os.environ.get("ElevenLabs_API_KEY", "")
+    )
     openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepl:            str = os.environ.get("DEEPL_API_KEY", "")
@@ -61,10 +67,16 @@ class _Audio:
 
 @dataclass(frozen=True)
 class _STT:
-    primary_engine:    str = "groq"            # "sensevoice" or "groq"
+    primary_engine:    str = "elevenlabs"      # "elevenlabs", "groq", or "sensevoice"
     sensevoice_model:  str = "iic/SenseVoiceSmall"
     sensevoice_device: str = "cuda"
     groq_model:        str = "whisper-large-v3"
+    elevenlabs_model:  str = "scribe_v2"
+    elevenlabs_timeout: float = 15.0
+    elevenlabs_failure_cooldown_sec: float = 30.0
+    # Keep this at or below 100: ElevenLabs applies a 20-second minimum
+    # billable duration to requests containing more than 100 keyterms.
+    elevenlabs_max_keyterms: int = 100
     language:          str = "ko"
     groq_prompt:            str   = (
         "Korean gaming livestream speech. Transcribe spoken Korean in Hangul only; "
@@ -117,6 +129,9 @@ class _Splitter:
     segment_gap_seconds: float = 0.6
     silence_complete_enabled: bool = True
     pending_incomplete_timeout_seconds: float = 8.0
+    provisional_enabled: bool = True
+    provisional_hold_seconds: float = 1.75
+    provisional_queue_maxsize: int = 4
     # T20's shadow gate did not clear the frozen activation criteria. Keep the
     # record-only diagnostic explicit; no "active" value is accepted.
     semantic_early_cut_mode: str = "off"
@@ -128,6 +143,19 @@ class _Splitter:
                 f"{self.semantic_early_cut_mode!r} "
                 f"(must be one of {_VALID_SEMANTIC_EARLY_CUT_MODES})"
             )
+        if (
+            isinstance(self.provisional_hold_seconds, bool)
+            or not isinstance(self.provisional_hold_seconds, (int, float))
+            or not math.isfinite(self.provisional_hold_seconds)
+            or self.provisional_hold_seconds <= 0
+        ):
+            raise ValueError("cfg.splitter.provisional_hold_seconds must be positive")
+        if (
+            isinstance(self.provisional_queue_maxsize, bool)
+            or not isinstance(self.provisional_queue_maxsize, int)
+            or self.provisional_queue_maxsize <= 0
+        ):
+            raise ValueError("cfg.splitter.provisional_queue_maxsize must be positive")
 
 
 _DEFAULT_SLANG_PATH = Path(__file__).resolve().parent / "data" / "default_slang.json"
@@ -147,7 +175,7 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 
 _VALID_STREAMER_PROFILES = known_profile_ids(include_aliases=True)
 _VALID_TRANSLATION_MODES = {"live", "clip"}
-_VALID_JAPANESE_RETRY_MODES = {"off", "shadow", "active"}
+_VALID_DEEPSEEK_ROUTES = {"primary", "off"}
 _VALID_ENGINE_NAMES      = {"claude", "google_translate", "deepl", "ollama", "nvidia", "groq", "openrouter"}
 _VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
 _VALID_SCENE_VISION_PROVIDERS = {"groq", "openrouter"}
@@ -157,23 +185,28 @@ _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 @dataclass(frozen=True)
 class _Translation:
     # -------------------------------------------------------------------------
-    # Engine chain — ordered fallback list; first available engine is primary.
+    # Configurable fallback list. In ordinary live ``anthropic`` mode the
+    # protected route is assembled separately by translation_engines.py:
+    # DeepSeek -> OpenRouter Qwen -> DeepL -> Groq (or Qwen -> DeepL -> Groq
+    # when deepseek_route="off"). Dashboard edits cannot reorder that route.
+    # This tuple remains configurable for NVIDIA/clip/other applicable paths.
     #
     # Supported names (must match keys in _make_engine() in translator.py):
     #   "claude"           — Anthropic Claude     (needs ANTHROPIC_API_KEY)
     #   "google_translate" — Google Translate v2  (needs GOOGLE_TRANSLATE_API_KEY)
-    #   "deepseek"         — DeepSeek Chat        (needs DEEPSEEK_API_KEY)   [not yet impl.]
+    #   "deepseek"         — DeepSeek V4 Flash    (needs DEEPSEEK_API_KEY;
+    #                           protected live route only, not dashboard chain)
     #   "deepl"            — DeepL API v2         (needs DEEPL_API_KEY)
     #
-    # To add a new engine:
-    #   1. Add its name to engine_chain below.
+    # To add a new configurable-chain engine:
+    #   1. Add its name to engine_chain below and to the validated name set.
     #   2. Add its model/config field(s) in this class (see examples below).
     #   3. Implement a TranslationEngine subclass in modules/translator.py.
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
-    # Primary chain when live_engine="anthropic", and fallback chain when
-    # live_engine="nvidia". OpenRouter uses the benchmarked Qwen3-Next capsule;
-    # DeepL is the fast non-LLM safety net and Groq remains last.
+    # Configured fallback chain for NVIDIA/clip/other applicable paths.
+    # OpenRouter uses the benchmarked Qwen3-Next capsule; DeepL is the fast
+    # non-LLM safety net and Groq remains last.
     engine_chain:   tuple        = ("openrouter", "deepl", "groq")
 
     # --- Model / API settings (one block per engine) -------------------------
@@ -210,8 +243,21 @@ class _Translation:
     # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
     google_translate_lang:    str = "zh-TW"
     google_translate_timeout: float = 5.0
-    # DeepSeek  (uncomment when DeepSeekEngine is implemented)
-    # deepseek_model: str        = "deepseek-chat"
+    # Owner-authorized protected live route. ``primary`` selects the fixed
+    # Flash -> Qwen -> DeepL -> Groq chain; ``off`` restores the exact fixed
+    # Qwen -> DeepL -> Groq chain. Dashboard engine ordering cannot alter it.
+    deepseek_route: str = os.environ.get(
+        "LIVE_TRANSLATE_DEEPSEEK_ROUTE", "primary"
+    ).strip().lower()
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_timeout: float = 4.0
+    deepseek_max_tokens: int = 160
+    # Pricing snapshot verified from DeepSeek's official pricing page on
+    # 2026-08-15. Keeping rates explicit makes every recorded cost auditable.
+    deepseek_cache_hit_usd_per_million: float = 0.0028
+    deepseek_cache_miss_usd_per_million: float = 0.14
+    deepseek_output_usd_per_million: float = 0.28
+    deepseek_pricing_revision: str = "2026-08-15"
     # DeepL     (target lang uses a different code from target_lang below)
     # DeepL API v2. Traditional Chinese must be requested as ZH-HANT.
     # Free keys (ending in :fx) use api-free.deepl.com automatically; all
@@ -263,9 +309,10 @@ class _Translation:
     # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
-    # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu","url"
-    streamer_profile: str        = "hades_chxxnnx"
+    # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu", "irise", "url"
+    streamer_profile: str        = "isegye_lilpa"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
+    profile_mode:     str        = "auto"  # auto content override or manual hard lock
     # Manual session state: what the streamer is doing right now (e.g.
     # "StarCraft", "tier list talk"). Injected into the system prompt as one
     # labeled background line to disambiguate game/context terms — never as
@@ -273,20 +320,6 @@ class _Translation:
     # automatic resolver publishes a separate canonical snapshot and never
     # writes this value.
     current_activity: str        = ""
-    # Act on the QE signal at runtime: when the reference-free heuristics rate
-    # an API result "bad" (Hangul leak / repetition / meta shapes), ask one
-    # different engine for a second opinion and keep whichever scores better.
-    # Detectable-bad is ~0.2% of sentences, so the retry cost is negligible.
-    quality_retry_enabled: bool  = True
-    # Japanese residue is ambiguous. "shadow" pays for a second opinion but
-    # never changes subtitles; "active" may replace only on a strict severity
-    # improvement. Keep off until offline + live-shadow evidence passes.
-    # Japanese residue remains observable through translation-quality flags.
-    # "shadow" is an explicit diagnostic mode: it synchronously generates and
-    # logs a candidate while the original subtitle ships, so flagged subtitles
-    # wait for the extra call. Keep production default "off"; use "active" only
-    # after its evidence gate passes.
-    quality_retry_japanese_mode: str = "off"
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):
@@ -295,13 +328,15 @@ class _Translation:
                 f"cfg.translation.translation_mode invalid: {self.translation_mode!r} "
                 f"(must be one of {_VALID_TRANSLATION_MODES})"
             )
-        if self.quality_retry_japanese_mode not in _VALID_JAPANESE_RETRY_MODES:
+        if self.deepseek_route not in _VALID_DEEPSEEK_ROUTES:
             raise ValueError(
-                "cfg.translation.quality_retry_japanese_mode invalid: "
-                f"{self.quality_retry_japanese_mode!r} "
-                f"(must be one of {_VALID_JAPANESE_RETRY_MODES})"
+                "cfg.translation.deepseek_route invalid: "
+                f"{self.deepseek_route!r} "
+                f"(must be one of {_VALID_DEEPSEEK_ROUTES})"
             )
         canonical_streamer_profile = canonical_profile_id(self.streamer_profile)
+        if self.profile_mode not in {"auto", "manual"}:
+            raise ValueError("cfg.translation.profile_mode must be auto or manual")
         if self.streamer_profile and not canonical_streamer_profile:
             raise ValueError(
                 f"cfg.translation.streamer_profile invalid: {self.streamer_profile!r} "
@@ -313,11 +348,17 @@ class _Translation:
                     f"cfg.translation.engine_chain contains unknown engine {name!r} "
                     f"(must be one of {_VALID_ENGINE_NAMES})"
                 )
+        if len(set(self.engine_chain)) != len(self.engine_chain):
+            raise ValueError("cfg.translation.engine_chain entries must be unique")
         for field_name in (
             "circuit_recovery_cooldown_sec",
             "live_total_deadline_sec",
             "claude_timeout",
             "google_translate_timeout",
+            "deepseek_timeout",
+            "deepseek_cache_hit_usd_per_million",
+            "deepseek_cache_miss_usd_per_million",
+            "deepseek_output_usd_per_million",
         ):
             value = getattr(self, field_name)
             if (
@@ -329,6 +370,12 @@ class _Translation:
                 raise ValueError(
                     f"cfg.translation.{field_name} must be positive and finite"
                 )
+        for field_name in (
+            "deepseek_max_tokens",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"cfg.translation.{field_name} must be a positive integer")
         if not isinstance(self.circuit_breaker_enabled, bool):
             raise ValueError(
                 "cfg.translation.circuit_breaker_enabled must be boolean"
@@ -424,7 +471,7 @@ class _Scene:
     # T15/T17 kill switch. The open-set runtime gate passed, so direct pipeline
     # runs publish by default; an explicit dashboard false still disables it.
     publish_open_set_activity: bool = True
-    check_interval_sec:   float = 20.0    # cheap fingerprint check cadence
+    check_interval_sec:   float = 5.0     # bounded fast profile discovery cadence
     min_call_gap_sec:     float = 180.0   # at most one vision call per gap
     refresh_interval_sec: float = 600.0   # re-ask even without a scene change
     change_threshold:     float = 12.0    # mean abs diff on 64x64 grayscale
@@ -436,22 +483,22 @@ class _Scene:
     # ChatGPT x175, "Google Sheets", "selling a product page").
     #
     # capture_mode options:
-    #   "chrome_window"  — lock onto ONE Chrome window at first scan (prefer a
-    #                      title matching window_title_keywords, else the
-    #                      top-most Chrome window) and keep scanning that hwnd
-    #                      for the whole session, even as its tab title
-    #                      changes. Windows renders a window, not a tab, so a
-    #                      tab-level lock is impossible: keep the stream in
-    #                      its own Chrome window; browsing in OTHER Chrome
-    #                      windows never touches the scene. Re-locks only if
-    #                      the locked window is closed.
+    #   "chrome_window"  — require exactly one visible, non-minimized,
+    #                      owner-approved browser window whose active title
+    #                      matches window_title_keywords; otherwise fail
+    #                      closed. Keep the stream in its own browser window.
     #   "window"         — legacy title-keyword match per scan (stream
     #                      platform name must stay in the active tab title).
     #   "primary_screen" — full-screen grab (pollution-prone, debug only).
     capture_mode:         str   = "chrome_window"
     window_title_keywords: tuple = ("SOOP", "치지직", "CHZZK")
-    # Chrome/Edge/Brave share the "Chrome_WidgetWin_1" window class; require
-    # this title substring so chrome_window mode never locks onto Edge etc.
+    # Chrome/Edge/Brave share the "Chrome_WidgetWin_1" class. Legacy title
+    # markers cannot establish browser identity and are retained only for
+    # configuration compatibility; executable basenames below are authoritative.
+    browser_title_markers: tuple = ("google chrome", "brave")
+    # Exact executable basenames form the security boundary. Window titles are
+    # page-controlled and therefore cannot prove browser identity.
+    browser_process_names: tuple = ("chrome.exe", "brave.exe")
     chrome_title_marker:  str   = "google chrome"
     window_fallback_fullscreen: bool = False
     # Explicit provider/model routes. Groq remains primary; the owner-approved
@@ -466,6 +513,17 @@ class _Scene:
     vision_max_retries:   int   = 0
     max_activity_chars:   int   = 40
     max_open_set_identities_per_window: int = 8
+    # A second bounded classifier reuses the validated player crop to resolve
+    # reviewed content profiles. It never emits free-form identities.
+    resolve_content_profile: bool = True
+    # Adaptive profile sampling: unresolved/recovering scenes sample quickly;
+    # stable confirmed content backs off to the normal cadence.
+    profile_identity_fast_call_gap_sec: float = 5.0
+    profile_identity_stable_call_gap_sec: float = 15.0
+    profile_identity_schema_retry_limit: int = 1
+    profile_identity_max_attempts_per_minute: int = 12
+    profile_identity_recovery_clear_sec: float = 15.0
+    profile_identity_expiry_sec: float = 300.0
 
     def __post_init__(self):
         routes: list[tuple[str, str]] = [
@@ -528,6 +586,40 @@ class _Scene:
             or self.vision_timeout <= 0
         ):
             raise ValueError("cfg.scene.vision_timeout must be positive")
+        for field_name in (
+            "check_interval_sec",
+            "min_call_gap_sec",
+            "refresh_interval_sec",
+            "profile_identity_fast_call_gap_sec",
+            "profile_identity_stable_call_gap_sec",
+            "profile_identity_expiry_sec",
+            "profile_identity_recovery_clear_sec",
+        ):
+            value = getattr(self, field_name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"cfg.scene.{field_name} must be positive and finite")
+        if self.profile_identity_fast_call_gap_sec > self.profile_identity_stable_call_gap_sec:
+            raise ValueError("cfg.scene profile fast cadence cannot exceed stable cadence")
+        if self.profile_identity_schema_retry_limit not in {0, 1}:
+            raise ValueError("cfg.scene.profile_identity_schema_retry_limit must be 0 or 1")
+        if (
+            isinstance(self.profile_identity_max_attempts_per_minute, bool)
+            or not isinstance(self.profile_identity_max_attempts_per_minute, int)
+            or not 1 <= self.profile_identity_max_attempts_per_minute <= 30
+        ):
+            raise ValueError("cfg.scene.profile_identity_max_attempts_per_minute must be 1..30")
+        if (
+            isinstance(self.change_threshold, bool)
+            or not isinstance(self.change_threshold, (int, float))
+            or not math.isfinite(self.change_threshold)
+            or self.change_threshold < 0
+        ):
+            raise ValueError("cfg.scene.change_threshold must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -540,7 +632,9 @@ class _Config:
     subtitle:            _Subtitle    = field(default_factory=_Subtitle)
     database:            _Database    = field(default_factory=_Database)
     # Translation backend per mode — options: "anthropic" | "ollama" | "nvidia"
-    # "anthropic" uses engine_chain (with fallback); "ollama"/"nvidia" bypass it entirely.
+    # Ordinary live "anthropic" uses the fixed protected route described
+    # above; other applicable anthropic/clip and NVIDIA paths may use
+    # translation.engine_chain. Ollama bypasses it.
     live_engine:         str          = "anthropic"
     clip_engine:         str          = "anthropic"
     ollama:              _Ollama      = field(default_factory=_Ollama)
@@ -577,7 +671,7 @@ _DASHBOARD_OVERRIDE_FIELDS = {
     "audio": ("vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
     "stt": ("primary_engine",),
     "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang",
-                    "current_activity"),
+                    "current_activity", "streamer_profile", "use_profile", "profile_mode"),
     "scene": ("publish_open_set_activity",),
     "subtitle": ("idle_hide_ms", "alpha"),
 }
@@ -612,13 +706,14 @@ def _dashboard_value_is_valid(
         if name == "vad_max_speech_sec":
             return _is_finite_number(value) and base.audio.vad_min_speech_sec < float(value) <= 30.0
     if section == "stt" and name == "primary_engine":
-        return value in {"groq", "sensevoice"}
+        return value in {"elevenlabs", "groq", "sensevoice"}
     if section == "translation":
         if name == "engine_chain":
             return (
                 isinstance(value, list)
                 and bool(value)
                 and all(isinstance(engine, str) and engine in _VALID_ENGINE_NAMES for engine in value)
+                and len(set(value)) == len(value)
             )
         if name == "translation_mode":
             return value in _VALID_TRANSLATION_MODES
@@ -628,6 +723,12 @@ def _dashboard_value_is_valid(
             return isinstance(value, str) and bool(value.strip()) and len(value) <= 50
         if name == "current_activity":
             return isinstance(value, str) and len(value) <= 200
+        if name == "streamer_profile":
+            return isinstance(value, str) and canonical_profile_id(value) is not None
+        if name == "use_profile":
+            return isinstance(value, bool)
+        if name == "profile_mode":
+            return value in {"auto", "manual"}
     if section == "scene" and name == "publish_open_set_activity":
         return isinstance(value, bool)
     if section == "subtitle":

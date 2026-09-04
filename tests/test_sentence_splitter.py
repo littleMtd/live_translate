@@ -12,7 +12,9 @@ from modules.sentence_splitter import (
     start,
 )
 from modules.pipeline_events import TranscriptionEvent
+from modules.activity_context import capture_activity_snapshot
 from modules.sentence_buffer import SentenceCut
+from modules.provisional_subtitles import ProvisionalRequest
 
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
@@ -31,6 +33,9 @@ def _fast_cfg(
     m.splitter.silence_complete_enabled = False
     m.splitter.pending_incomplete_timeout_seconds = pending_timeout
     m.splitter.semantic_early_cut_mode = "off"
+    m.splitter.provisional_enabled = False
+    m.splitter.provisional_hold_seconds = 0.15
+    m.translation.deepseek_route = "primary"
     return m
 
 
@@ -101,6 +106,11 @@ class TestIsComplete(unittest.TestCase):
         # "배고서" ends with 서 (incomplete 이서/어서 family) even though 고 is also checked
         self.assertFalse(_is_complete("배고서"))
 
+    def test_embedded_question_endings_override_generic_final_ji(self):
+        for text in ("무엇을 받을지", "누가 오는지", "정답인지"):
+            with self.subTest(text=text):
+                self.assertFalse(_is_complete(text))
+
 
 class TestSemanticEarlyCutMode(unittest.TestCase):
     def test_only_explicit_shadow_is_enabled(self):
@@ -111,6 +121,117 @@ class TestSemanticEarlyCutMode(unittest.TestCase):
 
 
 class TestSentenceSplitterThread(unittest.TestCase):
+
+    def test_live_derived_embedded_question_merges_with_continuation_in_order(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.3, force_cut=0.8)
+        cfg.splitter.silence_complete_enabled = True
+
+        with patch("modules.sentence_splitter.cfg", cfg):
+            thread = start(tq, sq, stop)
+            tq.put(
+                TranscriptionEvent(
+                    text="그래서 저희가 몇 시부터 몇 시까지를 그 받을지",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    vad_cut_reason="silence",
+                    utterance_id="utt-8",
+                )
+            )
+            time.sleep(0.15)
+            self.assertTrue(sq.empty())
+            tq.put(
+                TranscriptionEvent(
+                    text="그것도 정하면은 되거든요.",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    vad_cut_reason="silence",
+                    utterance_id="utt-9",
+                )
+            )
+            first = sq.get(timeout=2)
+            tq.put(
+                TranscriptionEvent(
+                    text="다음 안건이에요.",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    vad_cut_reason="silence",
+                    utterance_id="utt-10",
+                )
+            )
+            second = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(
+            first.text,
+            "그래서 저희가 몇 시부터 몇 시까지를 그 받을지 그것도 정하면은 되거든요.",
+        )
+        self.assertEqual(first.source_utterance_ids, ("utt-8", "utt-9"))
+        self.assertEqual(second.text, "다음 안건이에요.")
+        self.assertEqual(second.source_utterance_ids, ("utt-10",))
+
+    def test_single_source_requests_one_provisional_and_final_links_it(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        pq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.6, force_cut=0.8, pending_timeout=0.4)
+        cfg.splitter.provisional_enabled = True
+
+        with patch("modules.sentence_splitter.cfg", cfg):
+            thread = start(tq, sq, stop, provisional_queue=pq)
+            tq.put(
+                TranscriptionEvent(
+                    text="아직 말하는 중",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    utterance_id="utt-provisional-1",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.1,
+                )
+            )
+            request = pq.get(timeout=2)
+            time.sleep(0.25)
+            self.assertTrue(pq.empty(), "only one preview is allowed per lifecycle")
+            stop.set()
+            final = sq.get(timeout=2)
+            thread.join(timeout=2)
+
+        self.assertIsInstance(request, ProvisionalRequest)
+        self.assertEqual(request.source_utterance_ids, ("utt-provisional-1",))
+        self.assertEqual(request.profile_id, "url")
+        self.assertEqual(request.min_avg_logprob, -0.2)
+        self.assertEqual(request.max_no_speech_prob, 0.1)
+        self.assertEqual(final.provisional_id, request.provisional_id)
+
+    def test_deepseek_route_off_does_not_produce_provisional_request(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        pq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.6, force_cut=0.8, pending_timeout=0.4)
+        cfg.splitter.provisional_enabled = True
+        cfg.translation.deepseek_route = "off"
+
+        with patch("modules.sentence_splitter.cfg", cfg):
+            thread = start(tq, sq, stop, provisional_queue=pq)
+            tq.put(
+                TranscriptionEvent(
+                    text="provisional route off source",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    utterance_id="utt-route-off",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.1,
+                )
+            )
+            time.sleep(0.3)
+            self.assertTrue(pq.empty())
+            stop.set()
+            thread.join(timeout=2)
 
     def _run(self, tokens: list[str], wait: float) -> list[dict]:
         tq: queue.Queue = queue.Queue()
@@ -688,6 +809,44 @@ class TestSentenceSplitterPause(unittest.TestCase):
         self.assertGreater(len(results), 0)
         texts = " ".join(r.text for r in results)
         self.assertIn("감사합니다", texts)
+
+
+class TestSentenceActivitySnapshot(unittest.TestCase):
+    def test_emit_freezes_snapshot_and_assigns_episode_boundary(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        snapshots = iter(
+            [
+                capture_activity_snapshot("StarCraft", source="manual"),
+                capture_activity_snapshot("Hades", source="manual"),
+                capture_activity_snapshot("StarCraft", source="manual"),
+            ]
+        )
+        with patch("modules.sentence_splitter.cfg", _fast_cfg()), patch(
+            "modules.sentence_splitter.capture_effective_activity_snapshot",
+            side_effect=lambda *args, **kwargs: next(snapshots),
+        ):
+            thread = start(tq, sq, stop)
+            events = []
+            for text in ("첫 문장입니다", "둘째 문장입니다", "셋째 문장입니다"):
+                tq.put(text)
+                events.append(sq.get(timeout=3))
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(
+            [event.activity_snapshot.activity_id for event in events],
+            ["starcraft", "hades", "starcraft"],
+        )
+        self.assertEqual(
+            [event.activity_snapshot.cohort_epoch for event in events],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            [event.sentence_id for event in events],
+            ["sentence-000001", "sentence-000002", "sentence-000003"],
+        )
 
 
 if __name__ == "__main__":

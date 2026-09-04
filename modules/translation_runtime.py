@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 
 from modules.translation_engines import (
@@ -19,6 +19,7 @@ from utils.metrics import metrics
 
 CacheKey = tuple[str, bool, str, str, str]
 UntranslatedCheck = Callable[[str, str], bool]
+OutputGuard = Callable[[TranslationEngine, str, str], Mapping[str, object] | None]
 ProbeObservationSink = Callable[[dict[str, object]], None]
 
 _PROVIDER_FAILURE_ERROR_TYPES = frozenset({
@@ -36,7 +37,6 @@ _PROVIDER_FAILURE_MESSAGE_CLASSES = frozenset({
 @dataclass
 class FallbackState:
     active_idx: int = 0
-    probe_counter: int = 0
     consecutive_primary_failures: int = 0
     primary_cooldown_until: float = 0.0
     consecutive_probe_successes: int = 0
@@ -94,9 +94,12 @@ def _call_route(
     deadline_at: float | None,
     max_route_inflight: int,
     clock: Callable[[], float],
+    messages_frozen: tuple[tuple[str, str], ...] | None = None,
 ) -> tuple[str | None, bool]:
     """Return (result, sentence_deadline_exhausted)."""
     if deadline_at is None:
+        if messages_frozen is not None and hasattr(engine, "translate_messages"):
+            return engine.translate_messages(messages_frozen), False
         return engine.translate(text, system_prompt, incomplete, history), False
 
     remaining = deadline_at - clock()
@@ -131,6 +134,7 @@ def _call_route(
         timeout_seconds=timeout_seconds,
         max_inflight=max_route_inflight,
         deadline_scope=deadline_scope,
+        messages_frozen=messages_frozen,
     )
     return result, deadline_at - clock() <= 0
 
@@ -166,6 +170,47 @@ def _attempt_failure_scope(attempt: dict[str, object]) -> str:
         # without attaching an explicit empty_response message class.
         return "provider"
     return "unknown"
+
+
+def _output_rejection(
+    engine: TranslationEngine,
+    result: str | None,
+    source: str,
+    looks_untranslated: UntranslatedCheck,
+    output_guard: OutputGuard | None,
+) -> tuple[bool, dict[str, object]]:
+    if not result:
+        return False, {}
+    guard: dict[str, object] = {}
+    if output_guard is not None:
+        try:
+            guard = dict(output_guard(engine, result, source) or {})
+        except Exception as exc:
+            # A production-primary guard must fail closed. This is a content
+            # decision, not evidence that the provider is unavailable.
+            guard = {
+                "version": 1,
+                "reason": "output_guard_error",
+                "error_type": type(exc).__name__,
+            }
+    generic_candidate = (
+        str(guard.get("candidate_output") or result)
+        if guard.get("accepted_after_name_render")
+        else result
+    )
+    generic_rejection = bool(looks_untranslated(generic_candidate, source))
+    if generic_rejection and not guard.get("reason"):
+        guard = {
+            **guard,
+            "version": int(guard.get("version") or 1),
+            "reason": "generic_untranslated_output",
+        }
+    rejected = bool(generic_rejection or guard.get("reason"))
+    preserve_acceptance_evidence = bool(
+        guard.get("accepted_after_name_render")
+        or guard.get("canonical_obligations")
+    )
+    return rejected, guard if rejected or preserve_acceptance_evidence else {}
 
 
 def cache_key(
@@ -223,7 +268,6 @@ def call_with_fallback(
     system_prompt: str,
     incomplete: bool,
     history: list[tuple[str, str]] | None,
-    probe_every: int,
     failure_threshold: int,
     looks_untranslated: UntranslatedCheck,
     log,
@@ -233,6 +277,10 @@ def call_with_fallback(
     deadline_at: float | None = None,
     max_route_inflight: int = 2,
     clock: Callable[[], float] = time.monotonic,
+    frozen_messages_by_engine: Mapping[
+        str, tuple[tuple[str, str], ...]
+    ] | None = None,
+    output_guard: OutputGuard | None = None,
 ) -> tuple[str | None, int]:
     """Returns (result, engine_idx) where engine_idx is the engine that
     actually produced the result. On a soft fallback state.active_idx is NOT
@@ -258,11 +306,16 @@ def call_with_fallback(
             deadline_at=deadline_at,
             max_route_inflight=max_route_inflight,
             clock=clock,
+            messages_frozen=(frozen_messages_by_engine or {}).get(
+                str(getattr(primary, "engine_name", "") or "").lower()
+            ),
         )
     except Exception as exc:
         record_translation_attempt(primary, phase="fallback_chain", exception=exc)
         raise
-    primary_bad = bool(result and looks_untranslated(result, text))
+    primary_bad, primary_guard = _output_rejection(
+        primary, result, text, looks_untranslated, output_guard
+    )
     primary_attempt = record_translation_attempt(
         primary,
         phase="fallback_chain",
@@ -271,6 +324,8 @@ def call_with_fallback(
     )
     primary_failure_scope = _attempt_failure_scope(primary_attempt)
     primary_attempt["failure_scope"] = primary_failure_scope
+    if primary_guard:
+        primary_attempt["output_guard"] = primary_guard
 
     if result and not primary_bad:
         state.consecutive_primary_failures = 0
@@ -283,15 +338,21 @@ def call_with_fallback(
     if result:
         metrics.increment("translation.bad_output")
 
-    counts_toward_switch = (
-        not circuit_breaker_enabled or primary_failure_scope == "provider"
-    )
-    if counts_toward_switch:
-        state.consecutive_primary_failures += 1
+    if primary_failure_scope == "content":
+        # Content rejection is sentence-local. It must neither open/recover a
+        # provider circuit nor erase health evidence from an earlier transport
+        # failure; the responsive-recovery probe follows the same boundary.
+        counts_toward_switch = False
     else:
-        # A content response proves the provider is reachable. Unknown failures
-        # do not provide enough evidence to carry a provider-failure streak.
-        state.consecutive_primary_failures = 0
+        counts_toward_switch = (
+            not circuit_breaker_enabled or primary_failure_scope == "provider"
+        )
+        if counts_toward_switch:
+            state.consecutive_primary_failures += 1
+        else:
+            # Unknown failures do not provide enough evidence to carry a
+            # provider-failure streak under circuit-breaker routing.
+            state.consecutive_primary_failures = 0
     metrics.increment(
         f"translation.fallback.primary_failure.{primary_failure_scope}"
     )
@@ -305,8 +366,13 @@ def call_with_fallback(
         else primary_idx
     )
 
-    # ── Try fallback engines ──────────────────────────────────────────────────
-    for index in range(primary_idx + 1, len(engines)):
+    # Try later routes first. If the active route is already a fallback, retry
+    # earlier fallback routes too (excluding route 0, which has its dedicated
+    # cooldown/probe path) before declaring the sentence lost.
+    fallback_indices = list(range(primary_idx + 1, len(engines)))
+    if circuit_breaker_enabled and primary_idx > 1:
+        fallback_indices.extend(range(1, primary_idx))
+    for index in fallback_indices:
         if sentence_deadline_exhausted:
             metrics.increment("translation.fallback.deadline_exhausted")
             break
@@ -324,11 +390,16 @@ def call_with_fallback(
                 deadline_at=deadline_at,
                 max_route_inflight=max_route_inflight,
                 clock=clock,
+                messages_frozen=(frozen_messages_by_engine or {}).get(
+                    str(getattr(fallback, "engine_name", "") or "").lower()
+                ),
             )
         except Exception as exc:
             record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
             raise
-        fallback_bad = bool(fb_result and looks_untranslated(fb_result, text))
+        fallback_bad, fallback_guard = _output_rejection(
+            fallback, fb_result, text, looks_untranslated, output_guard
+        )
         fallback_attempt = record_translation_attempt(
             fallback,
             phase="fallback_chain",
@@ -336,12 +407,12 @@ def call_with_fallback(
             rejected_output=fallback_bad,
         )
         fallback_attempt["failure_scope"] = _attempt_failure_scope(fallback_attempt)
+        if fallback_guard:
+            fallback_attempt["output_guard"] = fallback_guard
         if fb_result and not fallback_bad:
             if hard_switch:
-                committed_idx = (
-                    persistent_switch_idx
-                    if circuit_breaker_enabled
-                    else index
+                committed_idx = index if index < primary_idx else (
+                    persistent_switch_idx if circuit_breaker_enabled else index
                 )
                 persistent_engine = engines[committed_idx]
                 # Persist only across contiguous provider failures. A later
@@ -356,7 +427,6 @@ def call_with_fallback(
                 )
                 state.active_idx = committed_idx
                 state.consecutive_primary_failures = 0
-                state.probe_counter = 0
                 state.consecutive_probe_successes = 0
                 state.primary_cooldown_until = (
                     clock() + max(0.0, recovery_cooldown_seconds)
@@ -405,6 +475,7 @@ def probe_primary_recovery(
     deadline_at: float | None = None,
     max_route_inflight: int = 2,
     clock: Callable[[], float] = time.monotonic,
+    output_guard: OutputGuard | None = None,
 ) -> bool:
     """Probe the primary engine without putting a user sentence on the probe path."""
     if len(engines) < 2 or state.active_idx <= 0 or state.active_idx >= len(engines):
@@ -457,7 +528,10 @@ def probe_primary_recovery(
         log.debug("Primary probe raised; restarting recovery cooldown", exc_info=True)
         return False
 
-    if probe and not looks_untranslated(probe, probe_text):
+    probe_rejected, probe_guard = _output_rejection(
+        engines[0], probe, probe_text, looks_untranslated, output_guard
+    )
+    if probe and not probe_rejected:
         metrics.increment("translation.fallback.probe_success")
         state.consecutive_probe_successes += 1
         success_streak = state.consecutive_probe_successes
@@ -486,7 +560,6 @@ def probe_primary_recovery(
         metrics.increment("translation.fallback.primary_recovered")
         log.info("Primary engine %s recovered; switching back", engines[0].engine_name)
         state.active_idx = 0
-        state.probe_counter = 0
         state.consecutive_primary_failures = 0
         state.primary_cooldown_until = 0.0
         state.consecutive_probe_successes = 0
@@ -502,15 +575,33 @@ def probe_primary_recovery(
     rejected_output = bool(probe)
     if rejected_output:
         metrics.increment("translation.bad_output")
+        # A responsive provider with an unsafe candidate has not supplied new
+        # provider-health evidence. Do not extend cooldown or alter the probe
+        # success streak; simply keep the circuit in its current state.
+        _observe_probe(
+            observation_sink,
+            status="rejected_output",
+            recovered=False,
+            success_streak=state.consecutive_probe_successes,
+            cooldown_until=state.primary_cooldown_until,
+            output_guard_reason=str(probe_guard.get("reason") or ""),
+            **probe_diagnostics,
+        )
+        log.debug(
+            "Primary probe output rejected, staying on %s",
+            engines[state.active_idx].engine_name,
+        )
+        return False
     if circuit_breaker_enabled:
         state.consecutive_probe_successes = 0
         state.primary_cooldown_until = now + max(0.0, recovery_cooldown_seconds)
     _observe_probe(
         observation_sink,
-        status="rejected_output" if rejected_output else "empty",
+        status="empty",
         recovered=False,
         success_streak=0,
         cooldown_until=state.primary_cooldown_until,
+        output_guard_reason=str(probe_guard.get("reason") or ""),
         **probe_diagnostics,
     )
     log.debug("Primary probe failed, staying on %s", engines[state.active_idx].engine_name)

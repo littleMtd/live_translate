@@ -15,6 +15,7 @@ import pytest
 
 from config import cfg
 from modules.activity_context import ActivityPublicationStore
+from modules.profile_context import ProfileState, profile_state
 import modules.scene_context as scene_context
 from modules.scene_context import (
     CaptureFrame,
@@ -221,6 +222,501 @@ def make_updater(
     return updater, source, capture, provider, manual_box, emitted, clock
 
 
+def test_content_profile_requires_two_distinct_frames_and_invalidates_on_destroyed_window():
+    state = ProfileState(profile_state.registry, source_profile_id="url")
+    profile_provider = QuerySequence([
+        '{"profile_id":"isegye_lilpa","matched_markers":[]}',
+        '{"profile_id":"isegye_lilpa","matched_markers":[]}',
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            answers=["Chatting", "Chatting"],
+            profile_vision_provider=profile_provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        assert state.current().effective_profile_id == "url"
+        clock.advance(1)
+        updater.tick()
+        assert state.current().content_profile_id == "isegye_lilpa"
+        assert state.current().effective_profile_id == "isegye_lilpa"
+        assert [event["status"] for event in events if event["event_type"] == "profile_resolution"] == [
+            "candidate",
+            "confirmed",
+        ]
+
+        source.candidates = []
+        clock.advance(1)
+        updater.tick()
+        assert state.current().content_profile_id == ""
+        assert state.current().effective_profile_id == "url"
+
+
+def _profile_result(profile_id, *marker_ids):
+    return json.dumps(
+        {"profile_id": profile_id, "matched_markers": list(marker_ids)},
+        separators=(",", ":"),
+    )
+
+
+def test_exact_member_marker_activates_profile_in_one_frame():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answer = _profile_result("url", "url_member_manyang")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=QuerySequence([answer]),
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    assert state.current().evidence_source == "scene_exact_member_marker"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["status"] == "confirmed"
+    assert event["candidate_streak"] == 1
+    assert event["matched_markers"] == ["url_member_manyang"]
+
+
+def test_two_member_markers_from_same_family_activate_immediately():
+    state = ProfileState(profile_state.registry, source_profile_id="url")
+    answer = _profile_result(
+        "hades_chxxnnx", "hades_member_chaenna", "hades_member_kyma"
+    )
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_ = make_updater(
+            profile_vision_provider=QuerySequence([answer]),
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+
+
+def test_medium_brand_marker_keeps_two_frame_consensus():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answer = _profile_result("url", "url_brand_group")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=QuerySequence([answer, answer]),
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        assert state.current().effective_profile_id == "isegye_lilpa"
+        clock.advance(1)
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    profile_events = [event for event in events if event["event_type"] == "profile_resolution"]
+    assert [event["status"] for event in profile_events] == ["candidate", "confirmed"]
+    assert profile_events[0]["marker_strengths"] == ["medium"]
+
+
+def test_schema_failure_retries_once_but_semantic_rejection_does_not():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    provider = QuerySequence(["not-json", _profile_result("url", "url_member_moka")])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert len(provider.calls) == 2
+    assert state.current().effective_profile_id == "url"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["schema_retry_count"] == 1
+
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    unsupported = QuerySequence([
+        _profile_result("url", "invented_marker"),
+        _profile_result("url", "url_member_moka"),
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_ = make_updater(
+            profile_vision_provider=unsupported,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert len(unsupported.calls) == 1
+    assert state.current().effective_profile_id == "isegye_lilpa"
+
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    duplicate = QuerySequence([
+        _profile_result("url", "url_member_moka", "url_member_moka"),
+        _profile_result("url", "url_member_moka"),
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_ = make_updater(
+            profile_vision_provider=duplicate,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert len(duplicate.calls) == 1
+    assert state.current().effective_profile_id == "isegye_lilpa"
+
+
+def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    strong = _profile_result("url", "url_member_moka")
+    provider = QuerySequence([strong, strong])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, _events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 5
+        updater._profile_stable_gap = 15
+        updater.tick()
+        clock.advance(5)
+        updater.tick()
+        assert len(provider.calls) == 1
+        clock.advance(10)
+        updater.tick()
+    assert len(provider.calls) == 2
+
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    unknown_provider = QuerySequence([
+        _profile_result("unknown"),
+        _profile_result("unknown"),
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, _events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=unknown_provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 5
+        updater.tick()
+        clock.advance(4)
+        updater.tick()
+        assert len(unknown_provider.calls) == 1
+        clock.advance(1)
+        updater.tick()
+    assert len(unknown_provider.calls) == 2
+
+
+def test_capture_failure_expires_confirmed_profile_and_enters_fast_recovery():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    unavailable = CaptureFrame(status="capture_unavailable", frame_quality="unavailable")
+    provider = QuerySequence([_profile_result("url", "url_member_moka")])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, _events, clock = make_updater(
+            frames=[frame(40), unavailable],
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_expiry = 300
+        updater._profile_recovery_clear_sec = 15
+        updater.tick()
+        assert state.current().effective_profile_id == "url"
+        clock.advance(5)
+        updater.tick()
+        assert state.current().effective_profile_id == "url"
+        clock.advance(15)
+        updater.tick()
+    assert state.current().content_profile_id == ""
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert updater._profile_resolver_state == "capture_failure"
+    assert updater._profile_next_call_at == clock.now + updater._profile_fast_gap
+
+
+def test_profile_event_preserves_provider_diagnostics_and_attempt_budget():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    diagnostics = VisionDiagnostics(
+        outcome="success",
+        attempt_limit=1,
+        provider="groq",
+        model="qwen-test",
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+    )
+    provider = QuerySequence([
+        VisionClassification(
+            _profile_result("url", "url_member_moka"),
+            diagnostics,
+        )
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["vision_provider"] == "groq"
+    assert event["vision_total_tokens"] == 120
+    assert event["parser_rejection_reason"] == ""
+    assert "raw" not in repr(event).lower()
+
+
+def test_profile_attempt_budget_bounds_schema_retries_and_future_calls():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    provider = QuerySequence(["not-json", "not-json", _profile_result("unknown")])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_max_attempts_per_minute = 2
+        updater._profile_fast_gap = 5
+        updater.tick()
+        assert len(provider.calls) == 2
+        clock.advance(5)
+        updater.tick()
+    assert len(provider.calls) == 2
+    assert any(
+        event.get("status") == "throttled"
+        and event.get("reason") == "profile_attempt_budget"
+        for event in events
+    )
+
+
+def test_profile_attempt_budget_preflights_multi_route_capacity():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    provider = QuerySequence([_profile_result("unknown")])
+    provider.route_identities = ("groq:model", "openrouter:model")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater._profile_max_attempts_per_minute = 12
+        updater._profile_attempt_times.extend([0.0] * 11)
+        updater.tick()
+    assert provider.calls == []
+    assert len(updater._profile_attempt_times) == 11
+    assert any(event.get("status") == "throttled" for event in events)
+
+
+def test_cross_family_member_markers_are_conflict_and_do_not_switch():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answer = _profile_result("url", "url_member_moka", "hades_member_kyma")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=QuerySequence([answer]),
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["status"] == "rejected"
+    assert event["reason"] == "conflicting_identity_markers"
+
+
+def test_manual_profile_lock_skips_strong_marker_resolution():
+    state = ProfileState(
+        profile_state.registry,
+        source_profile_id="isegye_lilpa",
+        mode="manual",
+    )
+    provider = QuerySequence([_profile_result("url", "url_member_moka")])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_ = make_updater(
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert provider.calls == []
+    assert state.current().effective_profile_id == "isegye_lilpa"
+
+
+def test_strong_marker_resolution_ignores_non_safe_crop():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    provider = QuerySequence([_profile_result("url", "url_member_moka")])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_ = make_updater(
+            frames=[frame(40, content_crop=False)],
+            profile_vision_provider=provider,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+    assert provider.calls == []
+    assert state.current().effective_profile_id == "isegye_lilpa"
+
+
+def test_strong_marker_result_is_discarded_after_window_identity_changes():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=QuerySequence([]),
+            profile_resolution_enabled=True,
+        )
+
+        def change_window():
+            source.candidates = [window(hwnd=200, pid=20)]
+            return _profile_result("url", "url_member_moka")
+
+        updater._profile_vision = QuerySequence([change_window])
+        updater.tick()
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["status"] == "discarded"
+
+
+def test_strong_marker_result_is_discarded_after_registry_reload(tmp_path):
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {"profile_id": "", "label": "General"},
+                    {
+                        "profile_id": "url",
+                        "label": "UR:L",
+                        "identity_markers": [
+                            {"marker_id": "url_member_moka", "visible_names": ["모카"]}
+                        ],
+                    },
+                    {"profile_id": "isegye_lilpa", "label": "Lilpa"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    from modules.profile_context import load_registry_snapshot
+
+    state = ProfileState(
+        load_registry_snapshot(registry_path, version=1),
+        source_profile_id="isegye_lilpa",
+    )
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
+            profile_vision_provider=QuerySequence([]),
+            profile_resolution_enabled=True,
+        )
+
+        def reload_registry():
+            state.reload_registry(registry_path)
+            return _profile_result("url", "url_member_moka")
+
+        updater._profile_vision = QuerySequence([reload_registry])
+        updater.tick()
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["status"] == "discarded"
+    assert event["reason"] == "profile_generation_changed"
+
+
+def test_default_window_inspector_accepts_brave_when_platform_title_matches():
+    class User32:
+        @staticmethod
+        def IsWindow(_hwnd):
+            return True
+
+        @staticmethod
+        def IsWindowVisible(_hwnd):
+            return True
+
+        @staticmethod
+        def IsIconic(_hwnd):
+            return False
+
+    with patch.object(scene_context.sys, "platform", "win32"), \
+                patch.object(scene_context, "_user32", return_value=User32()), \
+                patch.object(
+                    scene_context,
+                    "_window_text",
+                    return_value="Streamer - SOOP - Brave",
+                ), \
+                patch.object(
+                    scene_context,
+                    "_window_class",
+                    return_value="Chrome_WidgetWin_1",
+                ), \
+                patch.object(
+                    scene_context,
+                    "_window_bbox",
+                    return_value=(0, 0, 1200, 800),
+                ), \
+                patch.object(scene_context, "_window_pid", return_value=99), \
+                patch.object(
+                    scene_context,
+                    "_process_executable_name",
+                    return_value="brave.exe",
+                ):
+        identity = scene_context._inspect_window(123)
+
+    assert identity is not None
+    assert identity.platform == "soop"
+    assert identity.class_name == "Chrome_WidgetWin_1"
+
+
+@pytest.mark.parametrize(
+    "title",
+    (
+        "Streamer - SOOP - Microsoft Edge",
+        "Brave new world - SOOP - Microsoft Edge",
+        "Google Chrome issue - SOOP - Microsoft Edge",
+    ),
+)
+def test_default_window_inspector_rejects_unapproved_chromium_brand(title):
+    class User32:
+        IsWindow = staticmethod(lambda _hwnd: True)
+        IsWindowVisible = staticmethod(lambda _hwnd: True)
+        IsIconic = staticmethod(lambda _hwnd: False)
+
+    with patch.object(scene_context.sys, "platform", "win32"), \
+            patch.object(scene_context, "_user32", return_value=User32()), \
+            patch.object(
+                scene_context,
+                "_window_text",
+                return_value=title,
+            ), \
+            patch.object(
+                scene_context,
+                "_window_class",
+                return_value="Chrome_WidgetWin_1",
+            ), \
+            patch.object(
+                scene_context,
+                "_window_bbox",
+                return_value=(0, 0, 1200, 800),
+            ), \
+            patch.object(scene_context, "_window_pid", return_value=99), \
+            patch.object(
+                scene_context,
+                "_process_executable_name",
+                return_value="msedge.exe",
+            ):
+        assert scene_context._inspect_window(123) is None
+
+
+def test_window_invalid_emits_bounded_reason_without_window_identity():
+    events = []
+    resolver = SafeWindowResolver(
+        enumerate_windows=lambda: [],
+        inspect_window=lambda _hwnd: None,
+        diagnose_windows=lambda: {
+            "window_failure_reason": "platform_title_not_matched",
+            "supported_browser_windows": 1,
+            "platform_title_windows": 0,
+            "minimized_platform_windows": 0,
+        },
+    )
+    updater = SceneContextUpdater(
+        resolver=resolver,
+        capture_backend=CaptureSequence([frame(40)]),
+        vision_provider=QuerySequence(["StarCraft"]),
+        event_sink=lambda event_type, **fields: events.append(
+            {"event_type": event_type, **fields}
+        ),
+        publication_store=ActivityPublicationStore(),
+        publication_enabled=True,
+    )
+
+    assert updater.tick() is None
+    assert events[-1]["window_status"] == "window_invalid"
+    assert events[-1]["window_failure_reason"] == "platform_title_not_matched"
+    assert events[-1]["supported_browser_windows"] == 1
+    serialized = repr(events[-1])
+    assert "hwnd" not in serialized
+    assert "SECRET STREAM TITLE" not in serialized
+
+
 def test_open_set_parser_is_strict_bounded_and_keeps_known_aliases():
     assert "exactly two keys" in scene_context._QUESTION
     assert "League of Legends" not in scene_context._QUESTION
@@ -328,7 +824,8 @@ def test_groq_provider_uses_single_attempt_qwen_and_bounded_diagnostics(
     raw_response.parse.return_value = SimpleNamespace(
         choices=[
             SimpleNamespace(
-                message=SimpleNamespace(content="StarCraft\nSECRET RAW TEXT")
+                message=SimpleNamespace(content="StarCraft\nSECRET RAW TEXT"),
+                finish_reason="stop",
             )
         ],
         usage=SimpleNamespace(
@@ -364,6 +861,7 @@ def test_groq_provider_uses_single_attempt_qwen_and_bounded_diagnostics(
     assert result.diagnostics.prompt_tokens == 837
     assert result.diagnostics.completion_tokens == 4
     assert result.diagnostics.total_tokens == 841
+    assert result.diagnostics.finish_reason == "stop"
     assert result.diagnostics.rate_limit_tpm == 8000
     assert result.diagnostics.rate_limit_remaining_tokens == 5519
     assert result.diagnostics.rate_limit_reset_tokens_sec == 86.4
@@ -378,6 +876,8 @@ def test_groq_provider_uses_single_attempt_qwen_and_bounded_diagnostics(
     request = create.call_args.kwargs
     assert request["model"] == "qwen/qwen3.6-27b"
     assert request["reasoning_effort"] == "none"
+    assert request["max_tokens"] == 96
+    assert request["response_format"] == {"type": "json_object"}
     assert request["messages"][0]["content"][0]["text"] == scene_context._QUESTION
     assert request["messages"][0]["content"][1]["image_url"]["url"].startswith(
         "data:image/jpeg;base64,"
@@ -566,7 +1066,7 @@ def test_resolver_fails_closed_for_multiple_platform_windows():
     assert result.identity is None
 
 
-def test_resolver_rejects_wrong_tab_and_detectable_hwnd_reuse():
+def test_resolver_suspends_hidden_player_and_rejects_detectable_hwnd_reuse():
     source = WindowSource([window(hwnd=9, pid=101)])
     resolver = SafeWindowResolver(
         enumerate_windows=source.enumerate,
@@ -584,14 +1084,113 @@ def test_resolver_rejects_wrong_tab_and_detectable_hwnd_reuse():
             platform="",
         )
     ]
-    assert resolver.validate(locked).status == "wrong_tab"
-    assert resolver.window_generation > generation
+    assert resolver.validate(locked).status == "player_not_visible"
+    assert resolver.window_generation == generation
 
     source.candidates = [window(hwnd=9, pid=202)]
     relocked = resolver.resolve().identity
     assert relocked is not None
     source.candidates = [window(hwnd=9, pid=303)]
     assert resolver.validate(relocked).status == "identity_changed"
+
+
+def test_hidden_player_retains_profile_and_same_player_resumes_without_generation_churn():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    url = _profile_result("url", "url_member_moka")
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=QuerySequence([url, url]),
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+        confirmed_snapshot = state.current()
+        confirmed_generation = state.current().generation
+        window_generation = updater._resolver.window_generation
+        source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
+        clock.advance(29)
+        updater.tick()
+        clock.advance(60 * 10)
+        updater.tick()
+        hidden_snapshot = state.current()
+        assert hidden_snapshot.content_profile_id == "url"
+        assert hidden_snapshot.effective_profile_id == "url"
+        assert hidden_snapshot is confirmed_snapshot
+        assert hidden_snapshot.cache_identity == confirmed_snapshot.cache_identity
+        assert hidden_snapshot.generation == confirmed_generation
+        assert updater._resolver.window_generation == window_generation
+
+        source.candidates = [window()]
+        clock.advance(30)
+        updater.tick()
+
+    assert state.current().effective_profile_id == "url"
+    assert state.current() is confirmed_snapshot
+    assert state.current().generation == confirmed_generation
+    assert updater._resolver.window_generation == window_generation
+    suspended = next(
+        event for event in events
+        if event.get("event_type") == "profile_resolution"
+        and event.get("status") == "suspended"
+    )
+    assert suspended["reason"] == "player_not_visible"
+    assert suspended["activation_decision"] == "retain_confirmed_profile"
+
+
+def test_hidden_player_can_resume_to_different_supported_player_and_switch_profile():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answers = QuerySequence([
+        _profile_result("url", "url_member_moka"),
+        _profile_result("hades_chxxnnx", "hades_member_chaenna"),
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, _capture, _provider, _manual, _events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=answers,
+            profile_resolution_enabled=True,
+        )
+        updater.tick()
+        url_generation = state.current().generation
+        source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
+        clock.advance(60)
+        updater.tick()
+        assert state.current().generation == url_generation
+
+        source.candidates = [
+            window(title="Different stream - CHZZK - Google Chrome", platform="chzzk")
+        ]
+        clock.advance(1)
+        updater.tick()
+
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+    assert state.current().generation == url_generation + 1
+
+
+def test_production_timing_replay_retains_url_during_hidden_tab_interval():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    url = _profile_result("url", "url_member_moka")
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, _capture, _provider, _manual, _events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=QuerySequence([url, url]),
+            profile_resolution_enabled=True,
+        )
+        clock.advance(13)
+        updater.tick()  # 11:50:13 URL confirmed
+        generation = state.current().generation
+        source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
+        clock.advance(11)
+        updater.tick()  # 11:50:24 observation suspended
+        clock.advance(18)
+        assert state.current().effective_profile_id == "url"  # 11:50:42
+        clock.advance(11)
+        assert state.current().effective_profile_id == "url"  # 11:50:53
+        source.candidates = [window()]
+        clock.advance(31)
+        updater.tick()  # 11:51:24 same URL reconfirmed
+
+    assert state.current().effective_profile_id == "url"
+    assert state.current().generation == generation
 
 
 def test_same_hwnd_platform_title_change_rotates_window_generation():
@@ -1202,7 +1801,7 @@ def test_post_capture_wrong_tab_or_second_candidate_never_reaches_provider():
                 "candidates",
                 [window(title="ChatGPT - Google Chrome", platform="")],
             ),
-            "wrong_tab",
+            "player_not_visible",
         ),
         (
             lambda source: setattr(
@@ -1291,7 +1890,7 @@ def test_second_candidate_or_same_platform_title_change_during_provider_discards
         }
 
 
-def test_wrong_tab_during_vision_has_precise_discard_reason():
+def test_hidden_player_during_vision_has_precise_discard_reason():
     holder = {}
 
     def switch_tab():
@@ -1313,7 +1912,7 @@ def test_wrong_tab_during_vision_has_precise_discard_reason():
     assert updater.tick() is None
     assert updater._consensus.streak == 0
     assert updater._publication_store.current() is None
-    assert events[-1]["discard_reason"] == "wrong_tab"
+    assert events[-1]["discard_reason"] == "player_not_visible"
     assert events[-1]["title_match"] is False
 
 
@@ -1376,7 +1975,7 @@ def test_invalid_window_uses_shorter_nonextending_publication_deadline():
     assert updater._publication_store.current() is None
 
 
-def test_unknown_and_capture_unavailable_do_not_refresh_confirmed_ttl():
+def test_unknown_clears_confirmed_and_capture_unavailable_cannot_restore_it():
     clock = Clock()
     unavailable = CaptureFrame(
         status="capture_unavailable",
@@ -1391,18 +1990,13 @@ def test_unknown_and_capture_unavailable_do_not_refresh_confirmed_ttl():
     updater.tick()
     confirmed = updater.tick()
     assert confirmed is not None
-    original_deadline = confirmed.fresh_until_monotonic
-
     clock.advance(2)
-    lowered = updater.tick()
-    assert lowered is not None
-    assert lowered.confidence == 0.8
-    assert lowered.fresh_until_monotonic == original_deadline
+    assert updater.tick() is None
+    assert updater.automatic_snapshot is None
+    assert updater._publication_store.current() is None
 
     clock.advance(2)
     updater.tick()
-    assert updater.automatic_snapshot is not None
-    clock.advance(2)
     assert updater.automatic_snapshot is None
     assert capture.calls
 
@@ -1427,10 +2021,36 @@ def test_duplicate_title_and_frame_cannot_refresh_confirmed_ttl():
     assert duplicate.fresh_until_monotonic == original_deadline
 
     clock.advance(1)
-    unknown = updater.tick()
-    assert unknown is not None
-    assert unknown.confidence == 0.8
-    assert unknown.fresh_until_monotonic == original_deadline
+    assert updater.tick() is None
+    assert updater.automatic_snapshot is None
+    assert updater._publication_store.current() is None
+
+
+def test_first_distinct_candidate_clears_old_activity_before_reconfirmation():
+    updater, *_ = make_updater(
+        frames=[frame(20), frame(80), frame(140), frame(200)],
+        answers=[
+            "League of Legends",
+            "League of Legends",
+            '{"kind":"chatting","label":"Chatting"}',
+            '{"kind":"chatting","label":"Chatting"}',
+        ],
+        publication_enabled=True,
+        open_set_publication_enabled=True,
+    )
+
+    updater.tick()
+    assert updater.tick() is not None
+    assert updater.effective_activity == "League of Legends"
+
+    assert updater.tick() is None
+    assert updater.effective_activity == ""
+    assert updater._publication_store.current() is None
+
+    confirmed = updater.tick()
+    assert confirmed is not None
+    assert confirmed.display_label == "Chatting"
+    assert updater.effective_activity == "Chatting"
 
 
 def test_invalid_window_uses_short_non_extending_ttl():

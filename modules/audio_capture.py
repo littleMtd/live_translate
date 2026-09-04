@@ -1,5 +1,15 @@
 import queue
+import sys
 import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+if __name__ == "__main__" and __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 import numpy as np
 import sounddevice as sd
 
@@ -64,18 +74,24 @@ class _SileroDetector:
         )
         model.eval()
         self._model = model
+        self._pending = np.zeros(0, dtype=np.float32)
 
     def is_speech(self, frame: np.ndarray) -> bool:
-        """Return True if any 32 ms window in frame has speech prob >= threshold."""
+        """Consume a continuous stream and classify all complete 32 ms windows."""
         import torch
-        for start in range(0, len(frame) - self._WINDOW + 1, self._WINDOW):
-            tensor = torch.from_numpy(frame[start : start + self._WINDOW]).float()
+        combined = np.concatenate([self._pending, np.asarray(frame, dtype=np.float32)])
+        complete_samples = (len(combined) // self._WINDOW) * self._WINDOW
+        detected = False
+        for start in range(0, complete_samples, self._WINDOW):
+            tensor = torch.from_numpy(combined[start : start + self._WINDOW]).float()
             if self._model(tensor, self._sr).item() >= self._threshold:
-                return True
-        return False
+                detected = True
+        self._pending = combined[complete_samples:].copy()
+        return detected
 
     def reset(self) -> None:
         """Reset LSTM hidden states between utterances."""
+        self._pending = np.zeros(0, dtype=np.float32)
         self._model.reset_states()
 
 
@@ -395,12 +411,35 @@ class _VadState:
         if self._silero is not None:
             self._silero.reset()
 
+    def reset_stream(self) -> None:
+        """Drop buffered audio and model state after a capture discontinuity."""
+        self._adaptive_segments_remaining = 0
+        self._reset(clear_overlap=True)
+
 
 # ---------------------------------------------------------------------------
 # Public start()
 # ---------------------------------------------------------------------------
 
-_FRAME_QUEUE_MAXSIZE = 64   # 100 ms frames ≈ 6.4 s of headroom for the VAD worker
+_FRAME_QUEUE_MAXSIZE = 200  # 32 ms VAD frames ≈ 6.4 s of headroom
+_STREAM_READY_TIMEOUT_SEC = 5.0
+_DEVICE_REJECTION_LIMIT = 8
+_AUTO_DEVICE_KEYWORDS = ("cable output", "loopback", "stereo mix", "立體聲混音")
+
+
+@dataclass(frozen=True)
+class _CaptureDevice:
+    index: int
+    name: str
+    host_api: str
+    max_input_channels: int
+    default_samplerate: float
+
+
+@dataclass(frozen=True)
+class _CapturedFrame:
+    audio: np.ndarray
+    discontinuity_reason: str = ""
 
 
 def start(audio_queue: queue.Queue, stop_event: threading.Event,
@@ -408,40 +447,121 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
     # Resolve the loopback device synchronously so a missing device fails fast
     # in the caller's thread instead of silently killing a daemon thread.
     device = _find_loopback_device()
+    startup_condition = threading.Condition()
+    startup_state: dict[str, object] = {"status": "pending", "error": None}
+
+    def publish_startup(status: str, error: Exception | None = None) -> bool:
+        with startup_condition:
+            if startup_state["status"] != "pending":
+                return False
+            startup_state["status"] = status
+            startup_state["error"] = error
+            startup_condition.notify_all()
+            return True
 
     def run():
+        worker: threading.Thread | None = None
+        processor_ready = threading.Event()
+        stream_open_started = time.monotonic()
         try:
-            silero = None
-            if cfg.audio.vad_enabled:
-                silero = _load_silero(cfg.audio.vad_silero_threshold)
-
-            vad           = _VadState(audio_queue, silero) if cfg.audio.vad_enabled else None
+            vad: _VadState | None = None
             chunk_samples = cfg.audio.sample_rate * cfg.audio.chunk_seconds
 
-            # The sounddevice callback must return within one block (100 ms) or
-            # WASAPI overflows and silently drops audio. All heavy work (Silero
+            # The sounddevice callback must return within one capture block or
+            # PortAudio can overflow and silently drop audio. All heavy work (Silero
             # inference, buffer concatenation) therefore runs on a dedicated
             # worker thread; the callback only downmixes and enqueues the frame.
             frame_queue: queue.Queue = queue.Queue(maxsize=_FRAME_QUEUE_MAXSIZE)
+            frame_queue_lock = threading.Lock()
+            frame_available = threading.Event()
 
             def callback(indata, frames, time_info, status):
+                discontinuity_reason = ""
                 if status:
                     log.warning("sounddevice status: %s", status)
+                    if getattr(status, "input_overflow", False):
+                        discontinuity_reason = "input_overflow"
+                        metrics.increment("audio.input_overflow")
+                if not processor_ready.is_set():
+                    return
                 if pause_event and pause_event.is_set():
                     return
-                try:
-                    # copy(): sounddevice reuses the indata buffer after return.
-                    frame_queue.put_nowait(_downmix_to_mono(indata).copy())
-                except queue.Full:
+                captured_frame = _CapturedFrame(
+                    _downmix_to_mono(indata).copy(),
+                    discontinuity_reason,
+                )
+                overloaded = False
+                with frame_queue_lock:
+                    try:
+                        # copy(): sounddevice reuses the indata buffer after return.
+                        frame_queue.put_nowait(captured_frame)
+                    except queue.Full:
+                        # A missing oldest frame puts the gap before every
+                        # retained queued frame. Drop the stale backlog
+                        # atomically and keep only the newest frame, tagged so
+                        # reset occurs before it is processed.
+                        overloaded = True
+                        while True:
+                            try:
+                                frame_queue.get_nowait()
+                            except queue.Empty:
+                                break
+                        frame_queue.put_nowait(
+                            _CapturedFrame(
+                                captured_frame.audio,
+                                discontinuity_reason or "overload",
+                            )
+                        )
+                    frame_available.set()
+                if overloaded:
                     metrics.increment("audio.frames_dropped")
 
             def process_frames():
                 fixed_buf = np.zeros(0, dtype=np.float32)
+                was_paused = False
+
+                def reset_processing_state(reason: str, *, drain: bool = True) -> None:
+                    nonlocal fixed_buf
+                    fixed_buf = np.zeros(0, dtype=np.float32)
+                    if drain:
+                        with frame_queue_lock:
+                            while True:
+                                try:
+                                    frame_queue.get_nowait()
+                                except queue.Empty:
+                                    break
+                            frame_available.clear()
+                    if vad:
+                        vad.reset_stream()
+                    metrics.increment(f"audio.stream_reset.{reason}")
+
                 while not stop_event.is_set():
-                    try:
-                        mono = frame_queue.get(timeout=0.2)
-                    except queue.Empty:
+                    if pause_event and pause_event.is_set():
+                        if not was_paused:
+                            reset_processing_state("pause")
+                            was_paused = True
+                        stop_event.wait(0.05)
                         continue
+                    if was_paused:
+                        # Close the callback/reset race at the resume edge.
+                        reset_processing_state("resume")
+                        was_paused = False
+                    if not frame_available.wait(timeout=0.2):
+                        continue
+                    with frame_queue_lock:
+                        try:
+                            captured_frame = frame_queue.get_nowait()
+                        except queue.Empty:
+                            frame_available.clear()
+                            continue
+                        if frame_queue.empty():
+                            frame_available.clear()
+                    if captured_frame.discontinuity_reason:
+                        reset_processing_state(
+                            captured_frame.discontinuity_reason,
+                            drain=False,
+                        )
+                    mono = captured_frame.audio
                     if vad:
                         vad.push(mono)
                         continue
@@ -481,83 +601,298 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                     log.error("Audio frame worker aborted: %s", exc, exc_info=True)
                     stop_event.set()
 
-            worker = start_daemon_thread("AudioVadWorker", guarded_process_frames)
-
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
             capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+            capture_blocksize = (
+                _SileroDetector._WINDOW
+                if cfg.audio.vad_enabled
+                else cfg.audio.sample_rate // 10
+            )
             log.info(
-                "Starting WASAPI loopback capture — mode=%s samplerate=%d capture_channels=%d",
+                "Opening audio capture — device=[%d] %s host_api=%s mode=%s "
+                "requested_samplerate=%d capture_channels=%d blocksize=%d",
+                device.index,
+                device.name,
+                device.host_api,
                 mode,
                 cfg.audio.sample_rate,
                 capture_channels,
+                capture_blocksize,
             )
 
             with sd.InputStream(
                 samplerate=cfg.audio.sample_rate,
                 channels=capture_channels,
                 dtype="float32",
-                blocksize=cfg.audio.sample_rate // 10,   # 100 ms frames
+                blocksize=capture_blocksize,
                 callback=callback,
-                device=device,
+                device=device.index,
             ):
+                stream_ready_ms = round(
+                    (time.monotonic() - stream_open_started) * 1000,
+                    2,
+                )
+                if stop_event.is_set() or not publish_startup("ready"):
+                    return
+                log.info(
+                    "Audio stream ready — device=[%d] %s host_api=%s ready_ms=%.2f",
+                    device.index,
+                    device.name,
+                    device.host_api,
+                    stream_ready_ms,
+                )
+                runtime_events.emit(
+                    "audio_startup",
+                    status="ready",
+                    device_index=device.index,
+                    device_name=device.name[:160],
+                    host_api=device.host_api[:80],
+                    max_input_channels=device.max_input_channels,
+                    default_samplerate=device.default_samplerate,
+                    requested_samplerate=cfg.audio.sample_rate,
+                    capture_channels=capture_channels,
+                    dtype="float32",
+                    blocksize=capture_blocksize,
+                    mode=mode,
+                    preflight_passed=True,
+                    stream_ready_ms=stream_ready_ms,
+                )
+
+                # Stream availability is now proven. Load the optional model
+                # behind a callback gate so first-run Torch Hub work cannot be
+                # mistaken for an audio-open timeout or build a stale backlog.
+                silero = None
+                if cfg.audio.vad_enabled:
+                    silero = _load_silero(cfg.audio.vad_silero_threshold)
+                if stop_event.is_set():
+                    return
+                vad = _VadState(audio_queue, silero) if cfg.audio.vad_enabled else None
+                worker = start_daemon_thread("AudioVadWorker", guarded_process_frames)
+                processor_ready.set()
                 while not stop_event.is_set():
                     stop_event.wait(timeout=0.5)
-            worker.join(timeout=2.0)
         except Exception as exc:
             # An exception inside the daemon would otherwise terminate it
             # silently while the rest of the pipeline keeps polling an empty
             # queue forever. Surface it via stop_event so main.py can detect
             # the failure and shut down cleanly.
             log.error("Audio capture aborted: %s", exc, exc_info=True)
+            publish_startup("error", exc)
             stop_event.set()
             return
+        finally:
+            processor_ready.clear()
+            if worker is not None:
+                worker.join(timeout=2.0)
 
         log.info("Audio capture stopped")
 
-    return start_daemon_thread("AudioCapture", run)
+    thread = start_daemon_thread("AudioCapture", run)
+    with startup_condition:
+        ready = startup_condition.wait_for(
+            lambda: startup_state["status"] != "pending",
+            timeout=_STREAM_READY_TIMEOUT_SEC,
+        )
+        if not ready:
+            startup_state["status"] = "timeout"
+    if not ready:
+        stop_event.set()
+        thread.join(timeout=1.0)
+        raise RuntimeError(
+            "Audio stream did not become ready within "
+            f"{_STREAM_READY_TIMEOUT_SEC:.1f}s for device "
+            f"[{device.index}] {device.name} ({device.host_api})"
+        )
+    if startup_state["status"] == "error":
+        error = startup_state["error"]
+        thread.join(timeout=1.0)
+        raise RuntimeError(
+            "Audio stream failed to open for device "
+            f"[{device.index}] {device.name} ({device.host_api}): {error}"
+        ) from error
+    return thread
 
 
-def _find_loopback_device() -> int | None:
+def _device_host_api_name(device: dict, host_apis: object) -> str:
+    try:
+        host_api_index = int(device.get("hostapi", -1))
+        if host_api_index < 0:
+            return "unknown"
+        host_api = host_apis[host_api_index]
+        return str(host_api.get("name") or "unknown")
+    except (IndexError, KeyError, TypeError, ValueError):
+        return "unknown"
+
+
+def _capture_device(index: int, device: dict, host_apis: object) -> _CaptureDevice:
+    try:
+        max_input_channels = int(device.get("max_input_channels", 0) or 0)
+    except (TypeError, ValueError):
+        max_input_channels = 0
+    try:
+        default_samplerate = float(device.get("default_samplerate", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        default_samplerate = 0.0
+    return _CaptureDevice(
+        index=index,
+        name=str(device.get("name") or "unknown"),
+        host_api=_device_host_api_name(device, host_apis),
+        max_input_channels=max_input_channels,
+        default_samplerate=default_samplerate,
+    )
+
+
+def _preflight_candidates(
+    candidates: list[_CaptureDevice],
+    *,
+    sample_rate: int,
+    capture_channels: int,
+) -> tuple[list[_CaptureDevice], list[str]]:
+    passing: list[_CaptureDevice] = []
+    rejected: list[str] = []
+    for candidate in candidates:
+        if candidate.max_input_channels < capture_channels:
+            rejected.append(
+                f"[{candidate.index}] {candidate.name} ({candidate.host_api}): "
+                f"needs {capture_channels} input channels, has {candidate.max_input_channels}"
+            )
+            continue
+        try:
+            sd.check_input_settings(
+                device=candidate.index,
+                channels=capture_channels,
+                dtype="float32",
+                samplerate=sample_rate,
+            )
+        except Exception as exc:
+            rejected.append(
+                f"[{candidate.index}] {candidate.name} ({candidate.host_api}): {exc}"
+            )
+            continue
+        passing.append(candidate)
+    return passing, rejected
+
+
+def _bounded_rejections(rejected: list[str]) -> str:
+    visible = rejected[:_DEVICE_REJECTION_LIMIT]
+    if len(rejected) > len(visible):
+        visible.append(f"... {len(rejected) - len(visible)} more")
+    return "; ".join(visible) or "no matching input endpoints"
+
+
+def _find_loopback_device() -> _CaptureDevice:
     devices = sd.query_devices()
+    try:
+        host_apis = sd.query_hostapis()
+    except Exception:
+        host_apis = []
+    capture_channels = int(
+        getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+    )
+    sample_rate = int(cfg.audio.sample_rate)
+    available = [
+        _capture_device(index, device, host_apis)
+        for index, device in enumerate(devices)
+    ]
 
-    if cfg.audio.device_name:
-        name_lower = cfg.audio.device_name.lower()
-        for i, dev in enumerate(devices):
-            if name_lower in dev["name"].lower():
-                log.info("Using configured device [%d]: %s", i, dev["name"])
-                return i
+    configured_name = str(getattr(cfg.audio, "device_name", "") or "").strip()
+    if configured_name:
+        name_lower = configured_name.casefold()
+        configured = [
+            candidate
+            for candidate in available
+            if name_lower in candidate.name.casefold()
+        ]
+        if configured:
+            passing, rejected = _preflight_candidates(
+                configured,
+                sample_rate=sample_rate,
+                capture_channels=capture_channels,
+            )
+            if passing:
+                selected = passing[0]
+                log.info(
+                    "Using configured device [%d]: %s (host_api=%s, preflight=passed)",
+                    selected.index,
+                    selected.name,
+                    selected.host_api,
+                )
+                for reason in rejected:
+                    log.debug("Rejected configured audio candidate: %s", reason)
+                return selected
+            raise RuntimeError(
+                f"Configured audio device {configured_name!r} was found, but no "
+                f"matching endpoint supports {sample_rate} Hz/{capture_channels}ch "
+                f"float32. {_bounded_rejections(rejected)}"
+            )
         log.warning("Configured device_name %r not found, falling back to auto-detect",
-                    cfg.audio.device_name)
+                    configured_name)
 
-    for i, dev in enumerate(devices):
-        name = dev["name"].lower()
-        if "loopback" in name or "stereo mix" in name or "立體聲混音" in name:
-            log.info("Auto-detected loopback device [%d]: %s", i, dev["name"])
-            return i
+    automatic = [
+        candidate
+        for candidate in available
+        if any(keyword in candidate.name.casefold() for keyword in _AUTO_DEVICE_KEYWORDS)
+    ]
+    passing, rejected = _preflight_candidates(
+        automatic,
+        sample_rate=sample_rate,
+        capture_channels=capture_channels,
+    )
+    if passing:
+        selected = passing[0]
+        log.info(
+            "Auto-detected audio device [%d]: %s (host_api=%s, preflight=passed)",
+            selected.index,
+            selected.name,
+            selected.host_api,
+        )
+        for reason in rejected:
+            log.debug("Rejected auto-detected audio candidate: %s", reason)
+        return selected
 
     raise RuntimeError(
-        "No loopback audio device found. "
+        f"No compatible loopback audio device found for {sample_rate} Hz/"
+        f"{capture_channels}ch float32. {_bounded_rejections(rejected)}. "
         "Install VB-Cable or enable 'Stereo Mix', then restart. "
         "Run 'python modules/audio_capture.py' to list available devices."
     )
 
 
+def _print_device_diagnostics() -> None:
+    devices = sd.query_devices()
+    try:
+        host_apis = sd.query_hostapis()
+    except Exception:
+        host_apis = []
+    capture_channels = int(
+        getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+    )
+    sample_rate = int(cfg.audio.sample_rate)
+    print(
+        "Available input devices "
+        f"(requested format: {sample_rate} Hz/{capture_channels}ch float32):"
+    )
+    for index, raw_device in enumerate(devices):
+        candidate = _capture_device(index, raw_device, host_apis)
+        if candidate.max_input_channels <= 0:
+            continue
+        passing, rejected = _preflight_candidates(
+            [candidate],
+            sample_rate=sample_rate,
+            capture_channels=capture_channels,
+        )
+        outcome = "PASS" if passing else f"FAIL: {_bounded_rejections(rejected)}"
+        print(
+            f"[{index}] {candidate.name} | host_api={candidate.host_api} | "
+            f"max_input_channels={candidate.max_input_channels} | "
+            f"default_samplerate={candidate.default_samplerate:g} | {outcome}"
+        )
+    selected = _find_loopback_device()
+    print(
+        f"Selected: [{selected.index}] {selected.name} "
+        f"(host_api={selected.host_api}, preflight=passed)"
+    )
+
+
 if __name__ == "__main__":
-    import time
-    print("Available audio devices:")
-    print(sd.query_devices())
-    print(f"\nWill use device: {_find_loopback_device()}")
-    print(f"VAD enabled: {cfg.audio.vad_enabled}")
-    q: queue.Queue = queue.Queue()
-    stop = threading.Event()
-    t = start(q, stop)
-    print("Recording for 15 seconds…")
-    time.sleep(15)
-    stop.set()
-    t.join()
-    chunks = []
-    while not q.empty():
-        chunks.append(q.get())
-    print(f"Captured {len(chunks)} chunks")
-    for i, c in enumerate(chunks):
-        print(f"  [{i+1}] {len(c.audio)/cfg.audio.sample_rate:.2f}s  rms={_rms(c.audio):.4f}")
+    _print_device_diagnostics()

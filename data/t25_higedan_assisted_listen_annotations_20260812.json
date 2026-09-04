@@ -1,0 +1,79 @@
+{
+  "annotation_schema": 1,
+  "sample_path": "C:\\Users\\user\\Documents\\live_translate\\scratch\\analysis\\t25_higedan_blind_listen_20260812.json",
+  "created_at": "2026-08-11T17:14:15+00:00",
+  "updated_at": "2026-08-12T08:53:23+00:00",
+  "label_options": [
+    "different",
+    "higedan_likely",
+    "unclear"
+  ],
+  "context_tag_options": [
+    "bgm_mixed",
+    "clip_audio",
+    "multi_speaker",
+    "over_attributed_chunks",
+    "unclear_audio"
+  ],
+  "speaker_source_options": [
+    "audio_source_mismatch",
+    "clip_or_other_speaker",
+    "host_only",
+    "host_over_clip",
+    "multi_streamer",
+    "speaker_unclear",
+    "wrong_speaker_selected"
+  ],
+  "annotations": {
+    "T25-HG-blind-01": {
+      "label": "different",
+      "context_tags": [],
+      "speaker_source_tags": [
+        "host_only"
+      ],
+      "heard_source_text": "저는 진짜 희계나님 콘서트 보면서 무슨 생각을 했냐면",
+      "notes": "有漏字",
+      "updated_at": "2026-08-12T08:31:22+00:00"
+    },
+    "T25-HG-blind-02": {
+      "label": "different",
+      "context_tags": [],
+      "speaker_source_tags": [],
+      "heard_source_text": "안내방송 이렇게 나오고 하는데 그 희계단 뭐 역사 같아 보여요. 뭔가 이제 막 영상 같은 게 틀어져요.",
+      "notes": "히게단才對",
+      "updated_at": "2026-08-12T08:44:56+00:00"
+    },
+    "T25-HG-blind-03": {
+      "label": "different",
+      "context_tags": [],
+      "speaker_source_tags": [],
+      "heard_source_text": " 그거 하고 싶다 이런 생각 많이 하긴 했어요. 뭔가 희계단님분들 거 보고 너무 너무 멋있어 보였어.\n",
+      "notes": "",
+      "updated_at": "2026-08-12T08:46:09+00:00"
+    },
+    "T25-HG-blind-04": {
+      "label": "higedan_likely",
+      "context_tags": [],
+      "speaker_source_tags": [],
+      "heard_source_text": "행복한 희계단 분들이 행복한 미소로 이 음악을 하는 모습이 이렇게 착 내리면서 팍 보이는데 거기서 눈물이 주르고요.",
+      "notes": "應該是행복한 히게단 분들이 행복한 미소로 이 음악을 하는 모습이 이렇게 촥 내리면서 팍 보이는데, 거기서 눈물이 주르륵 나고요.",
+      "updated_at": "2026-08-12T08:47:44+00:00"
+    },
+    "T25-HG-blind-05": {
+      "label": "different",
+      "context_tags": [],
+      "speaker_source_tags": [],
+      "heard_source_text": "뭔가 내 곡을 내고 내 곡으로 뭔가 나도 무대로 가고 싶다는 생각이 들었어. 진짜 희계나님 공연을 보면서.",
+      "notes": "我都沒聽到진짜",
+      "updated_at": "2026-08-12T08:51:44+00:00"
+    },
+    "T25-HG-blind-06": {
+      "label": "different",
+      "context_tags": [],
+      "speaker_source_tags": [],
+      "heard_source_text": "실력이 너무 좋은 거라니까錯誤\n→ 실력이 너무 좋은 거 아니까 應該才對",
+      "notes": "T2502-06全部提到的都是히게단 Official髭男dism ",
+      "updated_at": "2026-08-12T08:53:23+00:00"
+    }
+  }
+}

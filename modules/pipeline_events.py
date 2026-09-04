@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from typing import Any
 
+from modules.activity_context import ActivitySnapshot
+from modules.profile_context import ProfileSnapshot
+
 
 def _source_ids(value: Any) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
@@ -74,6 +77,11 @@ class SegmentInfo:
     text: str = ""
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
+    # Provider-native word evidence. Scribe calls this field ``logprob``;
+    # keeping it separate avoids pretending it is Groq's segment avg_logprob.
+    logprob: float | None = None
+    word_type: str = ""
+    speaker_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,9 @@ class TranscriptionEvent:
     segments: tuple[SegmentInfo, ...] = ()
     overlap_seconds: float = 0.0
     vad_cut_reason: str = ""
+    language_probability: float | None = None
+    transcription_id: str = ""
+    profile_snapshot: ProfileSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +144,13 @@ class SentenceEvent:
     forced: bool = False
     chunk_count: int = 0
     audio_seconds: float = 0.0
+    sentence_id: str = ""
+    created_at_utc: str = ""
+    enqueued_at_utc: str = ""
+    enqueued_at_monotonic: float = 0.0
+    activity_snapshot: ActivitySnapshot | None = None
+    provisional_id: str = ""
+    profile_snapshot: ProfileSnapshot | None = None
 
 
 def transcription_text(item: str | TranscriptionEvent) -> str:
@@ -155,6 +173,12 @@ def transcription_to_sentence(
     forced: bool = False,
     chunk_count: int = 0,
     audio_seconds: float = 0.0,
+    sentence_id: str = "",
+    created_at_utc: str = "",
+    enqueued_at_utc: str = "",
+    enqueued_at_monotonic: float = 0.0,
+    activity_snapshot: ActivitySnapshot | None = None,
+    provisional_id: str = "",
 ) -> SentenceEvent:
     source_ids = _source_ids(source_utterance_ids)
     evidence_source_ids = _source_ids(evidence_source_utterance_ids)
@@ -170,6 +194,12 @@ def transcription_to_sentence(
             forced=forced,
             chunk_count=chunk_count,
             audio_seconds=audio_seconds,
+            sentence_id=sentence_id,
+            created_at_utc=created_at_utc,
+            enqueued_at_utc=enqueued_at_utc,
+            enqueued_at_monotonic=enqueued_at_monotonic,
+            activity_snapshot=activity_snapshot,
+            provisional_id=provisional_id,
         )
     if not source_ids:
         source_ids = (source.utterance_id,) if source.utterance_id else ()
@@ -177,6 +207,7 @@ def transcription_to_sentence(
         text=text,
         incomplete=incomplete,
         profile_id=source.profile_id,
+        profile_snapshot=source.profile_snapshot,
         stt_engine=source.engine,
         utterance_id=source.utterance_id,
         source_utterance_ids=source_ids,
@@ -193,6 +224,12 @@ def transcription_to_sentence(
         forced=forced,
         chunk_count=chunk_count,
         audio_seconds=audio_seconds,
+        sentence_id=sentence_id,
+        created_at_utc=created_at_utc,
+        enqueued_at_utc=enqueued_at_utc,
+        enqueued_at_monotonic=enqueued_at_monotonic,
+        activity_snapshot=activity_snapshot,
+        provisional_id=provisional_id,
     )
 
 
@@ -222,8 +259,10 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         source_no_speech_probs = _aligned_source_values(
             item.source_no_speech_probs, source_ids, fallback=item.no_speech_prob
         )
+        snapshot = item.activity_snapshot
         return {
             "profile_id": item.profile_id,
+            "profile_snapshot": item.profile_snapshot,
             "stt_engine": item.stt_engine,
             "utterance_id": item.utterance_id,
             "source_utterance_ids": list(source_ids),
@@ -235,6 +274,12 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
             "forced": item.forced,
             "chunk_count": item.chunk_count,
             "audio_seconds": item.audio_seconds,
+            "sentence_id": item.sentence_id,
+            "sentence_created_at_utc": item.created_at_utc,
+            "sentence_enqueued_at_utc": item.enqueued_at_utc,
+            "sentence_enqueued_at_monotonic": item.enqueued_at_monotonic,
+            "activity_snapshot": snapshot,
+            "provisional_id": item.provisional_id,
             **source_confidence_summary(
                 source_ids,
                 source_avg_logprobs,
@@ -246,6 +291,7 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         evidence_source_ids = _source_ids(item.get("evidence_source_utterance_ids", ()))
         return {
             "profile_id": item.get("profile_id", ""),
+            "profile_snapshot": item.get("profile_snapshot"),
             "stt_engine": item.get("stt_engine", ""),
             "utterance_id": item.get("utterance_id", ""),
             "source_utterance_ids": list(source_ids),
@@ -257,6 +303,12 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
             "forced": bool(item.get("forced", False)),
             "chunk_count": _int_or_zero(item.get("chunk_count")),
             "audio_seconds": item.get("audio_seconds", 0.0),
+            "sentence_id": item.get("sentence_id", ""),
+            "sentence_created_at_utc": item.get("created_at_utc", ""),
+            "sentence_enqueued_at_utc": item.get("enqueued_at_utc", ""),
+            "sentence_enqueued_at_monotonic": item.get("enqueued_at_monotonic", 0.0),
+            "activity_snapshot": item.get("activity_snapshot"),
+            "provisional_id": item.get("provisional_id", ""),
             **source_confidence_summary(
                 source_ids,
                 item.get("source_avg_logprobs", ()),
@@ -265,6 +317,7 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         }
     return {
         "profile_id": "",
+        "profile_snapshot": None,
         "stt_engine": "",
         "utterance_id": "",
         "source_utterance_ids": [],
@@ -276,5 +329,11 @@ def sentence_metadata(item: SentenceEvent | dict | str) -> dict:
         "forced": False,
         "chunk_count": 0,
         "audio_seconds": 0.0,
+        "sentence_id": "",
+        "sentence_created_at_utc": "",
+        "sentence_enqueued_at_utc": "",
+        "sentence_enqueued_at_monotonic": 0.0,
+        "activity_snapshot": None,
+        "provisional_id": "",
         **source_confidence_summary(()),
     }

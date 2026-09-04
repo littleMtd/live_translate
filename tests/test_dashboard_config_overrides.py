@@ -71,6 +71,16 @@ def test_invalid_override_value_falls_back_to_base(tmp_path):
     assert config_mod._apply_dashboard_overrides(base, json_path) is base
 
 
+def test_elevenlabs_is_an_accepted_stt_engine(tmp_path):
+    base = config_mod._Config()
+    json_path = tmp_path / "elevenlabs.json"
+    _write(json_path, {"stt": {"primary_engine": "elevenlabs"}})
+
+    merged = config_mod._apply_dashboard_overrides(base, json_path)
+
+    assert merged.stt.primary_engine == "elevenlabs"
+
+
 def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "invalid-fields.json"
@@ -89,6 +99,52 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
     assert merged.subtitle.idle_hide_ms == 12000
     assert merged.stt.primary_engine == base.stt.primary_engine
     assert merged.scene.publish_open_set_activity is True
+
+
+def test_duplicate_translation_routes_are_ignored(tmp_path):
+    base = config_mod._Config()
+    json_path = tmp_path / "duplicate-routes.json"
+    _write(json_path, {
+        "translation": {"engine_chain": ["groq", "groq"]},
+        "subtitle": {"idle_hide_ms": 12000},
+    })
+
+    merged = config_mod._apply_dashboard_overrides(base, json_path)
+
+    assert merged.translation.engine_chain == base.translation.engine_chain
+    assert merged.subtitle.idle_hide_ms == 12000
+
+
+def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
+    from unittest.mock import patch
+
+    import modules.translation_engines as translation_engines
+
+    base = config_mod._Config()
+    json_path = tmp_path / "protected-deepseek.json"
+    _write(
+        json_path,
+        {
+            "translation": {
+                "deepseek_route": "off",
+                # This is a valid dashboard override for other backends, but
+                # it must not alter the protected ordinary-live route.
+                "engine_chain": ["groq"],
+            }
+        },
+    )
+
+    merged = config_mod._apply_dashboard_overrides(base, json_path)
+
+    assert merged.translation.deepseek_route == "primary"
+    assert merged.translation.engine_chain == ("groq",)
+    with patch.object(translation_engines, "cfg", merged):
+        assert translation_engines.effective_engine_chain_names() == (
+            "deepseek",
+            "openrouter",
+            "deepl",
+            "groq",
+        )
 
 
 def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):

@@ -1,6 +1,7 @@
 import unittest
 
 from modules.pipeline_events import SegmentInfo, TranscriptionEvent
+from modules.profile_context import profile_state
 from modules.sentence_buffer import (
     SentenceBuffer,
     _split_prefix_with_reason,
@@ -121,6 +122,193 @@ class TestKoreanCompletenessDecision(unittest.TestCase):
 
 
 class TestSentenceBuffer(unittest.TestCase):
+    def test_profile_generation_change_requires_explicit_boundary(self):
+        first = profile_state.legacy_snapshot("url")
+        second = profile_state.legacy_snapshot("isegye_lilpa")
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="first fragment",
+                engine="test",
+                profile_id="url",
+                profile_snapshot=first,
+            ),
+            now=1.0,
+        )
+        incoming = TranscriptionEvent(
+            text="second fragment",
+            engine="test",
+            profile_id="isegye_lilpa",
+            profile_snapshot=second,
+        )
+        self.assertTrue(buffer.requires_profile_switch(incoming))
+        cut = buffer.flush_profile_switch(2.0)
+        self.assertEqual(cut.text, "first fragment")
+        self.assertEqual(cut.cut_reason, "profile_switch")
+        self.assertIs(cut.source.profile_snapshot, first)
+
+    def test_safe_full_stop_sentence_releases_without_force_cut(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="아, 너무 좋다.",
+                engine="elevenlabs",
+                profile_id="url",
+                utterance_id="utt-live-dot",
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(
+            4.0,
+            min_wait_seconds=3.0,
+            force_cut_seconds=8.0,
+        )
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.text, "아, 너무 좋다.")
+        self.assertEqual(cut.cut_reason, "natural")
+        self.assertFalse(cut.forced)
+        self.assertFalse(cut.incomplete)
+
+    def test_unsafe_dot_tails_do_not_become_complete(self):
+        for text in ("버전 1.2.", "example.com.", "아직...", "v2.0."):
+            with self.subTest(text=text):
+                self.assertFalse(is_complete(text))
+
+    def test_silence_holds_embedded_question_until_following_predicate(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="그래서 저희가 몇 시부터 몇 시까지를 그 받을지",
+                engine="elevenlabs",
+                profile_id="url",
+                vad_cut_reason="silence",
+                utterance_id="utt-8",
+                audio_seconds=6.88,
+            ),
+            now=1.0,
+        )
+
+        self.assertIsNone(
+            buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+        )
+        self.assertIsNone(buffer.provisional_snapshot(3.0))
+
+        buffer.push(
+            TranscriptionEvent(
+                text="그것도 정하면은 되거든요.",
+                engine="elevenlabs",
+                profile_id="url",
+                vad_cut_reason="silence",
+                utterance_id="utt-9",
+                audio_seconds=3.456,
+            ),
+            now=2.0,
+        )
+        cut = buffer.pop_ready(2.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(
+            cut.text,
+            "그래서 저희가 몇 시부터 몇 시까지를 그 받을지 그것도 정하면은 되거든요.",
+        )
+        self.assertEqual(cut.cut_reason, "silence_complete")
+        self.assertFalse(cut.incomplete)
+        self.assertEqual(cut.source_utterance_ids, ("utt-8", "utt-9"))
+        self.assertEqual(cut.chunk_count, 2)
+        self.assertEqual(cut.audio_seconds, 10.336)
+
+    def test_other_high_confidence_embedded_question_endings_are_held(self):
+        for text in ("누가 오는지", "이게 정답인지"):
+            with self.subTest(text=text):
+                buffer = SentenceBuffer(silence_complete_enabled=True)
+                buffer.push(
+                    TranscriptionEvent(
+                        text=text,
+                        engine="elevenlabs",
+                        profile_id="url",
+                        vad_cut_reason="silence",
+                    ),
+                    now=1.0,
+                )
+                self.assertIsNone(
+                    buffer.pop_ready(
+                        1.0,
+                        min_wait_seconds=5.0,
+                        force_cut_seconds=8.0,
+                    )
+                )
+
+    def test_complete_final_ji_sentence_is_not_blanket_delayed(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="그건 내가 알지.",
+                engine="elevenlabs",
+                profile_id="url",
+                vad_cut_reason="silence",
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(1.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.text, "그건 내가 알지.")
+        self.assertFalse(cut.incomplete)
+
+    def test_punctuated_embedded_question_forms_remain_complete_questions(self):
+        for text in ("이게 뭔지?", "알겠는지?", "정답인지?"):
+            with self.subTest(text=text):
+                self.assertTrue(is_complete(text))
+
+    def test_embedded_question_still_releases_at_force_cut_bound(self):
+        buffer = SentenceBuffer(silence_complete_enabled=True)
+        buffer.push(
+            TranscriptionEvent(
+                text="어느 쪽을 받을지",
+                engine="elevenlabs",
+                profile_id="url",
+                vad_cut_reason="silence",
+                utterance_id="utt-1",
+            ),
+            now=1.0,
+        )
+
+        cut = buffer.pop_ready(9.0, min_wait_seconds=5.0, force_cut_seconds=8.0)
+
+        self.assertIsNotNone(cut)
+        self.assertEqual(cut.text, "어느 쪽을 받을지")
+        self.assertEqual(cut.cut_reason, "forced_blob")
+        self.assertTrue(cut.forced)
+        self.assertTrue(cut.incomplete)
+
+    def test_provisional_snapshot_predicts_same_forced_prefix_without_mutation(self):
+        buffer = SentenceBuffer()
+        buffer.push(
+            TranscriptionEvent(
+                text="첫 문장은 끝났어요. 아직 이어지는 중",
+                engine="elevenlabs",
+                profile_id="url",
+                utterance_id="utt-1",
+            ),
+            now=1.0,
+        )
+
+        preview = buffer.provisional_snapshot(3.0)
+        final = buffer.pop_ready(
+            10.0,
+            min_wait_seconds=3.0,
+            force_cut_seconds=8.0,
+        )
+
+        self.assertIsNotNone(preview)
+        self.assertIsNotNone(final)
+        self.assertEqual(preview.text, final.text)
+        self.assertEqual(preview.incomplete, final.incomplete)
+        self.assertEqual(final.cut_reason, "forced_prefix")
+
     def test_push_accumulates_tokens_until_complete_cut(self):
         buffer = SentenceBuffer()
         buffer.push("안녕", now=10.0)

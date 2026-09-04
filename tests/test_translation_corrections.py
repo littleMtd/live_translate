@@ -1,8 +1,13 @@
 from contextlib import contextmanager
 
 from config import cfg
-from modules.translation_corrections import load_translation_corrections
+from modules.translation_corrections import (
+    evaluate_canonical_obligations,
+    load_translation_corrections,
+    resolve_canonical_obligations,
+)
 from modules.translator import (
+    _BOUNDARY_SOURCE_NORM_BY_PROFILE,
     _CONDITIONAL_SOURCE_NORM_BY_PROFILE,
     _CONDITIONAL_SOURCE_NORM_SHARED,
     _HADES_PROFILE_ID,
@@ -13,6 +18,8 @@ from modules.translator import (
     _apply_source_aware_corrections,
     _normalize_source_before_matching,
     _NAME_RENDERING_RULES,
+    get_corrections,
+    reset_corrections,
 )
 
 
@@ -36,7 +43,7 @@ def _wrong_profile(profile_id: str) -> str:
 def test_translation_correction_data_snapshot_counts():
     tables = load_translation_corrections()
 
-    assert len(tables.source_aware_target_replacements) == 31
+    assert len(tables.source_aware_target_replacements) == 32
     assert {profile: len(values) for profile, values in tables.source_norm_by_profile.items()} == {
         "stellive_hina": 6,
         "hades_chxxnnx": 27,
@@ -44,6 +51,11 @@ def test_translation_correction_data_snapshot_counts():
         "isegye_lilpa": 11,
         "url": 13,
     }
+    assert tables.boundary_source_norm_shared == {}
+    assert {
+        profile: len(values)
+        for profile, values in tables.boundary_source_norm_by_profile.items()
+    } == {"hades_chxxnnx": 9, "isegye_lilpa": 5}
     assert len(tables.conditional_source_norm_shared) == 0
     assert {
         profile: len(groups)
@@ -61,17 +73,218 @@ def test_translation_correction_data_snapshot_counts():
         "url": 8,
     }
     assert len(tables.korean_name_suffixes) == 33
-    assert len(tables.name_rendering_rules) == 30
-    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 237
+    assert len(tables.name_rendering_rules) == 37
+    assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 271
     assert sum(
         len(group.replacements)
         for group in tables.source_aware_target_replacements
-    ) == 73
+        ) == 74
     assert sum(
         len(group.replacements)
         for groups in tables.profile_source_aware_target_replacements.values()
         for group in groups
     ) == 52
+
+
+def test_required_canonical_rules_are_explicit_and_narrow():
+    tables = load_translation_corrections()
+    required = {
+        rule.canonical
+        for rule in tables.name_rendering_rules
+        if rule.publication_policy == "required"
+    }
+    assert required - {"CHZZK", "Memnon"} == {
+        "모카",
+        "랑코",
+        "마냥",
+        "솜먕",
+        "Jururu",
+        "Lilpa",
+        "KIIRI",
+        "Heart Crush",
+    }
+    assert {"CHZZK", "Memnon"} <= required
+    assert all(
+        rule.condition_id == "always"
+        for rule in tables.name_rendering_rules
+        if rule.publication_policy == "required"
+    )
+    activation_by_canonical = {
+        rule.canonical: rule.activation_policy
+        for rule in tables.name_rendering_rules
+        if rule.publication_policy == "required"
+    }
+    assert activation_by_canonical["마냥"] == "name_context_required"
+    assert all(
+        policy == "exact_alias"
+        for canonical, policy in activation_by_canonical.items()
+        if canonical != "마냥"
+    )
+
+
+def test_live23_entity_rescue_rules_are_exact_source_and_profile_gated():
+    cases = (
+        ("치지직 가기도 하고", "치지직", "CHZZK"),
+        ("치지직 가기도 하고", "chzzk", "CHZZK"),
+        ("아가 멤논급이야", "成員級", "Memnon級"),
+    )
+    for source, target, expected in cases:
+        with _active_translation_profile("hades_chxxnnx"):
+            assert _apply_source_aware_corrections(source, target) == expected
+        with _active_translation_profile("url"):
+            assert _apply_source_aware_corrections(source, target) == target
+        with _active_translation_profile("hades_chxxnnx", use_profile=False):
+            assert _apply_source_aware_corrections(source, target) == target
+        with _active_translation_profile("hades_chxxnnx"):
+            assert _apply_source_aware_corrections("관련 없는 문장", target) == target
+
+
+def test_repeated_moka_particle_rescue_does_not_change_obligation_activation():
+    source = "모카랑은 모카랑은 나루토 노래 부르면서 뛰어다니고."
+    with _active_translation_profile("url"):
+        assert (
+            _apply_source_aware_corrections(source, "모카랑是邊唱歌邊跑。")
+            == "모카是邊唱歌邊跑。"
+        )
+        obligations = resolve_canonical_obligations(
+            source,
+            profile_id="url",
+            profile_applied=True,
+            rules=_NAME_RENDERING_RULES,
+            korean_name_suffixes=load_translation_corrections().korean_name_suffixes,
+        )
+    assert obligations == ()
+
+
+def test_name_context_required_avoids_ordinary_word_collision():
+    tables = load_translation_corrections()
+
+    def targets(source: str) -> tuple[str, ...]:
+        return tuple(
+            obligation.canonical_target
+            for obligation in resolve_canonical_obligations(
+                source,
+                profile_id="url",
+                profile_applied=True,
+                rules=tables.name_rendering_rules,
+                korean_name_suffixes=tables.korean_name_suffixes,
+            )
+        )
+
+    assert targets("그러니까 마냥 그냥 렛츠고 이런 느낌으로 해요.") == ()
+    assert targets("마냥 씨 뭐 방송 천 일?") == ("마냥",)
+    assert targets("마냥씨 뭐 방송 천 일?") == ("마냥",)
+    assert targets("마냥 님 오셨어요") == ("마냥",)
+    assert targets("마냥님 오셨어요") == ("마냥",)
+    assert targets("마냥 언니보다 솔로곡 잘 부르면") == ("마냥",)
+    assert targets("마냥언니보다 솔로곡 잘 부르면") == ("마냥",)
+    assert targets("마냥 씨가 왔어") == ("마냥",)
+    assert targets("마냥아 안녕") == ("마냥",)
+    assert targets("마냥이 왔어") == ("마냥",)
+    assert targets("마냥이가 왔어") == ("마냥",)
+    assert targets("마냥이는 왔어") == ("마냥",)
+    assert targets("마냥 아무 말이나 해") == ()
+    assert targets("마냥아무 말이나 해") == ()
+    assert targets("마냥 씨앗을 심었어") == ()
+
+
+def test_ambiguous_short_name_requires_name_context():
+    with _active_translation_profile("url"):
+        assert _apply_source_aware_corrections(
+            "오아 진짜요?", "歐亞真的嗎？"
+        ) == "歐亞真的嗎？"
+        assert _apply_source_aware_corrections(
+            "오아님이 오셨어요", "歐亞老師來了"
+        ) == "오아老師來了"
+
+
+def test_streaming_hiatus_repairs_sleep_mistranslation_from_source_evidence():
+    assert _apply_source_aware_corrections(
+        "릴파님은 장기 휴방 중이세요", "Lilpa正在長期休眠"
+    ) == "Lilpa正在長期休播"
+    # 休眠 remains valid outside the evidenced long-hiatus mistranslation,
+    # including when a sentence also happens to mention a stream hiatus.
+    assert _apply_source_aware_corrections(
+        "컴퓨터가 절전 모드예요", "電腦正在休眠"
+    ) == "電腦正在休眠"
+    assert _apply_source_aware_corrections(
+        "휴방 중에 컴퓨터가 절전 모드에 들어갔어요",
+        "休播期間電腦進入休眠",
+    ) == "休播期間電腦進入休眠"
+
+
+def test_collision_aware_activation_preserves_other_required_rules():
+    tables = load_translation_corrections()
+    obligations = resolve_canonical_obligations(
+        "마냥 언니는 돌고래, 모카 언니는 니모, 솜먕 언니는 해파리",
+        profile_id="url",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    )
+    assert tuple(item.canonical_target for item in obligations) == (
+        "모카",
+        "마냥",
+        "솜먕",
+    )
+
+
+def test_canonical_obligation_resolution_uses_profile_boundary_and_one_occurrence():
+    tables = load_translation_corrections()
+
+    obligations = resolve_canonical_obligations(
+        "솜먕이 왔어",
+        profile_id="url",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    )
+    assert len(obligations) == 1
+    assert obligations[0].matched_alias == "솜먕이"
+    assert obligations[0].source_spans == ((0, 3),)
+    assert obligations[0].canonical_target == "솜먕"
+
+    assert resolve_canonical_obligations(
+        "모카가 왔어",
+        profile_id="irise",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    ) == ()
+    assert resolve_canonical_obligations(
+        "마냥히 웃었어",
+        profile_id="url",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    ) == ()
+    assert resolve_canonical_obligations(
+        "모카랑 모카가 왔어",
+        profile_id="url",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    ) == ()
+
+
+def test_canonical_obligation_evaluation_never_inserts_missing_target():
+    tables = load_translation_corrections()
+    obligations = resolve_canonical_obligations(
+        "주르르가 왔어",
+        profile_id="isegye_lilpa",
+        profile_applied=True,
+        rules=tables.name_rendering_rules,
+        korean_name_suffixes=tables.korean_name_suffixes,
+    )
+    passed = evaluate_canonical_obligations("Jururu來了。", obligations)
+    failed = evaluate_canonical_obligations("朱嚕嚕來了。", obligations)
+    embedded = evaluate_canonical_obligations("JururuExtra來了。", obligations)
+
+    assert passed.passed and passed.satisfied == ("Jururu",)
+    assert not failed.passed
+    assert failed.missing == ("Jururu",)
+    assert failed.rejection_reason == "canonical_obligation_missing"
+    assert not embedded.passed
 
 
 def test_each_profile_source_norm_rule_triggers_and_is_gated():
@@ -86,6 +299,74 @@ def test_each_profile_source_norm_rule_triggers_and_is_gated():
             with _active_translation_profile(_wrong_profile(profile_id)):
                 assert _normalize_source_before_matching(noisy) == noisy
 
+
+def test_each_profile_boundary_source_norm_rule_triggers_and_is_gated():
+    for profile_id, replacements in _BOUNDARY_SOURCE_NORM_BY_PROFILE.items():
+        for noisy, canonical in replacements.items():
+            with _active_translation_profile(profile_id):
+                assert _normalize_source_before_matching(noisy) == canonical
+
+            with _active_translation_profile(profile_id, use_profile=False):
+                assert _normalize_source_before_matching(noisy) == noisy
+
+            with _active_translation_profile(_wrong_profile(profile_id)):
+                assert _normalize_source_before_matching(noisy) == noisy
+
+
+def test_higedan_boundary_source_norm_handles_reviewed_suffix_shapes():
+    cases = {
+        "희계단 분들이": "히게단 분들이",
+        "희계단분들이": "히게단분들이",
+        "희계단님의 공연": "히게단님의 공연",
+        "희계나 님 콘서트": "히게단 님 콘서트",
+        "희계나님은 멋있다": "히게단님은 멋있다",
+        "희계단의 Pretender": "히게단의 Pretender",
+        "희계단, 희계나!": "히게단, 히게단!",
+    }
+    with _active_translation_profile("isegye_lilpa"):
+        for source, expected in cases.items():
+            assert _normalize_source_before_matching(source) == expected
+
+
+def test_higedan_boundary_source_norm_rejects_embedded_controls_and_is_idempotent():
+    controls = (
+        "김희계단이 왔어요",
+        "희계단풍 이야기를 해요",
+        "희계나무를 봤어요",
+    )
+    with _active_translation_profile("isegye_lilpa"):
+        for source in controls:
+            assert _normalize_source_before_matching(source) == source
+        assert _normalize_source_before_matching("히게단 공연") == "히게단 공연"
+
+
+def test_hades_lol_boundary_source_norm_is_scoped_and_collision_safe():
+    cases = {
+        "롤 중독 치료하는 건 없나?": "LoL 중독 치료하는 건 없나?",
+        "롤은 이제 안 해요": "LoL은 이제 안 해요",
+        "롤을 접겠습니다": "LoL을 접겠습니다",
+        "롤, 롤 진짜 재밌어": "LoL, LoL 진짜 재밌어",
+        "롤에서는 와드를 사야 해": "LoL에서는 와드를 사야 해",
+        "롤에서 정글을 해": "LoL에서 정글을 해",
+        "롤로 방송할까": "LoL로 방송할까",
+        "롤이나 할까": "LoL이나 할까",
+        "롤인데 왜 그래": "LoL인데 왜 그래",
+        "롤처럼 보이네": "LoL처럼 보이네",
+        "롤게임 롤랭크": "LoL 게임 LoL 랭크",
+    }
+    with _active_translation_profile("hades_chxxnnx"):
+        for source, expected in cases.items():
+            normalized = _normalize_source_before_matching(source)
+            assert normalized == expected
+            assert _normalize_source_before_matching(normalized) == normalized
+
+        for control in ("롤링페이퍼", "트롤은 싫어", "컨트롤을 바꿔"):
+            assert _normalize_source_before_matching(control) == control
+
+    with _active_translation_profile("url"):
+        assert _normalize_source_before_matching("롤 중독") == "롤 중독"
+    with _active_translation_profile("hades_chxxnnx", use_profile=False):
+        assert _normalize_source_before_matching("롤 중독") == "롤 중독"
 
 def test_shared_source_norm_fixes_hospital_stt_mishears():
     assert _normalize_source_before_matching("운동 사면서 나왔는데요") == "운동 삼아서 나왔는데요"
@@ -177,7 +458,7 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
         assert _apply_source_aware_corrections(
             "오아. 오아. 마냥 랑코?",
             "噢啊。噢啊。馬朗跟蘭可？",
-        ) == "오아。오아。마냥跟랑코？"
+        ) == "噢啊。噢啊。마냥跟랑코？"
         assert _apply_source_aware_corrections(
             "마냥 언니가 개웃김",
             "明明姐姐真的超好笑",
@@ -348,6 +629,8 @@ def test_each_name_rendering_rule_triggers_and_is_gated():
     for rule in _NAME_RENDERING_RULES:
         wrong = next(form for form in rule.wrong_forms if form != rule.canonical)
         source = rule.source_aliases[0]
+        if rule.repair_requires_name_context:
+            source += "님"
 
         with _active_translation_profile(rule.scope if rule.scope != _SHARED_NAME_SCOPE else ""):
             assert _apply_source_aware_corrections(source, wrong) == rule.canonical
@@ -359,3 +642,78 @@ def test_each_name_rendering_rule_triggers_and_is_gated():
 
             with _active_translation_profile(_wrong_profile(rule.scope)):
                 assert _apply_source_aware_corrections(source, wrong) == wrong
+
+
+def test_irise_canonical_rendering_is_exact_profile_scoped_and_traceable():
+    cases = (
+        (
+            "키리씨가 왔어요",
+            "基里와キリ, Kiri, Kiiri, Kkiri, KIIRI",
+            "KIIRI와KIIRI, KIIRI, KIIRI, KIIRI, KIIRI",
+            "KIIRI",
+        ),
+        (
+            "티즈는 준비됐어요",
+            "提茲와蒂茲, Tees, Teas, ティズ",
+            "TIZ와TIZ, TIZ, TIZ, TIZ",
+            "TIZ",
+        ),
+        (
+            "하트 크러쉬를 공개했어요",
+            "哈特克魯什와哈特克拉什",
+            "Heart Crush와Heart Crush",
+            "Heart Crush",
+        ),
+        (
+            "아이리즈의 무대예요",
+            "Iris、Iris Z、IrisZ、Irises",
+            "IRISÉ、IRISÉ、IRISÉ、IRISÉ",
+            "IRISÉ",
+        ),
+    )
+
+    with _active_translation_profile("irise"):
+        for source, target, expected, canonical in cases:
+            reset_corrections()
+            corrected = _apply_source_aware_corrections(source, target)
+            assert corrected == expected
+            assert _apply_source_aware_corrections(source, corrected) == corrected
+            name_traces = [
+                item for item in get_corrections()
+                if item["stage"] == "name_render" and item["after"] == canonical
+            ]
+            assert len(name_traces) == 1
+            assert name_traces[0]["rule"] == f"name:{canonical}"
+
+
+def test_irise_canonical_rendering_rejects_unsafe_source_activation():
+    cases = (
+        ("오늘 방송 재미있어요", "基里", "基里"),
+        ("도키리가 왔어요", "基里", "基里"),
+        ("파티즈가 시작됐어요", "蒂茲", "蒂茲"),
+        ("KIIRI is here", "基里", "基里"),
+        ("TIZ is here", "蒂茲", "蒂茲"),
+        ("Heart Crush is out", "哈特克魯什", "哈特克魯什"),
+        ("IRISÉ is back", "IrisZ", "IrisZ"),
+    )
+
+    with _active_translation_profile("irise"):
+        for source, target, expected in cases:
+            assert _apply_source_aware_corrections(source, target) == expected
+
+    with _active_translation_profile("url"):
+        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "基里"
+    with _active_translation_profile("irise", use_profile=False):
+        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "基里"
+
+
+def test_irise_canonical_rendering_preserves_embedded_target_words():
+    cases = (
+        ("키리가 왔어요", "Kirishima, Kiri, 도키리", "Kirishima, KIIRI, 도키리"),
+        ("티즈가 왔어요", "Teaspoon, Teas", "Teaspoon, TIZ"),
+        ("아이리제가 왔어요", "Irisé, Iris", "Irisé, IRISÉ"),
+    )
+
+    with _active_translation_profile("irise"):
+        for source, target, expected in cases:
+            assert _apply_source_aware_corrections(source, target) == expected

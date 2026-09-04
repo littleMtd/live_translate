@@ -21,7 +21,10 @@ Do not duplicate these rules in `system.md`.
 
 Persistent translation cache only. Stream session metadata and prompt-evolution tables (listed under *Suggested Tables* below) are still future work.
 
-The translator stores a record on every successful translation and reuses it when the same sentence reappears under the same engine / model / prompt version.
+When persistent cache is enabled for the active mode, the translator stores a
+record on successful final translation and may reuse it when the same sentence
+reappears under the same engine/model/prompt version. Live DB cache is disabled
+by default; clip mode may enable it.
 
 Use the cache key:
 
@@ -29,6 +32,7 @@ Use the cache key:
 - `target_lang`
 - `model`
 - `engine`
+- `prompt_version`
 
 **Important:** Only cache complete translations (`incomplete=False`). Incomplete sentences should remain in memory cache only.
 
@@ -51,11 +55,9 @@ If the DB is unavailable, the app must continue running with the existing in-mem
 
 ### Design Philosophy
 
-The current system is architected as multi-threaded (each pipeline stage runs in its own thread) but operates functionally as a single-threaded queue pipeline. Phase 1 SQLite integration must maintain this pattern:
-
-- **Single translator thread** reads from queue, calls translator logic, writes cache and results.
-- **SQLite database** is the shared persistent layer accessed from a single writer thread.
-- **No concurrent database writers** expected during Phase 1.
+The current system uses two translation workers. `TranslationDB` owns one
+SQLite connection opened with `check_same_thread=False` and serializes all DB
+operations with an `RLock`; callers must not bypass that owner.
 
 ### Thread Safety Strategy
 
@@ -64,10 +66,12 @@ The current system is architected as multi-threaded (each pipeline stage runs in
    - WAL allows concurrent reads while a single writer is active.
    - Suitable for single-writer, multiple-reader scenarios (e.g., if inspection tools query the DB later).
 
-2. **Single Writer Pattern**
-   - All database writes come from the translator thread only.
-   - No explicit locks needed if writes are confined to one thread.
-   - Reads from the in-memory cache can happen concurrently from the subtitle display thread (already safe via Python's dict).
+2. **Serialized connection owner**
+   - Translation workers may reach the shared DB concurrently.
+   - `TranslationDB` holds its `RLock` around lookup, store, delete, and each
+     eviction operation. `close()` is currently an unlocked shutdown action.
+   - The in-memory translation cache has its own synchronization owner in
+     `modules/translation_memory.py` / translator shared state.
 
 3. **Transaction Isolation**
    - Each translation write uses one transaction: read → check cache key → insert/update → commit.
@@ -76,7 +80,8 @@ The current system is architected as multi-threaded (each pipeline stage runs in
 
 ### Future Considerations
 
-If Phase 2 or Phase 3 introduces concurrent DB writes (e.g., multiple translator threads or background stats updater):
+If a future phase adds new DB writers outside the current translation workers
+(for example a background statistics updater):
 
 - Switch to explicit connection-level locks (e.g., `threading.Lock` around each DB operation).
 - Or use connection pooling with thread-safe wrappers (e.g., `sqlalchemy` or `peewee`).
@@ -85,9 +90,10 @@ If Phase 2 or Phase 3 introduces concurrent DB writes (e.g., multiple translator
 ### Phase 1 Scope
 
 - **Do:** implement WAL mode ✅
-- **Do:** confine writes to translator thread ✅
+- **Do:** serialize worker DB operations through `TranslationDB` ✅
 - **Do:** use transactions for data consistency ✅
-- **Do:** use `threading.RLock()` — `store()` calls `_evict_if_needed()` while holding the lock, requiring a re-entrant lock ✅
+- **Do:** use `threading.RLock()` around shared connection operations; eviction
+  takes its own short lock after the store commit ✅
 - **Do not:** attempt to optimize reads from other threads (not a bottleneck)
 
 ## Suggested Tables
@@ -216,4 +222,6 @@ The exact source label (`memory_hit` / `db_hit` / `skipped` / `miss`) is carried
 - Cache eviction: LRU by `last_used_at` when row count exceeds `cfg.database.db_cache_max_rows` (default 50,000).
 - Schema versioning: `schema_meta` table with `key='schema_version'`; current version is `"2"`.
 - Migration v1→v2: added `prompt_version` column and updated UNIQUE constraint to include it.
-- Lock: `threading.RLock()` — required because `store()` calls `_evict_if_needed()` while holding the lock.
+- Lock: `threading.RLock()` serializes shared connection operations. `store()`
+  commits and releases its lock before `_evict_if_needed()` takes a separate
+  short lock.

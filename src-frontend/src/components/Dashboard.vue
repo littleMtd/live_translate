@@ -35,6 +35,7 @@
         <ConfigPanel
           v-else-if="config"
           :config="config"
+          :profile-status="profileStatus"
           @save="saveConfig"
         />
       </template>
@@ -45,6 +46,7 @@
         @cleared="refreshCacheStats"
       />
       <SystemStats v-if="activeTab === 'Stats'" :stats="systemStats" />
+      <ExportBundle v-if="activeTab === 'Export'" />
     </main>
 
     <div v-if="errorMsg" class="error-banner">{{ errorMsg }}</div>
@@ -58,15 +60,17 @@ import { client } from '../api/client'
 import ConfigPanel from './ConfigPanel.vue'
 import CacheStats from './CacheStats.vue'
 import SystemStats from './SystemStats.vue'
-import type { ConfigDto, CacheStats as CacheStatsType, SystemStats as SystemStatsType } from '../types/config'
+import ExportBundle from './ExportBundle.vue'
+import type { ConfigDto, CacheStats as CacheStatsType, SystemStats as SystemStatsType, ProfileStatus } from '../types/config'
 
 const activeTab = ref('Settings')
-const tabs = ['Settings', 'Cache', 'Stats']
+const tabs = ['Settings', 'Cache', 'Stats', 'Export']
 const config = ref<ConfigDto | null>(null)
 const configLoadState = ref<'loading' | 'error' | 'loaded'>('loading')
 const configLoadError = ref<string | null>(null)
 const cacheStats = ref<CacheStatsType | null>(null)
 const systemStats = ref<SystemStatsType | null>(null)
+const profileStatus = ref<ProfileStatus | null>(null)
 const pythonRunning = ref(false)
 const busy = ref(false)
 const errorMsg = ref<string | null>(null)
@@ -125,7 +129,8 @@ const tick = async () => {
 
 // Only poll the data the active tab renders.
 const activeTabData = async () => {
-  if (activeTab.value === 'Cache') await refreshCacheStats()
+  if (activeTab.value === 'Settings') await refreshProfileStatus()
+  else if (activeTab.value === 'Cache') await refreshCacheStats()
   else if (activeTab.value === 'Stats') await refreshSystemStats()
 }
 
@@ -159,6 +164,18 @@ const loadConfig = async () => {
   }
 }
 
+const refreshProfileStatus = async () => {
+  if (!pythonRunning.value) {
+    profileStatus.value = null
+    return
+  }
+  try {
+    profileStatus.value = await client.getProfileStatus()
+  } catch {
+    profileStatus.value = null
+  }
+}
+
 const saveConfig = async (newConfig: ConfigDto) => {
   const snapshot = cloneConfig(newConfig)
   try {
@@ -166,7 +183,7 @@ const saveConfig = async (newConfig: ConfigDto) => {
     config.value = cloneConfig(snapshot)
     showNotice(
       pythonRunning.value
-        ? 'Config saved. Restart Python to apply runtime changes.'
+        ? 'Config saved. Profile selection will hot-reload; other changes may require restart.'
         : 'Config saved. It will apply when Python starts.',
     )
   } catch (e) {

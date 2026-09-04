@@ -7,6 +7,8 @@ import textwrap
 from config import cfg
 from utils.logger import get_logger
 from utils.metrics import metrics
+from modules.provisional_subtitles import SubtitlePayload
+from utils.runtime_events import runtime_events
 
 log = get_logger("subtitle_display")
 
@@ -25,7 +27,8 @@ class SubtitleWindow:
         self._translating = True
         self._drag_x = 0
         self._drag_y = 0
-        self._pending_text: str | None = None
+        self._pending_text: SubtitlePayload | None = None
+        self._current_subtitle_id = ""
         self._show_time: float = 0.0
         self._show_min_ms: int = 0
 
@@ -128,10 +131,39 @@ class SubtitleWindow:
             while True:
                 candidate = self._queue.get_nowait()
                 if self._translating:
+                    if isinstance(candidate, str):
+                        candidate = SubtitlePayload(
+                            text=candidate,
+                            subtitle_id="",
+                            phase="final",
+                        )
+                    if not isinstance(candidate, SubtitlePayload):
+                        continue
+                    if (
+                        candidate.subtitle_id
+                        and candidate.subtitle_id == self._current_subtitle_id
+                    ):
+                        self._show(candidate.text)
+                        self._pending_text = None
+                        metrics.increment("subtitle.revision_replaced")
+                        runtime_events.emit(
+                            "provisional_translation",
+                            action="final_revision_displayed",
+                            provisional_id=candidate.subtitle_id,
+                            revision=candidate.revision,
+                        )
+                        continue
                     if self._pending_text is not None and self._pending_text != candidate:
                         # L15: mirror of translator-side stale_skipped — a
                         # pending subtitle was replaced before it was shown.
                         metrics.increment("subtitle.pending_overwritten")
+                        if self._pending_text.phase == "provisional":
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="display_dropped",
+                                provisional_id=self._pending_text.subtitle_id,
+                                reason="pending_overwritten",
+                            )
                     self._pending_text = candidate
         except queue.Empty:
             pass
@@ -140,8 +172,17 @@ class SubtitleWindow:
         if self._pending_text and self._translating:
             elapsed_ms = (time.monotonic() - self._show_time) * 1000
             if elapsed_ms >= self._show_min_ms:
-                self._show(self._pending_text)
+                payload = self._pending_text
+                self._show(payload.text)
+                self._current_subtitle_id = payload.subtitle_id
                 self._pending_text = None
+                if payload.phase == "provisional":
+                    runtime_events.emit(
+                        "provisional_translation",
+                        action="displayed",
+                        provisional_id=payload.subtitle_id,
+                        revision=payload.revision,
+                    )
 
         if self._root:
             self._root.after(cfg.subtitle.poll_interval_ms, self._poll)

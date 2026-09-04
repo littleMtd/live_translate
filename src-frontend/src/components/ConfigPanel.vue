@@ -2,7 +2,7 @@
   <div class="config-panel">
     <h2>Settings</h2>
     <p class="restart-note">
-      Settings are written to disk. Restart the Python pipeline to apply runtime changes.
+      Profile mode and source profile hot-reload while Python is running. Other settings may require restart.
     </p>
 
     <div class="section">
@@ -70,6 +70,44 @@
     </div>
 
     <div class="section">
+      <h3>Content Profile</h3>
+      <label>
+        Resolution mode:
+        <select v-model="local.translation.profile_mode" data-testid="profile-mode">
+          <option value="auto">Auto (scene detected)</option>
+          <option value="manual">Manual (hard lock)</option>
+        </select>
+      </label>
+      <label>
+        Source profile:
+        <input v-model="local.translation.streamer_profile" type="text" data-testid="source-profile" />
+      </label>
+      <label>
+        Apply translation profile:
+        <input v-model="local.translation.use_profile" type="checkbox" />
+      </label>
+      <div v-if="profileStatus" class="profile-status" data-testid="profile-status">
+        <span>Source: {{ profileStatus.source_profile_id || 'general' }}</span>
+        <span>Detected: {{ profileStatus.content_profile_id || 'unknown' }}</span>
+        <span>Effective: {{ profileStatus.effective_profile_id || 'general' }}</span>
+        <span>Generation: {{ profileStatus.profile_generation }}</span>
+        <span>State: {{ profileStatus.profile_confirmation_state }}</span>
+        <template v-if="local.translation.profile_mode === 'auto'">
+          <span>Resolver: {{ profileStatus.profile_resolver_state || 'unknown' }}</span>
+          <span>
+            Evidence: {{ profileStatus.profile_evidence_markers?.join(', ') || 'none' }}
+          </span>
+          <span>Last detection: {{ profileStatus.profile_last_detection_at || 'never' }}</span>
+        </template>
+        <span>Activity: {{ profileStatus.activity || 'unknown' }}</span>
+      </div>
+      <p class="field-note">
+        Auto uses a confirmed scene identity and otherwise falls back to the source profile.
+        Manual prevents scene-driven switching.
+      </p>
+    </div>
+
+    <div class="section">
       <h3>Automatic Scene Context</h3>
       <label>
         Publish model-derived activity:
@@ -90,6 +128,7 @@
       <label>
         Primary engine:
         <select v-model="local.stt.primary_engine">
+          <option value="elevenlabs">ElevenLabs Scribe v2 (cloud)</option>
           <option value="sensevoice">SenseVoice (local)</option>
           <option value="groq">Groq Whisper (cloud)</option>
         </select>
@@ -121,12 +160,17 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { ConfigDto } from '../types/config'
+import type { ConfigDto, ProfileStatus } from '../types/config'
 
-const props = defineProps<{ config: ConfigDto }>()
+const props = defineProps<{ config: ConfigDto, profileStatus?: ProfileStatus | null }>()
 const emit = defineEmits<{ save: [ConfigDto] }>()
 
-const clone = (config: ConfigDto): ConfigDto => JSON.parse(JSON.stringify(config))
+const clone = (config: ConfigDto): ConfigDto => {
+  const copy: ConfigDto = JSON.parse(JSON.stringify(config))
+  copy.translation.profile_mode ??= 'auto'
+  copy.stt.use_profile_glossary ??= true
+  return copy
+}
 
 const local = ref<ConfigDto>(clone(props.config))
 
@@ -166,6 +210,8 @@ h2 { margin-bottom: 8px; font-size: 20px; }
   color: #6b7280;
   font-size: 12px;
 }
+
+.profile-status { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0; font-size: 12px; color: #374151; }
 
 .section {
   margin-bottom: 20px;

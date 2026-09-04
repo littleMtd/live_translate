@@ -104,15 +104,14 @@ class TranslationDB:
                 try:
                     for step in _MIGRATE_v1_to_v2_STEPS:
                         self._conn.execute(step)
+                    self._conn.execute(
+                        "UPDATE schema_meta SET value=? WHERE key='schema_version'",
+                        (_SCHEMA_VERSION,),
+                    )
                     self._conn.execute("COMMIT")
                 except Exception:
                     self._conn.execute("ROLLBACK")
                     raise
-                self._conn.execute(
-                    "UPDATE schema_meta SET value=? WHERE key='schema_version'",
-                    (_SCHEMA_VERSION,),
-                )
-                self._conn.commit()
                 log.info("Schema migration completed")
             elif current_version is None:
                 # First time setup
@@ -121,10 +120,17 @@ class TranslationDB:
                     ("schema_version", _SCHEMA_VERSION),
                 )
                 self._conn.commit()
+            elif current_version != _SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Unsupported translation DB schema version {current_version!r}; "
+                    f"expected {_SCHEMA_VERSION!r}"
+                )
             
             log.info("TranslationDB ready: %s (schema_version=%s)", db_path, _SCHEMA_VERSION)
         except Exception as e:
             log.error("TranslationDB init failed: %s", e)
+            if self._conn is not None:
+                self._conn.close()
             self._conn = None
 
     @property

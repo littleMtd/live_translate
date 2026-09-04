@@ -88,6 +88,46 @@ class TestRms(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestSileroDetector(unittest.TestCase):
+    def test_consumes_all_complete_windows_without_early_return(self):
+        import types
+        import modules.audio_capture as ac
+
+        calls = []
+
+        class _Tensor:
+            def __init__(self, value):
+                self.value = value
+            def float(self):
+                return self
+
+        fake_torch = types.SimpleNamespace(from_numpy=lambda value: _Tensor(value.copy()))
+
+        class _Model:
+            def __call__(self, tensor, _sample_rate):
+                calls.append(tensor.value)
+                probability = 0.9 if len(calls) == 1 else 0.1
+                return types.SimpleNamespace(item=lambda: probability)
+            def reset_states(self):
+                pass
+
+        detector = ac._SileroDetector.__new__(ac._SileroDetector)
+        detector._threshold = 0.5
+        detector._sr = 16000
+        detector._model = _Model()
+        detector._pending = np.zeros(0, dtype=np.float32)
+
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            self.assertTrue(detector.is_speech(np.arange(1600, dtype=np.float32)))
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(detector._pending), 64)
+            detector.is_speech(np.arange(448, dtype=np.float32))
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(detector._pending), 0)
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
 class TestVadState(unittest.TestCase):
     """Tests for _VadState — the VAD chunking state machine."""
 
@@ -374,35 +414,251 @@ class TestStartFailsFast(unittest.TestCase):
 class TestFindLoopbackDevice(unittest.TestCase):
 
     def _mock_devices(self, names: list[str]) -> list[dict]:
-        return [{"name": n} for n in names]
+        return [
+            {
+                "name": name,
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "default_samplerate": 48000,
+            }
+            for name in names
+        ]
+
+    def _audio_cfg(self, device_name: str = ""):
+        mock_cfg = MagicMock()
+        mock_cfg.audio.device_name = device_name
+        mock_cfg.audio.sample_rate = 16000
+        mock_cfg.audio.capture_channels = 2
+        mock_cfg.audio.channels = 1
+        return mock_cfg
 
     def test_finds_stereo_mix(self):
         import modules.audio_capture as ac
-        with patch.object(ac.sd, "query_devices",
-                          return_value=self._mock_devices(["Microphone", "Stereo Mix"])):
-            self.assertEqual(ac._find_loopback_device(), 1)
+        with patch.object(ac, "cfg", self._audio_cfg()), \
+                patch.object(ac.sd, "query_devices", return_value=self._mock_devices(["Microphone", "Stereo Mix"])), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings"):
+            self.assertEqual(ac._find_loopback_device().index, 1)
 
     def test_finds_loopback_keyword(self):
         import modules.audio_capture as ac
-        with patch.object(ac.sd, "query_devices",
-                          return_value=self._mock_devices(["Microphone", "WASAPI Loopback"])):
-            self.assertEqual(ac._find_loopback_device(), 1)
+        with patch.object(ac, "cfg", self._audio_cfg()), \
+                patch.object(ac.sd, "query_devices", return_value=self._mock_devices(["Microphone", "WASAPI Loopback"])), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings"):
+            self.assertEqual(ac._find_loopback_device().index, 1)
 
     def test_raises_when_not_found(self):
         import modules.audio_capture as ac
-        with patch.object(ac.sd, "query_devices",
-                          return_value=self._mock_devices(["Microphone", "Speaker"])):
+        with patch.object(ac, "cfg", self._audio_cfg()), \
+                patch.object(ac.sd, "query_devices", return_value=self._mock_devices(["Microphone", "Speaker"])), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings"):
             with self.assertRaises(RuntimeError):
                 ac._find_loopback_device()
 
     def test_device_name_config_takes_priority(self):
         import modules.audio_capture as ac
+        with patch.object(ac, "cfg", self._audio_cfg("custom_device")), \
+                patch.object(ac.sd, "query_devices", return_value=self._mock_devices(["Stereo Mix", "MY_CUSTOM_DEVICE"])), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings"):
+            self.assertEqual(ac._find_loopback_device().index, 1)
+
+    def test_configured_candidates_preserve_passing_enumeration_order(self):
+        import modules.audio_capture as ac
+        devices = [
+            {"name": "CABLE Output", "hostapi": 0, "max_input_channels": 2, "default_samplerate": 44100},
+            {"name": "CABLE Output", "hostapi": 1, "max_input_channels": 2, "default_samplerate": 48000},
+        ]
+        with patch.object(ac, "cfg", self._audio_cfg("CABLE Output")), \
+                patch.object(ac.sd, "query_devices", return_value=devices), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}, {"name": "WASAPI"}]), \
+                patch.object(ac.sd, "check_input_settings") as check:
+            selected = ac._find_loopback_device()
+
+        self.assertEqual([call.kwargs["device"] for call in check.call_args_list], [0, 1])
+        self.assertEqual(selected.index, 0)
+        self.assertEqual(selected.host_api, "MME")
+
+    def test_configured_matches_fail_closed_when_all_incompatible(self):
+        import modules.audio_capture as ac
+        devices = [
+            {"name": "CABLE Output", "hostapi": 0, "max_input_channels": 1, "default_samplerate": 44100},
+            {"name": "CABLE Output", "hostapi": 1, "max_input_channels": 2, "default_samplerate": 48000},
+            {"name": "Stereo Mix", "hostapi": 0, "max_input_channels": 2, "default_samplerate": 44100},
+        ]
+
+        def reject_wasapi(**kwargs):
+            if kwargs["device"] == 1:
+                raise RuntimeError("Invalid sample rate")
+
+        with patch.object(ac, "cfg", self._audio_cfg("CABLE Output")), \
+                patch.object(ac.sd, "query_devices", return_value=devices), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}, {"name": "WASAPI"}]), \
+                patch.object(ac.sd, "check_input_settings", side_effect=reject_wasapi) as check:
+            with self.assertRaisesRegex(RuntimeError, "no matching endpoint supports"):
+                ac._find_loopback_device()
+
+        self.assertEqual([call.kwargs["device"] for call in check.call_args_list], [1])
+
+    def test_auto_detect_skips_incompatible_candidate(self):
+        import modules.audio_capture as ac
+        devices = self._mock_devices(["Stereo Mix", "CABLE Output"])
+
+        def first_fails(**kwargs):
+            if kwargs["device"] == 0:
+                raise RuntimeError("Invalid sample rate")
+
+        with patch.object(ac, "cfg", self._audio_cfg()), \
+                patch.object(ac.sd, "query_devices", return_value=devices), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings", side_effect=first_fails):
+            selected = ac._find_loopback_device()
+
+        self.assertEqual(selected.index, 1)
+
+    def test_diagnostics_are_read_only(self):
+        import modules.audio_capture as ac
+        devices = self._mock_devices(["CABLE Output"])
+        with patch.object(ac, "cfg", self._audio_cfg("CABLE Output")), \
+                patch.object(ac.sd, "query_devices", return_value=devices), \
+                patch.object(ac.sd, "query_hostapis", return_value=[{"name": "MME"}]), \
+                patch.object(ac.sd, "check_input_settings"), \
+                patch.object(ac.sd, "InputStream") as input_stream, \
+                patch.object(ac, "_load_silero") as load_silero, \
+                patch.object(ac.runtime_events, "emit") as emit:
+            ac._print_device_diagnostics()
+
+        input_stream.assert_not_called()
+        load_silero.assert_not_called()
+        emit.assert_not_called()
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+class TestStreamReadiness(unittest.TestCase):
+    def _cfg(self):
         mock_cfg = MagicMock()
-        mock_cfg.audio.device_name = "custom_device"
-        with patch.object(ac.sd, "query_devices",
-                          return_value=self._mock_devices(["Stereo Mix", "MY_CUSTOM_DEVICE"])), \
-             patch("modules.audio_capture.cfg", mock_cfg):
-            self.assertEqual(ac._find_loopback_device(), 1)
+        mock_cfg.audio.sample_rate = 16000
+        mock_cfg.audio.chunk_seconds = 1
+        mock_cfg.audio.volume_threshold = 0.01
+        mock_cfg.audio.vad_enabled = True
+        mock_cfg.audio.vad_silero_threshold = 0.5
+        mock_cfg.audio.capture_channels = 1
+        mock_cfg.audio.channels = 1
+        mock_cfg.audio.device_name = "CABLE Output"
+        return mock_cfg
+
+    def test_actual_stream_open_error_is_synchronous_and_skips_silero(self):
+        import threading
+        import modules.audio_capture as ac
+
+        class _FailingStream:
+            def __init__(self, **_kwargs):
+                pass
+            def __enter__(self):
+                raise RuntimeError("device busy")
+            def __exit__(self, *_exc):
+                return False
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", self._cfg()), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(3, "CABLE Output", "MME", 2, 44100)), \
+                patch.object(ac.sd, "InputStream", _FailingStream), \
+                patch.object(ac, "_load_silero") as load_silero:
+            with self.assertRaisesRegex(RuntimeError, "device busy"):
+                ac.start(queue.Queue(), stop)
+
+        self.assertTrue(stop.is_set())
+        load_silero.assert_not_called()
+
+    def test_stream_open_timeout_rejects_late_success_without_silero(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        release = threading.Event()
+
+        class _SlowStream:
+            def __init__(self, **_kwargs):
+                pass
+            def __enter__(self):
+                release.wait(timeout=2.0)
+                return self
+            def __exit__(self, *_exc):
+                return False
+
+        stop = threading.Event()
+        started = time.monotonic()
+        with patch.object(ac, "cfg", self._cfg()), \
+                patch.object(ac, "_STREAM_READY_TIMEOUT_SEC", 0.05), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(3, "CABLE Output", "MME", 2, 44100)), \
+                patch.object(ac.sd, "InputStream", _SlowStream), \
+                patch.object(ac, "_load_silero") as load_silero:
+            try:
+                with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+                    ac.start(queue.Queue(), stop)
+            finally:
+                release.set()
+
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertTrue(stop.is_set())
+        load_silero.assert_not_called()
+
+    def test_start_returns_at_stream_ready_and_gates_silero_backlog(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        captured = {}
+        release_silero = threading.Event()
+        silero_started = threading.Event()
+        vad_initialized = threading.Event()
+        processed = []
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *_exc):
+                return False
+
+        def blocked_silero(_threshold):
+            silero_started.set()
+            release_silero.wait(timeout=2.0)
+            return None
+
+        class _FakeVad:
+            def __init__(self, *_args):
+                vad_initialized.set()
+            def push(self, frame):
+                processed.append(int(frame[0]))
+            def reset_stream(self):
+                pass
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", self._cfg()), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(3, "CABLE Output", "MME", 2, 44100)), \
+                patch.object(ac.sd, "InputStream", _FakeStream), \
+                patch.object(ac, "_load_silero", side_effect=blocked_silero), \
+                patch.object(ac, "_VadState", _FakeVad):
+            thread = ac.start(queue.Queue(), stop)
+            self.assertTrue(silero_started.wait(timeout=1.0))
+            captured["callback"](np.ones((512, 1), dtype=np.float32), 512, None, None)
+            self.assertEqual(processed, [])
+
+            release_silero.set()
+            self.assertTrue(vad_initialized.wait(timeout=1.0))
+            time.sleep(0.02)
+            captured["callback"](np.full((512, 1), 7, dtype=np.float32), 512, None, None)
+            deadline = time.monotonic() + 1.0
+            while not processed and time.monotonic() < deadline:
+                time.sleep(0.01)
+            stop.set()
+            thread.join(timeout=2.0)
+
+        self.assertEqual(processed, [7])
 
 
 if __name__ == "__main__":
@@ -442,9 +698,10 @@ class TestCallbackOffloadsToWorker(unittest.TestCase):
         stop = threading.Event()
 
         with patch.object(ac, "cfg", cfg_mock), \
-                patch.object(ac, "_find_loopback_device", return_value=0), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(0, "Fake", "Test", 1, 100)), \
                 patch.object(ac.sd, "InputStream", _FakeStream):
             thread = ac.start(audio_q, stop)
+            time.sleep(0.05)
             deadline = time.monotonic() + 2.0
             while "callback" not in captured and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -484,6 +741,7 @@ class TestCallbackOffloadsToWorker(unittest.TestCase):
         cfg_mock.audio.device_name = ""
 
         captured = {}
+        vad_initialized = threading.Event()
 
         class _FakeStream:
             def __init__(self, **kwargs):
@@ -495,17 +753,19 @@ class TestCallbackOffloadsToWorker(unittest.TestCase):
 
         class _ExplodingVad:
             def __init__(self, *_args):
-                pass
+                vad_initialized.set()
             def push(self, _frame):
                 raise RuntimeError("VAD inference failed")
 
         stop = threading.Event()
         with patch.object(ac, "cfg", cfg_mock), \
-                patch.object(ac, "_find_loopback_device", return_value=0), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(0, "Fake", "Test", 1, 100)), \
                 patch.object(ac.sd, "InputStream", _FakeStream), \
                 patch.object(ac, "_load_silero", return_value=None), \
                 patch.object(ac, "_VadState", _ExplodingVad):
             thread = ac.start(queue.Queue(), stop)
+            self.assertTrue(vad_initialized.wait(timeout=2.0))
+            time.sleep(0.02)
             deadline = time.monotonic() + 2.0
             while "callback" not in captured and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -517,6 +777,261 @@ class TestCallbackOffloadsToWorker(unittest.TestCase):
             thread.join(timeout=2.0)
 
         self.assertTrue(stop.is_set(), "worker failure must stop the pipeline")
+
+    def test_overload_keeps_latest_frames_and_resets_vad_stream(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        cfg_mock = MagicMock()
+        cfg_mock.audio.sample_rate = 100
+        cfg_mock.audio.chunk_seconds = 1
+        cfg_mock.audio.volume_threshold = 0.01
+        cfg_mock.audio.vad_enabled = True
+        cfg_mock.audio.vad_silero_threshold = 0.5
+        cfg_mock.audio.capture_channels = 1
+        cfg_mock.audio.channels = 1
+        cfg_mock.audio.device_name = ""
+
+        captured = {}
+        release = threading.Event()
+        vad_initialized = threading.Event()
+        processed = []
+        resets = []
+        actions = []
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        class _BlockingVad:
+            def __init__(self, *_args):
+                vad_initialized.set()
+            def push(self, frame):
+                value = int(frame[0])
+                processed.append(value)
+                actions.append(("push", value))
+                if len(processed) == 1:
+                    release.wait(timeout=2.0)
+            def reset_stream(self):
+                resets.append(True)
+                actions.append(("reset", "overload"))
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", cfg_mock), \
+                patch.object(ac, "_FRAME_QUEUE_MAXSIZE", 2), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(0, "Fake", "Test", 1, 100)), \
+                patch.object(ac.sd, "InputStream", _FakeStream), \
+                patch.object(ac, "_load_silero", return_value=None), \
+                patch.object(ac, "_VadState", _BlockingVad):
+            thread = ac.start(queue.Queue(), stop)
+            self.assertTrue(vad_initialized.wait(timeout=2.0))
+            time.sleep(0.02)
+            deadline = time.monotonic() + 2.0
+            while "callback" not in captured and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("callback", captured)
+
+            for value in range(1, 6):
+                frame = np.full((10, 1), value, dtype=np.float32)
+                captured["callback"](frame, 10, None, None)
+                if value == 1:
+                    deadline = time.monotonic() + 1.0
+                    while not processed and time.monotonic() < deadline:
+                        time.sleep(0.01)
+            release.set()
+            deadline = time.monotonic() + 2.0
+            while len(processed) < 3 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            stop.set()
+            thread.join(timeout=2.0)
+
+        self.assertEqual(processed[0], 1)
+        self.assertEqual(processed[-2:], [4, 5])
+        self.assertTrue(resets, "VAD state must reset across dropped audio")
+        self.assertEqual(
+            actions,
+            [
+                ("push", 1),
+                ("reset", "overload"),
+                ("push", 4),
+                ("push", 5),
+            ],
+        )
+
+    def test_input_overflow_resets_once_before_next_frame(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        cfg_mock = MagicMock()
+        cfg_mock.audio.sample_rate = 16000
+        cfg_mock.audio.chunk_seconds = 1
+        cfg_mock.audio.volume_threshold = 0.01
+        cfg_mock.audio.vad_enabled = True
+        cfg_mock.audio.vad_silero_threshold = 0.5
+        cfg_mock.audio.capture_channels = 1
+        cfg_mock.audio.channels = 1
+        cfg_mock.audio.device_name = ""
+
+        captured = {}
+        vad_initialized = threading.Event()
+        processed = []
+        resets = []
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *_exc):
+                return False
+
+        class _FakeVad:
+            def __init__(self, *_args):
+                vad_initialized.set()
+            def push(self, frame):
+                processed.append(int(frame[0]))
+            def reset_stream(self):
+                resets.append(True)
+
+        class _Status:
+            def __init__(self, input_overflow):
+                self.input_overflow = input_overflow
+            def __bool__(self):
+                return True
+            def __str__(self):
+                return "input overflow" if self.input_overflow else "other status"
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", cfg_mock), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(0, "Fake", "Test", 1, 16000)), \
+                patch.object(ac.sd, "InputStream", _FakeStream), \
+                patch.object(ac, "_load_silero", return_value=None), \
+                patch.object(ac, "_VadState", _FakeVad), \
+                patch.object(ac, "metrics") as metrics:
+            thread = ac.start(queue.Queue(), stop)
+            self.assertTrue(vad_initialized.wait(timeout=1.0))
+            time.sleep(0.02)
+            captured["callback"](
+                np.full((512, 1), 1, dtype=np.float32),
+                512,
+                None,
+                _Status(True),
+            )
+            deadline = time.monotonic() + 1.0
+            while len(processed) < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+            captured["callback"](
+                np.full((512, 1), 2, dtype=np.float32),
+                512,
+                None,
+                _Status(False),
+            )
+            deadline = time.monotonic() + 1.0
+            while len(processed) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            stop.set()
+            thread.join(timeout=2.0)
+
+        self.assertEqual(processed, [1, 2])
+        self.assertEqual(len(resets), 1)
+        metrics.increment.assert_any_call("audio.input_overflow")
+        metrics.increment.assert_any_call("audio.stream_reset.input_overflow")
+
+    def test_input_overflow_reset_is_bound_to_post_gap_frame_with_backlog(self):
+        import threading
+        import time
+        import modules.audio_capture as ac
+
+        cfg_mock = MagicMock()
+        cfg_mock.audio.sample_rate = 16000
+        cfg_mock.audio.chunk_seconds = 1
+        cfg_mock.audio.volume_threshold = 0.01
+        cfg_mock.audio.vad_enabled = True
+        cfg_mock.audio.vad_silero_threshold = 0.5
+        cfg_mock.audio.capture_channels = 1
+        cfg_mock.audio.channels = 1
+        cfg_mock.audio.device_name = ""
+
+        captured = {}
+        vad_initialized = threading.Event()
+        release_first = threading.Event()
+        actions = []
+
+        class _FakeStream:
+            def __init__(self, **kwargs):
+                captured["callback"] = kwargs["callback"]
+            def __enter__(self):
+                return self
+            def __exit__(self, *_exc):
+                return False
+
+        class _BlockingVad:
+            def __init__(self, *_args):
+                vad_initialized.set()
+            def push(self, frame):
+                value = int(frame[0])
+                actions.append(("push", value))
+                if value == 1:
+                    release_first.wait(timeout=2.0)
+            def reset_stream(self):
+                actions.append(("reset", "input_overflow"))
+
+        class _OverflowStatus:
+            input_overflow = True
+            def __bool__(self):
+                return True
+            def __str__(self):
+                return "input overflow"
+
+        stop = threading.Event()
+        with patch.object(ac, "cfg", cfg_mock), \
+                patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(0, "Fake", "Test", 1, 16000)), \
+                patch.object(ac.sd, "InputStream", _FakeStream), \
+                patch.object(ac, "_load_silero", return_value=None), \
+                patch.object(ac, "_VadState", _BlockingVad):
+            thread = ac.start(queue.Queue(), stop)
+            self.assertTrue(vad_initialized.wait(timeout=1.0))
+            time.sleep(0.02)
+            for value, status in (
+                (1, None),
+                (2, None),
+                (3, None),
+                (4, _OverflowStatus()),
+            ):
+                captured["callback"](
+                    np.full((512, 1), value, dtype=np.float32),
+                    512,
+                    None,
+                    status,
+                )
+                if value == 1:
+                    deadline = time.monotonic() + 1.0
+                    while ("push", 1) not in actions and time.monotonic() < deadline:
+                        time.sleep(0.01)
+            release_first.set()
+            deadline = time.monotonic() + 1.0
+            while ("push", 4) not in actions and time.monotonic() < deadline:
+                time.sleep(0.01)
+            stop.set()
+            thread.join(timeout=2.0)
+
+        self.assertEqual(
+            actions,
+            [
+                ("push", 1),
+                ("push", 2),
+                ("push", 3),
+                ("reset", "input_overflow"),
+                ("push", 4),
+            ],
+        )
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")

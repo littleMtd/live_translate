@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "dataset_id": "natural-live-20260812-focused-v1",
+  "provenance_policy": "natural_runtime_and_derived_policy",
+  "source_artifacts": [
+    "logs/runtime_events_20260811.jsonl",
+    "logs/runtime_events_20260812.jsonl"
+  ],
+  "excluded_runs": [
+    {
+      "run_id": "20260812T082422Z-24676",
+      "reason": "annotation playback, not natural livestream"
+    },
+    {
+      "run_id": "20260812T084207Z-28184",
+      "reason": "annotation playback, not natural livestream"
+    }
+  ],
+  "cases": [
+    {
+      "id": "normal_chat",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 0},
+      "source_text": "그게 무슨 말이야",
+      "reference_output": "這話是什麼意思啊",
+      "current_output": "這話是什麼意思啊",
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness"],
+      "expected_terms": ["什麼意思"]
+    },
+    {
+      "id": "incomplete_meaning_only",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 100},
+      "source_text": "제가 저거 예전에...",
+      "reference_output": "我以前那個……",
+      "current_output": "我以前...",
+      "incomplete": true,
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness", "hallucination"],
+      "forbidden_terms": ["後來", "所以"]
+    },
+    {
+      "id": "fully_broken_stt_empty",
+      "derived_from_runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 282, "transformation": "removed the separately recoverable final clause 월요일 맛있대"},
+      "source_text": "캣툴... 요넬? 어...",
+      "reference_output": "",
+      "current_output": "貓工具……要內？呃……",
+      "expected_empty": true,
+      "recoverability": "stt_unrecoverable",
+      "dimensions": ["noise", "hallucination"],
+      "requires_activity": true,
+      "requires_audio": true,
+      "note": "Policy fixture derived from runtime sequence 282 by removing its separately recoverable final clause. No defensible text-only reconstruction remains; do not guess champion names."
+    },
+    {
+      "id": "nickname_preserve_hangul",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 19},
+      "source_text": "인어십삼님 별풍선 157개 감사합니다. 와 좋다. 인어십삼님 별풍선 157개",
+      "reference_output": "謝謝 인어십삼 送的 157 個星星氣球。哇，太棒了。인어십삼，157 個星星氣球。",
+      "current_output": "謝謝人十三送的157個星星禮物。哇，太棒了。人十三送了157個星星禮物。",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["entity", "faithfulness"],
+      "expected_terms": ["인어십삼", "157"],
+      "forbidden_terms": ["人十三"],
+      "min_term_counts": {"인어십삼": 2, "157": 2},
+      "max_korean_ratio": 0.3
+    },
+    {
+      "id": "song_title_announcement",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 57},
+      "source_text": "그녀가 말했다. 라는 토이 노래고요. 보컬은 권진아님이십니다.",
+      "reference_output": "這是 Toy 的歌《她說了》，主唱是 권진아。",
+      "current_output": "那首歌叫《她說了》，主唱是權珍雅。",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["entity", "domain", "faithfulness"],
+      "expected_terms": ["Toy", "《她說了》", "권진아"],
+      "forbidden_terms": ["權珍雅"],
+      "max_korean_ratio": 0.25
+    },
+    {
+      "id": "lyric_fragment_no_completion",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 66},
+      "source_text": "난 숨쉬고 있지만",
+      "reference_output": "我雖然還在呼吸",
+      "current_output": "我雖然還在呼吸",
+      "incomplete": true,
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness", "hallucination", "domain"],
+      "forbidden_terms": ["但是", "所以"]
+    },
+    {
+      "id": "lol_domain_literal_roll",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 54},
+      "source_text": "아니 롤 중독 치료하는 건 없나?",
+      "reference_output": "沒有治療 LoL 成癮的方法嗎？",
+      "current_output": "沒有辦法治療滾動成癮嗎？",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["domain", "faithfulness"],
+      "requires_activity": true,
+      "expected_terms": ["LoL"],
+      "forbidden_terms": ["滾動"]
+    },
+    {
+      "id": "lol_quit_ambiguity",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 58},
+      "source_text": "진짜 롤 접을 수 있게 찐신을 보여주머",
+      "reference_output": "真的讓我能戒掉 LoL，讓我看看真本事吧。",
+      "current_output": "真的讓我能退出樂團，就給點真誠的表現吧",
+      "recoverability": "partially_recoverable",
+      "dimensions": ["domain", "faithfulness", "noise"],
+      "requires_activity": true,
+      "requires_audio": true,
+      "expected_terms": ["LoL", "戒掉"],
+      "forbidden_terms": ["樂團"]
+    },
+    {
+      "id": "coherent_mixed_english",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 1012},
+      "source_text": "You receive the gift. 이게 뭐예요?",
+      "reference_output": "你收到禮物了。這是什麼啊？",
+      "current_output": "你收到禮物了。這是什麼啊？",
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness", "noise"],
+      "expected_terms": ["收到禮物", "這是什麼"]
+    },
+    {
+      "id": "broken_english_lyric_keep_korean_only",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 94},
+      "source_text": "I KEEP A CUBE FOR A LONG WAY ROUND TWO BOTTLE WHISKEY FOR THE WAY 어 내일 좀 재밌겠는데? 내일 좀 내가 좋아하는 노래 많다",
+      "reference_output": "呃，明天應該會蠻有趣的吧？明天有很多我喜歡的歌。",
+      "current_output": "我一路帶了個立方體，還有兩瓶威士忌，這條路啊～明天應該會蠻有趣的吧？明天我喜歡的歌好多喔～",
+      "recoverability": "partially_recoverable",
+      "dimensions": ["noise", "hallucination", "faithfulness", "domain"],
+      "requires_activity": true,
+      "requires_audio": true,
+      "expected_terms": ["明天", "喜歡的歌"],
+      "forbidden_terms": ["立方體", "威士忌"]
+    },
+    {
+      "id": "number_correction_preserved",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 16},
+      "source_text": "아니 그렇게 막 비싸지는 않았던 것 같아. 하나에 5백원, 아니 5천원씩 하는.",
+      "reference_output": "我覺得沒有貴成那樣。一個五百韓元，不對，是五千韓元。",
+      "current_output": "不覺得有那麼貴啊，一個才五百塊，不對，是五千塊吧。",
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness"],
+      "expected_terms": ["五百", "五千"]
+    },
+    {
+      "id": "spoken_repetition_preserved",
+      "runtime_ref": {"run_id": "20260811T173036Z-28864", "sequence_id": 21},
+      "source_text": "감사합니다 감사합니다",
+      "reference_output": "謝謝，謝謝。",
+      "current_output": "謝謝你、謝謝你",
+      "recoverability": "translatable",
+      "dimensions": ["faithfulness"],
+      "min_term_counts": {"謝謝": 2}
+    },
+    {
+      "id": "history_amount_leak",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 20},
+      "source_text": "아니 엽떡에다가 사이드 추가를 몇 개나 뭘 할 수 있는지 얼마나 많이 할 수 있는데 이거를",
+      "reference_output": "不是，這些錢都能買 엽떡 再加多少份配菜了，能買多少東西啊。",
+      "current_output": "不！兩萬塊夠買多少葉餅加配菜了，能買多少啊！這算什麼！",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["context", "hallucination", "entity", "faithfulness"],
+      "expected_terms": ["엽떡"],
+      "forbidden_terms": ["兩萬", "葉餅", "這算什麼"],
+      "max_korean_ratio": 0.2
+    },
+    {
+      "id": "role_direction_reversal",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 62},
+      "source_text": "처음에 나도 나도 갈래 따라갈래 이러면서 키마 언니 나도 데리고 가 이러면서 근데 키마 언니 진짜 순순하게 오라그래서 그래 와 채나야",
+      "reference_output": "一開始我說我也要去、也要跟，還對 Kyma 姊說『也帶我去』。結果 Kyma 姊很乾脆地叫我來，說『好啊，Chaenna，來吧』。",
+      "current_output": "一開始我也說我也要去、我也要跟去，還說要帶Kyma姊姊一起，結果Kyma姊姊真的超順從地說好，我就說：『哇，Chaenna啊！』",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["role", "context", "faithfulness"],
+      "expected_terms": ["帶我去", "Kyma", "Chaenna"],
+      "forbidden_terms": ["帶Kyma"]
+    },
+    {
+      "id": "question_subject_reversal",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 69},
+      "source_text": "바다 한번 보고 오라고요? 여러분 제가 쉬었으면 좋겠어요",
+      "reference_output": "叫我去看看海嗎？大家希望我休息一下嗎？",
+      "current_output": "叫我去看看海？各位，我真的希望你們讓我休息一下。",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["role", "faithfulness", "hallucination"],
+      "expected_terms": ["大家希望我", "嗎"],
+      "forbidden_terms": ["我真的希望你們"]
+    },
+    {
+      "id": "lol_champion_entity",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 262},
+      "source_text": "안 되겠다 띵귤은 롤 접게 해야겠다 리신 가겠습니다",
+      "reference_output": "不行了，得讓 Singgyul 戒掉 LoL。我選李星。",
+      "current_output": "不行了，得讓Singgyul別玩了，我去打麗桑卓。",
+      "recoverability": "currently_mistranslated",
+      "dimensions": ["entity", "domain", "faithfulness"],
+      "requires_activity": true,
+      "expected_terms": ["Singgyul", "LoL", "李星"],
+      "forbidden_terms": ["麗桑卓"]
+    },
+    {
+      "id": "profile_entity_positive_control",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 126},
+      "source_text": "하데스 입문 영상은 언제... 아...",
+      "reference_output": "HADES 入門影片什麼時候……啊……",
+      "current_output": "HADES入門影片是什麼時候... 啊...",
+      "incomplete": true,
+      "recoverability": "translatable",
+      "dimensions": ["entity", "faithfulness"],
+      "expected_terms": ["HADES", "入門影片"]
+    },
+    {
+      "id": "audio_required_food_mishear",
+      "runtime_ref": {"run_id": "20260812T102117Z-33412", "sequence_id": 41},
+      "source_text": "사부사부 사부사부. 사부사부사부사부 맛있겠다. 사부사부 사부사부.",
+      "reference_output": "……好像很好吃。",
+      "current_output": "師父師父，師父師父師父師父，好想吃啊。師父師父，師父師父。",
+      "recoverability": "partially_recoverable",
+      "dimensions": ["noise", "domain", "faithfulness"],
+      "requires_audio": true,
+      "expected_terms": ["好像很好吃"],
+      "forbidden_terms": ["師父"],
+      "note": "Only 맛있겠다 is textually recoverable; do not assert 샤브샤브 without audio."
+    }
+  ]
+}

@@ -4,11 +4,23 @@ from datetime import timedelta, timezone
 
 from utils.runtime_events import (
     RuntimeEventWriter,
+    _default_run_id,
     _is_cjk,
     quality_score,
     quality_severity,
+    source_proven_quality_terms,
     translation_quality,
 )
+
+
+def test_default_run_id_honors_safe_launcher_override(monkeypatch):
+    monkeypatch.setenv("LIVE_TRANSLATE_RUN_ID", "dashboard-123-4")
+    assert _default_run_id() == "dashboard-123-4"
+
+
+def test_default_run_id_rejects_control_character_override(monkeypatch):
+    monkeypatch.setenv("LIVE_TRANSLATE_RUN_ID", "bad\nrun")
+    assert _default_run_id() != "bad\nrun"
 
 
 def test_runtime_event_writer_appends_jsonl(tmp_path):
@@ -28,7 +40,7 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
     assert len(files) == 1
     assert files[0].name == "runtime_events_20260514.jsonl"
     record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["schema_version"] == 3
+    assert record["schema_version"] == 5
     assert record["event_type"] == "translation"
     assert record["run_id"] == "test-run"
     assert record["run_kind"] == "benchmark"
@@ -88,6 +100,28 @@ def test_runtime_event_writer_filename_can_use_local_date(tmp_path):
 
     files = sorted(p.name for p in tmp_path.glob("runtime_events_*.jsonl"))
     assert files == ["runtime_events_20260519.jsonl"]
+
+
+def test_runtime_event_filename_uses_same_timestamp_as_record(tmp_path):
+    timestamps = iter(
+        [
+            "2026-05-14T23:59:59.999999+00:00",
+            "2026-05-15T00:00:00+00:00",
+        ]
+    )
+    writer = RuntimeEventWriter(
+        log_dir=tmp_path,
+        run_id="test-run",
+        clock=lambda: next(timestamps),
+        filename_timezone=timezone.utc,
+    )
+
+    writer.emit("translation", source_text="x")
+
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    assert path.exists()
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["created_at"] == "2026-05-14T23:59:59.999999+00:00"
 
 
 def test_runtime_event_writer_normalizes_nonjson_values(tmp_path):
@@ -222,6 +256,25 @@ def test_translation_quality_does_not_approve_arbitrary_uppercase_words():
         assert result["target_unexpected_latin_spans"]
         assert "target_high_latin_unexpected" in result["quality_classifications"]
         assert "target_high_latin_approved_only" not in result["quality_classifications"]
+
+
+def test_translation_quality_approves_only_source_proven_pvp_rp_acronyms():
+    for source, target in (
+        ("PVP에서 이겼어요", "PVP模式獲勝了。"),
+        ("RP를 시작할게요", "現在開始RP模式。"),
+    ):
+        result = translation_quality(
+            source,
+            target,
+            approved_terms=source_proven_quality_terms(source),
+        )
+        assert result["target_unexpected_latin_spans"] == []
+        assert "target_high_latin_approved_only" in result["quality_classifications"]
+
+    for target in ("現在開始PVP競技模式。", "現在開始進行RP角色扮演。"):
+        result = translation_quality("게임을 시작할게요", target)
+        assert result["target_unexpected_latin_spans"]
+        assert result["target_approved_latin_spans"] == []
 
 
 def test_translation_quality_recognizes_structured_source_terms():

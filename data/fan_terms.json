@@ -160,6 +160,16 @@
       "rendering": "WENs",
       "aliases": ["웬즈", "wenz", "Wenz"],
       "notes": "MW:MEU fandom; use WENs in zh-TW subtitles."
+    },
+    {
+      "profile_id": "irise",
+      "group": "IRISÉ",
+      "streamer": "",
+      "fandom_of": "IRISÉ fans",
+      "term": "이제들",
+      "rendering": "IZÉ",
+      "aliases": ["이재들", "이재 여러분", "이재희 여러분", "IZÉ", "IZE"],
+      "notes": "IRISÉ fandom reference. Use IZÉ only in clear fandom context; bare 이제 normally means 現在 and must not be rewritten as the fandom name."
     }
   ]
 }

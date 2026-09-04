@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ConfigDto, CacheStats, SystemStats } from '../types/config'
+import type { ConfigDto, CacheStats, SystemStats, ProfileStatus, ExportableRun, BundleExportResult } from '../types/config'
 
 export class TauriClient {
   async getConfig(): Promise<ConfigDto> {
@@ -36,6 +36,18 @@ export class TauriClient {
 
   async pythonStatus(): Promise<boolean> {
     return invoke<boolean>('python_status')
+  }
+
+  async getProfileStatus(): Promise<ProfileStatus> {
+    return invoke<ProfileStatus>('get_profile_status')
+  }
+
+  async listExportableRuns(): Promise<ExportableRun[]> {
+    return invoke<ExportableRun[]>('list_exportable_runs')
+  }
+
+  async exportChatgptBundle(runId: string, includeAudio: boolean): Promise<BundleExportResult> {
+    return invoke<BundleExportResult>('export_chatgpt_bundle', { runId, includeAudio })
   }
 }
 

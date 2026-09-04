@@ -39,9 +39,40 @@ describe('ConfigPanel', () => {
     expect(wrapper.html()).toContain('22')
   })
 
-  it('shows restart-required note for runtime settings', () => {
+  it('documents the profile hot-reload exception', () => {
     const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
-    expect(wrapper.text()).toContain('Restart the Python pipeline')
+    expect(wrapper.text()).toContain('Profile mode and source profile hot-reload')
+  })
+
+  it('edits profile mode and renders effective runtime status', async () => {
+    const wrapper = mount(ConfigPanel, {
+      props: {
+        config: makeConfig(),
+        profileStatus: {
+          source_profile_id: 'url',
+          content_profile_id: 'isegye_lilpa',
+          effective_profile_id: 'isegye_lilpa',
+          profile_generation: 4,
+          profile_confirmation_state: 'confirmed',
+          profile_mode: 'auto',
+          activity: 'Chatting',
+          activity_source: 'automatic',
+          updated_at: 1,
+          profile_resolver_state: 'stable',
+          profile_last_detection_at: '2026-09-02T00:00:00Z',
+          profile_evidence_markers: ['url_member_moka'],
+        },
+      },
+    })
+    expect(wrapper.get('[data-testid="profile-status"]').text()).toContain('Source: url')
+    expect(wrapper.get('[data-testid="profile-status"]').text()).toContain('Resolver: stable')
+    expect(wrapper.get('[data-testid="profile-status"]').text()).toContain('url_member_moka')
+    await wrapper.get('[data-testid="profile-mode"]').setValue('manual')
+    await wrapper.find('button.primary').trigger('click')
+    const saved = wrapper.emitted('save')![0][0] as ConfigDto
+    expect(saved.translation.profile_mode).toBe('manual')
+    expect(wrapper.get('[data-testid="profile-status"]').text()).toContain('Effective: isegye_lilpa')
+    expect(wrapper.get('[data-testid="profile-status"]').text()).toContain('Activity: Chatting')
   })
 
   it('shows translation engine settings', () => {
@@ -99,6 +130,7 @@ describe('ConfigPanel', () => {
     const emitted = wrapper.emitted('save')
     expect(emitted).toBeTruthy()
     expect((emitted![0][0] as ConfigDto).subtitle.font_size).toBe(22)
+    expect((emitted![0][0] as ConfigDto).stt.use_profile_glossary).toBe(true)
   })
 
   it('emitted save config is a deep clone not the original', async () => {

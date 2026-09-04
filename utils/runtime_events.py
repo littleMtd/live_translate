@@ -19,10 +19,9 @@ log = get_logger("runtime_events")
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
-# Version 3 adds run-kind and Git provenance. The fields are additive, while the
-# version lets offline tooling distinguish records written before provenance was
-# available.
-_SCHEMA_VERSION = 3
+# Version 5 adds the record-only translation-shadow pairing contract. Fields
+# remain additive; analyzers continue accepting older JSONL records without it.
+_SCHEMA_VERSION = 5
 _RUN_KINDS = frozenset({"live", "test", "replay", "benchmark"})
 
 # Types that are safe to pass straight to json.dumps without coercion.
@@ -34,6 +33,9 @@ def _utc_now_iso() -> str:
 
 
 def _default_run_id() -> str:
+    requested = os.getenv("LIVE_TRANSLATE_RUN_ID", "").strip()
+    if requested and len(requested) <= 200 and not any(ord(char) < 32 or ord(char) == 127 for char in requested):
+        return requested
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"{timestamp}-{os.getpid()}"
 
@@ -155,16 +157,20 @@ class RuntimeEventWriter:
 
     @property
     def path(self) -> Path:
-        day = _date_from_clock(self._clock(), self._filename_timezone)
+        return self._path_for_timestamp(self._clock())
+
+    def _path_for_timestamp(self, timestamp: Any) -> Path:
+        day = _date_from_clock(timestamp, self._filename_timezone)
         return self._log_dir / f"runtime_events_{day}.jsonl"
 
     def emit(self, event_type: str, **fields: Any) -> None:
         normalized_fields = {key: _normalize_value(value) for key, value in fields.items()}
+        created_at = self._clock()
         record = {
             "schema_version": _SCHEMA_VERSION,
             "event_type": event_type,
             "run_id": self.run_id,
-            "created_at": self._clock(),
+            "created_at": created_at,
             **normalized_fields,
             "run_kind": self.run_kind,
             "git_sha": self.git_sha,
@@ -179,7 +185,7 @@ class RuntimeEventWriter:
                 "schema_version": _SCHEMA_VERSION,
                 "event_type": event_type,
                 "run_id": self.run_id,
-                "created_at": self._clock(),
+                "created_at": created_at,
                 "run_kind": self.run_kind,
                 "git_sha": self.git_sha,
                 "git_dirty": self.git_dirty,
@@ -194,7 +200,7 @@ class RuntimeEventWriter:
         try:
             with self._lock:
                 self._log_dir.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as handle:
+                with self._path_for_timestamp(created_at).open("a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
         except Exception as exc:
             if not self._warned:
@@ -259,6 +265,16 @@ _SOURCE_EMAIL_RE = re.compile(
 )
 _SOURCE_STRUCTURED_TRIM = " \t\r\n()[]{}<>\"'.,!?;:，。！？；：、"
 _RECOGNIZED_LATIN_OUTPUT_TERMS = frozenset({"KTV", "Spotify"})
+_SOURCE_PROVEN_ACRONYMS = frozenset({"PVP", "RP"})
+
+
+def source_proven_quality_terms(source: str) -> frozenset[str]:
+    """Return narrow source-backed terms for telemetry classification only."""
+    return frozenset(
+        match.group(0)
+        for match in _SOURCE_LATIN_TOKEN_RE.finditer(source or "")
+        if match.group(0) in _SOURCE_PROVEN_ACRONYMS
+    )
 
 
 def _source_machine_terms(source: str) -> set[str]:

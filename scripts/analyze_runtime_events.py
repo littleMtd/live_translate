@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime
@@ -15,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import cfg
+from utils.chatgpt_bundle import bundle_event_paths
 from utils.text_heuristics import STT_TEMPLATE_CONDITIONAL_PHRASES, STT_TEMPLATE_HARD_PHRASES
 
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
@@ -23,6 +26,8 @@ QUEUE_LATENCY_FIELDS = (
     "queue_wait_ms",
     "output_delay_ms",
     "predecessor_stall_ms",
+    "sentence_queue_wait_ms",
+    "activity_snapshot_to_worker_ms",
 )
 API_DIAGNOSTIC_FIELDS = (
     "api_total_wall_ms",
@@ -50,21 +55,35 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def analyze_runtime_events(
-    path: Path | None = None,
+    path: Path | list[Path] | tuple[Path, ...] | None = None,
     top_n: int = 10,
     labels_path: Path | None = None,
     run_kind: str = "live",
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    event_path = path or latest_event_file(DEFAULT_LOG_DIR)
-    if event_path is None or not event_path.exists():
+    requested = path or latest_event_file(DEFAULT_LOG_DIR)
+    requested_paths = (
+        list(dict.fromkeys(Path(item) for item in requested))
+        if isinstance(requested, (list, tuple))
+        else ([Path(requested)] if requested is not None else [])
+    )
+    event_paths = list(
+        dict.fromkeys(
+            child
+            for requested_path in requested_paths
+            for child in (bundle_event_paths(requested_path) if requested_path.is_dir() else [requested_path])
+        )
+    )
+    if not event_paths or any(not event_path.exists() for event_path in event_paths):
         return {
-            "event_path": str(event_path) if event_path else "",
+            "event_path": (
+                str(event_paths[0]) if len(event_paths) == 1 else [str(p) for p in event_paths]
+            ) if event_paths else "",
             "available": False,
             "reason": "runtime event file does not exist",
         }
 
-    all_events = list(_read_events(event_path))
+    all_events = [event for event_path in event_paths for event in _read_events(event_path)]
     normalized_run_kind = str(run_kind or "live").strip().lower()
     if normalized_run_kind not in {"live", "test", "replay", "benchmark", "all"}:
         raise ValueError("run_kind must be live, test, replay, benchmark, or all")
@@ -89,9 +108,15 @@ def analyze_runtime_events(
             if str(event.get("run_id") or "") == resolved_run_id
         ]
     translation_events = [event for event in events if event.get("event_type") == "translation"]
+    translation_shadow_events = [
+        event for event in events if event.get("event_type") == "translation_shadow"
+    ]
     fallback_events = [event for event in events if event.get("event_type") == "translation_fallback"]
     stt_events = [event for event in events if event.get("event_type") == "stt"]
     audio_events = [event for event in events if event.get("event_type") == "audio"]
+    audio_startup_events = [
+        event for event in events if event.get("event_type") == "audio_startup"
+    ]
     sentence_hold_shadow_events = [
         event
         for event in events
@@ -112,6 +137,9 @@ def analyze_runtime_events(
         for event in events
         if event.get("event_type") == "activity_publication"
     ]
+    sentence_events = [
+        event for event in events if event.get("event_type") == "sentence"
+    ]
     labels = load_run_labels(labels_path)
     latencies = [
         latency
@@ -130,7 +158,11 @@ def analyze_runtime_events(
     )
 
     return {
-        "event_path": str(event_path),
+        "event_path": (
+            str(event_paths[0])
+            if len(event_paths) == 1
+            else [str(event_path) for event_path in event_paths]
+        ),
         "available": True,
         "run_kind_filter": normalized_run_kind,
         "run_id_filter": resolved_run_id or None,
@@ -141,9 +173,11 @@ def analyze_runtime_events(
         ),
         "total_events": len(events),
         "translation_events": len(translation_events),
+        "translation_shadow_events": len(translation_shadow_events),
         "translation_fallback_events": len(fallback_events),
         "stt_events": len(stt_events),
         "audio_events": len(audio_events),
+        "audio_startup_events": len(audio_startup_events),
         "sentence_hold_shadow_events": len(sentence_hold_shadow_events),
         "sentence_early_cut_events": len(sentence_early_cut_events),
         "activity_shadow_events": len(activity_shadow_events),
@@ -172,7 +206,8 @@ def analyze_runtime_events(
             for classification, count in quality_classifications.most_common()
         ],
         "audio_summary": _audio_summary(audio_events),
-        "stt_summary": _stt_summary(stt_events),
+        "audio_startup_summary": _audio_startup_summary(audio_startup_events),
+        "stt_summary": _stt_summary(stt_events, top_n),
         "sentence_hold_shadow": _sentence_hold_shadow_summary(
             sentence_hold_shadow_events,
             top_n,
@@ -187,6 +222,12 @@ def analyze_runtime_events(
             activity_publication_events,
             translation_events,
         ),
+        "activity_temporal": _activity_temporal_summary(
+            sentence_events,
+            translation_events,
+            activity_publication_events,
+            top_n,
+        ),
         "latency_ms": _latency_summary(latencies),
         "queue_latency_ms": _queue_latency_summary(translation_events),
         "retry_summary": _retry_summary(translation_events),
@@ -194,15 +235,22 @@ def analyze_runtime_events(
             translation_events,
             top_n,
         ),
-        "api_diagnostics": _api_diagnostics_summary(translation_events),
+        "api_diagnostics": _api_diagnostics_summary(translation_events, top_n),
         "dependency_markers": _dependency_marker_summary(translation_events),
         "translation_fallback": _fallback_summary(fallback_events),
+        "translation_model_shadow": _translation_model_shadow_summary(
+            translation_events,
+            translation_shadow_events,
+            stt_events,
+            top_n,
+        ),
         "analyzer_output_notes": ANALYZER_OUTPUT_NOTES,
         "runs": _run_summaries(
             translation_events,
             fallback_events,
             stt_events,
             audio_events,
+            audio_startup_events,
             activity_shadow_events,
             activity_publication_events,
             labels,
@@ -274,6 +322,7 @@ def _run_summaries(
     fallback_events: list[dict[str, Any]],
     stt_events: list[dict[str, Any]],
     audio_events: list[dict[str, Any]],
+    audio_startup_events: list[dict[str, Any]],
     activity_shadow_events: list[dict[str, Any]],
     activity_publication_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
@@ -288,6 +337,11 @@ def _run_summaries(
     grouped_audio: dict[str, list[dict[str, Any]]] = {}
     for event in audio_events:
         grouped_audio.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
+    grouped_audio_startup: dict[str, list[dict[str, Any]]] = {}
+    for event in audio_startup_events:
+        grouped_audio_startup.setdefault(
+            str(event.get("run_id") or "unknown"), []
+        ).append(event)
     grouped_fallback: dict[str, list[dict[str, Any]]] = {}
     for event in fallback_events:
         grouped_fallback.setdefault(str(event.get("run_id") or "unknown"), []).append(event)
@@ -355,8 +409,11 @@ def _run_summaries(
                         if (latency := _float_or_none(event.get("latency_ms"))) is not None
                     ]
                 ),
-                "stt": _stt_summary(grouped_stt.get(run_id, [])),
+                "stt": _stt_summary(grouped_stt.get(run_id, []), top_n),
                 "audio": _audio_summary(grouped_audio.get(run_id, [])),
+                "audio_startup": _audio_startup_summary(
+                    grouped_audio_startup.get(run_id, [])
+                ),
                 "success_latency_ms": _latency_summary(
                     [
                         latency
@@ -371,7 +428,7 @@ def _run_summaries(
                     run_events,
                     top_n,
                 ),
-                "api_diagnostics": _api_diagnostics_summary(run_events),
+                "api_diagnostics": _api_diagnostics_summary(run_events, top_n),
                 "dependency_markers": _dependency_marker_summary(run_events),
                 "translation_fallback": _fallback_summary(grouped_fallback.get(run_id, [])),
                 "activity_shadow": _activity_shadow_summary(
@@ -822,6 +879,140 @@ def _activity_publication_summary(
     }
 
 
+def _activity_temporal_summary(
+    sentence_events: list[dict[str, Any]],
+    translation_events: list[dict[str, Any]],
+    publication_events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    """Join sentence enqueue evidence to final translations without guessing.
+
+    Legacy records without sentence ids/snapshots are reported as unavailable,
+    never as safe or mismatched. Publication checks use only events at or before
+    the snapshot timestamp, rather than run-wide existence.
+    """
+    sentences: dict[tuple[str, str], dict[str, Any]] = {}
+    duplicate_sentence_ids: set[tuple[str, str]] = set()
+    for event in sentence_events:
+        key = (str(event.get("run_id") or ""), str(event.get("sentence_id") or ""))
+        if not key[1]:
+            continue
+        if key in sentences:
+            duplicate_sentence_ids.add(key)
+        sentences[key] = event
+
+    publications_by_run: dict[str, list[dict[str, Any]]] = {}
+    for event in publication_events:
+        publications_by_run.setdefault(str(event.get("run_id") or ""), []).append(event)
+    for grouped in publications_by_run.values():
+        grouped.sort(
+            key=lambda event: (
+                parsed.timestamp()
+                if (parsed := _parse_datetime(event.get("created_at"))) is not None
+                else float("-inf")
+            )
+        )
+
+    counts: Counter[str] = Counter()
+    samples: list[dict[str, Any]] = []
+    queue_ages: list[float] = []
+    snapshot_ages: list[float] = []
+    evidence_available = 0
+    for event in translation_events:
+        run_id = str(event.get("run_id") or "")
+        sentence_id = str(event.get("sentence_id") or "")
+        if not sentence_id:
+            counts["legacy_temporal_evidence_unavailable"] += 1
+            continue
+        key = (run_id, sentence_id)
+        sentence = sentences.get(key)
+        if sentence is None:
+            counts["orphan_translation"] += 1
+            continue
+        if key in duplicate_sentence_ids:
+            counts["duplicate_sentence_identity"] += 1
+            continue
+        evidence_available += 1
+        for field, target in (
+            ("sentence_queue_wait_ms", queue_ages),
+            ("activity_snapshot_to_worker_ms", snapshot_ages),
+        ):
+            value = _float_or_none(event.get(field))
+            if value is not None:
+                target.append(value)
+
+        mismatch = any(
+            event.get(field) != sentence.get(field)
+            for field in (
+                "activity_id",
+                "activity_kind",
+                "activity_source",
+                "activity_effective_generation",
+                "activity_cohort_epoch",
+            )
+        )
+        if mismatch:
+            counts["applied_snapshot_differs_from_enqueued_snapshot"] += 1
+        else:
+            counts["snapshot_binding_match"] += 1
+
+        worker_id = str(event.get("worker_observed_activity_id") or "")
+        if worker_id != str(sentence.get("activity_id") or ""):
+            if mismatch:
+                counts["activity_changed_while_queued_mismatch"] += 1
+            else:
+                counts["activity_changed_while_queued_bound_safely"] += 1
+
+        capsule_id = str(event.get("activity_capsule_activity_id") or "")
+        expected_capsule_id = str(event.get("activity_id") or "")
+        if capsule_id != expected_capsule_id:
+            counts["capsule_identity_mismatch"] += 1
+
+        if event.get("activity_source") == "automatic":
+            captured = _parse_datetime(event.get("activity_snapshot_captured_at_utc"))
+            prior = [
+                publication
+                for publication in publications_by_run.get(run_id, [])
+                if captured is not None
+                and (created := _parse_datetime(publication.get("created_at"))) is not None
+                and created <= captured
+            ]
+            state = prior[-1] if prior else None
+            if state is None or state.get("action") != "published":
+                counts["automatic_without_prior_publication"] += 1
+            elif str(state.get("activity_id") or "") != expected_capsule_id:
+                counts["automatic_publication_identity_mismatch"] += 1
+            elif int(state.get("effective_generation") or 0) != int(
+                event.get("activity_effective_generation") or 0
+            ):
+                counts["automatic_generation_mismatch"] += 1
+
+        if mismatch and len(samples) < top_n:
+            samples.append(
+                {
+                    "run_id": run_id,
+                    "sentence_id": sentence_id,
+                    "enqueued_activity_id": sentence.get("activity_id", ""),
+                    "applied_activity_id": event.get("activity_id", ""),
+                }
+            )
+
+    return {
+        "translation_count": len(translation_events),
+        "evidence_available_count": evidence_available,
+        "evidence_coverage_rate": round(
+            evidence_available / len(translation_events), 4
+        ) if translation_events else 0.0,
+        "status_counts": [
+            {"status": status, "count": count}
+            for status, count in counts.most_common()
+        ],
+        "sentence_queue_wait_ms": _latency_summary(queue_ages),
+        "snapshot_to_worker_ms": _latency_summary(snapshot_ages),
+        "mismatch_samples": samples,
+    }
+
+
 def _time_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     timestamps = [
         parsed
@@ -854,6 +1045,384 @@ def _has_template_phrase(event: dict[str, Any]) -> bool:
 
 
 _TEMPLATE_PHRASES = tuple(STT_TEMPLATE_HARD_PHRASES) + tuple(STT_TEMPLATE_CONDITIONAL_PHRASES)
+
+
+def _shadow_text_normalized(value: object) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    return " ".join(text.split()).casefold()
+
+
+def _shadow_branch_quality(events: list[dict[str, Any]]) -> dict[str, Any]:
+    count = len(events)
+    if not count:
+        return {
+            "successful_events": 0,
+            "qa_flag_rate": None,
+            "canonicalization_rate": None,
+            "unexpected_hangul_rate": None,
+            "japanese_residue_rate": None,
+        }
+
+    def rate(predicate) -> float:
+        return round(sum(1 for event in events if predicate(event)) / count, 4)
+
+    return {
+        "successful_events": count,
+        "qa_flag_rate": rate(
+            lambda event: bool(event.get("quality_flags"))
+            or bool(event.get("translation_qa_flags"))
+            or event.get("translation_qa_disposition") == "suspicious"
+        ),
+        "canonicalization_rate": rate(
+            lambda event: int(event.get("correction_count") or 0) > 0
+        ),
+        "unexpected_hangul_rate": rate(
+            lambda event: "target_has_unexpected_hangul"
+            in (event.get("quality_classifications") or [])
+        ),
+        "japanese_residue_rate": rate(
+            lambda event: "target_has_japanese" in (event.get("quality_flags") or [])
+        ),
+        "missing_canonical_event_rate": rate(
+            lambda event: bool(event.get("target_missing_canonical_terms"))
+        ),
+        "normalized_disposition_rate": rate(
+            lambda event: event.get("translation_qa_disposition") == "normalized"
+        ),
+    }
+
+
+def _shadow_problem_categories(event: dict[str, Any]) -> set[str]:
+    categories: set[str] = set()
+    if event.get("translation_qa_flags"):
+        categories.add("qa_flag")
+    if event.get("target_missing_canonical_terms"):
+        categories.add("missing_canonical")
+    if "target_has_unexpected_hangul" in (
+        event.get("quality_classifications") or []
+    ):
+        categories.add("unexpected_hangul")
+    if "target_has_japanese" in (event.get("quality_flags") or []):
+        categories.add("japanese_residue")
+    return categories
+
+
+def _shadow_cost_summary(
+    events: list[dict[str, Any]],
+    *,
+    audio_seconds: float | None,
+) -> dict[str, Any]:
+    costs = [_float_or_none(event.get("api_cost_usd")) for event in events]
+    observed = [cost for cost in costs if cost is not None]
+    complete = bool(events) and len(observed) == len(events)
+    total = round(sum(observed), 10)
+    return {
+        "requests": len(events),
+        "observed_requests": len(observed),
+        "coverage": round(len(observed) / len(events), 4) if events else None,
+        "total_usd": total,
+        "usd_per_request": round(total / len(events), 10) if complete else None,
+        "usd_per_audio_hour": (
+            round(total / (audio_seconds / 3600.0), 8)
+            if complete and audio_seconds and audio_seconds > 0
+            else None
+        ),
+    }
+
+
+def _shadow_audio_seconds(
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+    stt_events: list[dict[str, Any]],
+) -> tuple[float | None, dict[str, Any]]:
+    wanted = {
+        (str(production.get("run_id") or ""), str(utterance_id))
+        for production, _shadow in pairs
+        for utterance_id in (
+            list(production.get("source_utterance_ids") or [])
+            + list(production.get("evidence_source_utterance_ids") or [])
+        )
+        if utterance_id
+    }
+    durations: dict[tuple[str, str], set[float]] = {}
+    for event in stt_events:
+        key = (
+            str(event.get("run_id") or ""),
+            str(event.get("utterance_id") or ""),
+        )
+        if key not in wanted or event.get("status") != "success":
+            continue
+        seconds = _float_or_none(event.get("audio_seconds"))
+        overlap = _float_or_none(event.get("overlap_seconds")) or 0.0
+        if seconds is not None:
+            durations.setdefault(key, set()).add(round(max(0.0, seconds - overlap), 6))
+    missing = wanted - durations.keys()
+    ambiguous = {key for key, values in durations.items() if len(values) != 1}
+    complete = bool(wanted) and not missing and not ambiguous
+    total = (
+        sum(next(iter(values)) for values in durations.values())
+        if complete
+        else None
+    )
+    return total, {
+        "utterance_ids": len(wanted),
+        "joined": len(durations),
+        "missing": len(missing),
+        "ambiguous": len(ambiguous),
+        "audio_seconds": round(total, 3) if total is not None else None,
+        "coverage_complete": complete,
+    }
+
+
+def _translation_model_shadow_summary(
+    production_events: list[dict[str, Any]],
+    shadow_events: list[dict[str, Any]],
+    stt_events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    production_by_id: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in production_events:
+        shadow_id = str(event.get("shadow_id") or "")
+        if shadow_id:
+            production_by_id.setdefault(
+                (str(event.get("run_id") or ""), shadow_id), []
+            ).append(event)
+    shadow_by_id: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in shadow_events:
+        shadow_id = str(event.get("shadow_id") or "")
+        if shadow_id:
+            shadow_by_id.setdefault(
+                (str(event.get("run_id") or ""), shadow_id), []
+            ).append(event)
+
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    mismatches = 0
+    for key in production_by_id.keys() & shadow_by_id.keys():
+        if len(production_by_id[key]) != 1 or len(shadow_by_id[key]) != 1:
+            continue
+        production = production_by_id[key][0]
+        shadow = shadow_by_id[key][0]
+        if (
+            int(
+                production.get("sequence_id")
+                if production.get("sequence_id") is not None
+                else -1
+            )
+            != int(
+                shadow.get("sequence_id")
+                if shadow.get("sequence_id") is not None
+                else -2
+            )
+            or str(production.get("sentence_id") or "")
+            != str(shadow.get("sentence_id") or "")
+            or str(production.get("shadow_context_fingerprint") or "")
+            != str(shadow.get("context_fingerprint") or "")
+            or str(production.get("shadow_history_fingerprint") or "")
+            != str(shadow.get("history_fingerprint") or "")
+        ):
+            mismatches += 1
+            continue
+        pairs.append((production, shadow))
+
+    comparable = [
+        pair
+        for pair in pairs
+        if pair[0].get("status") == "success"
+        and pair[0].get("result_source") == "api"
+        and str(pair[0].get("route_id") or "").startswith("openrouter:")
+        and pair[1].get("status") == "success"
+    ]
+    qwen_events = [production for production, _shadow in comparable]
+    flash_events = [shadow for _production, shadow in comparable]
+    qwen_success_count = sum(
+        production.get("status") == "success"
+        and production.get("result_source") == "api"
+        and str(production.get("route_id") or "").startswith("openrouter:")
+        for production, _shadow in pairs
+    )
+    flash_success_count = sum(
+        shadow.get("status") == "success" for _production, shadow in pairs
+    )
+    pair_count = len(pairs)
+    candidate_only_regressions = []
+    for production, shadow in pairs:
+        categories = sorted(
+            _shadow_problem_categories(shadow)
+            - _shadow_problem_categories(production)
+        )
+        if categories:
+            candidate_only_regressions.append(
+                {
+                    "run_id": production.get("run_id"),
+                    "shadow_id": shadow.get("shadow_id"),
+                    "sequence_id": production.get("sequence_id"),
+                    "sentence_id": production.get("sentence_id"),
+                    "categories": categories,
+                }
+            )
+    audio_seconds, audio = _shadow_audio_seconds(comparable, stt_events)
+
+    similarities = []
+    disagreement_rows = []
+    for production, shadow in comparable:
+        qwen_text = str(production.get("target_text") or "")
+        flash_text = str(shadow.get("target_text") or "")
+        similarity = difflib.SequenceMatcher(
+            None,
+            _shadow_text_normalized(qwen_text),
+            _shadow_text_normalized(flash_text),
+        ).ratio()
+        similarities.append(similarity)
+        disagreement_rows.append(
+            {
+                "run_id": production.get("run_id"),
+                "shadow_id": shadow.get("shadow_id"),
+                "utterance_id": (
+                    shadow.get("utterance_id")
+                    or next(iter(production.get("source_utterance_ids") or []), "")
+                ),
+                "sequence_id": production.get("sequence_id"),
+                "sentence_id": production.get("sentence_id"),
+                "profile_id": production.get("profile_id"),
+                "activity_id": production.get("activity_id"),
+                "activity_kind": production.get("activity_kind"),
+                "context_fingerprint": shadow.get("context_fingerprint"),
+                "history_fingerprint": shadow.get("history_fingerprint"),
+                "similarity": round(similarity, 4),
+                "source_stt": _short(str(production.get("source_text") or ""), 160),
+                "qwen_target": _short(qwen_text, 160),
+                "flash_target": _short(flash_text, 160),
+                "qwen_qa_flags": production.get("translation_qa_flags", []),
+                "flash_qa_flags": shadow.get("translation_qa_flags", []),
+                "qwen_corrections": production.get("corrections", []),
+                "flash_corrections": shadow.get("corrections", []),
+                "qwen": {
+                    "target": _short(qwen_text, 160),
+                    "latency_ms": production.get("api_total_wall_ms"),
+                    "cost_usd": production.get("api_cost_usd"),
+                    "qa_flags": production.get("translation_qa_flags", []),
+                    "corrections": production.get("corrections", []),
+                },
+                "flash": {
+                    "target": _short(flash_text, 160),
+                    "latency_ms": shadow.get("latency_ms"),
+                    "input_tokens": shadow.get("token_prompt"),
+                    "cache_hit_tokens": shadow.get("token_cache_hit"),
+                    "cache_miss_tokens": shadow.get("token_cache_miss"),
+                    "output_tokens": shadow.get("token_output"),
+                    "cost_usd": shadow.get("api_cost_usd"),
+                    "qa_flags": shadow.get("translation_qa_flags", []),
+                    "corrections": shadow.get("corrections", []),
+                },
+            }
+        )
+    disagreement_rows.sort(
+        key=lambda row: (
+            row["similarity"],
+            str(row.get("run_id") or ""),
+            int(row.get("sequence_id") or 0),
+        )
+    )
+
+    flash_prompt = sum(
+        int(event.get("token_prompt") or 0) for event in flash_events
+    )
+    flash_cache_hit = sum(
+        int(event.get("token_cache_hit") or 0) for event in flash_events
+    )
+    accepted = [
+        event
+        for event in production_events
+        if event.get("shadow_enqueue_status") == "accepted"
+    ]
+    return {
+        "available": bool(production_by_id or shadow_by_id),
+        "production_envelopes": len(production_by_id),
+        "enqueue_status": _count_by(
+            [event for event in production_events if event.get("shadow_enqueue_status")],
+            "shadow_enqueue_status",
+        ),
+        "accepted": len(accepted),
+        "terminal_events": len(shadow_events),
+        "complete_pairs": len(pairs),
+        "comparable_success_pairs": len(comparable),
+        "missing_terminal": len(production_by_id.keys() - shadow_by_id.keys()),
+        "orphan_terminal": len(shadow_by_id.keys() - production_by_id.keys()),
+        "duplicate_production": sum(len(rows) > 1 for rows in production_by_id.values()),
+        "duplicate_terminal": sum(len(rows) > 1 for rows in shadow_by_id.values()),
+        "integrity_mismatches": mismatches,
+        "shadow_outcomes": _count_by(shadow_events, "status"),
+        "success_rate": {
+            "denominator": pair_count,
+            "qwen": round(qwen_success_count / pair_count, 4) if pair_count else None,
+            "flash": round(flash_success_count / pair_count, 4) if pair_count else None,
+            "flash_minus_qwen": (
+                round((flash_success_count - qwen_success_count) / pair_count, 4)
+                if pair_count
+                else None
+            ),
+        },
+        "record_only_violations": sum(
+            1
+            for event in shadow_events
+            if not event.get("record_only")
+            or event.get("subtitle_eligible")
+            or event.get("production_state_write_eligible")
+        ),
+        "latency_ms": {
+            "qwen": _latency_summary(
+                [
+                    value
+                    for event in qwen_events
+                    if (value := _float_or_none(event.get("api_total_wall_ms")))
+                    is not None
+                ]
+            ),
+            "flash": _latency_summary(
+                [
+                    value
+                    for event in flash_events
+                    if (value := _float_or_none(event.get("latency_ms"))) is not None
+                ]
+            ),
+            "flash_minus_qwen": _latency_summary(
+                [
+                    flash_latency - qwen_latency
+                    for production, shadow in comparable
+                    if (qwen_latency := _float_or_none(production.get("api_total_wall_ms")))
+                    is not None
+                    and (flash_latency := _float_or_none(shadow.get("latency_ms")))
+                    is not None
+                ]
+            ),
+        },
+        "cost": {
+            "qwen": _shadow_cost_summary(qwen_events, audio_seconds=audio_seconds),
+            "flash": _shadow_cost_summary(flash_events, audio_seconds=audio_seconds),
+        },
+        "audio_normalization": audio,
+        "flash_prompt_cache_hit_ratio": (
+            round(flash_cache_hit / flash_prompt, 4) if flash_prompt else None
+        ),
+        "quality": {
+            "qwen": _shadow_branch_quality(qwen_events),
+            "flash": _shadow_branch_quality(flash_events),
+            "candidate_only_regression_count": len(candidate_only_regressions),
+            "candidate_only_regressions": candidate_only_regressions,
+        },
+        "output_similarity": {
+            **_latency_summary([value * 100 for value in similarities]),
+            "unit": "percent",
+            "exact_match_rate": (
+                round(
+                    sum(value == 1.0 for value in similarities) / len(similarities),
+                    4,
+                )
+                if similarities
+                else None
+            ),
+        },
+        "highest_disagreement": disagreement_rows[:top_n],
+    }
 
 
 def _latency_summary(latencies: list[float]) -> dict[str, float | int]:
@@ -1019,7 +1588,113 @@ def _retry_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+def _deepseek_output_guard_summary(
+    events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    deepseek_attempts = 0
+    deepseek_provider_failures = 0
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        chain = [
+            attempt
+            for attempt in (event.get("attempts") or [])
+            if isinstance(attempt, dict)
+        ]
+        for index, attempt in enumerate(chain):
+            if str(attempt.get("engine") or "") != "deepseek":
+                continue
+            deepseek_attempts += 1
+            if str(attempt.get("failure_scope") or "") == "provider":
+                deepseek_provider_failures += 1
+            guard = attempt.get("output_guard")
+            if not isinstance(guard, dict) or not guard.get("reason"):
+                continue
+            later = chain[index + 1 :]
+            qwen_attempted = any(
+                str(candidate.get("engine") or "") == "openrouter"
+                for candidate in later
+            )
+            qwen_success = any(
+                str(candidate.get("engine") or "") == "openrouter"
+                and str(candidate.get("status") or "") == "success"
+                for candidate in later
+            )
+            qwen_selected = any(
+                str(candidate.get("engine") or "") == "openrouter"
+                and str(candidate.get("status") or "") == "success"
+                and bool(candidate.get("selected_for_output"))
+                for candidate in later
+            )
+            rows.append(
+                {
+                    "run_id": event.get("run_id"),
+                    "sequence_id": event.get("sequence_id"),
+                    "sentence_id": event.get("sentence_id"),
+                    "reason": str(guard.get("reason") or ""),
+                    "candidate_raw_output": _short(
+                        str(guard.get("candidate_raw_output") or "")
+                    ),
+                    "candidate_output": _short(
+                        str(guard.get("candidate_output") or "")
+                    ),
+                    "candidate_corrections": guard.get(
+                        "candidate_corrections", []
+                    ),
+                    "selected_output": _short(str(event.get("target_text") or "")),
+                    "qwen_attempted_after_guard": qwen_attempted,
+                    "qwen_success_after_guard": qwen_success,
+                    "qwen_selected_after_guard": qwen_selected,
+                    "guarded_attempt_selected": bool(
+                        attempt.get("selected_for_output")
+                    ),
+                    "candidate_quality_flags": guard.get(
+                        "candidate_quality_flags", []
+                    ),
+                    "candidate_quality_classifications": guard.get(
+                        "candidate_quality_classifications", []
+                    ),
+                    "candidate_raw_quality_flags": guard.get(
+                        "candidate_raw_quality_flags", []
+                    ),
+                    "candidate_raw_quality_classifications": guard.get(
+                        "candidate_raw_quality_classifications", []
+                    ),
+                }
+            )
+    return {
+        "deepseek_attempts": deepseek_attempts,
+        "deepseek_provider_failures": deepseek_provider_failures,
+        "guarded_attempts": len(rows),
+        "guard_rate": (
+            round(len(rows) / deepseek_attempts, 4)
+            if deepseek_attempts
+            else 0.0
+        ),
+        "by_reason": _count_by(rows, "reason"),
+        "qwen_selected_after_guard": sum(
+            bool(row["qwen_selected_after_guard"]) for row in rows
+        ),
+        "qwen_attempted_after_guard": sum(
+            bool(row["qwen_attempted_after_guard"]) for row in rows
+        ),
+        "qwen_success_after_guard": sum(
+            bool(row["qwen_success_after_guard"]) for row in rows
+        ),
+        "guard_without_qwen_attempt": sum(
+            not bool(row["qwen_attempted_after_guard"]) for row in rows
+        ),
+        "guarded_attempt_selected_violations": sum(
+            bool(row["guarded_attempt_selected"]) for row in rows
+        ),
+        "samples": rows[:top_n],
+    }
+
+
+def _api_diagnostics_summary(
+    events: list[dict[str, Any]],
+    top_n: int = 20,
+) -> dict[str, Any]:
     attempt_chains = [
         event.get("attempts")
         for event in events
@@ -1063,6 +1738,7 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         if (_float_or_none(event.get("api_total_wall_ms")) or 0) >= 10_000
     ]
     cost_rows: list[tuple[str, float]] = []
+    selected_cost_rows: list[tuple[str, float]] = []
     for event in events:
         chain = [
             attempt
@@ -1073,10 +1749,34 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         for source in sources:
             cost = _float_or_none(source.get("api_cost_usd"))
             if cost is not None:
-                cost_rows.append((str(source.get("engine") or ""), cost))
+                row = (str(source.get("engine") or ""), cost)
+                cost_rows.append(row)
+                if not chain or bool(source.get("selected_for_output")):
+                    selected_cost_rows.append(row)
     cost_by_engine: dict[str, float] = {}
     for engine, cost in cost_rows:
         cost_by_engine[engine] = cost_by_engine.get(engine, 0.0) + cost
+    selected_cost_by_engine: dict[str, float] = {}
+    for engine, cost in selected_cost_rows:
+        selected_cost_by_engine[engine] = (
+            selected_cost_by_engine.get(engine, 0.0) + cost
+        )
+    all_attempt_cost = {
+        "observations": len(cost_rows),
+        "total": round(sum(cost for _, cost in cost_rows), 8),
+        "by_engine": [
+            {"engine": engine, "cost_usd": round(cost, 8)}
+            for engine, cost in sorted(cost_by_engine.items())
+        ],
+    }
+    selected_attempt_cost = {
+        "observations": len(selected_cost_rows),
+        "total": round(sum(cost for _, cost in selected_cost_rows), 8),
+        "by_engine": [
+            {"engine": engine, "cost_usd": round(cost, 8)}
+            for engine, cost in sorted(selected_cost_by_engine.items())
+        ],
+    }
     return {
         "total_events": len(events),
         "api_events": len(api_events),
@@ -1103,12 +1803,11 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             "api_error_message_class",
         ),
         "cost_usd": {
-            "observations": len(cost_rows),
-            "total": round(sum(cost for _, cost in cost_rows), 8),
-            "by_engine": [
-                {"engine": engine, "cost_usd": round(cost, 8)}
-                for engine, cost in sorted(cost_by_engine.items())
-            ],
+            # Preserve the established flat keys for existing consumers while
+            # making the post-cutover all-attempt/selected split explicit.
+            **all_attempt_cost,
+            "all_attempts": all_attempt_cost,
+            "selected_attempts": selected_attempt_cost,
         },
         "attempt_chain": {
             "events_with_chain": len(attempt_chains),
@@ -1126,6 +1825,7 @@ def _api_diagnostics_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             "by_engine": _count_by(attempts, "engine"),
             "by_status": _count_by(attempts, "status"),
         },
+        "deepseek_output_guard": _deepseek_output_guard_summary(events, top_n),
         "fields": {
             field: _latency_summary(
                 [
@@ -1276,7 +1976,184 @@ def _empty_target_summary(events: list[dict[str, Any]], top_n: int) -> dict[str,
     }
 
 
-def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+_CONTEXT_PROVENANCE_FIELDS = (
+    "context_source_utterance_id",
+    "context_age_ms",
+    "context_text_len",
+    "context_source_engine",
+    "context_source_avg_logprob",
+    "context_source_no_speech_prob",
+)
+
+
+def _context_provenance_sample(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Return bounded, text-free identifiers for provenance diagnostics."""
+    return {
+        "run_id": str(event.get("run_id") or ""),
+        "created_at": str(event.get("created_at") or ""),
+        "utterance_id": str(event.get("utterance_id") or ""),
+        "attempt_index": event.get("attempt_index"),
+        "context_source_utterance_id": event.get("context_source_utterance_id"),
+        "context_source_engine": event.get("context_source_engine"),
+        "context_age_ms": event.get("context_age_ms"),
+        "context_text_len": event.get("context_text_len"),
+        "context_source_avg_logprob": event.get("context_source_avg_logprob"),
+        "context_source_no_speech_prob": event.get("context_source_no_speech_prob"),
+    }
+
+
+def _stt_context_provenance_summary(
+    events: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    telemetry_events = [
+        event
+        for event in events
+        if any(field in event for field in _CONTEXT_PROVENANCE_FIELDS)
+    ]
+    included = [
+        event
+        for event in events
+        if event.get("request_sent") is True and event.get("context_included") is True
+    ]
+    covered_included = [
+        event
+        for event in included
+        if any(field in event for field in _CONTEXT_PROVENANCE_FIELDS)
+    ]
+    with_provenance = [
+        event for event in covered_included if event.get("context_source_utterance_id")
+    ]
+    missing_provenance = [
+        event for event in covered_included if not event.get("context_source_utterance_id")
+    ]
+
+    successful_groq_sources: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+    for index, event in enumerate(events):
+        if event.get("engine") != "groq" or event.get("status") != "success":
+            continue
+        key = (
+            str(event.get("run_id") or ""),
+            str(event.get("utterance_id") or ""),
+        )
+        if key[1]:
+            successful_groq_sources.setdefault(key, []).append((index, event))
+
+    groq_source_requests = []
+    non_groq_source_requests = []
+    joined = []
+    join_failures = []
+    self_or_future = []
+    invalid_age = []
+    stale = []
+    confidence_missing = []
+    threshold_ineligible = []
+    metadata_mismatch = []
+    ages = []
+    max_age_ms = max(
+        0.0,
+        float(getattr(cfg.stt, "context_max_age_sec", 30.0) or 0.0) * 1000,
+    )
+    avg_threshold = float(
+        getattr(cfg.stt, "context_avg_logprob_threshold", -0.7)
+    )
+    no_speech_threshold = float(
+        getattr(cfg.stt, "context_no_speech_threshold", 0.3)
+    )
+
+    for index, event in enumerate(events):
+        if event not in with_provenance:
+            continue
+        source_engine = str(event.get("context_source_engine") or "")
+        age_ms = _float_or_none(event.get("context_age_ms"))
+        if age_ms is not None:
+            ages.append(age_ms)
+            if age_ms < 0:
+                invalid_age.append(event)
+            elif max_age_ms > 0 and age_ms > max_age_ms:
+                stale.append(event)
+
+        if source_engine != "groq":
+            non_groq_source_requests.append(event)
+            continue
+        groq_source_requests.append(event)
+
+        source_avg = _float_or_none(event.get("context_source_avg_logprob"))
+        source_no_speech = _float_or_none(
+            event.get("context_source_no_speech_prob")
+        )
+        if source_avg is None or source_no_speech is None:
+            confidence_missing.append(event)
+        elif source_avg < avg_threshold or source_no_speech > no_speech_threshold:
+            threshold_ineligible.append(event)
+
+        key = (
+            str(event.get("run_id") or ""),
+            str(event.get("context_source_utterance_id") or ""),
+        )
+        candidates = successful_groq_sources.get(key, [])
+        earlier = [(position, source) for position, source in candidates if position < index]
+        if not earlier:
+            join_failures.append(event)
+            if (
+                key[1] == str(event.get("utterance_id") or "")
+                or any(position >= index for position, _ in candidates)
+            ):
+                self_or_future.append(event)
+            continue
+
+        _, source = earlier[-1]
+        joined.append(event)
+        logged_avg = _float_or_none(source.get("avg_logprob"))
+        logged_no_speech = _float_or_none(source.get("no_speech_prob"))
+        if (
+            logged_avg != source_avg
+            or logged_no_speech != source_no_speech
+        ):
+            metadata_mismatch.append(event)
+
+    violation_events = []
+    for event in (
+        missing_provenance
+        + join_failures
+        + stale
+        + invalid_age
+        + confidence_missing
+        + threshold_ineligible
+        + metadata_mismatch
+    ):
+        if event not in violation_events:
+            violation_events.append(event)
+
+    groq_count = len(groq_source_requests)
+    return {
+        "telemetry_available": bool(telemetry_events),
+        "telemetry_event_count": len(telemetry_events),
+        "included_requests": len(included),
+        "telemetry_covered_included_requests": len(covered_included),
+        "legacy_included_requests": len(included) - len(covered_included),
+        "provenance_present": len(with_provenance),
+        "provenance_missing": len(missing_provenance),
+        "by_source_engine": _count_by(with_provenance, "context_source_engine"),
+        "groq_source_requests": groq_count,
+        "non_groq_source_requests": len(non_groq_source_requests),
+        "groq_source_joined": len(joined),
+        "groq_source_join_failures": len(join_failures),
+        "groq_source_join_rate": round(len(joined) / groq_count, 4) if groq_count else None,
+        "self_or_future_source_count": len(self_or_future),
+        "invalid_age_count": len(invalid_age),
+        "stale_by_current_policy_count": len(stale),
+        "source_confidence_missing_count": len(confidence_missing),
+        "source_threshold_ineligible_by_current_policy_count": len(threshold_ineligible),
+        "source_metadata_mismatch_count": len(metadata_mismatch),
+        "context_age_ms": _latency_summary(ages),
+        "violation_samples": [
+            _context_provenance_sample(event) for event in violation_events[:top_n]
+        ],
+    }
+
+
+def _stt_summary(events: list[dict[str, Any]], top_n: int = 10) -> dict[str, Any]:
     request_events = [event for event in events if bool(event.get("request_sent"))]
     requests_sent = len(request_events)
     return {
@@ -1294,6 +2171,7 @@ def _stt_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "by_status": _count_by(events, "status"),
         "by_reason": _count_by([event for event in events if event.get("reason")], "reason"),
         "by_engine": _count_by(events, "engine"),
+        "context_provenance": _stt_context_provenance_summary(events, top_n),
         "latency_ms": _latency_summary(
             [
                 latency
@@ -1668,6 +2546,33 @@ def _audio_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _audio_startup_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    formats = [
+        {
+            "requested_format": (
+                f"{event.get('requested_samplerate')}Hz/"
+                f"{event.get('capture_channels')}ch/"
+                f"{event.get('dtype') or 'unknown'}"
+            )
+        }
+        for event in events
+    ]
+    return {
+        "total": len(events),
+        "by_status": _count_by(events, "status"),
+        "by_host_api": _count_by(events, "host_api"),
+        "by_device_name": _count_by(events, "device_name"),
+        "by_requested_format": _count_by(formats, "requested_format"),
+        "stream_ready_ms": _latency_summary(
+            [
+                latency
+                for event in events
+                if (latency := _float_or_none(event.get("stream_ready_ms"))) is not None
+            ]
+        ),
+    }
+
+
 def _request_budget(requests_sent: int) -> dict[str, float | int]:
     limit = max(0, int(getattr(cfg.stt, "groq_daily_request_limit", 0) or 0))
     remaining = max(0, limit - requests_sent) if limit else 0
@@ -1710,7 +2615,8 @@ def _print_report(report: dict[str, Any]) -> None:
         f"Translations: {report['translation_events']} | "
         f"Fallback: {report.get('translation_fallback_events', 0)} | "
         f"STT: {report['stt_events']} | "
-        f"Audio: {report.get('audio_events', 0)}"
+        f"Audio: {report.get('audio_events', 0)} | "
+        f"Audio startups: {report.get('audio_startup_events', 0)}"
     )
     print(f"Run IDs: {', '.join(report['run_ids'])}")
     print(
@@ -1727,6 +2633,7 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"API diagnostics: {report['api_diagnostics']}")
     print(f"Dependency markers: {report['dependency_markers']}")
     print(f"Translation fallback: {report['translation_fallback']}")
+    print(f"Translation model shadow: {report['translation_model_shadow']}")
     print(f"Sentence hold shadow: {report['sentence_hold_shadow']}")
     print(f"Sentence early cut: {report['sentence_early_cut']}")
     print(f"Empty targets: {report['empty_targets']['total']}")
@@ -1739,12 +2646,17 @@ def _print_report(report: dict[str, Any]) -> None:
         f"reasons={report['stt_summary']['by_reason']}"
     )
     print(
+        "STT context provenance: "
+        f"{report['stt_summary']['context_provenance']}"
+    )
+    print(
         "Audio summary: "
         f"chunks={report['audio_summary']['total']} | "
         f"cuts={report['audio_summary']['by_cut_reason']} | "
         f"adaptive={report['audio_summary']['by_adaptive_active']} | "
         f"seconds={report['audio_summary']['audio_seconds']}"
     )
+    print(f"Audio startup summary: {report['audio_startup_summary']}")
     if report.get("runs"):
         print("\nRuns:")
         for run in report["runs"]:
@@ -1756,6 +2668,7 @@ def _print_report(report: dict[str, Any]) -> None:
                 f"status={run['status_breakdown']}, "
                 f"stt={run['stt']['by_status']}, "
                 f"audio_cuts={run['audio']['by_cut_reason']}, "
+                f"audio_startup={run['audio_startup']}, "
                 f"success_latency={run['success_latency_ms']}, "
                 f"queue_latency={run['queue_latency_ms']}, "
                 f"retry_rate={run['retry_summary']['retry_rate']}, "
@@ -1784,7 +2697,13 @@ def _print_report(report: dict[str, Any]) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze runtime translation event JSONL logs.")
-    parser.add_argument("--events", type=Path, default=None, help="Path to runtime_events_YYYYMMDD.jsonl.")
+    parser.add_argument(
+        "--events",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="One or more runtime_events_YYYYMMDD.jsonl paths.",
+    )
     parser.add_argument("--labels", type=Path, default=None, help="Optional JSON map of run_id to labels/notes.")
     parser.add_argument("--top", type=int, default=10, help="Number of sample rows per report section.")
     parser.add_argument(

@@ -45,6 +45,13 @@ SENTENCE_COMPLETE_ENDINGS = tuple(
 SENTENCE_INCOMPLETE_ENDINGS = tuple(
     sorted(
         [
+            # Embedded-question / uncertainty clauses require a following
+            # predicate in ordinary Korean (for example ``받을지 정하다``).
+            # Keep these ahead of the generic sentence-final ``지`` rule by
+            # owning them as incomplete endings.
+            "을지",
+            "는지",
+            "인지",
             "는데",
             "니까",
             "거든",

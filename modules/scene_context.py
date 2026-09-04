@@ -21,14 +21,15 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import secrets
 import sys
 import threading
 import time
 import unicodedata
-from collections import Counter
-from dataclasses import dataclass
+from collections import Counter, deque
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 from ctypes import wintypes
@@ -49,6 +50,14 @@ from modules.scene_vision import (
     VisionProvider,
     VisionProviderFailure,
     build_vision_provider,
+)
+from modules.profile_context import (
+    ContentProfileConsensus,
+    ParsedProfileIdentity,
+    build_profile_identity_prompt,
+    parse_profile_identity_evidence,
+    profile_resolution_status,
+    profile_state,
 )
 from utils.logger import get_logger
 from utils.runtime_events import runtime_events
@@ -114,6 +123,7 @@ class WindowResolution:
     identity: WindowIdentity | None
     title_changed: bool = False
     matched_platform: str = ""
+    ownership_changed: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,6 +228,53 @@ def _platform_for_title(title: str) -> str:
     return ""
 
 
+def _browser_title_allowed(title: str) -> bool:
+    configured = getattr(cfg.scene, "browser_title_markers", None)
+    if configured is None:
+        configured = (
+            getattr(cfg.scene, "chrome_title_marker", "google chrome"),
+        )
+    markers = tuple(
+        str(marker or "").strip().casefold()
+        for marker in configured
+        if str(marker or "").strip()
+    )
+    return not markers or any(marker in title.casefold() for marker in markers)
+
+
+def _process_executable_name(pid: int) -> str:
+    """Return a process basename without exposing its path to telemetry."""
+    if sys.platform != "win32" or pid <= 0:
+        return ""
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(
+            handle,
+            0,
+            buffer,
+            ctypes.byref(size),
+        ):
+            return ""
+        return os.path.basename(buffer.value).casefold()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _browser_process_allowed(pid: int) -> bool:
+    configured = getattr(cfg.scene, "browser_process_names", ())
+    allowed = {
+        os.path.basename(str(name or "")).strip().casefold()
+        for name in configured
+        if str(name or "").strip()
+    }
+    return bool(allowed) and _process_executable_name(pid) in allowed
+
+
 def _inspect_window(hwnd: int) -> WindowIdentity | None:
     """Read current identity. Numeric HWND reuse is rejected by other fields."""
     if sys.platform != "win32":
@@ -233,16 +290,14 @@ def _inspect_window(hwnd: int) -> WindowIdentity | None:
     platform = _platform_for_title(title)
     if not title or not class_name or bbox is None:
         return None
-    marker = str(
-        getattr(cfg.scene, "chrome_title_marker", "google chrome") or ""
-    ).casefold()
     if class_name != _CHROME_WINDOW_CLASS:
         return None
-    if marker and marker not in title.casefold():
+    pid = _window_pid(user32, hwnd)
+    if not _browser_process_allowed(pid):
         return None
     return WindowIdentity(
         hwnd=int(hwnd),
-        pid=_window_pid(user32, hwnd),
+        pid=pid,
         class_name=class_name,
         platform=platform,
         title=title,
@@ -269,6 +324,60 @@ def _enum_platform_candidates() -> list[WindowIdentity]:
     return results
 
 
+def _diagnose_window_candidates() -> dict[str, int | str]:
+    """Return bounded counters explaining an empty candidate set.
+
+    Titles, HWNDs, process IDs, and geometry are intentionally excluded from
+    telemetry.  The diagnostic is best-effort and never makes a window
+    eligible; capture remains fail closed.
+    """
+    if sys.platform != "win32":
+        return {"window_failure_reason": "unsupported_platform"}
+    user32 = _user32()
+    counts = {
+        "platform_title_windows": 0,
+        "supported_browser_windows": 0,
+        "minimized_platform_windows": 0,
+    }
+    enum_proc_type = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        wintypes.HWND,
+        wintypes.LPARAM,
+    )
+
+    @enum_proc_type
+    def enum_proc(hwnd, _lparam):
+        title = _window_text(user32, int(hwnd) if hwnd else 0)
+        if not title:
+            return True
+        platform = _platform_for_title(title)
+        if platform:
+            counts["platform_title_windows"] += 1
+        class_name = _window_class(user32, int(hwnd) if hwnd else 0)
+        supported = (
+            class_name == _CHROME_WINDOW_CLASS
+            and _browser_process_allowed(
+                _window_pid(user32, int(hwnd) if hwnd else 0)
+            )
+        )
+        if supported:
+            counts["supported_browser_windows"] += 1
+        if platform and supported and user32.IsIconic(hwnd):
+            counts["minimized_platform_windows"] += 1
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    if counts["minimized_platform_windows"]:
+        reason = "platform_window_minimized"
+    elif counts["platform_title_windows"]:
+        reason = "platform_window_not_capturable"
+    elif counts["supported_browser_windows"]:
+        reason = "platform_title_not_matched"
+    else:
+        reason = "supported_browser_window_not_found"
+    return {"window_failure_reason": reason, **counts}
+
+
 class SafeWindowResolver:
     """Session lock with fail-closed multi-window and identity validation."""
 
@@ -277,10 +386,17 @@ class SafeWindowResolver:
         *,
         enumerate_windows: Callable[[], list[WindowIdentity]] = _enum_platform_candidates,
         inspect_window: Callable[[int], WindowIdentity | None] = _inspect_window,
+        diagnose_windows: Callable[[], dict[str, int | str]] | None = None,
     ):
         self._enumerate = enumerate_windows
         self._inspect = inspect_window
+        self._diagnose = diagnose_windows or (
+            _diagnose_window_candidates
+            if enumerate_windows is _enum_platform_candidates
+            else lambda: {}
+        )
         self._locked: WindowIdentity | None = None
+        self.last_failure_diagnostics: dict[str, int | str] = {}
         self.window_generation = 0
 
     @property
@@ -299,6 +415,10 @@ class SafeWindowResolver:
             candidate for candidate in self._enumerate() if candidate.platform
         ]
         if len(candidates) > 1:
+            self.last_failure_diagnostics = {
+                "window_failure_reason": "multiple_platform_windows",
+                "eligible_platform_windows": len(candidates),
+            }
             self._replace_lock(None)
             return WindowResolution("multiple_candidates", None)
         if not candidates:
@@ -311,16 +431,34 @@ class SafeWindowResolver:
                     and current.class_name == self._locked.class_name
                     and not current.platform
                 ):
-                    self._replace_lock(None)
+                    self.last_failure_diagnostics = {
+                        "window_failure_reason": "player_not_visible"
+                    }
                     return WindowResolution(
-                        "wrong_tab",
+                        "player_not_visible",
                         None,
                         title_changed=True,
                     )
             self._replace_lock(None)
+            try:
+                self.last_failure_diagnostics = dict(self._diagnose())
+            except Exception:
+                self.last_failure_diagnostics = {
+                    "window_failure_reason": "diagnostic_unavailable"
+                }
             return WindowResolution("window_invalid", None)
 
         candidate = candidates[0]
+        self.last_failure_diagnostics = {}
+        ownership_changed = bool(
+            self._locked
+            and (
+                self._locked.hwnd,
+                self._locked.pid,
+                self._locked.class_name,
+            )
+            != (candidate.hwnd, candidate.pid, candidate.class_name)
+        )
         title_changed = bool(
             self._locked
             and self._locked.stable_key == candidate.stable_key
@@ -346,6 +484,7 @@ class SafeWindowResolver:
             candidate,
             title_changed=title_changed,
             matched_platform=candidate.platform,
+            ownership_changed=ownership_changed,
         )
 
     def validate(self, expected: WindowIdentity) -> WindowResolution:
@@ -364,9 +503,11 @@ class SafeWindowResolver:
                 and current.class_name == expected.class_name
                 and not current.platform
             ):
-                self._replace_lock(None)
+                self.last_failure_diagnostics = {
+                    "window_failure_reason": "player_not_visible"
+                }
                 return WindowResolution(
-                    "wrong_tab",
+                    "player_not_visible",
                     None,
                     title_changed=True,
                 )
@@ -873,6 +1014,8 @@ class SceneContextUpdater:
         resolver: SafeWindowResolver | None = None,
         capture_backend: WindowCaptureBackend | None = None,
         vision_provider: VisionProvider | None = None,
+        profile_vision_provider: VisionProvider | None = None,
+        profile_resolution_enabled: bool | None = None,
         query: Callable[[bytes], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
         utc_now: Callable[[], datetime] | None = None,
@@ -901,6 +1044,46 @@ class SceneContextUpdater:
             if query is not None
             else build_vision_provider(_QUESTION)
         )
+        injected_activity_provider = vision_provider is not None or query is not None
+        self._profile_enabled = (
+            bool(profile_resolution_enabled)
+            if profile_resolution_enabled is not None
+            else bool(getattr(cfg.scene, "resolve_content_profile", True))
+            and not injected_activity_provider
+        )
+        self._profile_vision = profile_vision_provider
+        self._profile_vision_injected = profile_vision_provider is not None
+        self._profile_registry_identity = profile_state.registry.identity
+        if self._profile_enabled and self._profile_vision is None:
+            self._profile_vision = build_vision_provider(
+                build_profile_identity_prompt(profile_state.registry)
+            )
+        self._profile_consensus = ContentProfileConsensus()
+        self._profile_next_call_at: float | None = None
+        self._profile_fast_gap = float(
+            getattr(cfg.scene, "profile_identity_fast_call_gap_sec", 5.0)
+        )
+        self._profile_stable_gap = float(
+            getattr(cfg.scene, "profile_identity_stable_call_gap_sec", 15.0)
+        )
+        self._profile_schema_retry_limit = int(
+            getattr(cfg.scene, "profile_identity_schema_retry_limit", 1)
+        )
+        self._profile_max_attempts_per_minute = int(
+            getattr(cfg.scene, "profile_identity_max_attempts_per_minute", 12)
+        )
+        self._profile_attempt_times: deque[float] = deque()
+        self._profile_provider_failure_streak = 0
+        self._profile_recovery_clear_sec = float(
+            getattr(cfg.scene, "profile_identity_recovery_clear_sec", 15.0)
+        )
+        self._profile_recovery_started_at: float | None = None
+        self._profile_expiry = float(
+            getattr(cfg.scene, "profile_identity_expiry_sec", 300.0)
+        )
+        self._profile_confirmed_at: float | None = None
+        self._profile_observation_suspended_at: float | None = None
+        self._profile_resolver_state = "startup"
         self._clock = clock
         self._utc_now = utc_now or (lambda: datetime.now(timezone.utc))
         self._event_sink = event_sink
@@ -1033,16 +1216,24 @@ class SceneContextUpdater:
             confidence=self._confirmed.confidence,
             evidence_count=self._confirmed.evidence_count,
             activity_kind=self._confirmed.activity_kind,
+            resolver_generation=self.resolver_generation,
+            window_generation=self._resolver.window_generation,
+            effective_generation=self.effective_generation,
         )
 
     def _sync_publication(self, reason: str, *, emit: bool = True) -> None:
         publication = self._publication_value()
-        publication_changed = self._publication_store.replace(publication)
         effective_identity = self._effective_identity()
         effective_changed = effective_identity != self._last_effective_identity
         if effective_changed:
             self.effective_generation += 1
             self._last_effective_identity = effective_identity
+        if publication is not None:
+            publication = replace(
+                publication,
+                effective_generation=self.effective_generation,
+            )
+        publication_changed = self._publication_store.replace(publication)
         if not emit or not (publication_changed or effective_changed):
             return
         effective_source, effective_activity_id = effective_identity
@@ -1107,6 +1298,9 @@ class SceneContextUpdater:
             self._last_distinct_evidence_at = None
             if paused:
                 self._confirmed = None
+                if self._profile_enabled:
+                    self._profile_consensus.reset()
+                    profile_state.clear_content("pipeline_paused")
             self._sync_publication(
                 "pipeline_paused" if paused else "pipeline_resumed"
             )
@@ -1116,6 +1310,9 @@ class SceneContextUpdater:
             self._stopped = True
             self.resolver_generation += 1
             self._confirmed = None
+            if self._profile_enabled:
+                self._profile_consensus.reset()
+                profile_state.clear_content("pipeline_stopped")
             self._sync_publication("pipeline_stopped")
 
     def _expire_if_needed(self) -> None:
@@ -1159,6 +1356,20 @@ class SceneContextUpdater:
     def _handle_invalid_window(self, resolution: WindowResolution) -> None:
         now = self._clock()
         previous_status = self._last_window_status
+        if resolution.status in {"player_not_visible", "wrong_tab"}:
+            self._mark_profile_observation_suspended(now)
+            if resolution.status != previous_status:
+                self._emit(
+                    window_status="player_not_visible",
+                    matched_platform=resolution.matched_platform,
+                    title_match=False,
+                    title_changed=resolution.title_changed,
+                    capture_status="not_attempted",
+                    discard_reason="observation_suspended",
+                    **self._resolver.last_failure_diagnostics,
+                )
+            self._last_window_status = "player_not_visible"
+            return
         self._mark_invalid_source(now, resolution.status)
         if resolution.status != previous_status:
             self._emit(
@@ -1168,10 +1379,54 @@ class SceneContextUpdater:
                 title_changed=resolution.title_changed,
                 capture_status="not_attempted",
                 discard_reason=resolution.status,
+                **self._resolver.last_failure_diagnostics,
             )
         self._last_window_status = resolution.status
 
+    def _mark_profile_observation_suspended(self, now: float) -> None:
+        """Retain confirmed content while its owning browser HWND is alive."""
+        self._last_window_status = "player_not_visible"
+        self._consensus.reset()
+        self._last_distinct_evidence_at = None
+        self._prev_thumb = None
+        self._pending_change = True
+        if not self._profile_enabled:
+            return
+        first_observation = self._profile_observation_suspended_at is None
+        if first_observation:
+            self._profile_observation_suspended_at = now
+        self._profile_consensus.reset(self._resolver.window_generation)
+        self._profile_next_call_at = None
+        self._profile_resolver_state = "observation_suspended"
+        self._profile_recovery_started_at = None
+        if first_observation:
+            prior_status = profile_resolution_status.current()
+            self._emit_profile_resolution(
+                status="suspended",
+                reason="player_not_visible",
+                last_detection_at=prior_status.get("profile_last_detection_at", ""),
+                state_transition="visible_to_observation_suspended",
+                activation_decision="retain_confirmed_profile",
+                window_generation=self._resolver.window_generation,
+                registry_generation=profile_state.registry.version,
+                **profile_state.current().as_metadata(),
+            )
+
+    def _resume_profile_observation(self, now: float) -> None:
+        suspended_at = self._profile_observation_suspended_at
+        if suspended_at is None:
+            return
+        if self._profile_confirmed_at is not None:
+            self._profile_confirmed_at += max(0.0, now - suspended_at)
+        self._profile_observation_suspended_at = None
+        self._profile_next_call_at = None
+        self._profile_resolver_state = "resumed"
+
     def _mark_invalid_source(self, now: float, status: str) -> None:
+        if status in {"player_not_visible", "wrong_tab"}:
+            self._mark_profile_observation_suspended(now)
+            return
+        had_profile_content = bool(profile_state.current().content_profile_id)
         if self._confirmed is not None and self._invalid_until is None:
             self._invalid_until = now + self._invalid_window_ttl
         self._last_window_status = status
@@ -1179,16 +1434,481 @@ class SceneContextUpdater:
         self._last_distinct_evidence_at = None
         self._prev_thumb = None
         self._pending_change = True
+        if self._profile_enabled:
+            self._profile_consensus.reset()
+            profile_state.clear_content(status)
+            self._profile_next_call_at = None
+            self._profile_resolver_state = status
+            self._profile_recovery_started_at = None
+            self._profile_observation_suspended_at = None
+            if had_profile_content:
+                self._emit_profile_resolution(
+                status="invalidated",
+                reason=status,
+                state_transition="window_to_invalid",
+                activation_decision="fallback_to_source",
+                window_generation=self._resolver.window_generation,
+                registry_generation=profile_state.registry.version,
+                **profile_state.current().as_metadata(),
+            )
         self._sync_publication("invalid_window")
         self._expire_if_needed()
 
-    def _clear_for_window_generation(self, reason: str) -> None:
+    def _clear_for_window_generation(
+        self,
+        reason: str,
+        *,
+        retain_profile: bool = False,
+    ) -> None:
         """A confirmed activity is scoped to exactly one window generation."""
+        had_profile_content = bool(profile_state.current().content_profile_id)
         self._confirmed = None
         self._invalid_until = None
         self._open_set_identities.clear()
         self._open_set_identity_cap_exhausted = False
+        if self._profile_enabled:
+            self._profile_consensus.reset(self._resolver.window_generation)
+            if not retain_profile:
+                profile_state.clear_content(reason)
+            self._profile_next_call_at = None
+            self._profile_resolver_state = (
+                "revalidating_visible_player" if retain_profile else "window_changed"
+            )
+            self._profile_recovery_started_at = None
+            self._profile_observation_suspended_at = None
+            if had_profile_content and not retain_profile:
+                self._emit_profile_resolution(
+                status="invalidated",
+                reason=reason,
+                state_transition="window_generation_changed",
+                activation_decision="fallback_to_source",
+                window_generation=self._resolver.window_generation,
+                registry_generation=profile_state.registry.version,
+                **profile_state.current().as_metadata(),
+            )
         self._sync_publication(reason)
+
+    def _schedule_profile_resolution(
+        self,
+        now: float,
+        state: str,
+        *,
+        stable: bool,
+        gap: float | None = None,
+    ) -> None:
+        self._profile_resolver_state = state
+        self._profile_next_call_at = now + (
+            gap
+            if gap is not None
+            else self._profile_stable_gap if stable else self._profile_fast_gap
+        )
+
+    def _emit_profile_resolution(self, **fields: object) -> None:
+        fields.setdefault("resolver_state", self._profile_resolver_state)
+        fields.setdefault("last_detection_at", self._utc_now().isoformat())
+        fields.setdefault("matched_markers", [])
+        fields.setdefault("marker_strengths", [])
+        profile_resolution_status.replace(**fields)
+        self._event_sink("profile_resolution", **fields)
+
+    def _reserve_profile_attempt(self, now: float, capacity: int) -> bool:
+        cutoff = now - 60.0
+        while self._profile_attempt_times and self._profile_attempt_times[0] <= cutoff:
+            self._profile_attempt_times.popleft()
+        if len(self._profile_attempt_times) + capacity > self._profile_max_attempts_per_minute:
+            return False
+        self._profile_attempt_times.extend(now for _ in range(capacity))
+        return True
+
+    def _release_unused_profile_attempts(self, reserved: int, used: int) -> None:
+        for _ in range(max(0, reserved - used)):
+            self._profile_attempt_times.pop()
+
+    def _enter_profile_recovery(
+        self,
+        now: float,
+        state: str,
+        *,
+        reason: str,
+        gap: float | None = None,
+    ) -> bool:
+        if self._profile_recovery_started_at is None:
+            self._profile_recovery_started_at = now
+        cleared = False
+        if (
+            profile_state.current().content_profile_id
+            and now - self._profile_recovery_started_at >= self._profile_recovery_clear_sec
+        ):
+            profile_state.clear_content(reason)
+            self._profile_confirmed_at = None
+            self._profile_consensus.reset(self._resolver.window_generation)
+            cleared = True
+        self._schedule_profile_resolution(now, state, stable=False, gap=gap)
+        return cleared
+
+    def _leave_profile_recovery(self) -> None:
+        self._profile_recovery_started_at = None
+        self._profile_provider_failure_streak = 0
+
+    def _expire_profile_if_needed(self, now: float) -> None:
+        if (
+            not self._profile_enabled
+            or self._profile_confirmed_at is None
+            or self._profile_observation_suspended_at is not None
+            or now - self._profile_confirmed_at < self._profile_expiry
+        ):
+            return
+        self._profile_confirmed_at = None
+        self._profile_consensus.reset(self._resolver.window_generation)
+        profile_state.clear_content("profile_expired")
+        self._profile_next_call_at = None
+        self._profile_resolver_state = "expired"
+        self._profile_recovery_started_at = None
+
+    def _resolve_content_profile(
+        self,
+        frame: CaptureFrame,
+        identity: WindowIdentity,
+        *,
+        now: float,
+        resolver_generation: int,
+        window_generation: int,
+    ) -> None:
+        if not self._profile_enabled or self._profile_vision is None:
+            return
+        if not frame.content_crop:
+            return
+        if profile_state.current().mode == "manual":
+            self._profile_consensus.reset(window_generation)
+            return
+        registry = profile_state.registry
+        if registry.identity != self._profile_registry_identity:
+            self._profile_registry_identity = registry.identity
+            self._profile_consensus.reset(window_generation)
+            self._profile_confirmed_at = None
+            profile_state.clear_content("profile_registry_changed")
+            self._profile_next_call_at = None
+            self._profile_resolver_state = "registry_changed"
+            self._profile_recovery_started_at = None
+            if not self._profile_vision_injected:
+                self._profile_vision = build_vision_provider(
+                    build_profile_identity_prompt(registry)
+                )
+        starting_snapshot = profile_state.current()
+        self._expire_profile_if_needed(now)
+        if self._profile_next_call_at is not None and now < self._profile_next_call_at:
+            return
+        validation = self._resolver.validate(identity)
+        discard = self._window_discard_reason(
+            validation,
+            resolver_generation=resolver_generation,
+            window_generation=window_generation,
+        )
+        if discard:
+            profile_state.clear_content(discard)
+            self._profile_consensus.reset(window_generation)
+            return
+        started = self._clock()
+        request_started_at = self._utc_now().isoformat()
+        retry_count = 0
+        request_diagnostics: list[VisionDiagnostics] = []
+        result: str | VisionClassification
+        while True:
+            attempt_now = self._clock()
+            route_capacity = max(
+                1,
+                len(getattr(self._profile_vision, "route_identities", ())),
+            )
+            if not self._reserve_profile_attempt(attempt_now, route_capacity):
+                self._schedule_profile_resolution(now, "rate_limited", stable=False)
+                self._emit_profile_resolution(
+                    status="throttled",
+                    reason="profile_attempt_budget",
+                    resolver_state=self._profile_resolver_state,
+                    state_transition="request_to_rate_limited",
+                    request_started_at=request_started_at,
+                    schema_retry_count=retry_count,
+                    profile_attempts_last_minute=len(self._profile_attempt_times),
+                    window_generation=window_generation,
+                    registry_generation=registry.version,
+                    **profile_state.current().as_metadata(),
+                )
+                return
+            try:
+                result = self._profile_vision.classify(frame.jpeg)
+            except Exception as exc:
+                failure_diagnostics = (
+                    exc.diagnostics
+                    if isinstance(exc, VisionProviderFailure)
+                    else None
+                )
+                used_attempts = (
+                    max(1, len(failure_diagnostics.attempt_chain))
+                    if failure_diagnostics is not None
+                    else 1
+                )
+                self._release_unused_profile_attempts(route_capacity, used_attempts)
+                diagnostics = (
+                    failure_diagnostics.event_fields()
+                    if failure_diagnostics is not None
+                    else {
+                        "vision_outcome": "error",
+                        "vision_error_type": "provider_error",
+                    }
+                )
+                self._profile_provider_failure_streak += 1
+                cooldown = min(
+                    self._profile_fast_gap
+                    * (2 ** (self._profile_provider_failure_streak - 1)),
+                    30.0,
+                )
+                cleared = self._enter_profile_recovery(
+                    now,
+                    "provider_error",
+                    reason="profile_provider_unavailable",
+                    gap=cooldown,
+                )
+                self._emit_profile_resolution(
+                    status="provider_error",
+                    reason=type(exc).__name__,
+                    parser_rejection_reason="",
+                    resolver_state=self._profile_resolver_state,
+                    state_transition="request_to_provider_error",
+                    request_started_at=request_started_at,
+                    schema_retry_count=retry_count,
+                    provider_failure_streak=self._profile_provider_failure_streak,
+                    recovery_cooldown_sec=cooldown,
+                    stale_profile_cleared=cleared,
+                    window_generation=window_generation,
+                    registry_generation=registry.version,
+                    latency_ms=round((self._clock() - started) * 1000, 2),
+                    **diagnostics,
+                    **profile_state.current().as_metadata(),
+                )
+                return
+            if isinstance(result, VisionClassification):
+                request_diagnostics.append(result.diagnostics)
+                self._release_unused_profile_attempts(
+                    route_capacity,
+                    max(1, len(result.diagnostics.attempt_chain)),
+                )
+                raw = result.text
+            else:
+                self._release_unused_profile_attempts(route_capacity, 1)
+                raw = result
+            self._profile_provider_failure_streak = 0
+            parsed = parse_profile_identity_evidence(raw, registry)
+            if not (
+                parsed.status == "rejected"
+                and parsed.rejection_reason in {
+                    "invalid_response_type",
+                    "invalid_json",
+                    "invalid_schema",
+                }
+                and retry_count < self._profile_schema_retry_limit
+            ):
+                break
+            validation = self._resolver.validate(identity)
+            retry_discard = self._window_discard_reason(
+                validation,
+                resolver_generation=resolver_generation,
+                window_generation=window_generation,
+            )
+            current_snapshot = profile_state.current()
+            if (
+                retry_discard
+                or profile_state.registry.identity != registry.identity
+                or current_snapshot.cache_identity != starting_snapshot.cache_identity
+            ):
+                parsed = ParsedProfileIdentity(
+                    "rejected",
+                    rejection_reason="stale_before_schema_retry",
+                )
+                break
+            retry_count += 1
+        vision_diagnostics = (
+            request_diagnostics[-1].event_fields()
+            if request_diagnostics else {}
+        )
+        total_costs = [
+            attempt.api_cost_usd
+            for diagnostics in request_diagnostics
+            for attempt in diagnostics.attempt_chain
+            if attempt.api_cost_usd is not None
+        ]
+        request_fields = {
+            "request_started_at": request_started_at,
+            "schema_retry_count": retry_count,
+            "profile_request_count": len(request_diagnostics) or 1,
+            "profile_route_attempt_count": sum(
+                max(1, len(item.attempt_chain)) for item in request_diagnostics
+            ) or 1,
+            "profile_attempts_last_minute": len(self._profile_attempt_times),
+            "registry_generation": registry.version,
+            "parser_rejection_reason": parsed.rejection_reason,
+            "matched_markers": list(parsed.matched_markers),
+            "marker_strengths": list(parsed.marker_strengths),
+            "marker_evidence_strength": parsed.evidence_strength,
+            "profile_request_total_cost_usd": (
+                round(sum(total_costs), 10) if total_costs else None
+            ),
+            **vision_diagnostics,
+        }
+        validation = self._resolver.validate(identity)
+        discard = self._window_discard_reason(
+            validation,
+            resolver_generation=resolver_generation,
+            window_generation=window_generation,
+        )
+        if discard:
+            profile_state.clear_content(discard)
+            self._profile_consensus.reset(window_generation)
+            self._schedule_profile_resolution(now, "discarded", stable=False)
+            self._emit_profile_resolution(
+                status="discarded",
+                reason=discard,
+                state_transition="request_to_discarded",
+                window_generation=window_generation,
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                **request_fields,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        # Parse against the exact registry generation used to construct this
+        # request. A concurrent reload makes the result stale, never salvageable.
+        current_snapshot = profile_state.current()
+        if (
+            profile_state.registry.identity != registry.identity
+            or current_snapshot.cache_identity != starting_snapshot.cache_identity
+        ):
+            self._profile_consensus.reset(window_generation)
+            self._schedule_profile_resolution(now, "discarded", stable=False)
+            self._emit_profile_resolution(
+                status="discarded",
+                reason="profile_generation_changed",
+                state_transition="request_to_generation_discard",
+                window_generation=window_generation,
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                **request_fields,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        status, candidate = parsed.status, parsed.profile_id
+        if status == "unknown":
+            self._profile_consensus.reset(window_generation)
+            cleared = self._enter_profile_recovery(
+                now,
+                "seeking",
+                reason="profile_unknown_timeout",
+            )
+            self._emit_profile_resolution(
+                status="unknown",
+                candidate_profile_id="",
+                candidate_streak=0,
+                resolver_state=self._profile_resolver_state,
+                state_transition="request_to_unknown",
+                stale_profile_cleared=cleared,
+                window_generation=window_generation,
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                **request_fields,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        if status != "accepted":
+            self._profile_consensus.reset(window_generation)
+            cleared = self._enter_profile_recovery(
+                now,
+                "conflict" if status == "conflict" else "recovering",
+                reason=(
+                    "profile_conflict_timeout"
+                    if status == "conflict"
+                    else "profile_schema_timeout"
+                ),
+            )
+            self._emit_profile_resolution(
+                status="rejected",
+                reason=(
+                    "conflicting_identity_markers"
+                    if status == "conflict"
+                    else "invalid_schema_or_allowlist"
+                ),
+                stale_profile_cleared=cleared,
+                candidate_profile_id="",
+                candidate_streak=0,
+                resolver_state=self._profile_resolver_state,
+                state_transition=(
+                    "request_to_conflict"
+                    if status == "conflict"
+                    else "request_to_schema_rejection"
+                ),
+                window_generation=window_generation,
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                **request_fields,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        self._leave_profile_recovery()
+        if parsed.strong:
+            self._profile_consensus.reset(window_generation)
+            previous_effective = profile_state.current().effective_profile_id
+            profile_state.confirm_content(
+                candidate,
+                confidence=1.0,
+                evidence_source="scene_exact_member_marker",
+            )
+            self._profile_confirmed_at = now
+            self._schedule_profile_resolution(now, "stable", stable=True)
+            self._emit_profile_resolution(
+                status="confirmed",
+                reason="exact_member_marker",
+                candidate_profile_id=candidate,
+                candidate_streak=1,
+                strong_identity_evidence=True,
+                resolver_state=self._profile_resolver_state,
+                state_transition="strong_marker_to_stable",
+                previous_effective_profile_id=previous_effective,
+                new_effective_profile_id=profile_state.current().effective_profile_id,
+                activation_decision="immediate_strong_marker",
+                distinct_frame=True,
+                window_generation=window_generation,
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                **request_fields,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        frame_key = hashlib.sha256(frame.thumb or frame.jpeg).hexdigest()[:16]
+        streak, confirmed, conflict, evidence_added = self._profile_consensus.observe(
+            candidate,
+            frame_key=frame_key,
+            window_generation=window_generation,
+        )
+        if confirmed:
+            profile_state.confirm_content(candidate, confidence=1.0)
+            self._profile_confirmed_at = now
+        self._schedule_profile_resolution(
+            now,
+            "stable" if confirmed else "candidate",
+            stable=confirmed,
+        )
+        self._emit_profile_resolution(
+            status="confirmed" if confirmed else "candidate",
+            reason="conflict_reset" if conflict else "",
+            candidate_profile_id=candidate,
+            candidate_streak=streak,
+            strong_identity_evidence=False,
+            resolver_state=self._profile_resolver_state,
+            state_transition=(
+                "weak_consensus_to_stable" if confirmed else "request_to_candidate"
+            ),
+            activation_decision=(
+                "weak_consensus_confirmed" if confirmed else "awaiting_consensus"
+            ),
+            distinct_frame=evidence_added,
+            window_generation=window_generation,
+            latency_ms=round((self._clock() - started) * 1000, 2),
+            **request_fields,
+            **profile_state.current().as_metadata(),
+        )
 
     def _window_discard_reason(
         self,
@@ -1204,6 +1924,7 @@ class SceneContextUpdater:
         if self.resolver_generation != resolver_generation:
             return "resolver_generation_changed"
         if validation.status in {
+            "player_not_visible",
             "wrong_tab",
             "window_invalid",
             "multiple_candidates",
@@ -1260,12 +1981,17 @@ class SceneContextUpdater:
         if resolution.status != "ok" or resolution.identity is None:
             self._handle_invalid_window(resolution)
             return None
+        self._resume_profile_observation(self._clock())
+        self._expire_profile_if_needed(self._clock())
         self._last_window_status = "ok"
         if self._invalid_until is not None:
             self._invalid_until = None
             self._sync_publication("window_revalidated")
         if self._resolver.window_generation != self._consensus_window_generation:
-            self._clear_for_window_generation("window_generation_changed")
+            self._clear_for_window_generation(
+                "window_generation_changed",
+                retain_profile=not resolution.ownership_changed,
+            )
             self._consensus.reset()
             self._last_distinct_evidence_at = None
             self._consensus_window_generation = self._resolver.window_generation
@@ -1276,6 +2002,24 @@ class SceneContextUpdater:
         capture_window_generation = self._resolver.window_generation
         frame = self._capture.capture(identity)
         if frame.status != "ok":
+            if self._profile_enabled:
+                cleared = self._enter_profile_recovery(
+                    self._clock(),
+                    "capture_failure",
+                    reason="profile_capture_timeout",
+                )
+                self._emit_profile_resolution(
+                    status="capture_failure",
+                    reason=frame.status,
+                    state_transition="capture_to_recovery",
+                    activation_decision=(
+                        "fallback_to_source" if cleared else "retain_during_grace"
+                    ),
+                    stale_profile_cleared=cleared,
+                    window_generation=capture_window_generation,
+                    registry_generation=profile_state.registry.version,
+                    **profile_state.current().as_metadata(),
+                )
             self._emit(
                 window_status="ok",
                 matched_platform=identity.platform,
@@ -1317,6 +2061,13 @@ class SceneContextUpdater:
             return self._confirmed
 
         now = self._clock()
+        self._resolve_content_profile(
+            frame,
+            identity,
+            now=now,
+            resolver_generation=capture_resolver_generation,
+            window_generation=capture_window_generation,
+        )
         if (
             self._last_distinct_evidence_at is not None
             and now - self._last_distinct_evidence_at > self._consensus_window
@@ -1503,16 +2254,10 @@ class SceneContextUpdater:
             self._consensus.reset()
             self._last_distinct_evidence_at = None
             if self._confirmed is not None:
-                self._confirmed = AutomaticActivitySnapshot(
-                    activity_id=self._confirmed.activity_id,
-                    display_label=self._confirmed.display_label,
-                    confirmed_at_utc=self._confirmed.confirmed_at_utc,
-                    fresh_until_monotonic=self._confirmed.fresh_until_monotonic,
-                    confidence=max(0.0, self._confirmed.confidence - 0.2),
-                    evidence_count=self._confirmed.evidence_count,
-                    activity_kind=self._confirmed.activity_kind,
-                    open_set=self._confirmed.open_set,
-                )
+                # A valid unknown/rejected observation is transition evidence,
+                # not permission to keep feeding the old scene to translation.
+                # Fail to no activity until a new candidate earns consensus.
+                self._confirmed = None
                 self._sync_publication(
                     "vision_abstained"
                     if parsed.status == "abstained"
@@ -1605,6 +2350,15 @@ class SceneContextUpdater:
         )
         if not observation.evidence_reused:
             self._last_distinct_evidence_at = now
+        if (
+            self._confirmed is not None
+            and not observation.evidence_reused
+            and observation.activity_id != self._confirmed.activity_id
+        ):
+            # The first distinct candidate withdraws stale context immediately;
+            # the replacement still needs the normal second distinct frame.
+            self._confirmed = None
+            self._sync_publication("candidate_changed")
         effective_changed = self.effective_generation != request_effective_generation
         self._record_confirmation(observation, now)
         final_discard = (

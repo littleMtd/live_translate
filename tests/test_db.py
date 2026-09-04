@@ -9,6 +9,7 @@ for _mod in ("anthropic", "google", "google.genai"):
 
 import os
 import tempfile
+import sqlite3
 import unittest
 import unittest.mock
 
@@ -29,6 +30,64 @@ class TestTranslationDBAvailable(unittest.TestCase):
             self.assertTrue(db.available)
         finally:
             db.close()
+
+    def test_unknown_schema_version_fails_closed(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            path = f.name
+        self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
+        db = TranslationDB(path=path, max_rows=100)
+        db._conn.execute(
+            "UPDATE schema_meta SET value='999' WHERE key='schema_version'"
+        )
+        db._conn.commit()
+        db.close()
+
+        reopened = TranslationDB(path=path, max_rows=100)
+
+        self.assertFalse(reopened.available)
+
+    def test_v1_migration_updates_data_and_version_together(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            path = f.name
+        self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta VALUES ('schema_version', '1');
+            CREATE TABLE translations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_text TEXT NOT NULL,
+                target_text TEXT NOT NULL,
+                source_lang TEXT NOT NULL DEFAULT 'ko',
+                target_lang TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                model TEXT NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT NOT NULL,
+                UNIQUE (source_text, target_lang, engine, model)
+            );
+            INSERT INTO translations
+                (source_text, target_text, target_lang, engine, model, created_at, last_used_at)
+            VALUES ('source', 'target', 'zh-TW', 'fake', 'model', 'now', 'now');
+            """
+        )
+        conn.close()
+
+        migrated = TranslationDB(path=path, max_rows=100)
+        try:
+            version = migrated._conn.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()[0]
+            prompt_version = migrated._conn.execute(
+                "SELECT prompt_version FROM translations WHERE source_text='source'"
+            ).fetchone()[0]
+        finally:
+            migrated.close()
+
+        self.assertEqual(version, "2")
+        self.assertEqual(prompt_version, "v1")
 
 
 class TestTranslationDBStoreAndLookup(unittest.TestCase):
@@ -178,7 +237,6 @@ def _make_translator():
     from config import cfg
     t = Translator.__new__(Translator)
     t._active_idx = 0
-    t._probe_counter = 0
     t._consecutive_primary_failures = 0
     t._last_input = ""
     t._engines = [_mock_engine("gemini"), _mock_engine("claude")]

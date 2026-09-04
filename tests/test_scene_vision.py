@@ -314,7 +314,7 @@ def test_openrouter_adapter_sends_image_and_records_cost_without_raw_text():
         return FakeResponse(
             {
                 "choices": [
-                    {"message": {"content": "League of Legends"}}
+                    {"message": {"content": "League of Legends"}, "finish_reason": "stop"}
                 ],
                 "usage": {
                     "prompt_tokens": 800,
@@ -338,6 +338,8 @@ def test_openrouter_adapter_sends_image_and_records_cost_without_raw_text():
     body = json.loads(captured["request"].data)
     assert captured["timeout"] == 7.0
     assert body["model"] == "qwen/qwen3-vl-32b-instruct"
+    assert body["max_tokens"] == 96
+    assert body["response_format"] == {"type": "json_object"}
     assert body["messages"][0]["content"][0]["text"] == "bounded prompt"
     assert body["messages"][0]["content"][1]["image_url"]["url"].startswith(
         "data:image/jpeg;base64,"
@@ -345,6 +347,7 @@ def test_openrouter_adapter_sends_image_and_records_cost_without_raw_text():
     assert result.text == "League of Legends"
     assert result.diagnostics.api_cost_usd == 0.0000572
     assert result.diagnostics.total_tokens == 804
+    assert result.diagnostics.finish_reason == "stop"
     assert "SECRET" not in repr(result.diagnostics.event_fields())
 
 

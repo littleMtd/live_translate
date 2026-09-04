@@ -17,6 +17,7 @@ from modules.activity_context import (
     capture_activity_snapshot,
     capture_effective_activity_snapshot,
     effective_activity_value,
+    infer_source_local_activity,
     normalize_activity,
 )
 from modules.translation_engines import (
@@ -56,6 +57,111 @@ def test_activity_prompt_capsule_is_single_metadata_section():
     assert activity_prompt_capsule("") == ""
 
 
+def test_source_local_lol_activity_is_exact_and_fail_closed():
+    for source in (
+        "레오나 물어!",
+        "롤 중독 치료하는 건 없나?",
+        "롤을 접을까?",
+        "롤게임 하자",
+        "와드 지우고 바텀 가요",
+    ):
+        snapshot = infer_source_local_activity(source)
+        assert snapshot is not None
+        assert snapshot.activity_id == "league_of_legends"
+        assert snapshot.source == "local_source"
+
+    for source in (
+        "집에 가요",
+        "그 사람한테 물어봐",
+        "렌즈를 새로 샀어요",
+        "연애가 어렵네",
+        "캣툴이 뭐지",
+        "롤링페이퍼를 썼어",
+        "컨트롤이 편해",
+        "I study CS at university",
+        "CS 고객센터에 문의하세요",
+        "lol that was funny",
+    ):
+        assert infer_source_local_activity(source) is None
+
+
+def test_local_source_context_wins_over_stale_automatic_but_not_manual():
+    store = ActivityPublicationStore(clock=lambda: 10.0)
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="minecraft",
+            display_label="Minecraft",
+            confirmed_at_utc="2026-08-12T00:00:00+00:00",
+            fresh_until_monotonic=100.0,
+            confidence=1.0,
+            evidence_count=2,
+            activity_kind="game",
+        )
+    )
+
+    local = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        source_text="레오나 궁 있어요?",
+        publication_store=store,
+    )
+    manual = capture_effective_activity_snapshot(
+        "Chatting",
+        automatic_enabled=True,
+        source_text="레오나 궁 있어요?",
+        publication_store=store,
+    )
+    unknown = capture_effective_activity_snapshot(
+        "",
+        automatic_enabled=True,
+        source_text="집에 가요",
+        publication_store=ActivityPublicationStore(clock=lambda: 10.0),
+    )
+
+    assert local.display_label == "League of Legends"
+    assert local.source == "local_source"
+    assert manual.display_label == "Chatting"
+    assert manual.source == "manual"
+    assert unknown.display_label == ""
+    assert unknown.source == "none"
+
+
+def test_scene_capsules_are_scoped_and_keep_current_source_authoritative():
+    lol = capture_activity_snapshot("League of Legends", source="automatic")
+    singing = ActivitySnapshot(
+        activity_id="auto-singing",
+        display_label="Singing",
+        source="automatic",
+        schema_version=3,
+        captured_at_utc="2026-08-12T00:00:00+00:00",
+        activity_kind="singing",
+    )
+    chatting = ActivitySnapshot(
+        activity_id="auto-chatting",
+        display_label="Chatting",
+        source="automatic",
+        schema_version=3,
+        captured_at_utc="2026-08-12T00:00:00+00:00",
+        activity_kind="chatting",
+    )
+
+    with bind_activity_snapshot(lol):
+        lol_capsule = activity_prompt_capsule(lol.display_label)
+    with bind_activity_snapshot(singing):
+        singing_capsule = activity_prompt_capsule(singing.display_label)
+    with bind_activity_snapshot(chatting):
+        chatting_capsule = activity_prompt_capsule(chatting.display_label)
+
+    assert "물다=engage/catch" in lol_capsule
+    assert "집=recall/base" in lol_capsule
+    assert "ordinary conversation" in lol_capsule
+    assert "lyric fragment, song discussion, or a title announcement" in singing_capsule
+    assert "incoherent English-like STT" in singing_capsule
+    assert "do not force game or lyric terminology" in chatting_capsule
+    for capsule in (lol_capsule, singing_capsule, chatting_capsule):
+        assert "Never translate, mention, or copy it" in capsule
+
+
 def test_snapshot_identity_uses_schema_and_canonical_activity_id():
     pokemon = capture_activity_snapshot("Pocket Monsters", source="automatic")
     league = capture_activity_snapshot("LoL", source="automatic")
@@ -64,10 +170,10 @@ def test_snapshot_identity_uses_schema_and_canonical_activity_id():
 
     assert pokemon.activity_id == "pokemon"
     assert pokemon.display_label == "Pokémon"
-    assert pokemon.cache_identity == "activity-v2:pokemon"
+    assert pokemon.cache_identity == "activity-v3:pokemon"
     assert league.activity_id == "league_of_legends"
     assert league.display_label == "League of Legends"
-    assert league.cache_identity == "activity-v2:league_of_legends"
+    assert league.cache_identity == "activity-v3:league_of_legends"
     assert manual_alias.activity_id.startswith("manual-")
     assert manual_alias.display_label == "Pocket Monsters"
     assert custom.activity_id.startswith("manual-")
@@ -107,7 +213,7 @@ def test_publication_store_captures_manual_then_fresh_auto_then_empty():
     assert automatic.activity_id == "minecraft"
     assert automatic.display_label == "Minecraft"
     assert automatic.source == "automatic"
-    assert automatic.cache_identity == "activity-v2:minecraft"
+    assert automatic.cache_identity == "activity-v3:minecraft"
     assert automatic.activity_kind == "game"
     assert manual.display_label == "StarCraft ladder"
     assert manual.source == "manual"
@@ -263,7 +369,7 @@ def test_captured_automatic_snapshot_is_immutable_across_store_changes():
 
     assert captured.activity_id == "minecraft"
     assert captured.display_label == "Minecraft"
-    assert captured.cache_identity == "activity-v2:minecraft"
+    assert captured.cache_identity == "activity-v3:minecraft"
 
 
 def test_automatic_cache_identity_ignores_confirmation_metadata():
@@ -302,7 +408,7 @@ def test_automatic_cache_identity_ignores_confirmation_metadata():
     )
 
     assert first.cache_identity == second.cache_identity
-    assert first.cache_identity == "activity-v2:minecraft"
+    assert first.cache_identity == "activity-v3:minecraft"
 
 
 def test_prompt_cache_version_uses_activity_id_and_schema_not_source_or_time():
@@ -396,7 +502,66 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
     assert "Hades" not in seen["effective_prompt"]
     assert outcome.prompt_version == hashlib.md5(
         (
-            seen["effective_prompt"]
-            + "\n[activity-cache-identity] activity-v2:starcraft"
+                seen["effective_prompt"]
+                + "\n[canonical-publication-policy] canonical-obligations-v1"
+                + "\n[request-cache-cohort] "
+            + f"{cfg.active_streamer_profile or 'default'}:starcraft:0"
+            + (
+                f"\n[history-session] {translator._shared_state.history_session_id}"
+                if cfg.translation.context_window > 0
+                else ""
+            )
+            + "\n[activity-cache-identity] activity-v3:starcraft"
         ).encode()
     ).hexdigest()[:8]
+
+
+def test_automatic_capture_freezes_freshness_confidence_and_generations():
+    store = ActivityPublicationStore(clock=lambda: 50.0)
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="minecraft",
+            display_label="Minecraft",
+            confirmed_at_utc="2026-08-12T00:00:00+00:00",
+            fresh_until_monotonic=60.0,
+            confidence=0.9,
+            evidence_count=3,
+            activity_kind="game",
+            resolver_generation=4,
+            window_generation=5,
+            effective_generation=6,
+        )
+    )
+
+    snapshot = store.capture("", automatic_enabled=True)
+    store.replace(None)
+
+    assert snapshot.activity_id == "minecraft"
+    assert snapshot.captured_at_monotonic == 50.0
+    assert snapshot.resolved_at_utc == "2026-08-12T00:00:00+00:00"
+    assert snapshot.fresh_until_monotonic == 60.0
+    assert snapshot.confidence == 0.9
+    assert snapshot.evidence_count == 3
+    assert snapshot.resolver_generation == 4
+    assert snapshot.window_generation == 5
+    assert snapshot.effective_generation == 6
+
+
+def test_expired_automatic_is_unknown_at_capture_time():
+    store = ActivityPublicationStore(clock=lambda: 60.0)
+    store.replace(
+        AutomaticActivityPublication(
+            activity_id="minecraft",
+            display_label="Minecraft",
+            confirmed_at_utc="2026-08-12T00:00:00+00:00",
+            fresh_until_monotonic=60.0,
+            confidence=0.9,
+            evidence_count=3,
+            activity_kind="game",
+        )
+    )
+
+    snapshot = store.capture("", automatic_enabled=True)
+
+    assert snapshot.activity_id == ""
+    assert snapshot.source == "none"

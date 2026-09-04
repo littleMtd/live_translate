@@ -188,6 +188,59 @@ def test_analyzer_summarizes_record_only_source_fuzzy_shadow(tmp_path):
     assert shadow_run["source_fuzzy_shadow"]["candidate_count"] == 2
 
 
+def test_activity_temporal_join_matches_sentence_snapshot_and_safe_switch(tmp_path):
+    path = tmp_path / "runtime_events_20260812.jsonl"
+    common = {"schema_version": 4, "run_id": "run", "run_kind": "live"}
+    snapshot = {
+        "sentence_id": "sentence-000001",
+        "activity_id": "league_of_legends",
+        "activity_kind": "game",
+        "activity_source": "manual",
+        "activity_effective_generation": 3,
+        "activity_cohort_epoch": 2,
+    }
+    _write_jsonl(
+        path,
+        [
+            {**common, "event_type": "sentence", "created_at": "2026-08-12T00:00:00+00:00", **snapshot},
+            {
+                **common,
+                "event_type": "translation",
+                "created_at": "2026-08-12T00:00:02+00:00",
+                **snapshot,
+                "worker_observed_activity_id": "chatting",
+                "activity_capsule_activity_id": "league_of_legends",
+                "sentence_queue_wait_ms": 2000,
+                "activity_snapshot_to_worker_ms": 2000,
+            },
+        ],
+    )
+
+    temporal = analyze_runtime_events(path)["activity_temporal"]
+    counts = {item["status"]: item["count"] for item in temporal["status_counts"]}
+    assert temporal["evidence_available_count"] == 1
+    assert counts["snapshot_binding_match"] == 1
+    assert counts["activity_changed_while_queued_bound_safely"] == 1
+    assert "applied_snapshot_differs_from_enqueued_snapshot" not in counts
+
+
+def test_activity_temporal_legacy_event_is_unavailable_not_mismatch(tmp_path):
+    path = tmp_path / "runtime_events_legacy.jsonl"
+    _write_jsonl(
+        path,
+        [{
+            "schema_version": 3,
+            "run_id": "legacy",
+            "run_kind": "live",
+            "event_type": "translation",
+            "created_at": "2026-08-12T00:00:00+00:00",
+        }],
+    )
+
+    temporal = analyze_runtime_events(path)["activity_temporal"]
+    counts = {item["status"]: item["count"] for item in temporal["status_counts"]}
+    assert counts == {"legacy_temporal_evidence_unavailable": 1}
+
 def test_analyzer_summarizes_record_only_activity_shadow(tmp_path):
     path = tmp_path / "runtime_events_20260725.jsonl"
     _write_jsonl(
@@ -996,12 +1049,166 @@ def test_stt_summary_counts_requests_audio_and_reasons(tmp_path):
     assert report["runs"][0]["stt"]["requests_sent"] == 2
 
 
+def test_stt_context_provenance_joins_prior_groq_source(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-context"),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-1",
+                avg_logprob=-0.2,
+                no_speech_prob=0.1,
+            ),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-2",
+                context_included=True,
+                context_source_utterance_id="utt-1",
+                context_age_ms=250.0,
+                context_text_len=24,
+                context_source_engine="groq",
+                context_source_avg_logprob=-0.2,
+                context_source_no_speech_prob=0.1,
+            ),
+        ],
+    )
+
+    report = analyze_runtime_events(path)
+    summary = report["stt_summary"]["context_provenance"]
+
+    assert summary["telemetry_available"] is True
+    assert summary["included_requests"] == 1
+    assert summary["telemetry_covered_included_requests"] == 1
+    assert summary["legacy_included_requests"] == 0
+    assert summary["provenance_present"] == 1
+    assert summary["groq_source_requests"] == 1
+    assert summary["groq_source_joined"] == 1
+    assert summary["groq_source_join_failures"] == 0
+    assert summary["groq_source_join_rate"] == 1.0
+    assert summary["source_metadata_mismatch_count"] == 0
+    assert summary["violation_samples"] == []
+    assert report["runs"][0]["stt"]["context_provenance"] == summary
+
+
+def test_stt_context_provenance_separates_non_groq_sources(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-context"),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-2",
+                context_included=True,
+                context_source_utterance_id="utt-sv-1",
+                context_age_ms=100.0,
+                context_text_len=18,
+                context_source_engine="sensevoice",
+                context_source_avg_logprob=None,
+                context_source_no_speech_prob=None,
+            ),
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["stt_summary"]["context_provenance"]
+
+    assert summary["non_groq_source_requests"] == 1
+    assert summary["groq_source_requests"] == 0
+    assert summary["groq_source_join_failures"] == 0
+    assert summary["source_confidence_missing_count"] == 0
+
+
+def test_stt_context_provenance_treats_legacy_rows_as_unavailable(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(),
+            _stt_event(utterance_id="utt-2", context_included=True),
+        ],
+    )
+
+    summary = analyze_runtime_events(path)["stt_summary"]["context_provenance"]
+
+    assert summary["telemetry_available"] is False
+    assert summary["included_requests"] == 1
+    assert summary["telemetry_covered_included_requests"] == 0
+    assert summary["legacy_included_requests"] == 1
+    assert summary["provenance_missing"] == 0
+    assert summary["groq_source_join_failures"] == 0
+    assert summary["violation_samples"] == []
+
+
+def test_stt_context_provenance_reports_bounded_invariant_candidates(tmp_path):
+    path = tmp_path / "runtime_events_20260514.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(run_id="run-context"),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-1",
+                context_included=True,
+                context_source_utterance_id="utt-2",
+                context_age_ms=40000.0,
+                context_text_len=12,
+                context_source_engine="groq",
+                context_source_avg_logprob=-0.8,
+                context_source_no_speech_prob=0.1,
+            ),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-2",
+                avg_logprob=-0.8,
+                no_speech_prob=0.1,
+            ),
+            _stt_event(
+                run_id="run-context",
+                utterance_id="utt-3",
+                context_included=True,
+                context_source_utterance_id=None,
+                context_age_ms=None,
+                context_text_len=None,
+                context_source_engine=None,
+                context_source_avg_logprob=None,
+                context_source_no_speech_prob=None,
+            ),
+        ],
+    )
+
+    summary = analyze_runtime_events(path, top_n=1)["stt_summary"]["context_provenance"]
+
+    assert summary["provenance_missing"] == 1
+    assert summary["groq_source_join_failures"] == 1
+    assert summary["self_or_future_source_count"] == 1
+    assert summary["stale_by_current_policy_count"] == 1
+    assert summary["source_threshold_ineligible_by_current_policy_count"] == 1
+    assert len(summary["violation_samples"]) == 1
+    assert "source_text" not in summary["violation_samples"][0]
+
+
 def test_audio_summary_counts_vad_cut_reasons(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(
         path,
         [
             _translation_event(run_id="run-a"),
+            {
+                "schema_version": 3,
+                "event_type": "audio_startup",
+                "run_id": "run-a",
+                "run_kind": "live",
+                "created_at": "2026-05-14T00:00:00+00:00",
+                "status": "ready",
+                "device_name": "CABLE Output",
+                "host_api": "MME",
+                "requested_samplerate": 16000,
+                "capture_channels": 2,
+                "dtype": "float32",
+                "stream_ready_ms": 12.5,
+            },
             _audio_event(run_id="run-a", cut_reason="silence", audio_seconds=5, overlap_seconds=0.4),
             _audio_event(run_id="run-a", cut_reason="hard_max", audio_seconds=9, adaptive_active=True, overlap_seconds=1.0),
         ],
@@ -1010,12 +1217,17 @@ def test_audio_summary_counts_vad_cut_reasons(tmp_path):
     report = analyze_runtime_events(path)
 
     assert report["audio_events"] == 2
+    assert report["audio_startup_events"] == 1
     assert report["audio_summary"]["total"] == 2
     assert {"value": "silence", "count": 1} in report["audio_summary"]["by_cut_reason"]
     assert {"value": "hard_max", "count": 1} in report["audio_summary"]["by_cut_reason"]
     assert {"value": "True", "count": 1} in report["audio_summary"]["by_adaptive_active"]
     assert report["audio_summary"]["audio_seconds"]["max"] == 9
     assert report["runs"][0]["audio"]["total"] == 2
+    assert report["audio_startup_summary"]["total"] == 1
+    assert {"value": "MME", "count": 1} in report["audio_startup_summary"]["by_host_api"]
+    assert report["audio_startup_summary"]["stream_ready_ms"]["max"] == 12.5
+    assert report["runs"][0]["audio_startup"]["total"] == 1
 
 
 def test_empty_target_summary_groups_by_source_and_reason(tmp_path):
@@ -1243,6 +1455,22 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
             {"engine": "groq", "cost_usd": 0.001},
             {"engine": "openrouter", "cost_usd": 0.002},
         ],
+        "all_attempts": {
+            "observations": 2,
+            "total": 0.003,
+            "by_engine": [
+                {"engine": "groq", "cost_usd": 0.001},
+                {"engine": "openrouter", "cost_usd": 0.002},
+            ],
+        },
+        "selected_attempts": {
+            "observations": 2,
+            "total": 0.003,
+            "by_engine": [
+                {"engine": "groq", "cost_usd": 0.001},
+                {"engine": "openrouter", "cost_usd": 0.002},
+            ],
+        },
     }
     assert report["api_diagnostics"]["fields"]["api_total_wall_ms"]["max"] == 12000
     assert report["api_diagnostics"]["fields"]["api_attempt_timeout_ms"]["p50"] == 10000
@@ -1262,6 +1490,84 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
     assert report["dependency_markers"]["marker_ratio"] == 0.5
     assert report["dependency_markers"]["by_marker"] == [{"value": "그래서", "count": 1}]
     assert any("poll-gap" in note for note in report["analyzer_output_notes"])
+
+
+def test_analyzer_reports_deepseek_guard_and_qwen_continuity(tmp_path):
+    path = tmp_path / "runtime_events_20260816.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _translation_event(
+                run_id="guard-run",
+                sequence_id=7,
+                sentence_id="sentence-7",
+                source_text="늦었어",
+                target_text="太晚了",
+                engine="openrouter",
+                attempts=[
+                    {
+                        "phase": "fallback_chain",
+                        "engine": "deepseek",
+                        "status": "rejected_output",
+                        "failure_scope": "content",
+                        "selected_for_output": False,
+                        "api_cost_usd": 0.001,
+                        "output_guard": {
+                            "version": 1,
+                            "reason": "unexpected_hangul",
+                            "candidate_raw_output": "這是느졋",
+                            "candidate_output": "這是느졋",
+                            "candidate_corrections": [],
+                            "candidate_quality_flags": ["target_has_hangul"],
+                            "candidate_quality_classifications": [
+                                "target_has_unexpected_hangul"
+                            ],
+                        },
+                    },
+                    {
+                        "phase": "fallback_chain",
+                        "engine": "openrouter",
+                        "status": "success",
+                        "selected_for_output": True,
+                        "api_cost_usd": 0.002,
+                    },
+                ],
+            )
+        ],
+    )
+
+    diagnostics = analyze_runtime_events(path)["api_diagnostics"]
+    guard = diagnostics["deepseek_output_guard"]
+
+    assert guard["deepseek_attempts"] == 1
+    assert guard["guarded_attempts"] == 1
+    assert guard["guard_rate"] == 1.0
+    assert guard["by_reason"] == [{"value": "unexpected_hangul", "count": 1}]
+    assert guard["qwen_attempted_after_guard"] == 1
+    assert guard["qwen_success_after_guard"] == 1
+    assert guard["qwen_selected_after_guard"] == 1
+    assert guard["guard_without_qwen_attempt"] == 0
+    assert guard["guarded_attempt_selected_violations"] == 0
+    assert guard["samples"][0]["qwen_attempted_after_guard"] is True
+    assert guard["samples"][0]["qwen_success_after_guard"] is True
+    assert guard["samples"][0]["qwen_selected_after_guard"] is True
+    assert guard["samples"][0]["candidate_raw_output"] == "這是느졋"
+    assert guard["samples"][0]["candidate_output"] == "這是느졋"
+    assert guard["samples"][0]["candidate_corrections"] == []
+    assert guard["samples"][0]["selected_output"] == "太晚了"
+    assert diagnostics["cost_usd"]["all_attempts"] == {
+        "observations": 2,
+        "total": 0.003,
+        "by_engine": [
+            {"engine": "deepseek", "cost_usd": 0.001},
+            {"engine": "openrouter", "cost_usd": 0.002},
+        ],
+    }
+    assert diagnostics["cost_usd"]["selected_attempts"] == {
+        "observations": 1,
+        "total": 0.002,
+        "by_engine": [{"engine": "openrouter", "cost_usd": 0.002}],
+    }
 
 
 def test_run_summaries_group_by_run_id_with_labels(tmp_path):
@@ -1397,3 +1703,89 @@ def test_run_summaries_include_success_latency_and_template_hits(tmp_path):
     ]
     assert len(run["template_success_samples"]) == 1
     assert run["template_success_samples"][0]["source_text"] == "시청해주셔서 감사합니다."
+def test_translation_model_shadow_joins_exact_pair_and_summarizes(tmp_path):
+    path = tmp_path / "runtime_events_shadow.jsonl"
+    rows = [
+        {
+            "schema_version": 4,
+            "event_type": "stt",
+            "run_id": "run-shadow",
+            "run_kind": "live",
+            "status": "success",
+            "utterance_id": "utt-1",
+            "audio_seconds": 5.0,
+            "overlap_seconds": 1.0,
+        },
+        {
+            "schema_version": 4,
+            "event_type": "translation_shadow",
+            "run_id": "run-shadow",
+            "run_kind": "live",
+            "shadow_id": "shadow-1",
+            "sequence_id": 0,
+            "sentence_id": "sentence-1",
+            "context_fingerprint": "ctx",
+            "history_fingerprint": "hist",
+            "status": "success",
+            "target_text": "Flash 翻譯",
+            "latency_ms": 80.0,
+            "api_cost_usd": 0.00002,
+            "token_prompt": 100,
+            "token_cache_hit": 75,
+            "correction_count": 1,
+            "quality_flags": [],
+            "quality_classifications": [],
+            "translation_qa_flags": ["candidate-only"],
+            "translation_qa_disposition": "normalized",
+            "record_only": True,
+            "subtitle_eligible": False,
+            "production_state_write_eligible": False,
+        },
+        {
+            "schema_version": 4,
+            "event_type": "translation",
+            "run_id": "run-shadow",
+            "run_kind": "live",
+            "shadow_id": "shadow-1",
+            "shadow_enqueue_status": "accepted",
+            "shadow_context_fingerprint": "ctx",
+            "shadow_history_fingerprint": "hist",
+            "sequence_id": 0,
+            "sentence_id": "sentence-1",
+            "source_utterance_ids": ["utt-1"],
+            "source_text": "원문",
+            "target_text": "Qwen 翻譯",
+            "status": "success",
+            "result_source": "api",
+            "route_id": "openrouter:qwen/qwen3-next-80b-a3b-instruct",
+            "api_total_wall_ms": 100.0,
+            "api_cost_usd": 0.0001,
+            "correction_count": 0,
+            "quality_flags": [],
+            "quality_classifications": [],
+            "translation_qa_flags": [],
+            "translation_qa_disposition": "clean",
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = analyze_runtime_events(path)["translation_model_shadow"]
+
+    assert summary["complete_pairs"] == 1
+    assert summary["comparable_success_pairs"] == 1
+    assert summary["integrity_mismatches"] == 0
+    assert summary["record_only_violations"] == 0
+    assert summary["latency_ms"]["qwen"]["p50"] == 100.0
+    assert summary["latency_ms"]["flash"]["p50"] == 80.0
+    assert summary["flash_prompt_cache_hit_ratio"] == 0.75
+    assert summary["audio_normalization"]["audio_seconds"] == 4.0
+    assert summary["quality"]["flash"]["canonicalization_rate"] == 1.0
+    assert summary["success_rate"]["flash_minus_qwen"] == 0.0
+    assert summary["quality"]["candidate_only_regression_count"] == 1
+    assert summary["highest_disagreement"][0]["utterance_id"] == "utt-1"
+    assert summary["highest_disagreement"][0]["qwen"]["latency_ms"] == 100.0
+    assert summary["highest_disagreement"][0]["flash"]["cache_hit_tokens"] == 75
+    assert summary["highest_disagreement"][0]["source_stt"] == "원문"

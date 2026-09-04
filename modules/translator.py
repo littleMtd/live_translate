@@ -3,29 +3,52 @@ import queue
 import re
 import threading
 import time
+import unicodedata
+import uuid
 from collections.abc import Callable
 from contextlib import nullcontext
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
-from datetime import datetime
+from concurrent.futures import Future
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config import cfg
 from modules.activity_context import (
+    ActivitySnapshot,
     activity_prompt_capsule,
+    activity_snapshot_metadata,
     bind_activity_snapshot,
+    bind_profile_id,
     bound_activity_snapshot,
     capture_effective_activity_snapshot,
     effective_activity_value,
+    effective_profile_id,
     normalize_activity,
+)
+from modules.profile_context import (
+    ProfileSnapshot,
+    bind_profile_snapshot,
+    bound_profile_snapshot,
+    effective_profile_applied,
+    profile_state,
 )
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
-from utils.runtime_events import runtime_events, translation_quality
+from utils.runtime_events import (
+    runtime_events,
+    source_proven_quality_terms,
+    translation_quality,
+)
 from modules.pipeline_events import sentence_incomplete, sentence_metadata, sentence_text
-from modules.source_fuzzy_shadow import safe_source_fuzzy_shadow
+from modules.provisional_subtitles import (
+    ProvisionalCandidate,
+    ProvisionalRequest,
+    ProvisionalStore,
+    SubtitlePayload,
+    provisional_fingerprint,
+)
 from modules.db import _get_db
 from modules.translation_prompts import (
     _BASE_PROMPT,
@@ -34,17 +57,21 @@ from modules.translation_prompts import (
     _QWEN_PROMPT_TAIL,
     _is_qwen_model,
     get_translation_profile,
+    get_translation_profile_output_terms,
     get_translation_profile_preserve_terms,
 )
 from modules.streamer_profiles import common_stt_terms
 from modules.translation_engines import (
     TranslationEngine,
+    DeepSeekTranslationEngine,
     _build_engine_chain,
-    call_engine_with_deadline,
+    build_effective_deepseek_messages,
+    build_effective_qwen_messages,
     effective_system_prompt_for_engine,
     engine_chain_config_key,
     get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
+    get_last_token_usage,
     get_selected_token_usage,
     get_selected_translation_attempt,
     get_translation_attempts,
@@ -52,7 +79,6 @@ from modules.translation_engines import (
     reset_last_engine_diagnostics,
     reset_last_token_usage,
     reset_translation_call_trace,
-    select_translation_attempt,
     translation_route_id,
 )
 from modules.translation_runtime import (
@@ -61,11 +87,24 @@ from modules.translation_runtime import (
     call_with_fallback,
     probe_primary_recovery,
 )
-from modules.translation_memory import MemoryLookup, TranslationMemory
+from modules.translation_memory import HistoryCohort, MemoryLookup, TranslationMemory
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
+from modules.unknown_name_escrow import (
+    UnknownNameEscrow,
+    resolve_unknown_name_escrow,
+)
+from modules.semantic_terminology import (
+    SemanticTerminologyEscrow,
+    resolve_semantic_terminology,
+)
 from modules.translation_corrections import (
+    CanonicalObligation,
+    CanonicalObligationEvaluation,
     NameRenderingRule as _NameRenderingRule,
+    evaluate_canonical_obligations,
     load_translation_corrections,
+    resolve_canonical_obligations,
+    source_alias_matches,
 )
 
 log = get_logger("translator")
@@ -75,7 +114,6 @@ _LOG_DIR.mkdir(exist_ok=True)
 
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
 _CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
-_FALLBACK_PROBE_EVERY = 3    # legacy call-count probe interval; user-path probes are disabled
 _FALLBACK_PROBE_INTERVAL_SEC = 30.0
 _FALLBACK_PROBE_TEXT = "안녕하세요"
 _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
@@ -83,8 +121,7 @@ _LIVE_FALLBACK_THRESHOLD = 1
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _TRANSLATION_LOOP_POLL_SEC = 0.05
-_QUALITY_RETRY_TRACE = threading.local()
-_QUALITY_RETRY_REFUSAL_RE = re.compile(
+_MODEL_REFUSAL_RE = re.compile(
     r"^\s*(?:"
     r"(?:translation|output|target|번역|출력|译文|譯文)\s*[:：]"
     r"|(?:(?:i(?:'m| am)\s+)?sorry[,;:]?\s*(?:but\s+)?)?"
@@ -96,23 +133,6 @@ _QUALITY_RETRY_REFUSAL_RE = re.compile(
     r"|unable\s+to\s+translate\b"
     r")",
     re.IGNORECASE,
-)
-_QUALITY_RETRY_MIN_SOURCE_CHARS = 24
-_QUALITY_RETRY_MIN_SOURCE_HANGUL = 12
-_QUALITY_RETRY_MIN_SOURCE_BIGRAM_RATIO = 0.65
-_QUALITY_RETRY_PROVABLE_AMOUNT_RE = re.compile(
-    r"(?<![0-9가-힣])"
-    r"(?P<leading_man>만)\s*(?P<thousands>[1-9])\s*천\s*원?"
-    r"|(?<![0-9])"
-    r"(?P<number>\d+)\s*(?P<unit>천|만|억)\s*원"
-)
-_QUALITY_RETRY_AMOUNT_UNITS = {
-    "천": 1_000,
-    "만": 10_000,
-    "억": 100_000_000,
-}
-_QUALITY_RETRY_AMOUNT_PREFIX_RE = re.compile(
-    r"[0-9일이삼사오육칠팔구십백천만억]\s+$"
 )
 _API_EVENT_DEFAULTS = {
     "api_attempt_count": 0,
@@ -188,10 +208,35 @@ from modules.translation_corrections import SHARED_NAME_SCOPE as _SHARED_NAME_SC
 _STELLIVE_HINA_PROFILE_ID = "stellive_hina"
 _HADES_PROFILE_ID = "hades_chxxnnx"
 _MWMEU_PROFILE_ID = "mwmeu"
+_IRISE_PROFILE_ID = "irise"
+_IRISE_MUSIC_PART_CUES = (
+    "고음",
+    "보컬",
+    "브릿지",
+    "후렴",
+    "랩",
+    "킬링",
+    "안무",
+    "녹음",
+    "노래",
+    "하모니",
+)
+_IRISE_MUSIC_PART_CUE_SUFFIXES = frozenset(
+    ("가", "는", "를", "의", "에서", "에도", "도", "만", "와", "과", "로", "이", "을", "랑")
+)
+_IRISE_BUSINESS_PART_CUES = ("사업", "담당", "업무", "부서", "조직")
+_IRISE_PART_CUE_MAX_GAP = 6
+_IRISE_PART_TOKEN_RE = re.compile(
+    r"(?<![가-힣])파트"
+    r"(?=(?:가|는|를|의|에서|에도|도|만|랑|와|과|로|부터|까지|예요|입니다|라고(?:요)?)?"
+    r"(?:$|[^가-힣]))"
+)
 
 _CORRECTION_TABLES = load_translation_corrections()
 _SOURCE_NORM_SHARED = _CORRECTION_TABLES.source_norm_shared
 _SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.source_norm_by_profile
+_BOUNDARY_SOURCE_NORM_SHARED = _CORRECTION_TABLES.boundary_source_norm_shared
+_BOUNDARY_SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.boundary_source_norm_by_profile
 _CONDITIONAL_SOURCE_NORM_SHARED = tuple(
     (group.source_terms, group.replacements, group.match_all)
     for group in _CORRECTION_TABLES.conditional_source_norm_shared
@@ -214,6 +259,7 @@ _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS = {
 }
 _KOREAN_NAME_SUFFIXES = _CORRECTION_TABLES.korean_name_suffixes
 _NAME_RENDERING_RULES = _CORRECTION_TABLES.name_rendering_rules
+_CANONICAL_PUBLICATION_POLICY_VERSION = "canonical-obligations-v1"
 
 
 def _sorted_norm_items(norm: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -226,6 +272,11 @@ _SOURCE_NORM_SHARED_SORTED = _sorted_norm_items(_SOURCE_NORM_SHARED)
 _SOURCE_NORM_WITH_PROFILE_SORTED = {
     profile: _sorted_norm_items({**_SOURCE_NORM_SHARED, **profile_norm})
     for profile, profile_norm in _SOURCE_NORM_BY_PROFILE.items()
+}
+_BOUNDARY_SOURCE_NORM_SHARED_SORTED = _sorted_norm_items(_BOUNDARY_SOURCE_NORM_SHARED)
+_BOUNDARY_SOURCE_NORM_WITH_PROFILE_SORTED = {
+    profile: _sorted_norm_items({**_BOUNDARY_SOURCE_NORM_SHARED, **profile_norm})
+    for profile, profile_norm in _BOUNDARY_SOURCE_NORM_BY_PROFILE.items()
 }
 
 
@@ -249,28 +300,12 @@ def _translation_deadline_at() -> float | None:
     return time.monotonic() + float(cfg.translation.live_total_deadline_sec)
 
 
-def _remaining_deadline_for_engine(
-    engine: TranslationEngine,
-    deadline_at: float,
-) -> tuple[float, str]:
-    remaining = max(0.0, deadline_at - time.monotonic())
-    route_timeout = getattr(engine, "request_timeout_seconds", None)
-    if (
-        isinstance(route_timeout, (int, float))
-        and not isinstance(route_timeout, bool)
-        and route_timeout > 0
-        and route_timeout < remaining
-    ):
-        return float(route_timeout), "route"
-    return remaining, "sentence"
-
-
 def _emit_fallback_runtime_event(action: str, **fields) -> None:
     runtime_events.emit(
         "translation_fallback",
         action=action,
         translation_mode=cfg.translation.translation_mode,
-        profile_id=cfg.active_streamer_profile,
+        profile_id=effective_profile_id(cfg.active_streamer_profile),
         circuit_breaker_enabled=_translation_circuit_breaker_enabled(),
         **fields,
     )
@@ -291,7 +326,7 @@ def _db_cache_enabled() -> bool:
 # (비워 둬 → 留空, 공백 → 空白), so bare matching is restricted to phrases
 # that cannot be a genuine translation of anything.
 _PLACEHOLDER_BRACKETED_RE = re.compile(
-    r"^[（(\[【\s]+(?:留空|空白|無輸出|无输出|無內容|无内容|空字串|空字符串|"
+    r"^[（(\[【\s]+(?:空|留空|空白|無輸出|无输出|無內容|无内容|空字串|空字符串|"
     r"零個字元|零个字符|沒有輸出|没有输出|無翻譯|无翻译|無輸出內容)"
     r"[）)\]】\s。.!…]*$"
 )
@@ -349,89 +384,7 @@ def _looks_like_meta_garbage_output(result: str) -> bool:
 
 
 def _looks_like_model_refusal(result: str) -> bool:
-    return bool(_QUALITY_RETRY_REFUSAL_RE.search((result or "").strip()))
-
-
-def _clearly_translatable_complete_source(source: str) -> bool:
-    compact = re.sub(r"\s+", "", source or "")
-    hangul_count = sum(1 for char in compact if _is_hangul_syllable(char))
-    bigrams = [
-        compact[index : index + 2]
-        for index in range(max(0, len(compact) - 1))
-    ]
-    distinct_bigram_ratio = len(set(bigrams)) / max(1, len(bigrams))
-    return (
-        len(compact) >= _QUALITY_RETRY_MIN_SOURCE_CHARS
-        and hangul_count >= _QUALITY_RETRY_MIN_SOURCE_HANGUL
-        and hangul_count / max(1, len(compact)) >= 0.35
-        and distinct_bigram_ratio >= _QUALITY_RETRY_MIN_SOURCE_BIGRAM_RATIO
-    )
-
-
-def _selective_quality_retry_trigger(
-    source: str,
-    target: str,
-    quality: dict,
-) -> str:
-    """Return one fail-closed T05 trigger, or an empty string."""
-    if _looks_like_placeholder_output(target):
-        return (
-            "placeholder_reduction"
-            if _clearly_translatable_complete_source(source)
-            else ""
-        )
-    if _looks_like_meta_garbage_output(target) or _looks_like_model_refusal(target):
-        return "meta_or_refusal"
-    if _has_provable_amount_mismatch(source, quality):
-        return "amount_mismatch"
-    return ""
-
-
-def _has_provable_amount_mismatch(source: str, quality: dict) -> bool:
-    """Promote only parser candidates backed by a narrow source shape."""
-    if not bool(quality.get("amount_mismatch_candidate")):
-        return False
-    provable_source_values: set[int] = set()
-    for match in _QUALITY_RETRY_PROVABLE_AMOUNT_RE.finditer(source or ""):
-        if _QUALITY_RETRY_AMOUNT_PREFIX_RE.search((source or "")[:match.start()]):
-            continue
-        provable_source_values.add(
-            10_000 + int(match.group("thousands")) * 1_000
-            if match.group("leading_man")
-            else int(match.group("number"))
-            * _QUALITY_RETRY_AMOUNT_UNITS[match.group("unit")]
-        )
-    if not provable_source_values:
-        return False
-    target_values = {
-        int(value)
-        for value in quality.get("target_amount_values") or []
-    }
-    for source_value in provable_source_values:
-        if not target_values:
-            return True
-        nearest_delta = min(
-            abs(source_value - target_value)
-            for target_value in target_values
-        )
-        if nearest_delta >= max(100, source_value * 0.1):
-            return True
-    return False
-
-
-def _missing_approved_terms(
-    original: str,
-    candidate: str,
-    approved_terms: frozenset[str],
-) -> list[str]:
-    original_folded = (original or "").casefold()
-    candidate_folded = (candidate or "").casefold()
-    return sorted(
-        term
-        for term in approved_terms
-        if term.casefold() in original_folded
-        and term.casefold() not in candidate_folded
-    )
+    return bool(_MODEL_REFUSAL_RE.search((result or "").strip()))
 
 
 def _is_hangul_syllable(char: str) -> bool:
@@ -465,22 +418,78 @@ def _source_alias_matches_at(source: str, alias: str, start: int) -> bool:
     return suffix_end >= len(source) or _is_name_suffix_boundary(source[suffix_end])
 
 
-def _source_has_name_alias(source: str, aliases: tuple[str, ...]) -> bool:
+def _source_has_name_alias(
+    source: str,
+    aliases: tuple[str, ...],
+    *,
+    activation_policy: str = "exact_alias",
+) -> bool:
     for alias in aliases:
-        if not alias:
-            continue
-        start = source.find(alias)
-        while start >= 0:
-            if _source_alias_matches_at(source, alias, start):
-                return True
-            start = source.find(alias, start + 1)
+        if alias and source_alias_matches(
+            source,
+            alias,
+            activation_policy=activation_policy,
+            korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
+        ):
+            return True
     return False
 
 
 def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
     if rule.scope == _SHARED_NAME_SCOPE:
         return True
-    return bool(cfg.translation.use_profile) and cfg.active_streamer_profile == rule.scope
+    return effective_profile_applied(cfg.translation.use_profile) and effective_profile_id(
+        cfg.active_streamer_profile
+    ) == rule.scope
+
+
+def _resolve_active_canonical_obligations(
+    source: str,
+) -> tuple[CanonicalObligation, ...]:
+    profile_applied = effective_profile_applied(
+        bool(getattr(cfg.translation, "use_profile", False))
+    )
+    profile_id = (
+        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
+        if profile_applied
+        else ""
+    )
+    return resolve_canonical_obligations(
+        source,
+        profile_id=profile_id,
+        profile_applied=profile_applied,
+        rules=_NAME_RENDERING_RULES,
+        korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
+    )
+
+
+def _source_activated_name_canonicals(
+    source: str,
+    *,
+    profile_id: str | None = None,
+) -> frozenset[str]:
+    """Existing soft name-render evidence, narrowed to this source only."""
+    if profile_id is None:
+        rule_enabled = _name_rendering_rule_enabled
+    else:
+        rule_enabled = lambda rule: rule.scope in (
+            profile_id,
+            _SHARED_NAME_SCOPE,
+        )
+    return frozenset(
+        rule.canonical
+        for rule in _NAME_RENDERING_RULES
+        if rule_enabled(rule)
+        and _source_has_name_alias(
+            source,
+            rule.source_aliases,
+            activation_policy=(
+                "name_context_required"
+                if rule.repair_requires_name_context
+                else "exact_alias"
+            ),
+        )
+    )
 
 
 # Per-worker record of source-normalization / target-correction rules that
@@ -516,13 +525,63 @@ def _replace_recording(text: str, wrong: str, right: str, *, stage: str, rule_id
     return text
 
 
+def _replace_source_alias_recording(
+    text: str,
+    wrong: str,
+    right: str,
+    *,
+    rule_id: str,
+) -> str:
+    """Replace a Korean source alias only at the existing name boundaries."""
+    if not wrong:
+        return text
+
+    pieces: list[str] = []
+    cursor = 0
+    search_from = 0
+    changed = False
+    while True:
+        start = text.find(wrong, search_from)
+        if start < 0:
+            break
+        end = start + len(wrong)
+        if _source_alias_matches_at(text, wrong, start):
+            pieces.extend((text[cursor:start], right))
+            cursor = end
+            changed = True
+            search_from = end
+        else:
+            search_from = start + 1
+
+    if not changed:
+        return text
+    pieces.append(text[cursor:])
+    corrected = "".join(pieces)
+    _record_correction("source_norm", rule_id, wrong, right)
+    return corrected
+
+
 def _replace_wrong_name_forms(result: str, rule: _NameRenderingRule) -> str:
     if not rule.wrong_forms:
         return result
 
     alternatives = sorted({rule.canonical, *rule.wrong_forms}, key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(alternative) for alternative in alternatives))
-    corrected = pattern.sub(rule.canonical, result)
+
+    def replace_if_bounded(match: re.Match) -> str:
+        form = match.group(0)
+        start, end = match.span()
+        if any(_is_hangul_syllable(char) for char in form):
+            if not _source_alias_matches_at(result, form, start):
+                return form
+        if any(_is_latin_letter(char) for char in form):
+            if start > 0 and _is_latin_letter(result[start - 1]):
+                return form
+            if end < len(result) and _is_latin_letter(result[end]):
+                return form
+        return rule.canonical
+
+    corrected = pattern.sub(replace_if_bounded, result)
     if corrected != result:
         present = "|".join(form for form in rule.wrong_forms if form in result)
         _record_correction("name_render", f"name:{rule.canonical}", present, rule.canonical)
@@ -536,8 +595,23 @@ def _normalize_source_before_matching(text: str) -> str:
     Operates on prepared text only; raw_text stored in TranslationOutcome is untouched.
     Profile-gated: normalization only applies when the matching profile is active.
     """
-    profile_id = cfg.active_streamer_profile
-    if profile_id and bool(cfg.translation.use_profile):
+    profile_id = effective_profile_id(cfg.active_streamer_profile)
+    if profile_id and effective_profile_applied(cfg.translation.use_profile):
+        boundary_items = _BOUNDARY_SOURCE_NORM_WITH_PROFILE_SORTED.get(
+            profile_id,
+            _BOUNDARY_SOURCE_NORM_SHARED_SORTED,
+        )
+    else:
+        boundary_items = _BOUNDARY_SOURCE_NORM_SHARED_SORTED
+    for noisy, canonical in boundary_items:
+        text = _replace_source_alias_recording(
+            text,
+            noisy,
+            canonical,
+            rule_id=f"boundary:{noisy}->{canonical}",
+        )
+
+    if profile_id and effective_profile_applied(cfg.translation.use_profile):
         items = _SOURCE_NORM_WITH_PROFILE_SORTED.get(profile_id, _SOURCE_NORM_SHARED_SORTED)
     else:
         items = _SOURCE_NORM_SHARED_SORTED
@@ -547,7 +621,7 @@ def _normalize_source_before_matching(text: str) -> str:
         )
 
     conditional_groups = _CONDITIONAL_SOURCE_NORM_SHARED
-    if profile_id and bool(cfg.translation.use_profile):
+    if profile_id and effective_profile_applied(cfg.translation.use_profile):
         conditional_groups += _CONDITIONAL_SOURCE_NORM_BY_PROFILE.get(profile_id, ())
     for source_terms, replacements, match_all in conditional_groups:
         if not _source_terms_match(text, source_terms, match_all):
@@ -579,8 +653,10 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
                 corrected, wrong, right, stage="target_correction", rule_id=f"{wrong}->{right}"
             )
 
-    if cfg.translation.use_profile:
-        profile_replacements = _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.get(cfg.active_streamer_profile, ())
+    if effective_profile_applied(cfg.translation.use_profile):
+        profile_replacements = _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS.get(
+            effective_profile_id(cfg.active_streamer_profile), ()
+        )
         for source_terms, replacements, match_all in profile_replacements:
             if not _source_terms_match(source, source_terms, match_all):
                 continue
@@ -590,10 +666,24 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
                     stage="target_correction", rule_id=f"profile:{wrong}->{right}",
                 )
 
+    return _apply_source_gated_name_rendering(source, corrected)
+
+
+def _apply_source_gated_name_rendering(source: str, result: str) -> str:
+    """Apply only exact, source-proven canonical name rendering rules."""
+    corrected = result
     for rule in _NAME_RENDERING_RULES:
         if not _name_rendering_rule_enabled(rule):
             continue
-        if not _source_has_name_alias(source, rule.source_aliases):
+        if not _source_has_name_alias(
+            source,
+            rule.source_aliases,
+            activation_policy=(
+                "name_context_required"
+                if rule.repair_requires_name_context
+                else "exact_alias"
+            ),
+        ):
             continue
         corrected = _replace_wrong_name_forms(corrected, rule)
 
@@ -616,10 +706,10 @@ def _dependency_marker(text: str) -> str:
 
 
 def _profile_preserve_as_is_terms() -> frozenset[str]:
-    if not bool(cfg.translation.use_profile):
+    if not effective_profile_applied(cfg.translation.use_profile):
         return frozenset()
 
-    profile_id = cfg.active_streamer_profile
+    profile_id = effective_profile_id(cfg.active_streamer_profile)
     if not profile_id:
         return frozenset()
 
@@ -634,16 +724,414 @@ def _profile_preserve_as_is_terms() -> frozenset[str]:
     return frozenset(terms)
 
 
-def _quality_approved_terms(profile_id: str) -> frozenset[str]:
-    """Terms allowed to remain foreign-script in telemetry for one profile."""
+def _contains_hangul(text: str) -> bool:
+    return any(_is_hangul_syllable(char) for char in text)
+
+
+def _publication_approved_terms(
+    profile_id: str,
+    obligations: tuple[CanonicalObligation, ...] = (),
+) -> frozenset[str]:
+    """Terms authorized by deterministic publication policy for this sentence."""
     terms = set(_COMMON_PRESERVED_ACRONYMS)
-    if not profile_id:
-        return frozenset(terms)
-    terms.update(get_translation_profile_preserve_terms(profile_id))
-    for rule in _NAME_RENDERING_RULES:
-        if rule.scope in (profile_id, _SHARED_NAME_SCOPE):
-            terms.add(rule.canonical)
+    if profile_id:
+        terms.update(
+            term
+            for term in get_translation_profile_preserve_terms(profile_id)
+            if not _contains_hangul(term)
+        )
+        terms.update(
+            rule.canonical
+            for rule in _NAME_RENDERING_RULES
+            if rule.scope in (profile_id, _SHARED_NAME_SCOPE)
+            and rule.publication_policy == "repair_only"
+            and not _contains_hangul(rule.canonical)
+        )
+    # Hangul publication approval is sentence-local and source-proven.  Do not
+    # allow an unrelated active-profile name to mask ordinary Korean residue.
+    terms.update(obligation.canonical_target for obligation in obligations)
     return frozenset(term for term in terms if term)
+
+
+def _preview_source_aware_corrections(
+    source: str,
+    result: str,
+    *,
+    name_render_only: bool = False,
+) -> tuple[str, list[dict]]:
+    """Preview deterministic target fixes without contaminating selected trace."""
+    sentinel = object()
+    previous = getattr(_LAST_CORRECTIONS, "value", sentinel)
+    _LAST_CORRECTIONS.value = []
+    try:
+        corrected = (
+            _apply_source_gated_name_rendering(source, result)
+            if name_render_only
+            else _apply_source_aware_corrections(source, result)
+        )
+        corrections = get_corrections()
+    finally:
+        if previous is sentinel:
+            try:
+                delattr(_LAST_CORRECTIONS, "value")
+            except AttributeError:
+                pass
+        else:
+            _LAST_CORRECTIONS.value = previous
+    return corrected, corrections
+
+
+def _translation_output_guard(
+    engine: TranslationEngine,
+    result: str,
+    source: str,
+    *,
+    obligations: tuple[CanonicalObligation, ...] | None = None,
+    unknown_name_escrow: UnknownNameEscrow | None = None,
+    semantic_terminology: SemanticTerminologyEscrow | None = None,
+) -> dict[str, object]:
+    """Enforce publication script safety plus narrow Flash-specific guards.
+
+    Every provider is judged after deterministic corrections for unexpected
+    Hangul/Kana residue. Flash additionally retains its raw-output boundary:
+    only exact, source-gated ``name_render`` rules may rescue a raw script
+    violation, and only when those rules alone remove all residue of that type.
+    """
+    if obligations is None:
+        obligations = _resolve_active_canonical_obligations(source)
+    if unknown_name_escrow is None:
+        unknown_name_escrow = UnknownNameEscrow(source, source)
+    if semantic_terminology is None:
+        semantic_terminology = SemanticTerminologyEscrow(source, source)
+    engine_name = str(getattr(engine, "engine_name", "") or "")
+    is_deepseek = engine_name == "deepseek"
+    terminology_passed, terminology_reason = (
+        semantic_terminology.evaluate_provider_candidate(result)
+    )
+    terminology_restored = (
+        semantic_terminology.restore_provider_candidate(result)
+        if terminology_passed
+        else result
+    )
+    escrow_evaluation = unknown_name_escrow.evaluate_provider_candidate(
+        terminology_restored
+    )
+    restored_result = (
+        unknown_name_escrow.restore_provider_candidate(terminology_restored)
+        if escrow_evaluation.passed
+        else terminology_restored
+    )
+    corrected, corrections = _preview_source_aware_corrections(source, restored_result)
+    profile_id = (
+        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
+        if bool(getattr(cfg.translation, "use_profile", False))
+        else ""
+    )
+    approved_terms = set(_publication_approved_terms(profile_id, obligations))
+    # Preserve the existing generic source-proof allowance, while removing the
+    # old profile-wide Hangul allowlist.  A Korean span absent from this source
+    # and from its activated obligations remains a script violation.
+    approved_terms.update(source_proven_quality_terms(source))
+    approved_terms.update(_source_activated_name_canonicals(source))
+    approved_terms.update(unknown_name_escrow.approved_hangul_terms)
+    approved_terms = frozenset(approved_terms)
+    obligation_evaluation = evaluate_canonical_obligations(corrected, obligations)
+    raw_quality = translation_quality(
+        source,
+        restored_result,
+        approved_terms=approved_terms,
+    )
+    quality = translation_quality(
+        source,
+        corrected,
+        approved_terms=approved_terms,
+    )
+    raw_flags = set(raw_quality.get("quality_flags") or [])
+    raw_classifications = set(
+        raw_quality.get("quality_classifications") or []
+    )
+    flags = set(quality.get("quality_flags") or [])
+    classifications = set(quality.get("quality_classifications") or [])
+    raw_script_violations = set()
+    if "target_has_japanese" in raw_flags:
+        raw_script_violations.add("unexpected_japanese")
+    if "target_has_unexpected_hangul" in raw_classifications:
+        raw_script_violations.add("unexpected_hangul")
+    corrected_script_violations = set()
+    if "target_has_japanese" in flags:
+        corrected_script_violations.add("unexpected_japanese")
+    if "target_has_unexpected_hangul" in classifications:
+        corrected_script_violations.add("unexpected_hangul")
+
+    name_render_rescued: set[str] = set()
+    if raw_script_violations - corrected_script_violations:
+        name_rendered, name_render_corrections = _preview_source_aware_corrections(
+            source,
+            restored_result,
+            name_render_only=True,
+        )
+        name_render_quality = translation_quality(
+            source,
+            name_rendered,
+            approved_terms=approved_terms,
+        )
+        name_render_flags = set(name_render_quality.get("quality_flags") or [])
+        name_render_classifications = set(
+            name_render_quality.get("quality_classifications") or []
+        )
+        name_render_violations = set()
+        if "target_has_japanese" in name_render_flags:
+            name_render_violations.add("unexpected_japanese")
+        if "target_has_unexpected_hangul" in name_render_classifications:
+            name_render_violations.add("unexpected_hangul")
+        if any(
+            correction.get("stage") == "name_render"
+            for correction in name_render_corrections
+        ):
+            name_render_rescued = (
+                raw_script_violations
+                - corrected_script_violations
+                - name_render_violations
+            )
+
+    reason = ""
+    if not terminology_passed:
+        reason = terminology_reason
+    elif not escrow_evaluation.passed:
+        reason = escrow_evaluation.reason
+    elif not obligation_evaluation.passed:
+        reason = "canonical_obligation_missing"
+    elif "unexpected_japanese" in corrected_script_violations:
+        reason = "unexpected_japanese"
+    elif "unexpected_hangul" in corrected_script_violations:
+        reason = "unexpected_hangul"
+    elif is_deepseek and "unexpected_japanese" in (
+        raw_script_violations - name_render_rescued
+    ):
+        reason = "unexpected_japanese"
+    elif is_deepseek and "unexpected_hangul" in (
+        raw_script_violations - name_render_rescued
+    ):
+        reason = "unexpected_hangul"
+    elif is_deepseek and _looks_like_meta_garbage_output(corrected):
+        reason = "meta_garbage_output"
+    elif is_deepseek and _looks_like_model_refusal(corrected):
+        reason = "model_refusal"
+    elif is_deepseek and "target_meta_leak" in flags:
+        reason = "target_meta_leak"
+    elif is_deepseek and "repetitive_target" in flags:
+        reason = "repetitive_target"
+    evidence = {
+        "version": 1,
+        "candidate_raw_output": result,
+        "candidate_output": corrected,
+        "candidate_corrections": corrections,
+        "candidate_quality_flags": sorted(flags),
+        "candidate_quality_classifications": sorted(classifications),
+        "candidate_raw_quality_flags": sorted(raw_flags),
+        "candidate_raw_quality_classifications": sorted(raw_classifications),
+        "canonical_obligations": obligation_evaluation.as_dict(),
+        "semantic_terminology": {
+            "active": semantic_terminology.active,
+            "rule_ids": [term.rule_id for term in semantic_terminology.terms],
+            "passed": terminology_passed,
+        },
+        "unknown_name_escrow": {
+            "active": unknown_name_escrow.active,
+            "expected": list(escrow_evaluation.expected),
+            "missing": list(escrow_evaluation.missing),
+            "duplicated": list(escrow_evaluation.duplicated),
+            "mutated_placeholder": escrow_evaluation.mutated_placeholder,
+            "invented_aliases": list(escrow_evaluation.invented_aliases),
+            "approved_hangul_terms": list(
+                unknown_name_escrow.approved_hangul_terms
+            ),
+        },
+    }
+    if reason:
+        evidence["reason"] = reason
+    elif name_render_rescued:
+        evidence["accepted_after_name_render"] = sorted(name_render_rescued)
+    elif not is_deepseek:
+        return {}
+    return evidence
+
+
+def _quality_telemetry_approved_terms(
+    profile_id: str,
+    source_text: str,
+    obligations: tuple[CanonicalObligation, ...] = (),
+) -> frozenset[str]:
+    """Add diagnostic-only evidence without changing publication policy."""
+    terms = set(_publication_approved_terms(profile_id, obligations))
+    if profile_id:
+        terms.update(
+            term
+            for term in get_translation_profile_output_terms(profile_id)
+            if not _contains_hangul(term)
+        )
+    terms.update(source_proven_quality_terms(source_text))
+    if profile_id:
+        terms.update(
+            _source_activated_name_canonicals(
+                source_text,
+                profile_id=profile_id,
+            )
+        )
+    return frozenset(term for term in terms if term)
+
+
+def _final_script_rejection_reason(event_fields: dict[str, object]) -> str:
+    """Return the authoritative publication-time script violation, if any."""
+    classifications = set(event_fields.get("quality_classifications") or ())
+    flags = set(event_fields.get("quality_flags") or ())
+    if "target_has_unexpected_hangul" in classifications:
+        return "unexpected_hangul"
+    if "target_has_japanese" in flags:
+        return "unexpected_japanese"
+    return ""
+
+
+def _is_latin_letter(char: str) -> bool:
+    return bool(char) and char.isalpha() and "LATIN" in unicodedata.name(char, "")
+
+
+def _bounded_korean_term_spans(
+    text: str,
+    terms: tuple[str, ...],
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for term in terms:
+        search_from = 0
+        while True:
+            start = text.find(term, search_from)
+            if start < 0:
+                break
+            end = start + len(term)
+            search_from = start + 1
+            if start > 0 and _is_hangul_syllable(text[start - 1]):
+                continue
+            if end < len(text) and _is_hangul_syllable(text[end]):
+                suffix_end = end
+                while suffix_end < len(text) and _is_hangul_syllable(text[suffix_end]):
+                    suffix_end += 1
+                if text[end:suffix_end] not in _IRISE_MUSIC_PART_CUE_SUFFIXES:
+                    continue
+            spans.append((start, end))
+    return spans
+
+
+def _irise_music_part_semantic_candidate(source_text: str, target_text: str) -> bool:
+    """Conservatively flag music/performance `파트` rendered as `部門`.
+
+    This is diagnostic-only.  The local cue requirement intentionally leaves
+    ambiguous business/team uses alone, and the token matcher excludes words
+    such as `파트너`.
+    """
+    if "部門" not in target_text:
+        return False
+
+    for clause in re.split(r"[.!?。！？\n]+", source_text or ""):
+        part_matches = list(_IRISE_PART_TOKEN_RE.finditer(clause))
+        if not part_matches:
+            continue
+        if "저희 파트" in clause and "수정" in clause:
+            return True
+        cue_spans = _bounded_korean_term_spans(clause, _IRISE_MUSIC_PART_CUES)
+        for part_match in part_matches:
+            local_start = max(0, part_match.start() - _IRISE_PART_CUE_MAX_GAP)
+            local_end = min(len(clause), part_match.end() + _IRISE_PART_CUE_MAX_GAP)
+            local_text = clause[local_start:local_end]
+            if any(cue in local_text for cue in _IRISE_BUSINESS_PART_CUES):
+                continue
+            for cue_start, cue_end in cue_spans:
+                gap = max(
+                    part_match.start() - cue_end,
+                    cue_start - part_match.end(),
+                    0,
+                )
+                if gap <= _IRISE_PART_CUE_MAX_GAP:
+                    return True
+    return False
+
+
+def _profile_translation_qa(
+    *,
+    source_text: str,
+    target_text: str | None,
+    status: str,
+    incomplete: bool,
+    profile_id: str,
+    profile_applied: bool,
+    metadata: dict,
+    quality: dict,
+    obligation_evaluation: CanonicalObligationEvaluation | None = None,
+) -> dict:
+    """Return profile-scoped QA evidence without changing retry or routing.
+
+    Deterministic repairs remain attributable through the existing
+    `corrections` trace.  This helper only adds post-correction obligations and
+    diagnostic suspicions; it never mutates legacy quality flags or scores.
+    """
+    # Canonical QA and hard publication acceptance share one resolver.  Keep
+    # the legacy flat fields while avoiding a second profile-specific mapping.
+    expected_terms = list(
+        obligation_evaluation.expected if obligation_evaluation is not None else ()
+    )
+
+    eligible = status == "success" and not incomplete and target_text is not None
+    target = target_text or ""
+    missing_terms = list(
+        obligation_evaluation.missing
+        if eligible and obligation_evaluation is not None
+        else ()
+    )
+
+    semantic_candidates: list[str] = []
+    if (
+        eligible
+        and profile_applied
+        and profile_id == _IRISE_PROFILE_ID
+        and _irise_music_part_semantic_candidate(source_text, target)
+    ):
+        semantic_candidates.append("music_part_rendered_as_department")
+
+    qa_flags: list[str] = []
+    classifications = list(quality.get("quality_classifications") or [])
+    if missing_terms:
+        qa_flags.append("target_missing_profile_canonical")
+        classifications.append("target_missing_profile_canonical")
+    if semantic_candidates:
+        qa_flags.append("target_profile_semantic_candidate")
+        classifications.append("target_profile_semantic_candidate")
+
+    # Script drift already has mature generic evidence in translation_quality;
+    # mirror it only in the disposition so this profile QA remains additive.
+    has_script_suspicion = (
+        "target_has_japanese" in (quality.get("quality_flags") or [])
+        or "target_has_unexpected_hangul" in classifications
+    )
+    name_render_fixed = any(
+        isinstance(correction, dict)
+        and correction.get("stage") == "name_render"
+        and correction.get("after") in expected_terms
+        for correction in (metadata.get("corrections") or [])
+    )
+    if qa_flags or has_script_suspicion:
+        disposition = "suspicious"
+    elif name_render_fixed:
+        disposition = "normalized"
+    else:
+        disposition = "clean"
+
+    return {
+        "target_expected_canonical_terms": expected_terms,
+        "target_missing_canonical_terms": missing_terms,
+        "target_profile_semantic_candidates": semantic_candidates,
+        "translation_qa_flags": qa_flags,
+        "translation_qa_disposition": disposition,
+        "quality_classifications": list(dict.fromkeys(classifications)),
+    }
 
 
 def _is_legitimate_preserve_as_is(source: str) -> bool:
@@ -726,6 +1214,13 @@ class TranslationOutcome:
     model: str = ""
     prompt_version: str = ""
     filter_reason: str = ""
+    canonical_obligation_evaluation: CanonicalObligationEvaluation | None = None
+    unknown_name_approved_terms: tuple[str, ...] = ()
+    deferred_success: Callable[[], None] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def route_id(self) -> str:
@@ -738,9 +1233,50 @@ class TranslationOutcome:
     def as_event_fields(self, latency_ms: float, metadata: dict) -> dict:
         profile_id = str(metadata.get("profile_id") or "")
         profile_applied = bool(metadata.get("profile_applied"))
-        approved_terms = _quality_approved_terms(
-            profile_id if profile_applied else ""
+        obligation_evaluation = self.canonical_obligation_evaluation
+        if obligation_evaluation is None:
+            obligations = resolve_canonical_obligations(
+                self.source_text,
+                profile_id=profile_id,
+                profile_applied=profile_applied,
+                rules=_NAME_RENDERING_RULES,
+                korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
+            )
+            obligation_evaluation = evaluate_canonical_obligations(
+                self.target_text, obligations
+            )
+        approved_terms = _quality_telemetry_approved_terms(
+            profile_id if profile_applied else "",
+            self.source_text,
+            (
+                obligation_evaluation.obligations
+            ),
         )
+        approved_terms = frozenset(
+            set(approved_terms) | set(self.unknown_name_approved_terms)
+        )
+        quality = translation_quality(
+            self.source_text,
+            self.target_text,
+            approved_terms=approved_terms,
+        )
+        profile_qa = _profile_translation_qa(
+            source_text=self.source_text,
+            target_text=self.target_text,
+            status=self.status,
+            incomplete=self.incomplete,
+            profile_id=profile_id,
+            profile_applied=profile_applied,
+            metadata=metadata,
+            quality=quality,
+            obligation_evaluation=obligation_evaluation,
+        )
+        obligation_fields = {
+            "canonical_publication_policy_version": (
+                _CANONICAL_PUBLICATION_POLICY_VERSION
+            ),
+            "canonical_obligation_evaluation": obligation_evaluation.as_dict(),
+        }
         return {
             "source_text": self.source_text,
             "target_text": self.target_text,
@@ -753,13 +1289,14 @@ class TranslationOutcome:
             "route_id": self.route_id,
             "prompt_version": self.prompt_version,
             "filter_reason": self.filter_reason,
+            "target_unknown_name_escrow_terms": list(
+                self.unknown_name_approved_terms
+            ),
             "latency_ms": round(latency_ms, 2),
             **metadata,
-            **translation_quality(
-                self.source_text,
-                self.target_text,
-                approved_terms=approved_terms,
-            ),
+            **quality,
+            **profile_qa,
+            **obligation_fields,
         }
 
 
@@ -770,6 +1307,8 @@ class _TranslatorSharedState:
     fallback: FallbackState
     lock: object
     fallback_event_sink: FallbackEventSink | None = None
+    inflight_sources: dict[str, int] = field(default_factory=dict)
+    history_session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
 
 def _new_translation_memory() -> TranslationMemory:
@@ -799,6 +1338,17 @@ def _new_translation_policy() -> TranslationPolicy:
     )
 
 
+def _history_cohort_for(
+    snapshot: ActivitySnapshot | None,
+    profile_id: object,
+) -> HistoryCohort:
+    return (
+        str(profile_id or "").strip() or "default",
+        (snapshot.activity_id if snapshot is not None else "") or "unknown",
+        max(0, int(snapshot.cohort_epoch or 0)) if snapshot is not None else 0,
+    )
+
+
 def _new_translator_shared_state(
     *,
     fallback_event_sink: FallbackEventSink | None = None,
@@ -815,7 +1365,6 @@ def _new_translator_shared_state(
 def _copy_fallback_state(state: FallbackState) -> FallbackState:
     return FallbackState(
         state.active_idx,
-        state.probe_counter,
         state.consecutive_primary_failures,
         state.primary_cooldown_until,
         state.consecutive_probe_successes,
@@ -842,13 +1391,11 @@ def _send_fallback_event(
 def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: FallbackState) -> None:
     if (
         shared.active_idx == before.active_idx
-        and shared.probe_counter == before.probe_counter
         and shared.consecutive_primary_failures == before.consecutive_primary_failures
         and shared.primary_cooldown_until == before.primary_cooldown_until
         and shared.consecutive_probe_successes == before.consecutive_probe_successes
     ):
         shared.active_idx = after.active_idx
-        shared.probe_counter = after.probe_counter
         shared.consecutive_primary_failures = after.consecutive_primary_failures
         shared.primary_cooldown_until = after.primary_cooldown_until
         shared.consecutive_probe_successes = after.consecutive_probe_successes
@@ -862,7 +1409,6 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
         and shared.consecutive_probe_successes == before.consecutive_probe_successes
     ):
         shared.active_idx = 0
-        shared.probe_counter = 0
         shared.consecutive_primary_failures = 0
         shared.primary_cooldown_until = 0.0
         shared.consecutive_probe_successes = 0
@@ -875,7 +1421,6 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
     ):
         previous_cooldown_until = shared.primary_cooldown_until
         shared.active_idx = after.active_idx
-        shared.probe_counter = after.probe_counter
         shared.consecutive_primary_failures = after.consecutive_primary_failures
         shared.primary_cooldown_until = max(previous_cooldown_until, after.primary_cooldown_until)
         if after.primary_cooldown_until >= previous_cooldown_until:
@@ -883,7 +1428,6 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
         return
 
     if shared.active_idx == after.active_idx:
-        shared.probe_counter = max(shared.probe_counter, after.probe_counter)
         shared.consecutive_primary_failures = max(
             shared.consecutive_primary_failures,
             after.consecutive_primary_failures,
@@ -956,15 +1500,6 @@ def _token_usage_for_outcome(outcome: TranslationOutcome) -> dict[str, int | Non
     return get_selected_token_usage()
 
 
-def reset_quality_retry_trace() -> None:
-    _QUALITY_RETRY_TRACE.value = {}
-
-
-def get_quality_retry_trace() -> dict:
-    value = getattr(_QUALITY_RETRY_TRACE, "value", None)
-    return dict(value) if isinstance(value, dict) else {}
-
-
 @dataclass(frozen=True)
 class _CompletedTranslation:
     seq: int
@@ -978,10 +1513,78 @@ class _CompletedTranslation:
     retry_count: int
     retry_reason: str
     api_event_fields: dict
+    policy_input: str = ""
+
+
+class _DaemonWorkerPool:
+    """Small fixed-size pool whose workers cannot keep the process alive.
+
+    ``ThreadPoolExecutor`` uses non-daemon threads and registers them for an
+    interpreter-exit join.  A provider call stuck below Python's timeout layer
+    could therefore outlive the bounded translator drain and prevent process
+    exit.  This pool keeps the same ``Future`` interface used by the coordinator
+    while making the worker lifetime subordinate to the pipeline process.
+    """
+
+    def __init__(self, max_workers: int, *, thread_name_prefix: str):
+        self._tasks: queue.Queue[tuple[Future, Callable, tuple, dict] | None] = queue.Queue()
+        self._lock = threading.Lock()
+        self._shutdown = False
+        self._threads = [
+            start_daemon_thread(f"{thread_name_prefix}_{index}", self._worker)
+            for index in range(max_workers)
+        ]
+
+    def _worker(self) -> None:
+        while True:
+            task = self._tasks.get()
+            if task is None:
+                return
+            future, fn, args, kwargs = task
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+    def submit(self, fn: Callable, /, *args, **kwargs) -> Future:
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            future: Future = Future()
+            self._tasks.put((future, fn, args, kwargs))
+            return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            if cancel_futures:
+                while True:
+                    try:
+                        task = self._tasks.get_nowait()
+                    except queue.Empty:
+                        break
+                    if task is not None:
+                        task[0].cancel()
+            for _thread in self._threads:
+                self._tasks.put(None)
+        if wait:
+            for thread in self._threads:
+                thread.join()
 
 
 class Translator:
-    def __init__(self, shared_state: _TranslatorSharedState | None = None):
+    def __init__(
+        self,
+        shared_state: _TranslatorSharedState | None = None,
+        *,
+        defer_success_record: bool = False,
+    ):
         self._shared_state = shared_state or _new_translator_shared_state()
         self._state_lock = self._shared_state.lock
         self._fallback_state_obj = self._shared_state.fallback
@@ -990,6 +1593,9 @@ class Translator:
         self._memory = self._shared_state.memory
         self._policy = self._shared_state.policy
         self._last_input: str = ""
+        self._defer_success_record = defer_success_record
+        self._history_session_id = self._shared_state.history_session_id
+        self._last_provisional_trace: dict = {}
 
     def _state_guard(self):
         return getattr(self, "_state_lock", None) or nullcontext()
@@ -1014,7 +1620,6 @@ class Translator:
             self._engines_key = current_key
             state = self._fallback_state()
             state.active_idx = 0
-            state.probe_counter = 0
             state.consecutive_primary_failures = 0
             state.primary_cooldown_until = 0.0
             state.consecutive_probe_successes = 0
@@ -1026,14 +1631,6 @@ class Translator:
     @_active_idx.setter
     def _active_idx(self, value: int) -> None:
         self._fallback_state().active_idx = value
-
-    @property
-    def _probe_counter(self) -> int:
-        return self._fallback_state().probe_counter
-
-    @_probe_counter.setter
-    def _probe_counter(self, value: int) -> None:
-        self._fallback_state().probe_counter = value
 
     @property
     def _consecutive_primary_failures(self) -> int:
@@ -1052,18 +1649,25 @@ class Translator:
         incomplete: bool = False,
         *,
         repetition_evidence: RepetitionEvidence | None = None,
+        provisional_candidate: ProvisionalCandidate | None = None,
+        source_utterance_ids: tuple[str, ...] = (),
+        evidence_source_utterance_ids: tuple[str, ...] = (),
     ) -> TranslationOutcome:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
             getattr(cfg.translation, "current_activity", ""),
             automatic_enabled=bool(
                 getattr(cfg.scene, "publish_translation_activity", False)
             ),
+            source_text=text,
         )
         with bind_activity_snapshot(snapshot):
             return self._translate_event_with_snapshot(
                 text,
                 incomplete,
                 repetition_evidence=repetition_evidence,
+                provisional_candidate=provisional_candidate,
+                source_utterance_ids=source_utterance_ids,
+                evidence_source_utterance_ids=evidence_source_utterance_ids,
             )
 
     def _translate_event_with_snapshot(
@@ -1072,8 +1676,13 @@ class Translator:
         incomplete: bool = False,
         *,
         repetition_evidence: RepetitionEvidence | None = None,
+        provisional_candidate: ProvisionalCandidate | None = None,
+        source_utterance_ids: tuple[str, ...] = (),
+        evidence_source_utterance_ids: tuple[str, ...] = (),
     ) -> TranslationOutcome:
         raw_text = (text or "").strip()
+        self._last_provisional_trace = {}
+        history_cohort = self._history_cohort()
         if repetition_evidence is not None:
             # The call argument is authoritative.  A stale/malformed evidence
             # object must never relabel an incomplete sentence as complete.
@@ -1112,16 +1721,56 @@ class Translator:
             )
 
         text = _normalize_source_before_matching(text)
+        canonical_obligations = _resolve_active_canonical_obligations(text)
+        known_source_spans = tuple(
+            span
+            for obligation in canonical_obligations
+            for span in obligation.source_spans
+        )
+        unknown_name_escrow = resolve_unknown_name_escrow(
+            text,
+            known_source_spans=known_source_spans,
+        )
+        semantic_terminology = resolve_semantic_terminology(
+            unknown_name_escrow.provider_source
+        )
+        provider_text = semantic_terminology.provider_source
 
-        if slang_result := self._translate_slang(text, incomplete):
-            return TranslationOutcome(
-                source_text=raw_text,
-                target_text=slang_result,
-                status="success",
-                result_source="slang",
-                cache_status="skipped",
-                incomplete=incomplete,
+        # Direct paths predate escrow and cannot preserve its provider token.
+        # Keep them unavailable for the narrowly escrowed sentences rather than
+        # allowing a cache/slang result to bypass the final identity invariant.
+        slang_result = (
+            None
+            if unknown_name_escrow.active or semantic_terminology.active
+            else self._translate_slang(text, incomplete)
+        )
+        if slang_result:
+            slang_preview, _ = _preview_source_aware_corrections(text, slang_result)
+            slang_evaluation = evaluate_canonical_obligations(
+                slang_preview, canonical_obligations
             )
+            if slang_evaluation.passed:
+                slang_result = _apply_source_aware_corrections(text, slang_result)
+                success_commit = lambda: self._record_direct_success(
+                    text,
+                    slang_result,
+                    incomplete,
+                    history_cohort,
+                )
+                if not getattr(self, "_defer_success_record", False):
+                    success_commit()
+                    success_commit = None
+                return TranslationOutcome(
+                    source_text=raw_text,
+                    target_text=slang_result,
+                    status="success",
+                    result_source="slang",
+                    cache_status="skipped",
+                    incomplete=incomplete,
+                    canonical_obligation_evaluation=slang_evaluation,
+                    deferred_success=success_commit,
+                )
+            metrics.increment("translation.canonical_obligation.slang_rejected")
 
         # 根据当前模型选择对应的 prompt
         self._refresh_engines_if_needed()
@@ -1130,14 +1779,33 @@ class Translator:
         prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
         self._log_prompt_mode_once()
 
-        lookup = self._lookup_existing_translation_event(text, incomplete, prompt_ver, engine)
+        lookup = (
+            MemoryLookup(None, "miss")
+            if unknown_name_escrow.active or semantic_terminology.active
+            else self._lookup_existing_translation_event(
+                text, incomplete, prompt_ver, engine, history_cohort
+            )
+        )
         if lookup.result:
-            target_text = _apply_source_aware_corrections(text, lookup.result)
+            target_preview, _ = _preview_source_aware_corrections(text, lookup.result)
+            cache_evaluation = evaluate_canonical_obligations(
+                target_preview, canonical_obligations
+            )
+            if not cache_evaluation.passed:
+                metrics.increment("translation.canonical_obligation.cache_rejected")
+                self._invalidate_cached_translation(
+                    text, incomplete, prompt_ver, engine, lookup.result
+                )
+                lookup = MemoryLookup(None, "miss")
+            else:
+                target_text = _apply_source_aware_corrections(text, lookup.result)
+        if lookup.result:
             if (
                 _looks_like_meta_garbage_output(target_text)
                 or _looks_like_model_refusal(target_text)
             ):
                 self._invalidate_cached_translation(text, incomplete, prompt_ver, engine, lookup.result)
+                self._reset_failed_input()
                 return TranslationOutcome(
                     source_text=raw_text,
                     target_text=None,
@@ -1149,6 +1817,14 @@ class Translator:
                     engine=engine.engine_name if engine else "",
                     model=engine.model_name if engine else "",
                     prompt_version=prompt_ver,
+                )
+            success_commit = None
+            if getattr(self, "_defer_success_record", False):
+                success_commit = lambda: self._record_lookup_context(
+                    text,
+                    target_text,
+                    incomplete,
+                    history_cohort,
                 )
             return TranslationOutcome(
                 source_text=raw_text,
@@ -1160,86 +1836,254 @@ class Translator:
                 engine=engine.engine_name if engine else "",
                 model=engine.model_name if engine else "",
                 prompt_version=prompt_ver,
+                canonical_obligation_evaluation=cache_evaluation,
+                deferred_success=success_commit,
             )
 
         with self._state_guard():
-            history = self._memory_state().context()
+            history = self._memory_state().context(history_cohort)
+        frozen_messages_by_engine = {
+            "deepseek": build_effective_deepseek_messages(
+                provider_text, system_prompt, incomplete, history
+            ),
+            "openrouter": build_effective_qwen_messages(
+                provider_text, system_prompt, incomplete, history
+            ),
+        }
+        effective_deepseek_messages = frozen_messages_by_engine["deepseek"]
         deadline_at = _translation_deadline_at()
-        result, used_engine = self._call_with_fallback(
-            text,
-            system_prompt,
-            incomplete,
-            history,
-            deadline_at=deadline_at,
-        )
+        promoted = False
+        result = None
+        used_engine = None
+        if provisional_candidate is not None:
+            snapshot = bound_activity_snapshot()
+            profile_snapshot = bound_profile_snapshot()
+            assert snapshot is not None
+            fingerprint = provisional_fingerprint(
+                prepared_source=text,
+                source_utterance_ids=source_utterance_ids,
+                evidence_source_utterance_ids=evidence_source_utterance_ids,
+                profile_id=(
+                    profile_snapshot.effective_profile_id
+                    if profile_snapshot is not None else history_cohort[0]
+                ),
+                profile_cache_identity=(
+                    profile_snapshot.cache_identity
+                    if profile_snapshot is not None else ""
+                ),
+                activity_cache_identity=snapshot.cache_identity,
+                history_cohort=history_cohort,
+                messages=effective_deepseek_messages,
+                incomplete=incomplete,
+            )
+            if fingerprint == provisional_candidate.fingerprint:
+                provisional_engine = DeepSeekTranslationEngine()
+                guard = _translation_output_guard(
+                    provisional_engine,
+                    provisional_candidate.raw_target,
+                    text,
+                    obligations=canonical_obligations,
+                    unknown_name_escrow=unknown_name_escrow,
+                    semantic_terminology=semantic_terminology,
+                )
+                if not guard.get("reason"):
+                    result = str(
+                        guard.get("candidate_output")
+                        or provisional_candidate.raw_target
+                    )
+                    used_engine = provisional_engine
+                    promoted = True
+                    self._last_provisional_trace = {
+                        "promotion_attempted": True,
+                        "promotion_passed": True,
+                        "fingerprint_match": True,
+                    }
+                else:
+                    self._last_provisional_trace = {
+                        "promotion_attempted": True,
+                        "promotion_passed": False,
+                        "fingerprint_match": True,
+                        "guard_rejection": str(guard.get("reason") or ""),
+                        "final_retranslation": True,
+                    }
+            else:
+                self._last_provisional_trace = {
+                    "promotion_attempted": True,
+                    "promotion_passed": False,
+                    "fingerprint_match": False,
+                    "fingerprint_mismatch": True,
+                    "final_retranslation": True,
+                }
+        if not promoted:
+            result, used_engine = self._call_with_fallback(
+                provider_text,
+                system_prompt,
+                incomplete,
+                history,
+                deadline_at=deadline_at,
+                frozen_messages_by_engine=frozen_messages_by_engine,
+                canonical_obligations=canonical_obligations,
+                source_text=text,
+                unknown_name_escrow=unknown_name_escrow,
+                semantic_terminology=semantic_terminology,
+            )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
         # _active_engine() here mislabeled the result source, API diagnostics
         # and the DB cache row.
         engine = used_engine or self._active_engine()
         prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
-        if result:
-            result = _apply_source_aware_corrections(text, result)
-            result, engine, prompt_ver = self._maybe_quality_retry(
-                raw_text, text, result, system_prompt, incomplete, history,
-                engine, prompt_ver, deadline_at=deadline_at,
-            )
-            if (
-                _looks_like_meta_garbage_output(result)
-                or _looks_like_model_refusal(result)
-            ):
-                log.debug("Filtering meta garbage translation output: %.40s -> %.40s", text, result)
-                return TranslationOutcome(
-                    source_text=raw_text,
-                    target_text=None,
-                    status="filtered",
-                    result_source="post_policy",
-                    cache_status=lookup.source,
-                    incomplete=incomplete,
-                    engine=engine.engine_name if engine else "",
-                    model=engine.model_name if engine else "",
-                    prompt_version=prompt_ver,
-                    filter_reason="meta_garbage_output",
-                )
-            self._record_success(text, result, incomplete, prompt_ver, engine)
+        return self._finalize_translation_result(
+            raw_text=raw_text,
+            prepared_text=text,
+            provider_result=result,
+            promoted=promoted,
+            engine=engine,
+            prompt_version=prompt_ver,
+            cache_status=lookup.source,
+            incomplete=incomplete,
+            canonical_obligations=canonical_obligations,
+            unknown_name_escrow=unknown_name_escrow,
+            semantic_terminology=semantic_terminology,
+            history_cohort=history_cohort,
+        )
+
+    def _reset_failed_input(self) -> None:
+        """Release duplicate suppression after a retryable final failure."""
+        with self._state_guard():
+            policy = self._policy_state()
+            if policy.last_input == self._last_input:
+                policy.reset_last_input()
+            self._last_input = ""
+
+    def _finalize_translation_result(
+        self,
+        *,
+        raw_text: str,
+        prepared_text: str,
+        provider_result: str | None,
+        promoted: bool,
+        engine: TranslationEngine | None,
+        prompt_version: str,
+        cache_status: str,
+        incomplete: bool,
+        canonical_obligations: tuple[CanonicalObligation, ...],
+        unknown_name_escrow: UnknownNameEscrow,
+        semantic_terminology: SemanticTerminologyEscrow,
+        history_cohort: HistoryCohort,
+    ) -> TranslationOutcome:
+        """Sole finalizer for primary, fallback, and provisional candidates."""
+        if not provider_result:
+            self._reset_failed_input()
             return TranslationOutcome(
                 source_text=raw_text,
-                target_text=result,
-                status="success",
-                result_source="api",
-                cache_status=lookup.source,
+                target_text=None,
+                status="failed",
+                result_source="none",
+                cache_status=cache_status,
                 incomplete=incomplete,
                 engine=engine.engine_name if engine else "",
                 model=engine.model_name if engine else "",
-                prompt_version=prompt_ver,
+                prompt_version=prompt_version,
+                canonical_obligation_evaluation=evaluate_canonical_obligations(
+                    None, canonical_obligations
+                ),
             )
-        else:
-            # API failure — allow next identical input to retry rather than
-            # staying suppressed. Under the state lock, and only if last_input
-            # is still ours: with two workers, a slow failing request must not
-            # clear the duplicate-suppression state another worker just wrote.
-            with self._state_guard():
-                policy = self._policy_state()
-                if policy.last_input == self._last_input:
-                    policy.reset_last_input()
-                self._last_input = ""
+
+        result = provider_result
+        if not promoted:
+            result = unknown_name_escrow.restore_provider_candidate(result)
+            result = semantic_terminology.restore_provider_candidate(result)
+        result = _apply_source_aware_corrections(prepared_text, result)
+
+        final_obligation_evaluation = evaluate_canonical_obligations(
+            result, canonical_obligations
+        )
+        common_failure = {
+            "source_text": raw_text,
+            "target_text": None,
+            "result_source": "post_policy",
+            "cache_status": cache_status,
+            "incomplete": incomplete,
+            "engine": engine.engine_name if engine else "",
+            "model": engine.model_name if engine else "",
+            "prompt_version": prompt_version,
+        }
+        if (
+            _looks_like_meta_garbage_output(result)
+            or _looks_like_model_refusal(result)
+        ):
+            log.debug(
+                "Filtering meta garbage translation output: %.40s -> %.40s",
+                prepared_text,
+                result,
+            )
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="filtered",
+                filter_reason="meta_garbage_output",
+                canonical_obligation_evaluation=final_obligation_evaluation,
+            )
+
+        final_escrow_evaluation = unknown_name_escrow.evaluate_final(result)
+        if not final_escrow_evaluation.passed:
+            metrics.increment("translation.unknown_name_escrow.final_rejected")
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="failed",
+                filter_reason=final_escrow_evaluation.reason,
+                canonical_obligation_evaluation=final_obligation_evaluation,
+            )
+
+        terminology_passed, terminology_reason = semantic_terminology.evaluate_final(
+            result
+        )
+        if not terminology_passed:
+            metrics.increment("translation.semantic_terminology.final_rejected")
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="failed",
+                filter_reason=terminology_reason,
+            )
+
+        if not final_obligation_evaluation.passed:
+            metrics.increment("translation.canonical_obligation.final_rejected")
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="failed",
+                filter_reason="canonical_obligation_missing",
+                canonical_obligation_evaluation=final_obligation_evaluation,
+            )
+
+        success_commit = lambda: self._record_success(
+            prepared_text,
+            result,
+            incomplete,
+            prompt_version,
+            engine,
+            history_cohort,
+        )
+        if not getattr(self, "_defer_success_record", False):
+            success_commit()
+            success_commit = None
         return TranslationOutcome(
             source_text=raw_text,
-            target_text=None,
-            status="failed",
-            result_source="none",
-            cache_status=lookup.source,
+            target_text=result,
+            status="success",
+            result_source="provisional_promotion" if promoted else "api",
+            cache_status=cache_status,
             incomplete=incomplete,
             engine=engine.engine_name if engine else "",
             model=engine.model_name if engine else "",
-            prompt_version=prompt_ver,
+            prompt_version=prompt_version,
+            canonical_obligation_evaluation=final_obligation_evaluation,
+            unknown_name_approved_terms=unknown_name_escrow.approved_hangul_terms,
+            deferred_success=success_commit,
         )
-
-    def _prepare_input(self, text: str) -> str | None:
-        with self._state_guard():
-            prepared = self._policy_state().prepare_input(text)
-            self._last_input = self._policy_state().last_input
-        return prepared
 
     def _policy_state(self) -> TranslationPolicy:
         return self._policy
@@ -1247,17 +2091,48 @@ class Translator:
     def _memory_state(self) -> TranslationMemory:
         return self._memory
 
+    def _history_cohort(self) -> HistoryCohort:
+        snapshot = bound_activity_snapshot()
+        profile_snapshot = bound_profile_snapshot()
+        return _history_cohort_for(
+            snapshot,
+            (
+                profile_snapshot.cache_identity
+                if profile_snapshot is not None
+                else effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
+            ),
+        )
+
+    def _history_session(self) -> str:
+        value = getattr(self, "_history_session_id", "")
+        if not value:
+            value = uuid.uuid4().hex[:12]
+            self._history_session_id = value
+        return value
+
     def _translate_slang(self, text: str, incomplete: bool) -> str | None:
         slang_result = self._policy_state().slang_result(text)
         if not slang_result:
             return None
 
         log.debug("Slang hit: %s → %s", text, slang_result)
-        with self._state_guard():
-            self._memory_state().record_direct_memory(text, slang_result, incomplete)
-        # File I/O outside the shared lock (M1).
-        self._memory_state().write_history(text, slang_result)
         return slang_result
+
+    def _record_direct_success(self, text: str, result: str, incomplete: bool,
+                               cohort: HistoryCohort) -> None:
+        with self._state_guard():
+            self._memory_state().record_direct_memory(
+                text, result, incomplete, cohort
+            )
+        # File I/O outside the shared lock (M1).
+        self._memory_state().write_history(text, result)
+
+    def _record_lookup_context(self, text: str, result: str, incomplete: bool,
+                               cohort: HistoryCohort) -> None:
+        with self._state_guard():
+            self._memory_state().record_recent_context(
+                text, result, incomplete, cohort
+            )
 
     def _lookup_existing_translation_event(
         self,
@@ -1265,6 +2140,7 @@ class Translator:
         incomplete: bool,
         prompt_ver: str,
         engine: TranslationEngine | None = None,
+        cohort: HistoryCohort | None = None,
     ) -> MemoryLookup:
         # Memory cache under the lock; the SQLite read happens outside it (M1)
         # so a slow DB never blocks the other worker.
@@ -1272,7 +2148,12 @@ class Translator:
             engine = self._active_engine()
         with self._state_guard():
             lookup = self._memory_state().lookup_memory_event(
-                text, incomplete, prompt_ver, engine
+                text,
+                incomplete,
+                prompt_ver,
+                engine,
+                remember_recent=not getattr(self, "_defer_success_record", False),
+                cohort=cohort,
             )
         if lookup.result:
             log.debug("Cache hit: %s", text[:20])
@@ -1284,7 +2165,13 @@ class Translator:
         if db_result:
             with self._state_guard():
                 lookup = self._memory_state().record_db_hit(
-                    text, incomplete, prompt_ver, db_result, engine
+                    text,
+                    incomplete,
+                    prompt_ver,
+                    db_result,
+                    engine,
+                    remember_recent=not getattr(self, "_defer_success_record", False),
+                    cohort=cohort,
                 )
             log.debug("Cache hit: %s", text[:20])
             return lookup
@@ -1293,12 +2180,13 @@ class Translator:
 
     def _record_success(self, text: str, result: str, incomplete: bool,
                         prompt_ver: str,
-        engine: TranslationEngine | None = None) -> None:
+        engine: TranslationEngine | None = None,
+        cohort: HistoryCohort | None = None) -> None:
         with self._state_guard():
             if engine is None:
                 engine = self._active_engine()
             self._memory_state().record_success_memory(
-                text, result, incomplete, prompt_ver, engine
+                text, result, incomplete, prompt_ver, engine, cohort
             )
         # File/DB I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
@@ -1361,15 +2249,26 @@ class Translator:
                 engine,
                 system_prompt,
             )
-        if not snapshot.activity_id:
-            return self._prompt_version(effective_prompt)
-        # The prompt profile still protects all other semantic prompt changes.
-        # The activity-specific cache component is deliberately the stable
-        # canonical id plus schema, never source/confidence/confirmation time.
+        cohort = self._history_cohort()
+        # Cache entries can be context-shaped, so the episode boundary is part
+        # of the identity even when activity is unknown. Resolver refreshes do
+        # not change cohort_epoch; actual scene/profile transitions do.
         return self._prompt_version(
             effective_prompt
-            + "\n[activity-cache-identity] "
-            + snapshot.cache_identity
+            + "\n[canonical-publication-policy] "
+            + _CANONICAL_PUBLICATION_POLICY_VERSION
+            + "\n[request-cache-cohort] "
+            + f"{cohort[0]}:{cohort[1]}:{cohort[2]}"
+            + (
+                "\n[history-session] " + self._history_session()
+                if int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+                else ""
+            )
+            + (
+                "\n[activity-cache-identity] " + snapshot.cache_identity
+                if snapshot.activity_id
+                else ""
+            )
         )
 
     def _call_with_fallback(
@@ -1377,10 +2276,26 @@ class Translator:
         history: list[tuple[str, str]] | None = None,
         *,
         deadline_at: float | None = None,
+        frozen_messages_by_engine: dict[
+            str, tuple[tuple[str, str], ...]
+        ] | None = None,
+        canonical_obligations: tuple[CanonicalObligation, ...] | None = None,
+        source_text: str | None = None,
+        unknown_name_escrow: UnknownNameEscrow | None = None,
+        semantic_terminology: SemanticTerminologyEscrow | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
         actually produced the result — on a soft fallback this differs from
         the active engine, which intentionally stays on primary."""
+        source_text = source_text or text
+        if canonical_obligations is None:
+            canonical_obligations = _resolve_active_canonical_obligations(source_text)
+        if unknown_name_escrow is None:
+            unknown_name_escrow = UnknownNameEscrow(source_text, source_text)
+        if semantic_terminology is None:
+            semantic_terminology = SemanticTerminologyEscrow(
+                source_text, source_text
+            )
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
         if lock is None:
@@ -1397,7 +2312,6 @@ class Translator:
             system_prompt,
             incomplete,
             history,
-            _FALLBACK_PROBE_EVERY,
             _fallback_failure_threshold(),
             _looks_untranslated,
             log,
@@ -1407,6 +2321,17 @@ class Translator:
             ),
             deadline_at=deadline_at,
             max_route_inflight=cfg.translation.live_route_max_inflight,
+            frozen_messages_by_engine=frozen_messages_by_engine,
+            output_guard=lambda candidate_engine, candidate, _provider_source: (
+                _translation_output_guard(
+                    candidate_engine,
+                    candidate,
+                    source_text,
+                    obligations=canonical_obligations,
+                    unknown_name_escrow=unknown_name_escrow,
+                    semantic_terminology=semantic_terminology,
+                )
+            ),
         )
         if lock is not None:
             with lock:
@@ -1419,7 +2344,7 @@ class Translator:
 
         if (
             _translation_circuit_breaker_enabled()
-            and committed_after.active_idx > committed_before.active_idx
+            and committed_after.active_idx != committed_before.active_idx
         ):
             from_engine = active_engine(self._engines, committed_before.active_idx)
             to_engine = active_engine(self._engines, committed_after.active_idx)
@@ -1435,7 +2360,13 @@ class Translator:
             )
             _send_fallback_event(
                 getattr(self, "_shared_state", None),
-                "circuit_opened" if committed_before.active_idx == 0 else "fallback_advanced",
+                (
+                    "fallback_recovered"
+                    if committed_after.active_idx < committed_before.active_idx
+                    else "circuit_opened"
+                    if committed_before.active_idx == 0
+                    else "fallback_advanced"
+                ),
                 primary_engine=str(getattr(active_engine(self._engines, 0), "engine_name", "") or ""),
                 primary_route=translation_route_id(active_engine(self._engines, 0)),
                 from_engine=str(getattr(from_engine, "engine_name", "") or ""),
@@ -1444,6 +2375,20 @@ class Translator:
                 active_route=translation_route_id(to_engine),
                 from_active_idx=committed_before.active_idx,
                 active_idx=committed_after.active_idx,
+                sequence_id=getattr(self, "_current_sequence_id", None),
+                attempt_chain=[
+                    {
+                        key: attempt.get(key)
+                        for key in (
+                            "route_id",
+                            "status",
+                            "failure_scope",
+                            "api_error_type",
+                            "api_error_message_class",
+                        )
+                    }
+                    for attempt in attempts
+                ],
                 failure_status=str(failed_attempt.get("status") or ""),
                 failure_scope=str(failed_attempt.get("failure_scope") or ""),
                 api_error_type=failed_attempt.get("api_error_type"),
@@ -1460,255 +2405,6 @@ class Translator:
         used_engine = active_engine(self._engines, used_idx)
         return result, used_engine
 
-    _QUALITY_SEVERITY_RANK = {"ok": 0, "warn": 1, "bad": 2}
-
-    def _maybe_quality_retry(
-        self, raw_text: str, text: str, result: str, system_prompt: str,
-        incomplete: bool, history: list[tuple[str, str]] | None,
-        engine, prompt_ver: str,
-        *,
-        deadline_at: float | None = None,
-    ):
-        """Act on the QE signal at runtime instead of only logging it.
-
-        Only a small fail-closed set of defects may ask one untried engine for
-        a second opinion. Generic severity, high Latin, repetition, and low-CJK
-        ratios are telemetry only. Incomplete fragments are skipped because
-        they are translated again with the completed sentence.
-        """
-        if incomplete or not getattr(cfg.translation, "quality_retry_enabled", True):
-            return result, engine, prompt_ver
-        approved_terms = _quality_approved_terms(
-            cfg.active_streamer_profile
-            if bool(getattr(cfg.translation, "use_profile", False))
-            else ""
-        )
-        quality = translation_quality(
-            raw_text,
-            result,
-            approved_terms=approved_terms,
-        )
-        severity = quality.get("quality_severity")
-        flags = set(quality.get("quality_flags") or [])
-        selective_trigger = _selective_quality_retry_trigger(
-            raw_text,
-            result,
-            quality,
-        )
-        japanese_mode = str(
-            getattr(cfg.translation, "quality_retry_japanese_mode", "off") or "off"
-        ).lower()
-        japanese_flagged = "target_has_japanese" in flags
-        # The production-default "off" mode is fail-closed for every
-        # Japanese-flagged original, including composite selective defects.
-        # The former default shadow mode never replaced those originals;
-        # changing the default must remove its diagnostic call without
-        # silently activating replacement for the same subtitles.
-        if japanese_flagged and japanese_mode == "off":
-            return result, engine, prompt_ver
-        japanese_trigger = japanese_flagged and japanese_mode in {
-            "shadow",
-            "active",
-        }
-        if not selective_trigger and not japanese_trigger:
-            return result, engine, prompt_ver
-        # §17 precedence: while collecting the Phase B dataset
-        # (japanese_mode=shadow), ANY Japanese-flagged output is absolutely
-        # record-only even when a selective trigger also matches, or
-        # the semantic-regression gate systematically loses its highest-risk
-        # composite samples.
-        shadow_locked = japanese_flagged and japanese_mode == "shadow"
-        current_name = engine.engine_name if engine else ""
-        co_triggers = []
-        if selective_trigger:
-            co_triggers.append(selective_trigger)
-        if japanese_trigger:
-            co_triggers.append("target_has_japanese")
-        if shadow_locked:
-            primary_trigger = "target_has_japanese"
-            trace_mode = "shadow"
-        else:
-            primary_trigger = selective_trigger or "target_has_japanese"
-            trace_mode = "active" if selective_trigger else japanese_mode
-        trace = {
-            "trigger": primary_trigger,
-            "co_triggers": co_triggers,
-            "mode": trace_mode,
-            "original_engine": current_name,
-            "original_route": translation_route_id(engine),
-            "original_output": result,
-            "original_severity": severity,
-            "original_flags": sorted(flags),
-            "candidate_engine": "",
-            "candidate_route": "",
-            "candidate_output": "",
-            "candidate_severity": "",
-            "candidate_flags": [],
-            "would_replace": False,
-            "applied": False,
-            "reason": "",
-        }
-        _QUALITY_RETRY_TRACE.value = trace
-        attempted_routes = {
-            str(attempt.get("route_id") or "")
-            for attempt in get_translation_attempts()
-        }
-        current_route = translation_route_id(engine)
-        alternate = next(
-            (e for e in self._engines
-             if (
-                 e.available
-                 and translation_route_id(e) != current_route
-                 and translation_route_id(e) not in attempted_routes
-             )),
-            None,
-        )
-        if alternate is None:
-            trace["reason"] = (
-                "no_untried_alternate_engine"
-                if attempted_routes
-                else "no_alternate_engine"
-            )
-            return result, engine, prompt_ver
-        trace["candidate_engine"] = alternate.engine_name
-        trace["candidate_route"] = translation_route_id(alternate)
-        metrics.increment("translation.quality_retry.attempted")
-        reset_last_engine_diagnostics()
-        reset_last_token_usage()
-        try:
-            if deadline_at is None:
-                retry_raw = alternate.translate(
-                    text,
-                    system_prompt,
-                    incomplete,
-                    history,
-                )
-            else:
-                timeout_seconds, deadline_scope = _remaining_deadline_for_engine(
-                    alternate,
-                    deadline_at,
-                )
-                if timeout_seconds <= 0:
-                    trace["reason"] = "sentence_deadline_exhausted"
-                    metrics.increment(
-                        "translation.quality_retry.deadline_exhausted"
-                    )
-                    return result, engine, prompt_ver
-                retry_raw = call_engine_with_deadline(
-                    alternate,
-                    text,
-                    system_prompt,
-                    incomplete,
-                    history,
-                    timeout_seconds=timeout_seconds,
-                    max_inflight=cfg.translation.live_route_max_inflight,
-                    deadline_scope=deadline_scope,
-                )
-        except Exception as exc:  # second opinion must never break the first
-            record_translation_attempt(alternate, phase="quality_retry", exception=exc)
-            trace["reason"] = "alternate_exception"
-            trace["exception_type"] = type(exc).__name__
-            log.debug("quality retry failed on %s: %s", alternate.engine_name, exc)
-            return result, engine, prompt_ver
-        if not retry_raw:
-            record_translation_attempt(alternate, phase="quality_retry", result=None)
-            trace["reason"] = "empty_candidate"
-            return result, engine, prompt_ver
-        retry_result = _apply_source_aware_corrections(text, retry_raw)
-        trace["candidate_output"] = retry_result
-        if (
-            _looks_like_meta_garbage_output(retry_result)
-            or _looks_like_model_refusal(retry_result)
-        ):
-            record_translation_attempt(
-                alternate,
-                phase="quality_retry",
-                result=retry_result,
-                rejected_output=True,
-            )
-            trace["reason"] = "candidate_meta_garbage"
-            return result, engine, prompt_ver
-        retry_attempt = record_translation_attempt(
-            alternate,
-            phase="quality_retry",
-            result=retry_result,
-        )
-        retry_quality = translation_quality(
-            raw_text,
-            retry_result,
-            approved_terms=approved_terms,
-        )
-        retry_severity = retry_quality.get("quality_severity")
-        candidate_trigger = _selective_quality_retry_trigger(
-            raw_text,
-            retry_result,
-            retry_quality,
-        )
-        trace["candidate_severity"] = retry_severity
-        trace["candidate_flags"] = retry_quality.get("quality_flags") or []
-        trace["candidate_trigger"] = candidate_trigger
-        missing_approved_terms = _missing_approved_terms(
-            f"{raw_text}\n{result}",
-            retry_result,
-            approved_terms,
-        )
-        trace["candidate_missing_approved_terms"] = missing_approved_terms
-        rank = self._QUALITY_SEVERITY_RANK
-        candidate_is_clean = (
-            not candidate_trigger
-            and "target_has_japanese"
-            not in set(retry_quality.get("quality_flags") or [])
-            and not missing_approved_terms
-        )
-        if selective_trigger:
-            if selective_trigger == "amount_mismatch":
-                improved = (
-                    candidate_is_clean
-                    and rank.get(retry_severity, 2) <= rank.get(severity, 2)
-                )
-            else:
-                improved = (
-                    candidate_is_clean
-                    and rank.get(retry_severity, 2) < rank.get(severity, 2)
-                )
-        else:
-            improved = (
-                candidate_is_clean
-                and rank.get(retry_severity, 2) < rank.get(severity, 2)
-            )
-        trace["would_replace"] = improved
-        should_apply = (
-            improved
-            and not shadow_locked
-            and (bool(selective_trigger) or japanese_mode == "active")
-        )
-        if should_apply:
-            select_translation_attempt(retry_attempt)
-            trace["applied"] = True
-            trace["reason"] = (
-                "selective_trigger_resolved"
-                if selective_trigger
-                else "strict_severity_improvement"
-            )
-            metrics.increment("translation.quality_retry.accepted")
-            log.info(
-                "quality retry accepted: %s(%s/%s) -> %s(%s) for %.30s",
-                current_name,
-                selective_trigger or "target_has_japanese",
-                severity,
-                alternate.engine_name,
-                retry_severity,
-                raw_text,
-            )
-            return (
-                retry_result,
-                alternate,
-                self._prompt_version_for_engine(alternate, system_prompt),
-            )
-        # shadow_locked keeps "shadow_only" regardless of the counterfactual;
-        # would_replace already answers "would the generic policy have swapped".
-        trace["reason"] = "shadow_only" if shadow_locked else "not_improved"
-        return result, engine, prompt_ver
 
     def _get_prompt_version_hash(self) -> str:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
@@ -1751,11 +2447,12 @@ def _compose_system_prompt() -> str:
     is_qwen = _is_qwen_model()
     system_prompt = _QWEN_PROMPT if is_qwen else _BASE_PROMPT
 
-    if cfg.translation.use_profile:
-        streamer_profile = get_translation_profile(cfg.active_streamer_profile, qwen=is_qwen)
+    if effective_profile_applied(cfg.translation.use_profile):
+        profile_id = effective_profile_id(cfg.active_streamer_profile)
+        streamer_profile = get_translation_profile(profile_id, qwen=is_qwen)
         if streamer_profile:
             system_prompt += "\n\n" + streamer_profile
-            log.debug("Appended streamer profile: %s", cfg.active_streamer_profile)
+            log.debug("Appended streamer profile: %s", profile_id)
 
     # Manual session state (orthogonal to profiles, applies even with
     # use_profile=False): one labeled background line, never source text.
@@ -1790,7 +2487,10 @@ def _start_fallback_probe_thread(
                     continue
                 probe_state = _copy_fallback_state(shared_state.fallback)
                 before_state = _copy_fallback_state(probe_state)
-                probe_history = shared_state.memory.context()
+                # Provider-health probes are not subtitles and have no event
+                # cohort. Conversation history would only risk cross-scene
+                # contamination, so probes deliberately run without it.
+                probe_history: list[tuple[str, str]] = []
             # L7: rebuild the probe chain when the engine selection changes
             # mid-run instead of caching the first build forever.
             chain_key = engine_chain_config_key()
@@ -1830,6 +2530,7 @@ def _start_fallback_probe_thread(
                         max_route_inflight=(
                             cfg.translation.live_route_max_inflight
                         ),
+                        output_guard=_translation_output_guard,
                     )
                 except Exception:
                     log.exception("Fallback primary probe failed unexpectedly")
@@ -1907,16 +2608,24 @@ def _start_fallback_probe_thread(
 
 def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
-          pause_event: threading.Event | None = None) -> threading.Thread:
+          pause_event: threading.Event | None = None,
+          *,
+          provisional_queue: queue.Queue | None = None) -> threading.Thread:
     def run():
         shared_state = _new_translator_shared_state(
             fallback_event_sink=_emit_fallback_runtime_event,
         )
         worker_state = threading.local()
-        executor = ThreadPoolExecutor(
+        executor = _DaemonWorkerPool(
             max_workers=_TRANSLATION_WORKERS,
             thread_name_prefix="TranslationWorker",
         )
+        provisional_executor = _DaemonWorkerPool(
+            max_workers=1,
+            thread_name_prefix="ProvisionalTranslation",
+        )
+        provisional_store = ProvisionalStore()
+        provisional_future: Future[None] | None = None
         pending: dict[int, Future[_CompletedTranslation]] = {}
         completed: dict[int, _CompletedTranslation] = {}
         next_seq = 0
@@ -1925,21 +2634,254 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
         last_result_time = 0.0
         _start_fallback_probe_thread(shared_state, stop_event)
 
-        def translate_item(seq: int, item, submitted_at: float) -> _CompletedTranslation:
+        def translate_provisional(request: ProvisionalRequest) -> None:
             started = time.monotonic()
+            if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
+                return
+            if (
+                request.profile_snapshot is not None
+                and request.profile_snapshot.cache_identity
+                != profile_state.current().cache_identity
+            ):
+                provisional_store.close(request.provisional_id)
+                runtime_events.emit(
+                    "provisional_translation",
+                    action="retired_profile_generation",
+                    provisional_id=request.provisional_id,
+                    **request.profile_snapshot.as_metadata(),
+                )
+                return
+            engine = DeepSeekTranslationEngine()
+            if not engine.available or provisional_store.is_closed(
+                request.provisional_id
+            ):
+                return
+            reset_last_engine_diagnostics()
+            reset_last_token_usage()
+            try:
+                request_profile_snapshot = request.profile_snapshot or profile_state.current()
+                with bind_profile_snapshot(request_profile_snapshot):
+                  with bind_profile_id(request.profile_id):
+                    with bind_activity_snapshot(request.activity_snapshot):
+                        preview_translator = Translator(shared_state=shared_state)
+                        preview_policy = _new_translation_policy()
+                        repetition_evidence = RepetitionEvidence(
+                            min_avg_logprob=request.min_avg_logprob,
+                            max_no_speech_prob=request.max_no_speech_prob,
+                            cut_reason=request.cut_reason,
+                            forced=request.forced,
+                            incomplete=request.incomplete,
+                        )
+                        filter_reason = preview_policy.rejection_reason(
+                            request.text.strip(),
+                            repetition_evidence=repetition_evidence,
+                        )
+                        prepared_source = preview_policy.prepare_input(
+                            request.text.strip(),
+                            initial_rejection_reason=filter_reason,
+                            repetition_evidence=repetition_evidence,
+                        )
+                        if prepared_source is None:
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="source_filtered",
+                                provisional_id=request.provisional_id,
+                                filter_reason=filter_reason or "source_policy",
+                            )
+                            return
+                        prepared_source = _normalize_source_before_matching(
+                            prepared_source
+                        )
+                        obligations = _resolve_active_canonical_obligations(
+                            prepared_source
+                        )
+                        known_source_spans = tuple(
+                            span
+                            for obligation in obligations
+                            for span in obligation.source_spans
+                        )
+                        unknown_name_escrow = resolve_unknown_name_escrow(
+                            prepared_source,
+                            known_source_spans=known_source_spans,
+                        )
+                        semantic_terminology = resolve_semantic_terminology(
+                            unknown_name_escrow.provider_source
+                        )
+                        system_prompt = preview_translator._build_system_prompt()
+                        history_cohort = _history_cohort_for(
+                            request.activity_snapshot,
+                            request_profile_snapshot.cache_identity,
+                        )
+                        with shared_state.lock:
+                            history = shared_state.memory.context(history_cohort)
+                        messages = build_effective_deepseek_messages(
+                            semantic_terminology.provider_source,
+                            system_prompt,
+                            request.incomplete,
+                            history,
+                        )
+                        fingerprint = provisional_fingerprint(
+                            prepared_source=prepared_source,
+                            source_utterance_ids=request.source_utterance_ids,
+                            evidence_source_utterance_ids=(
+                                request.evidence_source_utterance_ids
+                            ),
+                            profile_id=effective_profile_id(request.profile_id),
+                            profile_cache_identity=request_profile_snapshot.cache_identity,
+                            activity_cache_identity=(
+                                request.activity_snapshot.cache_identity
+                            ),
+                            history_cohort=history_cohort,
+                            messages=messages,
+                            incomplete=request.incomplete,
+                        )
+                        # Re-check at the actual call boundary so stale queued work
+                        # cannot reach DeepSeek after the emergency route is disabled.
+                        if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
+                            return
+                        if (
+                            request.profile_snapshot is not None
+                            and request.profile_snapshot.cache_identity
+                            != profile_state.current().cache_identity
+                        ):
+                            provisional_store.close(request.provisional_id)
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="retired_profile_generation",
+                                provisional_id=request.provisional_id,
+                                **request.profile_snapshot.as_metadata(),
+                            )
+                            return
+                        raw_target = engine.translate_messages(messages)
+                        if (
+                            request.profile_snapshot is not None
+                            and request.profile_snapshot.cache_identity
+                            != profile_state.current().cache_identity
+                        ):
+                            provisional_store.close(request.provisional_id)
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="retired_profile_generation",
+                                provisional_id=request.provisional_id,
+                                **request.profile_snapshot.as_metadata(),
+                            )
+                            return
+                        diagnostics = get_last_engine_api_diagnostics()
+                        usage = get_last_token_usage()
+                        if not raw_target:
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="failed",
+                                provisional_id=request.provisional_id,
+                                latency_ms=round((time.monotonic() - started) * 1000, 2),
+                                engine=engine.engine_name,
+                                model=engine.model_name,
+                            )
+                            return
+                        guard = _translation_output_guard(
+                            engine,
+                            raw_target,
+                            prepared_source,
+                            obligations=obligations,
+                            unknown_name_escrow=unknown_name_escrow,
+                            semantic_terminology=semantic_terminology,
+                        )
+                        if guard.get("reason"):
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="guard_rejected",
+                                provisional_id=request.provisional_id,
+                                guard_rejection=str(guard.get("reason") or ""),
+                                latency_ms=round((time.monotonic() - started) * 1000, 2),
+                                engine=engine.engine_name,
+                                model=engine.model_name,
+                            )
+                            return
+                        display_target = str(
+                            guard.get("candidate_output") or raw_target
+                        )
+                        completed = time.monotonic()
+                        candidate = ProvisionalCandidate(
+                            provisional_id=request.provisional_id,
+                            raw_target=raw_target,
+                            display_target=display_target,
+                            fingerprint=fingerprint,
+                            engine=engine.engine_name,
+                            model=engine.model_name,
+                            requested_at_monotonic=request.requested_at_monotonic,
+                            completed_at_monotonic=completed,
+                            usage=usage,
+                            diagnostics=diagnostics,
+                        )
+                        if not provisional_store.publish(candidate):
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="cancelled_late",
+                                provisional_id=request.provisional_id,
+                            )
+                            return
+                        put_latest(
+                            subtitle_queue,
+                            SubtitlePayload(
+                                text=display_target,
+                                subtitle_id=request.provisional_id,
+                                revision=0,
+                                phase="provisional",
+                            ),
+                            log,
+                            "subtitle_queue",
+                        )
+                        runtime_events.emit(
+                            "provisional_translation",
+                            action="succeeded",
+                            provisional_id=request.provisional_id,
+                            target_text=display_target,
+                            latency_ms=round((completed - started) * 1000, 2),
+                            stt_ready_to_subtitle_ms=round(
+                                max(
+                                    0.0,
+                                    completed
+                                    - request.first_stt_ready_at_monotonic,
+                                )
+                                * 1000,
+                                2,
+                            ),
+                            engine=engine.engine_name,
+                            model=engine.model_name,
+                            input_tokens=usage.get("prompt"),
+                            output_tokens=usage.get("output"),
+                            cache_hit_tokens=usage.get("cache_read"),
+                            cache_miss_tokens=usage.get("cache_write"),
+                            cost_usd=diagnostics.get("api_cost_usd"),
+                        )
+            except Exception:
+                log.exception("Provisional translation failed")
+                runtime_events.emit(
+                    "provisional_translation",
+                    action="failed",
+                    provisional_id=request.provisional_id,
+                    latency_ms=round((time.monotonic() - started) * 1000, 2),
+                )
+
+        def translate_item(
+            seq: int, item, submitted_at: float, submitted_at_utc: str
+        ) -> _CompletedTranslation:
+            started = time.monotonic()
+            worker_started_at_utc = datetime.now(timezone.utc).isoformat()
             worker_id = threading.current_thread().name
             # Reset before translating so cache hits / failures (which never reach an
             # engine) don't inherit the previous call's token usage / corrections.
             reset_last_engine_diagnostics()
             reset_last_token_usage()
             reset_translation_call_trace()
-            reset_quality_retry_trace()
             reset_corrections()
             # Everything that touches `item` runs inside the try: a malformed item
             # must yield a synthetic failed outcome, never a lost sequence number
             # (a gap would stall the in-order emit loop forever).
             text = ""
             incomplete = False
+            policy_input = ""
+            worker_translator: Translator | None = None
             translation_mode = str(
                 getattr(cfg.translation, "translation_mode", "") or ""
             )
@@ -1947,43 +2889,98 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             try:
                 text = sentence_text(item)
                 incomplete = sentence_incomplete(item)
-                activity_snapshot = capture_effective_activity_snapshot(
+                metadata = sentence_metadata(item).copy()
+                event_snapshot = metadata.pop("activity_snapshot", None)
+                event_profile_snapshot = metadata.pop("profile_snapshot", None)
+                activity_snapshot_fallback_used = not isinstance(
+                    event_snapshot, ActivitySnapshot
+                )
+                activity_snapshot = (
+                    event_snapshot
+                    if isinstance(event_snapshot, ActivitySnapshot)
+                    else capture_effective_activity_snapshot(
+                        getattr(cfg.translation, "current_activity", ""),
+                        automatic_enabled=bool(
+                            getattr(cfg.scene, "publish_translation_activity", False)
+                        ),
+                        source_text=text,
+                    )
+                )
+                worker_observed_snapshot = capture_effective_activity_snapshot(
                     getattr(cfg.translation, "current_activity", ""),
                     automatic_enabled=bool(
                         getattr(cfg.scene, "publish_translation_activity", False)
                     ),
                 )
-                metadata = sentence_metadata(item).copy()
+                profile_snapshot = (
+                    event_profile_snapshot
+                    if isinstance(event_profile_snapshot, ProfileSnapshot)
+                    else profile_state.legacy_snapshot(
+                        str(metadata.get("profile_id") or getattr(cfg, "active_streamer_profile", "") or ""),
+                        translation_profile_applied=bool(cfg.translation.use_profile),
+                        stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+                    )
+                )
+                profile_id = profile_snapshot.effective_profile_id
                 marker = _dependency_marker(text)
                 metadata.update(
                     {
                         "sequence_id": seq,
                         "starts_with_dependency_marker": bool(marker),
                         "dependency_marker": marker,
-                        "profile_id": cfg.active_streamer_profile,
-                        "profile_applied": bool(getattr(cfg.translation, "use_profile", False)),
+                        "profile_id": profile_id,
+                        **profile_snapshot.as_metadata(),
                         # QE must be able to check whether background context
                         # helped or polluted; record it per event.
                         "current_activity": activity_snapshot.display_label,
-                        "activity_id": activity_snapshot.activity_id,
-                        "activity_kind": activity_snapshot.activity_kind,
-                        "activity_source": activity_snapshot.source,
-                        "activity_context_schema_version": (
-                            activity_snapshot.schema_version
+                        **activity_snapshot_metadata(activity_snapshot),
+                        "activity_snapshot_stage": (
+                            "sentence_enqueue"
+                            if not activity_snapshot_fallback_used
+                            else "worker_fallback"
                         ),
+                        "activity_bound_snapshot_used": (
+                            not activity_snapshot_fallback_used
+                        ),
+                        "activity_snapshot_fallback_used": (
+                            activity_snapshot_fallback_used
+                        ),
+                        "activity_snapshot_fallback_reason": (
+                            "legacy_event_without_snapshot"
+                            if activity_snapshot_fallback_used
+                            else ""
+                        ),
+                        "activity_local_cue_applied": (
+                            activity_snapshot.source == "local_source"
+                        ),
+                        "worker_observed_activity_id": (
+                            worker_observed_snapshot.activity_id
+                        ),
+                        "worker_observed_activity_source": (
+                            worker_observed_snapshot.source
+                        ),
+                        "worker_observed_effective_generation": (
+                            worker_observed_snapshot.effective_generation
+                        ),
+                        "activity_capsule_applied": bool(
+                            activity_snapshot.display_label
+                        ),
+                        "activity_capsule_activity_id": (
+                            activity_snapshot.activity_id
+                            if activity_snapshot.display_label
+                            else ""
+                        ),
+                        "worker_started_at_utc": worker_started_at_utc,
+                        "translation_submitted_at_utc": submitted_at_utc,
                         # Diagnostic-only: distinguishes the 5s live timeout path
                         # from the 60s clip/offline path in latency artifacts.
                         "translation_mode": translation_mode,
                     }
                 )
-                metadata["source_fuzzy_shadow"] = safe_source_fuzzy_shadow(
-                    text,
-                    profile_id=cfg.active_streamer_profile,
-                    use_profile=bool(getattr(cfg.translation, "use_profile", False)),
-                )
                 worker_translator = getattr(worker_state, "translator", None)
                 if worker_translator is None:
                     worker_translator = Translator(shared_state=shared_state)
+                    worker_translator._defer_success_record = True
                     worker_state.translator = worker_translator
                 repetition_evidence = RepetitionEvidence(
                     min_avg_logprob=metadata.get("min_avg_logprob"),
@@ -1992,14 +2989,144 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     forced=bool(metadata.get("forced", False)),
                     incomplete=incomplete,
                 )
-                with bind_activity_snapshot(activity_snapshot):
-                    outcome = worker_translator.translate_event(
-                        text,
-                        incomplete,
-                        repetition_evidence=repetition_evidence,
-                    )
+                source_key = (text or "").strip()
+                provisional_id = str(metadata.get("provisional_id") or "")
+                provisional_candidate = provisional_store.candidate(provisional_id)
+                provisional_not_ready = bool(
+                    provisional_id and provisional_candidate is None
+                )
+                if provisional_id and provisional_candidate is None:
+                    provisional_store.close(provisional_id)
+                with shared_state.lock:
+                    inflight_count = shared_state.inflight_sources.get(source_key, 0)
+                    if inflight_count and shared_state.policy.last_input == source_key:
+                        # The previous identical input has not succeeded yet.
+                        # Let this worker attempt it; ordered output dedupe still
+                        # suppresses two successful visible subtitles.
+                        shared_state.policy.reset_last_input()
+                    shared_state.inflight_sources[source_key] = inflight_count + 1
+                outcome_for_state: TranslationOutcome | None = None
+                try:
+                    worker_translator._current_sequence_id = seq
+                    with bind_profile_snapshot(profile_snapshot):
+                      with bind_profile_id(profile_id):
+                        with bind_activity_snapshot(activity_snapshot):
+                            history_cohort = _history_cohort_for(
+                                activity_snapshot, profile_snapshot.cache_identity
+                            )
+                            with shared_state.lock:
+                                history_items, cross_cohort_items = (
+                                    shared_state.memory.cohort_stats(history_cohort)
+                                )
+                            metadata.update(
+                                {
+                                    "history_profile_id": history_cohort[0],
+                                    "history_activity_id": history_cohort[1],
+                                    "history_cohort_epoch": history_cohort[2],
+                                    "history_cohort_id": (
+                                        f"{history_cohort[0]}:"
+                                        f"{history_cohort[1]}:"
+                                        f"{history_cohort[2]}"
+                                    ),
+                                    "history_candidate_count": history_items,
+                                    "history_cross_cohort_excluded_count": (
+                                        cross_cohort_items
+                                    ),
+                                }
+                            )
+                            if provisional_candidate is None:
+                                # Preserve the long-standing worker contract for
+                                # ordinary sentences and lightweight test doubles.
+                                outcome = worker_translator.translate_event(
+                                    text,
+                                    incomplete,
+                                    repetition_evidence=repetition_evidence,
+                                )
+                            else:
+                                outcome = worker_translator.translate_event(
+                                    text,
+                                    incomplete,
+                                    repetition_evidence=repetition_evidence,
+                                    provisional_candidate=provisional_candidate,
+                                    source_utterance_ids=tuple(
+                                        metadata.get("source_utterance_ids") or ()
+                                    ),
+                                    evidence_source_utterance_ids=tuple(
+                                        metadata.get(
+                                            "evidence_source_utterance_ids"
+                                        )
+                                        or ()
+                                    ),
+                                )
+                            outcome_for_state = outcome
+                            if provisional_id:
+                                provisional_store.close(provisional_id)
+                                provisional_trace = {
+                                    "provisional_id": provisional_id,
+                                    **worker_translator._last_provisional_trace,
+                                }
+                                if provisional_not_ready and not worker_translator._last_provisional_trace:
+                                    provisional_trace.update(
+                                        {
+                                            "promotion_attempted": False,
+                                            "promotion_passed": False,
+                                            "candidate_not_ready": True,
+                                            "final_retranslation": True,
+                                        }
+                                    )
+                                metadata["provisional"] = provisional_trace
+                                metadata.update(
+                                    {
+                                        "provisional_id": provisional_id,
+                                        "provisional_promotion_attempted": bool(
+                                            provisional_trace.get(
+                                                "promotion_attempted"
+                                            )
+                                        ),
+                                        "provisional_promotion_passed": bool(
+                                            provisional_trace.get("promotion_passed")
+                                        ),
+                                        "provisional_fingerprint_mismatch": bool(
+                                            provisional_trace.get(
+                                                "fingerprint_mismatch"
+                                            )
+                                        ),
+                                        "provisional_guard_rejection": str(
+                                            provisional_trace.get(
+                                                "guard_rejection"
+                                            )
+                                            or ""
+                                        ),
+                                        "provisional_final_retranslation": bool(
+                                            provisional_trace.get(
+                                                "final_retranslation"
+                                            )
+                                        ),
+                                        "provisional_final_revision": 1,
+                                    }
+                                )
+                            policy_input = (
+                                getattr(worker_translator, "_last_input", "")
+                                or source_key
+                            )
+                finally:
+                    worker_translator._current_sequence_id = None
+                    with shared_state.lock:
+                        remaining = shared_state.inflight_sources.get(source_key, 1) - 1
+                        if remaining > 0:
+                            shared_state.inflight_sources[source_key] = remaining
+                        else:
+                            shared_state.inflight_sources.pop(source_key, None)
             except Exception:
                 log.exception("Translation worker failed for: %.40s", text)
+                failed_policy_input = policy_input or str(
+                    getattr(worker_translator, "_last_input", "") or ""
+                )
+                if failed_policy_input:
+                    with shared_state.lock:
+                        if shared_state.policy.last_input == failed_policy_input:
+                            shared_state.policy.reset_last_input()
+                    policy_input = failed_policy_input
                 metadata.setdefault("sequence_id", seq)
                 outcome = TranslationOutcome(
                     source_text=(text or "").strip(),
@@ -2010,6 +3137,16 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     incomplete=incomplete,
                 )
             completed_at = time.monotonic()
+            metadata["worker_completed_at_utc"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+            snapshot_monotonic = float(
+                metadata.get("activity_snapshot_captured_at_monotonic") or 0.0
+            )
+            if snapshot_monotonic > 0:
+                metadata["activity_snapshot_to_worker_ms"] = round(
+                    max(0.0, started - snapshot_monotonic) * 1000, 2
+                )
             elapsed = completed_at - started
             selected_attempt = get_selected_translation_attempt()
             diagnostics = selected_attempt or get_last_engine_diagnostics()
@@ -2017,9 +3154,6 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             attempts = get_translation_attempts()
             if attempts:
                 metadata["attempts"] = attempts
-            quality_retry = get_quality_retry_trace()
-            if quality_retry:
-                metadata["quality_retry"] = quality_retry
             for usage_key, usage_value in _token_usage_for_outcome(outcome).items():
                 if usage_value is not None:
                     metadata[f"token_{usage_key}"] = usage_value
@@ -2045,6 +3179,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 retry_count,
                 retry_reason,
                 api_event_fields,
+                policy_input,
             )
 
         def _failed_completion(seq: int) -> _CompletedTranslation:
@@ -2105,10 +3240,21 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             emitted_at = time.monotonic()
             output_delay_ms = round(max(0.0, emitted_at - item.submitted_at) * 1000, 2)
             event_metadata = item.metadata.copy()
+            sentence_enqueued_at = float(
+                event_metadata.get("sentence_enqueued_at_monotonic") or 0.0
+            )
             event_metadata.update(
                 {
                     "engine_latency_ms": round(elapsed * 1000, 2),
                     "queue_wait_ms": round(max(0.0, item.started_at - item.submitted_at) * 1000, 2),
+                    "sentence_queue_wait_ms": (
+                        round(
+                            max(0.0, item.started_at - sentence_enqueued_at) * 1000,
+                            2,
+                        )
+                        if sentence_enqueued_at > 0
+                        else None
+                    ),
                     "output_delay_ms": output_delay_ms,
                     "predecessor_stall_ms": round(max(0.0, emitted_at - item.completed_at) * 1000, 2),
                     "translation_worker_id": item.worker_id,
@@ -2120,6 +3266,52 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
             metrics.observe_latency("translation", elapsed)
             event_fields = outcome.as_event_fields(elapsed * 1000, event_metadata)
             result = outcome.target_text
+            final_script_rejection = (
+                _final_script_rejection_reason(event_fields) if result else ""
+            )
+            if final_script_rejection:
+                metrics.increment("translation.final_script_rejected")
+                with shared_state.lock:
+                    if (
+                        item.policy_input
+                        and shared_state.policy.last_input == item.policy_input
+                    ):
+                        shared_state.policy.reset_last_input()
+                runtime_events.emit(
+                    "translation",
+                    **{
+                        **event_fields,
+                        "target_text": None,
+                        "status": "failed",
+                        "filter_reason": final_script_rejection,
+                    },
+                    subtitle_emitted=False,
+                    subtitle_suppressed_reason="final_script_invariant",
+                )
+                return
+            with shared_state.lock:
+                if result:
+                    shared_state.policy.last_input = (
+                        item.policy_input or outcome.source_text.strip()
+                    )
+                elif (
+                    outcome.status == "failed"
+                    and item.policy_input
+                    and shared_state.policy.last_input == item.policy_input
+                ):
+                    shared_state.policy.reset_last_input()
+            if outcome.deferred_success is not None:
+                try:
+                    # Commit conversation state in sequence order, not provider
+                    # completion order. Subtitle/event ordering already uses
+                    # this same coordinator boundary.
+                    outcome.deferred_success()
+                except Exception:
+                    metrics.increment("translation.memory_commit_failed")
+                    log.exception(
+                        "Ordered translation memory commit failed for sequence %s",
+                        item.seq,
+                    )
             if result:
                 metrics.increment("translation.success")
                 # Surface low-quality output in the 60 s metrics summary so a
@@ -2154,7 +3346,21 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     return
                 last_result = result
                 last_result_time = now
-                put_latest(subtitle_queue, result, log, "subtitle_queue")
+                provisional_id = str(event_metadata.get("provisional_id") or "")
+                subtitle_item: str | SubtitlePayload = result
+                if provisional_id:
+                    subtitle_item = SubtitlePayload(
+                        text=result,
+                        subtitle_id=provisional_id,
+                        revision=1,
+                        phase="final",
+                    )
+                put_latest(
+                    subtitle_queue,
+                    subtitle_item,
+                    log,
+                    "subtitle_queue",
+                )
                 runtime_events.emit(
                     "translation",
                     **event_fields,
@@ -2173,6 +3379,17 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
 
         try:
             while not stop_event.is_set():
+                if provisional_future is not None and provisional_future.done():
+                    provisional_future = None
+                if provisional_queue is not None and provisional_future is None:
+                    try:
+                        request = provisional_queue.get_nowait()
+                    except queue.Empty:
+                        request = None
+                    if isinstance(request, ProvisionalRequest):
+                        provisional_future = provisional_executor.submit(
+                            translate_provisional, request
+                        )
                 collect_finished()
                 while next_emit_seq in completed:
                     emit_completed(completed.pop(next_emit_seq))
@@ -2190,9 +3407,17 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 )
                 if has_item:
                     submitted_at = time.monotonic()
-                    pending[next_seq] = executor.submit(translate_item, next_seq, item, submitted_at)
+                    submitted_at_utc = datetime.now(timezone.utc).isoformat()
+                    pending[next_seq] = executor.submit(
+                        translate_item,
+                        next_seq,
+                        item,
+                        submitted_at,
+                        submitted_at_utc,
+                    )
                     next_seq += 1
         finally:
+            provisional_executor.shutdown(wait=False, cancel_futures=True)
             # Stop accepting work but let already-submitted translations finish:
             # cancel_futures=True dropped completed-but-unemitted and in-flight
             # subtitles at stop. Drain in order with a bounded wait so shutdown
@@ -2217,7 +3442,6 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     break
                 time.sleep(_TRANSLATION_LOOP_POLL_SEC)
             log.info("Translator stopped")
-
     return start_daemon_thread("Translator", run)
 
 

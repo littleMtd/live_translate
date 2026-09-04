@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "format": "active-terminology-v1",
+  "derivation_policy": "Entries are derived only from the effective profile facts stored in translation_prompt_benchmark_20260822.json; omitted post-blank-line profile content is excluded.",
+  "conditions": [
+    "always",
+    "fandom_address",
+    "group_reference",
+    "web_address",
+    "song_title",
+    "minecraft_context"
+  ],
+  "profiles": {
+    "irise": {
+      "effective_profile_facts_sha256": "f480a3bf15803c0dbabb6cf6a5a41d4b6c6dbdc830932240bf9bf58a386231cc",
+      "entries": [
+        {"kind": "group", "aliases": ["아이리제", "아이리즈", "IRISÉ", "IRISE"], "target": "IRISÉ", "condition": "always"},
+        {"kind": "name", "aliases": ["키리", "KIIRI"], "target": "KIIRI", "condition": "always"},
+        {"kind": "name", "aliases": ["티즈", "TIZ"], "target": "TIZ", "condition": "always"},
+        {"kind": "fandom", "aliases": ["이제들", "이재들", "이재 여러분", "이재희 여러분", "IZÉ", "IZE"], "target": "IZÉ", "condition": "fandom_address"},
+        {"kind": "company", "aliases": ["패러블", "Parable Entertainment"], "target": "Parable Entertainment", "condition": "always"},
+        {"kind": "title", "aliases": ["날개", "Wings"], "target": "Wings", "condition": "song_title"},
+        {"kind": "title", "aliases": ["IRIDESCENT"], "target": "IRIDESCENT", "condition": "always"},
+        {"kind": "title", "aliases": ["LOVEGAME"], "target": "LOVEGAME", "condition": "always"},
+        {"kind": "title", "aliases": ["Heart Crush", "하트 크러쉬"], "target": "Heart Crush", "condition": "always"}
+      ]
+    },
+    "isegye_lilpa": {
+      "effective_profile_facts_sha256": "3c30d9d1583f1f947d6417e6f7a64bbf6cb0066e763439f4371d505c906cfd3f",
+      "entries": [
+        {"kind": "name", "aliases": ["고세구"], "target": "Gosegu", "condition": "always"},
+        {"kind": "name", "aliases": ["주르르"], "target": "Jururu", "condition": "always"},
+        {"kind": "name", "aliases": ["릴파"], "target": "Lilpa", "condition": "always"},
+        {"kind": "artist", "aliases": ["히게단"], "target": "Official髭男dism", "condition": "always"}
+      ]
+    },
+    "url": {
+      "effective_profile_facts_sha256": "20c1ce3de7b34dab78ab765d196118633780bda36ecfd5907fa18f579e1d67eb",
+      "entries": [
+        {"kind": "group", "aliases": ["UR:L", "유아렐", "유아엘"], "target": "UR:L", "condition": "always"},
+        {"kind": "group", "aliases": ["URL"], "target": "UR:L", "condition": "group_reference"},
+        {"kind": "web", "aliases": ["URL"], "target": "URL", "condition": "web_address"},
+        {"kind": "group", "aliases": ["YOU ARE LINKED"], "target": "YOU ARE LINKED", "condition": "always"},
+        {"kind": "name", "aliases": ["모카"], "target": "모카", "condition": "always"},
+        {"kind": "name", "aliases": ["랑코"], "target": "랑코", "condition": "always"},
+        {"kind": "name", "aliases": ["마냥"], "target": "마냥", "condition": "always"},
+        {"kind": "name", "aliases": ["솜먕"], "target": "솜먕", "condition": "always"},
+        {"kind": "name", "aliases": ["오아"], "target": "오아", "condition": "always"},
+        {"kind": "name", "aliases": ["바밍"], "target": "바밍", "condition": "always"},
+        {"kind": "project", "aliases": ["결속아이돌", "결속 아이돌"], "target": "결속아이돌", "condition": "always"},
+        {"kind": "company", "aliases": ["샌드박스네트워크", "샌드박스 네트워크"], "target": "Sandbox Network", "condition": "always"},
+        {"kind": "company", "aliases": ["플럭서스", "㈜플럭서스"], "target": "Fluxus", "condition": "always"},
+        {"kind": "title", "aliases": ["Chemical Love"], "target": "Chemical Love", "condition": "always"},
+        {"kind": "title", "aliases": ["Again"], "target": "Again", "condition": "song_title"},
+        {"kind": "title", "aliases": ["Wish Me Love"], "target": "Wish Me Love", "condition": "always"},
+        {"kind": "title", "aliases": ["조금 더 가까이 (모카)"], "target": "조금 더 가까이 (모카)", "condition": "always"},
+        {"kind": "project", "aliases": ["사계(四季)"], "target": "「四季」企劃", "condition": "always"}
+      ]
+    },
+    "hades_chxxnnx": {
+      "effective_profile_facts_sha256": "fa10be94bc247f0f7ab1a3ac754e3852191be593f6c8d6875e33cea1dc13ba94",
+      "entries": [
+        {"kind": "name", "aliases": ["챈나", "Chxxnnx", "CHXXNNX"], "target": "Chaenna", "condition": "always"},
+        {"kind": "name", "aliases": ["솜주먹", "솜펀치"], "target": "Sompunch", "condition": "always"},
+        {"kind": "name", "aliases": ["연초록"], "target": "Yeon Chorok", "condition": "always"},
+        {"kind": "name", "aliases": ["띵귤", "싱귤", "TINGGYUL"], "target": "Singgyul", "condition": "always"},
+        {"kind": "fandom", "aliases": ["띵띵이"], "target": "띵띵이", "condition": "always"},
+        {"kind": "name", "aliases": ["키마", "큐마"], "target": "Kyma", "condition": "always"},
+        {"kind": "fandom", "aliases": ["지옥견"], "target": "지옥견", "condition": "always"},
+        {"kind": "fandom", "aliases": ["수제비"], "target": "수제비", "condition": "always"},
+        {"kind": "name", "aliases": ["봉준", "김봉준"], "target": "Kim Bongjun", "condition": "always"},
+        {"kind": "name", "aliases": ["성태"], "target": "KimSungtae", "condition": "always"},
+        {"kind": "game", "aliases": ["마크"], "target": "Minecraft", "condition": "minecraft_context"},
+        {"kind": "role", "aliases": ["섭주", "섭쥬", "썹주", "SUBJU"], "target": "服主", "condition": "always"},
+        {"kind": "place", "aliases": ["섭쥬방"], "target": "服主房", "condition": "always"}
+      ]
+    }
+  }
+}

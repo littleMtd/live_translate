@@ -1,5 +1,8 @@
 import queue
 import threading
+import time
+from dataclasses import replace
+from datetime import datetime, timezone
 
 from config import cfg
 from utils.logger import get_logger
@@ -7,12 +10,18 @@ from utils.metrics import metrics
 from utils.pipeline import start_daemon_thread, wait_while_paused
 from utils.queue_utils import put_drop_oldest
 from utils.runtime_events import runtime_events
+from modules.activity_context import (
+    activity_snapshot_metadata,
+    capture_effective_activity_snapshot,
+)
+from modules.profile_context import profile_state
 from modules.pipeline_events import (
     TranscriptionEvent,
     source_confidence_summary,
     transcription_text,
     transcription_to_sentence,
 )
+from modules.provisional_subtitles import ProvisionalRequest
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 from modules.sentence_hold_shadow import (
     UnfinishedTail,
@@ -100,9 +109,9 @@ def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
 
 def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
           stop_event: threading.Event,
-          pause_event: threading.Event | None = None) -> threading.Thread:
+          pause_event: threading.Event | None = None,
+          provisional_queue: queue.Queue | None = None) -> threading.Thread:
     def run():
-        import time
         buffer = SentenceBuffer(
             segment_gap_split_enabled=_bool_setting(
                 getattr(cfg.splitter, "segment_gap_split_enabled", False),
@@ -129,8 +138,12 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
         semantic_decision_sequence = 0
         semantic_batch_sequence = 0
         sentence_emit_sequence = 0
+        activity_cohort_epoch = 0
+        last_activity_cohort_identity: tuple[str, str] | None = None
         shadow_sequence = 0
         active_shadow: dict[str, object] | None = None
+        active_provisional_id = ""
+        active_provisional_source_id = ""
 
         def finish_shadow_without_chunk(reason: str, now: float) -> None:
             nonlocal active_shadow
@@ -275,15 +288,78 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             track_shadow: bool = True,
             shadow_started_at: float | None = None,
         ) -> None:
-            nonlocal sentence_emit_sequence
+            nonlocal sentence_emit_sequence, activity_cohort_epoch
+            nonlocal last_activity_cohort_identity
+            nonlocal active_provisional_id, active_provisional_source_id
             if cut.forced:
                 log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
             log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
             source = cut.source
+            profile_snapshot = (
+                source.profile_snapshot
+                if source is not None and source.profile_snapshot is not None
+                else profile_state.legacy_snapshot(
+                    source.profile_id if source is not None else getattr(cfg, "active_streamer_profile", ""),
+                    translation_profile_applied=bool(cfg.translation.use_profile),
+                    stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+                )
+            )
+            profile_id = profile_snapshot.effective_profile_id
+            activity_snapshot = capture_effective_activity_snapshot(
+                getattr(cfg.translation, "current_activity", ""),
+                automatic_enabled=bool(
+                    getattr(cfg.scene, "publish_translation_activity", False)
+                ),
+                source_text=cut.text,
+            )
+            cohort_identity = (
+                profile_snapshot.cache_identity,
+                activity_snapshot.activity_id or "unknown",
+            )
+            if cohort_identity != last_activity_cohort_identity:
+                activity_cohort_epoch += 1
+                last_activity_cohort_identity = cohort_identity
+            activity_snapshot = replace(
+                activity_snapshot,
+                cohort_epoch=activity_cohort_epoch,
+            )
+            sentence_emit_sequence += 1
+            sentence_id = f"sentence-{sentence_emit_sequence:06d}"
+            enqueued_at_utc = datetime.now(timezone.utc).isoformat()
+            enqueued_at_monotonic = time.monotonic()
+            event = transcription_to_sentence(
+                cut.text,
+                cut.incomplete,
+                cut.source,
+                cut.source_utterance_ids,
+                cut.evidence_source_utterance_ids,
+                cut.source_avg_logprobs,
+                cut.source_no_speech_probs,
+                cut.cut_reason,
+                cut.forced,
+                cut.chunk_count,
+                cut.audio_seconds,
+                sentence_id=sentence_id,
+                created_at_utc=enqueued_at_utc,
+                enqueued_at_utc=enqueued_at_utc,
+                enqueued_at_monotonic=enqueued_at_monotonic,
+                activity_snapshot=activity_snapshot,
+                provisional_id=(
+                    active_provisional_id
+                    if active_provisional_source_id
+                    and active_provisional_source_id
+                    in {
+                        *cut.source_utterance_ids,
+                        *cut.evidence_source_utterance_ids,
+                    }
+                    else ""
+                ),
+            )
             runtime_events.emit(
                 "sentence",
+                sentence_id=sentence_id,
                 utterance_id=source.utterance_id if source else "",
-                profile_id=source.profile_id if source else "",
+                **profile_snapshot.as_metadata(),
                 stt_engine=source.engine if source else "",
                 cut_reason=cut.cut_reason,
                 incomplete=cut.incomplete,
@@ -300,29 +376,30 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 ),
                 text_len=len(cut.text or ""),
                 elapsed_ms=round(cut.elapsed * 1000, 2),
-            )
-            event = transcription_to_sentence(
-                cut.text,
-                cut.incomplete,
-                cut.source,
-                cut.source_utterance_ids,
-                cut.evidence_source_utterance_ids,
-                cut.source_avg_logprobs,
-                cut.source_no_speech_probs,
-                cut.cut_reason,
-                cut.forced,
-                cut.chunk_count,
-                cut.audio_seconds,
+                sentence_created_at_utc=enqueued_at_utc,
+                sentence_enqueued_at_utc=enqueued_at_utc,
+                sentence_enqueued_at_monotonic=enqueued_at_monotonic,
+                activity_snapshot_stage="sentence_enqueue",
+                **activity_snapshot_metadata(activity_snapshot),
+                provisional_id=event.provisional_id,
             )
             metrics.increment("sentence.emitted")
-            put_drop_oldest(sentence_queue, event, log, "sentence_queue")
-            sentence_emit_sequence += 1
+            dropped = put_drop_oldest(sentence_queue, event, log, "sentence_queue")
+            if dropped:
+                runtime_events.emit(
+                    "sentence_queue_drop",
+                    replacement_sentence_id=sentence_id,
+                    dropped_count=dropped,
+                )
             if track_shadow:
                 start_shadow(
                     cut,
                     time.monotonic() if shadow_started_at is None else shadow_started_at,
                     "emitted",
                 )
+            if event.provisional_id:
+                active_provisional_id = ""
+                active_provisional_source_id = ""
             metrics.log_summary_if_due()
 
         def buffer_incomplete(cut: SentenceCut, now: float) -> None:
@@ -353,11 +430,27 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             emit_cut(pending_incomplete, track_shadow=False)
             clear_pending()
 
+        def admit_token(token: str | TranscriptionEvent, received_at: float) -> None:
+            nonlocal active_provisional_id, active_provisional_source_id
+            if buffer.requires_profile_switch(token):
+                switch_cut = buffer.flush_profile_switch(received_at)
+                if pending_incomplete is not None:
+                    emit_cut(pending_incomplete, track_shadow=False)
+                    clear_pending()
+                if switch_cut is not None:
+                    emit_cut(switch_cut, track_shadow=False)
+                active_provisional_id = ""
+                active_provisional_source_id = ""
+                metrics.increment("sentence.profile_switch")
+            buffer.push(token, received_at)
+
         while not stop_event.is_set():
             if pause_event and pause_event.is_set():
                 buffer.reset()
                 finish_shadow_without_chunk("pipeline_paused", time.monotonic())
                 clear_pending()
+                active_provisional_id = ""
+                active_provisional_source_id = ""
                 wait_while_paused(stop_event, pause_event)
                 # Drain tokens that accumulated while paused so they don't
                 # appear as fresh content after resume.
@@ -382,7 +475,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 received_at = time.monotonic()
                 if shadow_outcome := observe_next_chunk(token, received_at):
                     deferred_shadow_outcomes.append(shadow_outcome)
-                buffer.push(token, received_at)
+                admit_token(token, received_at)
                 if semantic_event := build_semantic_shadow(
                     token,
                     received_at,
@@ -396,7 +489,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                         received_at = time.monotonic()
                         if shadow_outcome := observe_next_chunk(token, received_at):
                             deferred_shadow_outcomes.append(shadow_outcome)
-                        buffer.push(token, received_at)
+                        admit_token(token, received_at)
                         if semantic_event := build_semantic_shadow(
                             token,
                             received_at,
@@ -448,6 +541,104 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                     buffer_incomplete(cut, now)
                 else:
                     emit_cut(cut, shadow_started_at=now)
+
+            if (
+                cut is None
+                and provisional_queue is not None
+                and bool(getattr(cfg.splitter, "provisional_enabled", False))
+                and str(getattr(cfg.translation, "deepseek_route", "off")) == "primary"
+                and not active_provisional_id
+            ):
+                provisional = buffer.provisional_snapshot(now)
+                hold_seconds = float(
+                    getattr(cfg.splitter, "provisional_hold_seconds", 1.75)
+                )
+                if provisional is not None and provisional.elapsed >= hold_seconds:
+                    source = provisional.source
+                    assert source is not None
+                    activity_snapshot = capture_effective_activity_snapshot(
+                        getattr(cfg.translation, "current_activity", ""),
+                        automatic_enabled=bool(
+                            getattr(cfg.scene, "publish_translation_activity", False)
+                        ),
+                        source_text=provisional.text,
+                    )
+                    prospective_identity = (
+                        source.profile_id,
+                        activity_snapshot.activity_id or "unknown",
+                    )
+                    prospective_epoch = activity_cohort_epoch + int(
+                        prospective_identity != last_activity_cohort_identity
+                    )
+                    activity_snapshot = replace(
+                        activity_snapshot,
+                        cohort_epoch=prospective_epoch,
+                    )
+                    active_provisional_source_id = source.utterance_id
+                    active_provisional_id = f"provisional:{source.utterance_id}"
+                    request = ProvisionalRequest(
+                        provisional_id=active_provisional_id,
+                        text=provisional.text,
+                        incomplete=provisional.incomplete,
+                        profile_id=source.profile_id,
+                        profile_snapshot=(
+                            source.profile_snapshot
+                            or profile_state.legacy_snapshot(
+                                source.profile_id,
+                                translation_profile_applied=bool(cfg.translation.use_profile),
+                                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+                            )
+                        ),
+                        source_utterance_ids=provisional.source_utterance_ids,
+                        evidence_source_utterance_ids=(
+                            provisional.evidence_source_utterance_ids
+                        ),
+                        activity_snapshot=activity_snapshot,
+                        requested_at_monotonic=now,
+                        first_stt_ready_at_monotonic=max(
+                            0.0, now - provisional.elapsed
+                        ),
+                        min_avg_logprob=min(
+                            (
+                                value
+                                for value in provisional.source_avg_logprobs
+                                if value is not None
+                            ),
+                            default=None,
+                        ),
+                        max_no_speech_prob=max(
+                            (
+                                value
+                                for value in provisional.source_no_speech_probs
+                                if value is not None
+                            ),
+                            default=None,
+                        ),
+                        cut_reason=provisional.cut_reason,
+                        forced=provisional.forced,
+                    )
+                    dropped = put_drop_oldest(
+                        provisional_queue, request, log, "provisional_queue"
+                    )
+                    runtime_events.emit(
+                        "provisional_translation",
+                        action="requested",
+                        provisional_id=request.provisional_id,
+                        source_text=request.text,
+                        source_utterance_ids=list(request.source_utterance_ids),
+                        evidence_source_utterance_ids=list(
+                            request.evidence_source_utterance_ids
+                        ),
+                        profile_id=request.profile_id,
+                        profile_generation=(
+                            request.profile_snapshot.generation
+                            if request.profile_snapshot is not None else 0
+                        ),
+                        incomplete=request.incomplete,
+                        hold_elapsed_ms=round(provisional.elapsed * 1000, 2),
+                        queue_dropped=dropped,
+                        **activity_snapshot_metadata(activity_snapshot),
+                    )
 
             # Persist after buffer/cut behavior has completed so shadow I/O
             # cannot delay the observed token's admission or its cut decision.

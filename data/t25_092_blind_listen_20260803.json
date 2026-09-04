@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "batch_id": "T25-092-blind-listen-20260803",
+  "annotation_focus": "label",
+  "annotation_goal": "只根據音檔寫下你實際聽到的韓文；不要猜遊戲名或參考任何 ASR 候選。",
+  "annotation_rules": [
+    "先完整播放至少兩次，再填寫 Heard source text。",
+    "聽不清楚的音節請用 [?]，不要靠上下文補字。",
+    "完成後選 ok；整段無法判斷則選 unclear。"
+  ],
+  "speaker_policy": "blind single-WAV transcription; engine outputs hidden",
+  "sampling": {
+    "seed": "fixed-T25-092",
+    "population_size": 1
+  },
+  "label_options": [
+    "ok",
+    "unclear"
+  ],
+  "samples": [
+    {
+      "sample_id": "T25-092-blind-utt-281",
+      "run_id": "20260802T093732Z-30160",
+      "profile_id": "",
+      "model": "",
+      "status": "blind_listen",
+      "source_text": "",
+      "target_text": "",
+      "source_utterance_id_count": 1,
+      "unique_source_utterance_id_count": 1,
+      "evidence_source_utterance_id_count": 0,
+      "unique_evidence_source_utterance_id_count": 0,
+      "source_chunks": [
+        {
+          "utterance_id": "blind-audio-1",
+          "chunk_role": "primary",
+          "source_kind": "current",
+          "audio_path": "logs/audio_dump/20260802T093732Z-30160/utt-281.wav",
+          "audio_exists": true,
+          "stt_event_line": 3600,
+          "stt_audio_seconds": 7.392,
+          "avg_logprob": null,
+          "no_speech_prob": null
+        }
+      ]
+    }
+  ]
+}

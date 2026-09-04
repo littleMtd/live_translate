@@ -30,7 +30,7 @@ export interface AudioConfig {
 }
 
 export interface SttConfig {
-  primary_engine: 'sensevoice' | 'groq'
+  primary_engine: 'sensevoice' | 'groq' | 'elevenlabs'
   sensevoice_model: string
   sensevoice_device: string
   groq_model: string
@@ -42,6 +42,7 @@ export interface SttConfig {
   avg_logprob_threshold: number
   max_japanese_chars: number
   max_repeat_ratio: number
+  use_profile_glossary?: boolean
 }
 
 export interface SplitterConfig {
@@ -61,8 +62,34 @@ export interface TranslationConfig {
   translation_mode: 'live' | 'clip'
   streamer_profile: string
   use_profile: boolean
+  profile_mode?: 'auto' | 'manual'
   current_activity: string
   slang: Record<string, string>
+}
+
+export interface ProfileStatus {
+  source_profile_id: string
+  content_profile_id: string
+  effective_profile_id: string
+  profile_generation: number
+  profile_confirmation_state: string
+  profile_mode: 'auto' | 'manual'
+  activity: string
+  activity_source: string
+  updated_at: number
+  profile_resolver_state?: string
+  profile_last_detection_at?: string
+  profile_candidate_id?: string
+  profile_evidence_markers?: string[]
+  profile_evidence_strengths?: string[]
+  profile_resolution_status?: string
+  profile_resolution_reason?: string
+  profile_resolution_transition?: string
+  profile_activation_decision?: string
+  profile_resolution_latency_ms?: number | null
+  profile_resolution_retry_count?: number
+  profile_resolution_window_generation?: number
+  profile_resolution_registry_generation?: number
 }
 
 export interface SceneConfig {
@@ -119,4 +146,23 @@ export interface SystemStats {
   unix_timestamp_seconds: number
   platform: string
   arch: string
+}
+
+export interface ExportableRun {
+  run_id: string
+  started_at: string
+  ended_at: string
+  event_count: number
+  run_kind: string
+  run_complete: boolean
+}
+
+export interface BundleExportResult {
+  run_id: string
+  output_path: string
+  file_count: number
+  total_bytes: number
+  event_count: number
+  runtime_event_files: string[]
+  audio_included: number
 }

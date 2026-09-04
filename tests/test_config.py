@@ -34,8 +34,23 @@ class TestConfig(unittest.TestCase):
         self.assertIsInstance(cfg.translation.engine_chain, tuple)
         for name in cfg.translation.engine_chain:
             self.assertIn(name, _VALID_ENGINE_NAMES)
+        self.assertNotIn("deepseek", _VALID_ENGINE_NAMES)
 
-    def test_live_fallback_chain_uses_benchmarked_openrouter_capsule_order(self):
+    def test_deepseek_primary_and_emergency_off_are_explicit(self):
+        from config import _Translation
+
+        self.assertEqual(cfg.translation.deepseek_route, "primary")
+        self.assertEqual(cfg.translation.deepseek_model, "deepseek-v4-flash")
+        with self.assertRaisesRegex(ValueError, "deepseek_route invalid"):
+            _Translation(deepseek_route="automatic")
+        self.assertEqual(
+            _Translation(deepseek_route="off").engine_chain,
+            ("openrouter", "deepl", "groq"),
+        )
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            _Translation(deepseek_max_tokens=0)
+
+    def test_live_fallback_chain_keeps_protected_base_order(self):
         self.assertEqual(cfg.live_engine, "anthropic")
         self.assertEqual(cfg.clip_engine, "anthropic")
         self.assertEqual(
@@ -74,6 +89,8 @@ class TestConfig(unittest.TestCase):
             with self.subTest(live_route_max_inflight=value):
                 with self.assertRaisesRegex(ValueError, "between 1 and 8"):
                     _Translation(live_route_max_inflight=value)
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            _Translation(engine_chain=("groq", "groq"))
 
     def test_scene_vision_routes_are_explicit_groq_then_openrouter(self):
         self.assertEqual(cfg.scene.vision_provider, "groq")
@@ -140,6 +157,23 @@ class TestConfig(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "between 1 and 32"):
                     _Scene(max_open_set_identities_per_window=value)
 
+    def test_scene_cadence_values_are_finite_and_bounded(self):
+        from config import _Scene
+
+        for field_name in (
+            "check_interval_sec",
+            "min_call_gap_sec",
+            "refresh_interval_sec",
+        ):
+            for value in (0, -1, float("inf"), float("nan"), True):
+                with self.subTest(field_name=field_name, value=value):
+                    with self.assertRaisesRegex(ValueError, "positive and finite"):
+                        _Scene(**{field_name: value})
+        for value in (-1, float("inf"), float("nan"), True):
+            with self.subTest(change_threshold=value):
+                with self.assertRaisesRegex(ValueError, "finite and non-negative"):
+                    _Scene(change_threshold=value)
+
     def test_streamer_profile_ids_match_registry(self):
         from config import _VALID_STREAMER_PROFILES
         from modules.streamer_profiles import known_profile_ids
@@ -169,17 +203,6 @@ class TestConfig(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "streamer_profile invalid"):
             _Config(translation=_Translation(streamer_profile="typo_profile"))
-
-    def test_unknown_japanese_retry_mode_is_rejected(self):
-        from config import _Translation
-
-        with self.assertRaisesRegex(ValueError, "quality_retry_japanese_mode invalid"):
-            _Translation(quality_retry_japanese_mode="replace-everything")
-
-    def test_japanese_retry_defaults_off(self):
-        from config import _Translation
-
-        self.assertEqual(_Translation().quality_retry_japanese_mode, "off")
 
     def test_translation_slang_is_dict(self):
         from collections.abc import Mapping

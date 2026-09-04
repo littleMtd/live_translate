@@ -34,6 +34,12 @@ def _engine(name: str, result: str | None) -> MagicMock:
     return engine
 
 
+def _capsule_engine(name: str, result: str | None) -> MagicMock:
+    engine = _engine(name, result)
+    engine.translate_messages.return_value = result
+    return engine
+
+
 def _failed_engine(
     name: str,
     *,
@@ -152,7 +158,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -161,7 +166,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(used_idx, 1)
         self.assertEqual(state.active_idx, 1)
-        self.assertEqual(state.probe_counter, 0)
         snapshot = metrics.snapshot()
         self.assertEqual(snapshot.counters["translation.fallback.attempt"], 2)
         self.assertEqual(snapshot.counters["translation.fallback.success"], 1)
@@ -169,7 +173,7 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
     def test_user_path_does_not_probe_primary(self):
         metrics.reset()
         engines = [_engine("primary", "primary ok"), _engine("fallback", "fallback ok")]
-        state = FallbackState(active_idx=1, probe_counter=49)
+        state = FallbackState(active_idx=1)
 
         result, used_idx = call_with_fallback(
             engines,
@@ -178,7 +182,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             3,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -231,7 +234,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -256,7 +258,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: result == "copied source",
             logging.getLogger("test"),
@@ -272,6 +273,194 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         attempts = get_translation_attempts()
         self.assertEqual(attempts[0]["status"], "rejected_output")
         self.assertEqual(attempts[0]["failure_scope"], "content")
+
+    def test_deepseek_guard_uses_same_frozen_capsule_and_soft_falls_back(self):
+        frozen = (("system", "same"), ("user", "input: source"))
+        engines = [
+            _capsule_engine("deepseek", "候選느졋"),
+            _capsule_engine("openrouter", "正式結果"),
+        ]
+        state = FallbackState(
+            active_idx=0,
+            consecutive_primary_failures=1,
+            primary_cooldown_until=17.0,
+            consecutive_probe_successes=2,
+        )
+        health_before = (
+            state.active_idx,
+            state.consecutive_primary_failures,
+            state.primary_cooldown_until,
+            state.consecutive_probe_successes,
+        )
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            1,
+            lambda _result, _source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            frozen_messages_by_engine={"deepseek": frozen, "openrouter": frozen},
+            output_guard=lambda engine, _result, _source: (
+                {"version": 1, "reason": "unexpected_hangul"}
+                if engine.engine_name == "deepseek"
+                else {}
+            ),
+        )
+
+        self.assertEqual((result, used_idx), ("正式結果", 1))
+        self.assertEqual(
+            (
+                state.active_idx,
+                state.consecutive_primary_failures,
+                state.primary_cooldown_until,
+                state.consecutive_probe_successes,
+            ),
+            health_before,
+        )
+        engines[0].translate_messages.assert_called_once_with(frozen)
+        engines[1].translate_messages.assert_called_once_with(frozen)
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(attempts[0]["failure_scope"], "content")
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "unexpected_hangul",
+        )
+        self.assertTrue(attempts[1]["selected_for_output"])
+
+    def test_generic_deepseek_rejection_preserves_candidate_evidence(self):
+        engines = [
+            _capsule_engine("deepseek", "overlong candidate"),
+            _capsule_engine("openrouter", "正式結果"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            1,
+            lambda result, _source: result == "overlong candidate",
+            logging.getLogger("test"),
+            frozen_messages_by_engine={
+                "deepseek": (("system", "same"),),
+                "openrouter": (("system", "same"),),
+            },
+            output_guard=lambda engine, _result, _source: (
+                {
+                    "version": 1,
+                    "candidate_output": "normalized candidate",
+                    "candidate_corrections": [{"rule": "preview-only"}],
+                    "candidate_quality_flags": ["low_target_cjk"],
+                    "candidate_quality_classifications": [],
+                }
+                if engine.engine_name == "deepseek"
+                else {}
+            ),
+        )
+
+        self.assertEqual((result, used_idx), ("正式結果", 1))
+        guard = get_translation_attempts()[0]["output_guard"]
+        self.assertEqual(guard["reason"], "generic_untranslated_output")
+        self.assertEqual(guard["candidate_output"], "normalized candidate")
+        self.assertEqual(
+            guard["candidate_corrections"],
+            [{"rule": "preview-only"}],
+        )
+        self.assertEqual(guard["candidate_quality_flags"], ["low_target_cjk"])
+
+    def test_deepseek_provider_failure_opens_circuit_and_uses_qwen(self):
+        deepseek_frozen = (("system", "deepseek contract"), ("user", "input: source"))
+        qwen_frozen = (("system", "qwen contract"), ("user", "input: source"))
+        deepseek = _capsule_engine("deepseek", None)
+        qwen = _capsule_engine("openrouter", "正式結果")
+
+        def fail_messages(_messages):
+            _set_last_engine_diagnostics(
+                "deepseek",
+                api_attempt_count=1,
+                api_error_type="timeout",
+                api_error_message_class="read_timeout",
+            )
+            return None
+
+        deepseek.translate_messages.side_effect = fail_messages
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            [deepseek, qwen],
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            1,
+            lambda _result, _source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            frozen_messages_by_engine={
+                "deepseek": deepseek_frozen,
+                "openrouter": qwen_frozen,
+            },
+            recovery_cooldown_seconds=60.0,
+            clock=lambda: 100.0,
+        )
+
+        self.assertEqual((result, used_idx), ("正式結果", 1))
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.primary_cooldown_until, 160.0)
+        deepseek.translate_messages.assert_called_once_with(deepseek_frozen)
+        qwen.translate_messages.assert_called_once_with(qwen_frozen)
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["failure_scope"], "provider")
+        self.assertTrue(attempts[1]["selected_for_output"])
+
+    def test_guarded_recovery_probe_cannot_close_primary_circuit(self):
+        engines = [_engine("deepseek", "候選느졋"), _engine("openrouter", "正式")]
+        state = FallbackState(
+            active_idx=1,
+            primary_cooldown_until=90.0,
+            consecutive_probe_successes=1,
+        )
+        observations = []
+
+        recovered = probe_primary_recovery(
+            engines,
+            state,
+            "probe",
+            "prompt",
+            lambda _result, _source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            recovery_cooldown_seconds=60.0,
+            required_consecutive_successes=2,
+            observation_sink=observations.append,
+            clock=lambda: 100.0,
+            output_guard=lambda engine, _result, _source: (
+                {"version": 1, "reason": "unexpected_hangul"}
+                if engine.engine_name == "deepseek"
+                else {}
+            ),
+        )
+
+        self.assertFalse(recovered)
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(state.primary_cooldown_until, 90.0)
+        self.assertEqual(state.consecutive_probe_successes, 1)
+        self.assertEqual(observations[0]["status"], "rejected_output")
+        self.assertEqual(observations[0]["success_streak"], 1)
+        self.assertEqual(
+            observations[0]["output_guard_reason"],
+            "unexpected_hangul",
+        )
 
     def test_content_rejection_on_intermediate_fallback_does_not_skip_it(self):
         engines = [
@@ -292,7 +481,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: result == "copied source",
             logging.getLogger("test"),
@@ -335,7 +523,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -344,6 +531,37 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
 
         self.assertEqual((result, used_idx), ("ok", 2))
         self.assertEqual(state.active_idx, 2)
+
+    def test_terminal_active_route_retries_recovered_intermediate_fallback(self):
+        primary = _failed_engine(
+            "primary",
+            error_type="timeout",
+            message_class="read_timeout",
+        )
+        intermediate = _engine("fallback-one", "recovered")
+        terminal = _failed_engine(
+            "fallback-two",
+            error_type="empty_response",
+            message_class="empty_response",
+        )
+        state = FallbackState(active_idx=2)
+
+        result, used_idx = call_with_fallback(
+            [primary, intermediate, terminal],
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("recovered", 1))
+        self.assertEqual(state.active_idx, 1)
+        primary.translate.assert_not_called()
 
     def test_non_circuit_legacy_switches_to_the_successful_fallback(self):
         engines = [
@@ -360,7 +578,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: result == "copied source",
             logging.getLogger("test"),
@@ -381,7 +598,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -411,7 +627,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -442,7 +657,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                 "prompt",
                 False,
                 [],
-                50,
                 1,
                 lambda result, source: False,
                 logging.getLogger("test"),
@@ -480,7 +694,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                 "prompt",
                 False,
                 [],
-                50,
                 1,
                 lambda result, source: False,
                 logging.getLogger("test"),
@@ -513,7 +726,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                 "prompt",
                 False,
                 [],
-                50,
                 1,
                 lambda result, source: False,
                 logging.getLogger("test"),
@@ -532,7 +744,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                 "prompt",
                 False,
                 [],
-                50,
                 1,
                 lambda result, source: False,
                 logging.getLogger("test"),
@@ -571,7 +782,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             1,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -602,7 +812,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                     "prompt",
                     False,
                     [],
-                    50,
                     1,
                     lambda result, source: False,
                     logging.getLogger("test"),
@@ -644,7 +853,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                     "prompt",
                     False,
                     [],
-                    50,
                     1,
                     lambda result, source: False,
                     logging.getLogger("test"),
@@ -678,7 +886,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                     "prompt",
                     False,
                     [],
-                    50,
                     1,
                     lambda result, source: False,
                     logging.getLogger("test"),
@@ -892,7 +1099,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             3,
             lambda result, source: False,
             logging.getLogger("test"),
@@ -930,7 +1136,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             3,
             lambda result, source: result == "bad",
             logging.getLogger("test"),
@@ -955,7 +1160,6 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
             "prompt",
             False,
             [],
-            50,
             3,
             lambda result, source: False,
             logging.getLogger("test"),

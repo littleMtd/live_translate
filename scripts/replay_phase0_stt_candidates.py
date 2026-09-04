@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
+import platform
 import re
 import sys
 import time
@@ -16,7 +18,12 @@ import soundfile as sf
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
 DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_sensevoice_shadow_20260624.json"
+DEFAULT_FASTER_WHISPER_OUTPUT = (
+    PROJECT_ROOT / "scratch" / "analysis" / "phase0_faster_whisper_shadow_20260624.json"
+)
 DEFAULT_GROUPS = ("clean_host_stt", "stt_unverified")
+DEFAULT_SENSEVOICE_MODEL = "iic/SenseVoiceSmall"
+DEFAULT_FASTER_WHISPER_MODEL = "large-v3-turbo"
 SENSEVOICE_TAG_RE = re.compile(r"<\|[^>]*\|>")
 
 
@@ -90,6 +97,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
 def verify_audio_asset(asset: dict[str, Any], audio_path: Path) -> None:
     expected_size = asset.get("size_bytes")
     expected_sha256 = str(asset.get("sha256") or "")
@@ -104,6 +118,33 @@ def verify_audio_asset(asset: dict[str, Any], audio_path: Path) -> None:
     actual_sha256 = _sha256(audio_path)
     if actual_sha256 != expected_sha256:
         raise ValueError(f"audio sha256 changed since manifest build: {audio_path}")
+
+
+def _resolve_audio_path(asset: dict[str, Any], project_root: Path) -> Path:
+    audio_path = Path(str(asset.get("audio_path") or ""))
+    if not audio_path.is_absolute():
+        audio_path = project_root / audio_path
+    return audio_path
+
+
+def _verify_audio_format(audio_path: Path, sample_id: str) -> None:
+    info = sf.info(audio_path)
+    if info.samplerate != 16000:
+        raise ValueError(f"expected 16 kHz audio for {sample_id}: {audio_path}")
+    if info.channels != 1:
+        raise ValueError(f"expected mono audio for {sample_id}: {audio_path}")
+
+
+def preflight_cases(
+    cases: list[dict[str, Any]], *, project_root: Path = PROJECT_ROOT
+) -> None:
+    """Fail on changed/missing/incompatible audio before loading a model."""
+    for case in cases:
+        sample_id = str(case.get("sample_id") or "")
+        for asset in _chronological_assets(case):
+            audio_path = _resolve_audio_path(asset, project_root)
+            verify_audio_asset(asset, audio_path)
+            _verify_audio_format(audio_path, sample_id)
 
 
 def _groq_diagnostics(sample: dict[str, Any]) -> dict[str, Any]:
@@ -148,24 +189,25 @@ def replay_cases(
     *,
     generate: Callable[[np.ndarray], str],
     project_root: Path = PROJECT_ROOT,
+    engine_name: str = "sensevoice",
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for case in cases:
         chunk_results: list[dict[str, Any]] = []
         for asset in _chronological_assets(case):
-            audio_path = Path(str(asset.get("audio_path") or ""))
-            if not audio_path.is_absolute():
-                audio_path = project_root / audio_path
+            audio_path = _resolve_audio_path(asset, project_root)
             verify_audio_asset(asset, audio_path)
             audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=False)
-            if sample_rate != 16000:
-                raise ValueError(f"expected 16 kHz audio for {case['sample_id']}: {audio_path}")
-            if audio.ndim != 1:
-                raise ValueError(f"expected mono audio for {case['sample_id']}: {audio_path}")
+            _verify_audio_format(audio_path, str(case["sample_id"]))
+            if sample_rate != 16000 or audio.ndim != 1:
+                raise ValueError(f"audio shape changed while reading {case['sample_id']}: {audio_path}")
             started = time.monotonic()
             raw_text = generate(audio)
             latency_ms = round((time.monotonic() - started) * 1000, 1)
-            text, tags = clean_sensevoice_text(raw_text)
+            if engine_name == "sensevoice":
+                text, tags = clean_sensevoice_text(raw_text)
+            else:
+                text, tags = raw_text.strip(), []
             chunk_results.append(
                 {
                     "utterance_id": str(asset.get("utterance_id") or ""),
@@ -190,31 +232,111 @@ def replay_cases(
             for row in chunk_results
             if row["text"] and row["source_kind"] == "evidence"
         ).strip()
-        output.append(
+        case_output = {
+            "sample_id": case["sample_id"],
+            "root_cause_group": case["root_cause_group"],
+            "ground_truth_status": case.get("ground_truth_status"),
+            "groq_source_text": sample.get("source_text"),
+            "groq_diagnostics": _groq_diagnostics(sample),
+            "annotation": case.get("annotation"),
+            "engine": engine_name,
+            "candidate_text": current_text,
+            "candidate_current_text": current_text,
+            "candidate_evidence_text": evidence_text,
+            "candidate_chunks": chunk_results,
+        }
+        # Keep the original SenseVoice field names for downstream compatibility.
+        prefix = "sensevoice" if engine_name == "sensevoice" else "faster_whisper"
+        case_output.update(
             {
-                "sample_id": case["sample_id"],
-                "root_cause_group": case["root_cause_group"],
-                "ground_truth_status": case.get("ground_truth_status"),
-                "groq_source_text": sample.get("source_text"),
-                "groq_diagnostics": _groq_diagnostics(sample),
-                "annotation": case.get("annotation"),
-                "sensevoice_text": current_text,
-                "sensevoice_current_text": current_text,
-                "sensevoice_evidence_text": evidence_text,
-                "sensevoice_chunks": chunk_results,
+                f"{prefix}_text": current_text,
+                f"{prefix}_current_text": current_text,
+                f"{prefix}_evidence_text": evidence_text,
+                f"{prefix}_chunks": chunk_results,
             }
         )
+        output.append(case_output)
     return output
 
 
+def _sensevoice_generator(*, model_name: str, device: str) -> Callable[[np.ndarray], str]:
+    from funasr import AutoModel
+
+    model = AutoModel(
+        model=model_name,
+        trust_remote_code=True,
+        device=device,
+        disable_update=True,
+    )
+
+    def generate(audio: np.ndarray) -> str:
+        result = model.generate(
+            input=audio,
+            cache={},
+            language="ko",
+            use_itn=True,
+            batch_size_s=60,
+        )
+        if not result:
+            return ""
+        return str(result[0].get("text") or "")
+
+    return generate
+
+
+def _faster_whisper_generator(
+    *,
+    model_name: str,
+    device: str,
+    compute_type: str,
+    cpu_threads: int,
+    num_workers: int,
+    download_root: Path | None,
+    local_files_only: bool,
+) -> Callable[[np.ndarray], str]:
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(
+        model_name,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=cpu_threads,
+        num_workers=num_workers,
+        download_root=str(download_root) if download_root else None,
+        local_files_only=local_files_only,
+    )
+
+    def generate(audio: np.ndarray) -> str:
+        segments, _info = model.transcribe(
+            audio,
+            language="ko",
+            beam_size=5,
+            temperature=0.0,
+            vad_filter=False,
+            condition_on_previous_text=False,
+            word_timestamps=False,
+        )
+        return "".join(str(segment.text) for segment in segments).strip()
+
+    return generate
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Replay Phase 0 STT cases through SenseVoice offline.")
+    parser = argparse.ArgumentParser(
+        description="Replay Phase 0 STT cases through a local offline ASR engine."
+    )
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--group", action="append", dest="groups", default=None)
     parser.add_argument("--case-id", action="append", dest="case_ids", default=None)
-    parser.add_argument("--model", default="iic/SenseVoiceSmall")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--engine", choices=("sensevoice", "faster-whisper"), default="sensevoice")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--compute-type", default="int8")
+    parser.add_argument("--cpu-threads", type=int, default=6)
+    parser.add_argument("--num-workers", type=int, default=1)
+    parser.add_argument("--download-root", type=Path, default=None)
+    parser.add_argument("--local-files-only", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -222,35 +344,37 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     groups = set(args.groups or DEFAULT_GROUPS)
     case_ids = set(args.case_ids) if args.case_ids else None
+    engine_name = args.engine.replace("-", "_")
+    model_name = args.model or (
+        DEFAULT_SENSEVOICE_MODEL
+        if args.engine == "sensevoice"
+        else DEFAULT_FASTER_WHISPER_MODEL
+    )
+    device = args.device or ("cuda" if args.engine == "sensevoice" else "cpu")
+    output_path = args.output or (
+        DEFAULT_OUTPUT if args.engine == "sensevoice" else DEFAULT_FASTER_WHISPER_OUTPUT
+    )
     try:
         manifest = _read_manifest(args.manifest)
         cases = select_cases(manifest, groups=groups, case_ids=case_ids)
         if not cases:
             raise ValueError("no replay cases matched the requested groups")
-
-        from funasr import AutoModel
-
-        model = AutoModel(
-            model=args.model,
-            trust_remote_code=True,
-            device=args.device,
-            disable_update=True,
-        )
-
-        def generate(audio: np.ndarray) -> str:
-            result = model.generate(
-                input=audio,
-                cache={},
-                language="ko",
-                use_itn=True,
-                batch_size_s=60,
+        preflight_cases(cases)
+        if args.engine == "sensevoice":
+            generate = _sensevoice_generator(model_name=model_name, device=device)
+        else:
+            generate = _faster_whisper_generator(
+                model_name=model_name,
+                device=device,
+                compute_type=args.compute_type,
+                cpu_threads=args.cpu_threads,
+                num_workers=args.num_workers,
+                download_root=args.download_root,
+                local_files_only=args.local_files_only,
             )
-            if not result:
-                return ""
-            return str(result[0].get("text") or "")
 
-        results = replay_cases(cases, generate=generate)
-    except (OSError, ValueError) as exc:
+        results = replay_cases(cases, generate=generate, engine_name=engine_name)
+    except Exception as exc:
         print(f"Phase 0 STT replay failed: {exc}", file=sys.stderr)
         return 1
 
@@ -258,16 +382,52 @@ def main(argv: list[str] | None = None) -> int:
         "phase0_stt_replay_schema": 2,
         "manifest": str(args.manifest),
         "manifest_sha256": _sha256(args.manifest),
-        "engine": "sensevoice",
-        "model": args.model,
-        "device": args.device,
+        "engine": engine_name,
+        "model": model_name,
+        "device": device,
+        "runtime_versions": {
+            "python": platform.python_version(),
+            "numpy": _package_version("numpy"),
+            "soundfile": _package_version("soundfile"),
+            "engine_package": _package_version(
+                "funasr" if args.engine == "sensevoice" else "faster-whisper"
+            ),
+            "engine_runtime": _package_version(
+                "torch" if args.engine == "sensevoice" else "ctranslate2"
+            ),
+        },
+        "engine_parameters": (
+            {
+                "language": "ko",
+                "use_itn": True,
+                "batch_size_s": 60,
+            }
+            if args.engine == "sensevoice"
+            else {
+                "language": "ko",
+                "compute_type": args.compute_type,
+                "cpu_threads": args.cpu_threads,
+                "num_workers": args.num_workers,
+                "beam_size": 5,
+                "temperature": 0.0,
+                "vad_filter": False,
+                "condition_on_previous_text": False,
+                "word_timestamps": False,
+                "download_root": str(args.download_root) if args.download_root else None,
+                "local_files_only": args.local_files_only,
+            }
+        ),
+        "model_artifact_identity_limit": (
+            "Model name and runtime parameters are recorded; an immutable upstream "
+            "artifact revision is not exposed uniformly by both engines."
+        ),
         "groups": sorted(groups),
         "case_count": len(results),
         "cases": results,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(results)} SenseVoice replay cases to {args.output}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {len(results)} {engine_name} replay cases to {output_path}")
     return 0
 
 

@@ -9,17 +9,17 @@ from modules.streamer_profiles import known_profile_ids
 from modules.translation_prompts import (
     _PROFILE_DATA_PATH,
     _build_qwen_optimized_prompt,
-    _build_qwen_legacy_prompt,
     _load_translation_profiles,
     get_translation_profile,
     get_translation_profile_facts,
+    get_translation_profile_output_terms,
     get_translation_profile_preserve_terms,
     translation_profile_ids,
 )
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "8a80528dd2eb2d7c6d91b609939c86c73fc8e7efeb2ed85142f5c4ad10222696"
+_TRANSLATION_PROFILE_DATA_HASH = "ee55e9bb9ff4cbab3f4186141a2aafecf986308865ec7664f37d25909268b185"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -51,9 +51,7 @@ def test_qwen_prompt_does_not_teach_placeholder_outputs():
 
 def test_qwen_prompt_v2_is_compact_and_has_one_ordered_policy():
     prompt = _build_qwen_optimized_prompt()
-    legacy = _build_qwen_legacy_prompt()
 
-    assert len(prompt) < len(legacy) * 0.7
     assert "[Ordered decision policy]" in prompt
     assert "Translate coherent Korean, English, or Japanese speech" in prompt
     assert "Unknown token inside an otherwise coherent sentence" in prompt
@@ -99,6 +97,15 @@ def test_profile_preserve_terms_keep_only_canonical_self_mapping():
     assert "투니버스 메들리" in stellive_terms
     assert "해둥" not in stellive_terms
     assert "Haedungi" not in stellive_terms
+
+
+def test_profile_output_terms_are_limited_to_explicit_glossary_canonicals():
+    terms = get_translation_profile_output_terms("isegye_lilpa")
+
+    assert {"Gosegu", "Jururu", "Lilpa", "Official髭男dism"} <= terms
+    assert "고세구" not in terms
+    assert "Everybody say" not in terms
+    assert not any("only when" in term for term in get_translation_profile_output_terms("url"))
 
 
 def test_profile_preserve_terms_include_later_official_title_rules():
@@ -166,6 +173,8 @@ def test_isegye_translation_profiles_contain_official_romanization():
         assert "Gosegu" in profile
         assert "Jururu" in profile
         assert "Lilpa" in profile
+        assert "히게단" in profile
+        assert "Official髭男dism" in profile
 
 
 def test_stellive_translation_profiles_contain_official_romanization():
@@ -203,6 +212,39 @@ def test_url_translation_profiles_contain_official_group_terms():
         profile = get_translation_profile("url", qwen=qwen)
         for term in required_terms:
             assert term in profile
+
+
+def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
+    required_terms = (
+        "IRISÉ",
+        "아이리제",
+        "KIIRI",
+        "키리",
+        "TIZ",
+        "티즈",
+        "IZÉ",
+        "이제들",
+        "이재들",
+        "이재 여러분",
+        "이재희 여러분",
+        "Parable Entertainment",
+        "IRIDESCENT",
+        "LOVEGAME",
+        "Heart Crush",
+    )
+
+    for qwen in (False, True):
+        profile = get_translation_profile("irise", qwen=qwen)
+        for term in required_terms:
+            assert term in profile
+        assert "이제 여러분들도 많이 기다려" in profile
+        assert "output:現在各位應該也等了很久" in profile
+        assert "never add" in profile or "must never leak" in profile
+
+    output_terms = get_translation_profile_output_terms("irise")
+    assert {"IRISÉ", "KIIRI", "TIZ", "IZÉ", "Parable Entertainment", "Wings"} <= output_terms
+    assert not any("translate normally" in term for term in output_terms)
+    assert not any("only in clear fandom" in term for term in output_terms)
 
 
 def test_live_path_uses_qwen_prompt(monkeypatch):

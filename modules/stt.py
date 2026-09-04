@@ -2,6 +2,7 @@ import io
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -17,7 +18,16 @@ from utils.runtime_events import runtime_events
 from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
 from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
 from modules.scene_stt_terms import terms_for_activity
-from modules.streamer_profiles import build_stt_glossary
+from modules.streamer_profiles import (
+    build_stt_glossary,
+    common_stt_terms,
+    profile_stt_terms,
+)
+from modules.profile_context import (
+    ProfileSnapshot,
+    build_registry_stt_glossary,
+    profile_state,
+)
 from modules.stt_policy import (
     build_groq_prompt_budget,
     dedupe_transcript_overlap,
@@ -39,6 +49,26 @@ _GROQ_CONTEXT_CHARS = 120
 _GROQ_PROMPT_MAX_CHARS = 896
 _TIMESTAMP_DEDUPE_MARGIN_SEC = 0.3
 _AUDIO_DUMP_ROOT = Path(__file__).resolve().parent.parent / "logs" / "audio_dump"
+_ELEVENLABS_UNSUPPORTED_KEYTERM_CHARS = frozenset("<>{}[]\\")
+
+
+@dataclass(frozen=True)
+class _ContextSource:
+    utterance_id: str
+    engine: str
+    avg_logprob: float | None
+    no_speech_prob: float | None
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class _ContextProvenance:
+    source_utterance_id: str
+    age_ms: float
+    text_len: int
+    source_engine: str
+    source_avg_logprob: float | None
+    source_no_speech_prob: float | None
 
 
 def _is_groq_rate_limit_error(exc: Exception) -> bool:
@@ -138,6 +168,49 @@ def _dedupe_segments_by_timestamp(
     return "", kept, len(dropped), deduped_chars or len(text or "")
 
 
+def _dedupe_elevenlabs_words_by_timestamp(
+    text: str,
+    words: list,
+    overlap_seconds: float,
+) -> tuple[str, list, int, int, bool]:
+    """Discard Scribe tokens wholly contained in capture's copied prefix.
+
+    Unlike transcript-string overlap, this is anchored to the exact audio
+    prefix copied into the new VAD chunk. When usable timestamps exist their
+    result is authoritative, including the no-drop case: a speaker may
+    legitimately repeat the preceding words after the copied prefix.
+    """
+    if overlap_seconds <= 0 or not words:
+        return text, words, 0, 0, False
+
+    timed_words = [
+        word for word in words
+        if _float_or_none(_segment_value(word, "end")) is not None
+    ]
+    if not timed_words:
+        return text, words, 0, 0, False
+
+    kept = []
+    dropped = []
+    for word in words:
+        end = _float_or_none(_segment_value(word, "end"))
+        if end is not None and end <= overlap_seconds:
+            dropped.append(word)
+        else:
+            kept.append(word)
+
+    if not dropped:
+        return text, words, 0, 0, True
+
+    dropped_chars = sum(
+        len(str(_segment_value(word, "text", "") or "")) for word in dropped
+    )
+    kept_text = "".join(
+        str(_segment_value(word, "text", "") or "") for word in kept
+    ).strip()
+    return kept_text, kept, len(dropped), dropped_chars, True
+
+
 def _cfg_audio_bool(name: str, default: bool) -> bool:
     value = getattr(cfg.audio, name, default)
     return bool(value) if isinstance(value, bool) else default
@@ -211,6 +284,8 @@ class STTEngine:
         self._sense_voice = None
         self._groq_client = None
         self._groq_fallback_client = None
+        self._elevenlabs_client = None
+        self._use_elevenlabs = (cfg.stt.primary_engine == "elevenlabs")
         self._use_groq = (cfg.stt.primary_engine == "groq")
         self._consecutive_none = 0
         self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
@@ -223,12 +298,17 @@ class STTEngine:
         self._last_transcript: str = ""
         self._last_context_transcript: str = ""
         self._last_context_updated_at: float | None = None
+        self._last_context_source: _ContextSource | None = None
+        self._current_context_provenance: _ContextProvenance | None = None
         self._last_context_gate_reason: str = ""
         self._last_prompt_context_gated = False
         self._last_prompt_context_gate_reason = ""
         self._last_avg_logprob: float | None = None
         self._last_no_speech_prob: float | None = None
         self._last_sensevoice_error = False
+        self._last_elevenlabs_error = False
+        self._elevenlabs_retry_after = 0.0
+        self._last_elevenlabs_keyterm_count = 0
         # Monotonic per-transcription counter; minted once per transcribe_event
         # call (single STT thread, so no lock needed) to correlate downstream events.
         self._utterance_seq = 0
@@ -241,8 +321,15 @@ class STTEngine:
         self._current_vad_cut_reason = ""
         self._last_prompt_budget = None
         self._last_detected_language = ""
+        self._last_language_probability: float | None = None
+        self._last_transcription_id = ""
         self._last_foreign_speech_allowed = False
-        if self._use_groq:
+        if self._use_elevenlabs:
+            self._init_elevenlabs()
+            # Groq remains a same-chunk fallback for provider failures.
+            self._init_groq()
+            self._init_groq_fallback()
+        elif self._use_groq:
             self._init_groq()
             self._init_groq_fallback()
         else:
@@ -250,11 +337,26 @@ class STTEngine:
 
         self.available = (
             self._sense_voice is not None
+            or self._elevenlabs_client is not None
             or self._groq_client is not None
             or self._groq_fallback_client is not None
         )
         if not self.available:
-            log.error("STT unavailable: both SenseVoice and Groq failed to initialize")
+            log.error("STT unavailable: ElevenLabs, SenseVoice, and Groq all failed to initialize")
+
+    def _init_elevenlabs(self):
+        if not cfg.keys.elevenlabs:
+            log.error("ELEVENLABS_API_KEY not set — ElevenLabs STT unavailable")
+            return
+        try:
+            from elevenlabs.client import ElevenLabs
+            self._elevenlabs_client = ElevenLabs(
+                api_key=cfg.keys.elevenlabs,
+                timeout=cfg.stt.elevenlabs_timeout,
+            )
+            log.info("ElevenLabs %s ready as primary STT", cfg.stt.elevenlabs_model)
+        except Exception as e:
+            log.error("Failed to init ElevenLabs client: %s", e)
 
     def _load_sense_voice(self):
         try:
@@ -311,23 +413,73 @@ class STTEngine:
         return event.text if event else None
 
     def transcribe_event(self, audio: np.ndarray | AudioChunk) -> TranscriptionEvent | None:
+        request_profile = profile_state.current()
+        configured_profile = str(getattr(cfg, "active_streamer_profile", "") or "")
+        if (
+            request_profile.evidence_source == "source_default"
+            and not request_profile.source_profile_id
+            and configured_profile
+        ):
+            request_profile = profile_state.legacy_snapshot(
+                configured_profile,
+                translation_profile_applied=bool(cfg.translation.use_profile),
+                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+            )
+        previous_profile = getattr(self, "_current_profile_snapshot", None)
+        if (
+            previous_profile is not None
+            and previous_profile.generation != request_profile.generation
+        ):
+            self.reset_stream_context("profile_changed")
+        self._current_profile_snapshot = request_profile
         chunk = _audio_chunk(audio)
         audio = chunk.audio
         self._utterance_seq += 1
         self._current_utterance_id = f"utt-{self._utterance_seq}"
         self._last_audio_seconds = _audio_seconds(audio)
         self._current_overlap_seconds = float(chunk.overlap_seconds or 0.0)
+        self._current_overlap_represented = self._overlap_matches_last_represented_audio(
+            audio,
+            self._current_overlap_seconds,
+        )
         self._current_vad_cut_reason = str(chunk.vad_cut_reason or "")
+        # Provenance is request-attempt scoped. Clearing it here prevents a
+        # skipped/no-request path from inheriting the previous attempt.
+        self._current_context_provenance = None
+        if getattr(self, "_use_elevenlabs", False):
+            result = self._transcribe_elevenlabs(audio)
+            if result is not None:
+                self._consecutive_none = 0
+                self._last_transcript = result
+                self._update_context_transcript(result, "elevenlabs")
+                self._remember_represented_audio(audio)
+                return self._event(result, "elevenlabs")
+            if not self._last_elevenlabs_error:
+                return None
+            # Provider/network/quota failures retry this same chunk with Groq.
+            # The configured primary remains ElevenLabs for the next chunk;
+            # a bounded cooldown prevents an outage from being hammered.
+            log.warning("ElevenLabs STT unavailable for this chunk — falling back to Groq")
+            result = self._transcribe_groq(audio, _attempt_index=2)
+            if result is not None:
+                self._consecutive_none = 0
+                self._last_transcript = result
+                self._update_context_transcript(result, "groq")
+                self._remember_represented_audio(audio)
+                return self._event(result, "groq")
+            self._consecutive_none += 1
+            return None
         if not self._use_groq:
             self._last_segments = ()
             result = self._transcribe_sensevoice(audio)
             if result is not None:
-                result = dedupe_transcript_overlap(self._last_transcript, result)
+                result = self._dedupe_current_overlap(result)
                 if not result:
                     return None
                 self._consecutive_none = 0
                 self._last_transcript = result
                 self._update_context_transcript(result, "sensevoice")
+                self._remember_represented_audio(audio)
                 return self._event(result, "sensevoice")
             if not self._last_sensevoice_error:
                 return None
@@ -345,7 +497,7 @@ class STTEngine:
                     self._last_segments = ()
                     probe = self._transcribe_sensevoice(audio)
                     if probe is not None:
-                        probe = dedupe_transcript_overlap(self._last_transcript, probe)
+                        probe = self._dedupe_current_overlap(probe)
                         if not probe:
                             return None
                         log.info("SenseVoice recovered — switching back from Groq")
@@ -353,16 +505,15 @@ class STTEngine:
                         self._consecutive_none = 0
                         self._last_transcript = probe
                         self._update_context_transcript(probe, "sensevoice")
+                        self._remember_represented_audio(audio)
                         return self._event(probe, "sensevoice")
 
         result = self._transcribe_groq(audio)
         if result is not None:
-            result = dedupe_transcript_overlap(self._last_transcript, result)
-            if not result:
-                return None
             self._consecutive_none = 0
             self._last_transcript = result
             self._update_context_transcript(result, "groq")
+            self._remember_represented_audio(audio)
             return self._event(result, "groq")
         else:
             self._consecutive_none += 1
@@ -373,11 +524,273 @@ class STTEngine:
                 )
         return None
 
+    def _overlap_matches_last_represented_audio(
+        self,
+        audio: np.ndarray,
+        overlap_seconds: float,
+    ) -> bool:
+        """Prove that this prefix came from the last successful STT chunk."""
+        if overlap_seconds <= 0:
+            return False
+        previous = getattr(self, "_last_represented_audio", None)
+        if previous is None:
+            return False
+        sample_count = int(round(overlap_seconds * max(1, cfg.audio.sample_rate)))
+        if sample_count <= 0 or sample_count > len(audio) or sample_count > len(previous):
+            return False
+        return bool(np.array_equal(previous[-sample_count:], audio[:sample_count]))
+
+    def _remember_represented_audio(self, audio: np.ndarray) -> None:
+        self._last_represented_audio = np.asarray(audio).copy()
+
+    def _elevenlabs_keyterms(self) -> list[str]:
+        snapshot = getattr(self, "_current_profile_snapshot", None)
+        if snapshot is None:
+            snapshot = profile_state.legacy_snapshot(
+                str(getattr(cfg, "active_streamer_profile", "") or ""),
+                translation_profile_applied=bool(cfg.translation.use_profile),
+                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+            )
+        if not snapshot.stt_glossary_applied or not _cfg_stt_bool("use_profile_glossary", True):
+            return []
+        scene_terms = terms_for_activity(
+            normalize_activity(getattr(cfg.translation, "current_activity", ""))
+        )
+        candidates = (
+            *scene_terms,
+            *(snapshot.registry or profile_state.registry).common_stt_terms,
+            *(snapshot.registry or profile_state.registry).terms_for(snapshot.effective_profile_id),
+        )
+        limit = max(0, min(100, _cfg_stt_int("elevenlabs_max_keyterms", 100)))
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            term = str(candidate or "").strip()
+            if (
+                not term
+                or term in seen
+                or len(term) >= 50
+                or len(term.split()) > 5
+                or any(char in term for char in _ELEVENLABS_UNSUPPORTED_KEYTERM_CHARS)
+            ):
+                continue
+            seen.add(term)
+            unique.append(term)
+            if len(unique) >= limit:
+                break
+        return unique
+
+    def _transcribe_elevenlabs(self, audio: np.ndarray) -> str | None:
+        started = time.monotonic()
+        self._last_elevenlabs_error = False
+        self._last_avg_logprob = None
+        self._last_no_speech_prob = None
+        self._last_segments = ()
+        self._last_timestamp_deduped_segments = 0
+        self._last_timestamp_deduped_chars = 0
+        self._last_detected_language = ""
+        self._last_language_probability = None
+        self._last_transcription_id = ""
+        self._last_foreign_speech_allowed = False
+        self._last_elevenlabs_keyterm_count = 0
+
+        if self._elevenlabs_client is None:
+            self._last_elevenlabs_error = True
+            self._emit_elevenlabs_runtime_event(
+                audio=audio,
+                started=started,
+                status="failed",
+                reason="no_client",
+                request_sent=False,
+                will_retry=self._groq_client is not None or self._groq_fallback_client is not None,
+            )
+            return None
+        if started < self._elevenlabs_retry_after:
+            self._last_elevenlabs_error = True
+            self._emit_elevenlabs_runtime_event(
+                audio=audio,
+                started=started,
+                status="skipped",
+                reason="provider_cooldown",
+                request_sent=False,
+                will_retry=self._groq_client is not None or self._groq_fallback_client is not None,
+            )
+            return None
+
+        request_audio, audio_stats = _normalize_audio_for_stt(audio)
+        if _rms(request_audio) < cfg.audio.volume_threshold:
+            self._emit_elevenlabs_runtime_event(
+                audio=audio,
+                started=started,
+                status="skipped",
+                reason="below_volume_threshold",
+                request_sent=False,
+                audio_stats=audio_stats,
+            )
+            return None
+
+        request_sent = False
+        try:
+            buf = io.BytesIO()
+            sf.write(buf, request_audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
+            buf.seek(0)
+            buf.name = "audio.wav"
+            keyterms = self._elevenlabs_keyterms()
+            self._last_elevenlabs_keyterm_count = len(keyterms)
+            request_kwargs = {
+                "file": buf,
+                "model_id": cfg.stt.elevenlabs_model,
+                "language_code": cfg.stt.language,
+                "timestamps_granularity": "word",
+                "tag_audio_events": False,
+                "diarize": False,
+            }
+            if keyterms:
+                request_kwargs["keyterms"] = keyterms
+            request_sent = True
+            resp = self._elevenlabs_client.speech_to_text.convert(**request_kwargs)
+            text = str(getattr(resp, "text", "") or "").strip()
+            words = list(getattr(resp, "words", None) or [])
+            language_probability = _float_or_none(
+                getattr(resp, "language_probability", None)
+            )
+            self._last_language_probability = (
+                language_probability
+                if language_probability is not None and np.isfinite(language_probability)
+                else None
+            )
+            self._last_transcription_id = str(
+                getattr(resp, "transcription_id", "") or ""
+            )
+            timestamp_dedupe_applied = False
+            if (
+                _cfg_stt_bool("dedupe_by_timestamp", True)
+                and bool(getattr(self, "_current_overlap_represented", False))
+            ):
+                (
+                    text,
+                    words,
+                    dropped_words,
+                    dropped_chars,
+                    timestamp_dedupe_applied,
+                ) = _dedupe_elevenlabs_words_by_timestamp(
+                    text,
+                    words,
+                    getattr(self, "_current_overlap_seconds", 0.0),
+                )
+                self._last_timestamp_deduped_segments = dropped_words
+                self._last_timestamp_deduped_chars = dropped_chars
+            self._last_segments = tuple(
+                SegmentInfo(
+                    start=_float_or_none(getattr(word, "start", None)),
+                    end=_float_or_none(getattr(word, "end", None)),
+                    text=str(getattr(word, "text", "") or ""),
+                    logprob=(
+                        value
+                        if (value := _float_or_none(getattr(word, "logprob", None)))
+                        is not None and np.isfinite(value)
+                        else None
+                    ),
+                    word_type=str(getattr(word, "type", "") or ""),
+                    speaker_id=str(getattr(word, "speaker_id", "") or ""),
+                )
+                for word in words
+            )
+            detected_lang = getattr(resp, "language_code", None)
+            self._last_detected_language = str(detected_lang or "")
+            allow_detected_japanese = (
+                bool(getattr(cfg.translation, "translate_coherent_foreign_speech", False))
+                and self._last_detected_language.lower() in ("ja", "japanese")
+            )
+            self._last_foreign_speech_allowed = allow_detected_japanese
+            if should_reject_language(
+                detected_lang,
+                text,
+                log,
+                allow_japanese=allow_detected_japanese,
+            ):
+                self._clear_context_transcript("filtered_language")
+                reason = "language"
+            elif not text:
+                self._clear_context_transcript("filtered_empty")
+                reason = "empty"
+            elif _is_hallucinated(text, allow_japanese=allow_detected_japanese):
+                self._clear_context_transcript("filtered_hallucinated")
+                reason = "hallucinated"
+            else:
+                # Exact transcript overlap remains a compatibility fallback for
+                # responses without usable timestamps. Once Scribe supplied
+                # timing evidence, even a no-drop result is trusted so an
+                # intentional repetition after the copied prefix is preserved.
+                if not timestamp_dedupe_applied:
+                    text = self._dedupe_current_overlap(text)
+                if not text:
+                    self._clear_context_transcript("filtered_overlap_duplicate")
+                    reason = "overlap_duplicate"
+                else:
+                    self._emit_elevenlabs_runtime_event(
+                        audio=audio,
+                        started=started,
+                        status="success",
+                        reason="",
+                        request_sent=request_sent,
+                        text=text,
+                        audio_stats=audio_stats,
+                    )
+                    log.debug("ElevenLabs: %s", text)
+                    return text
+
+            self._emit_elevenlabs_runtime_event(
+                audio=audio,
+                started=started,
+                status="filtered",
+                reason=reason,
+                request_sent=request_sent,
+                text=text,
+                audio_stats=audio_stats,
+            )
+            return None
+        except Exception as e:
+            self._last_elevenlabs_error = True
+            self._elevenlabs_retry_after = time.monotonic() + max(
+                0.0,
+                _cfg_stt_float("elevenlabs_failure_cooldown_sec", 30.0),
+            )
+            log.error("ElevenLabs STT error: %s", e)
+            self._emit_elevenlabs_runtime_event(
+                audio=audio,
+                started=started,
+                status="failed",
+                reason="rate_limited" if _is_groq_rate_limit_error(e) else "error",
+                request_sent=request_sent,
+                audio_stats=audio_stats,
+                will_retry=self._groq_client is not None or self._groq_fallback_client is not None,
+            )
+            return None
+
+    def _dedupe_current_overlap(self, text: str) -> str:
+        """Remove exact text overlap only for a proven represented audio prefix."""
+        if float(getattr(self, "_current_overlap_seconds", 0.0) or 0.0) <= 0:
+            return text
+        if not bool(getattr(self, "_current_overlap_represented", False)):
+            return text
+        return dedupe_transcript_overlap(self._last_transcript, text)
+
+    def reset_stream_context(self, reason: str = "stream_reset") -> None:
+        """Clear transcript state that must not cross a pause/discontinuity."""
+        self._last_transcript = ""
+        self._clear_context_transcript(reason)
+        self._current_overlap_seconds = 0.0
+        self._current_overlap_represented = False
+        self._last_represented_audio = None
+        self._current_vad_cut_reason = ""
+
     def _event(self, text: str, engine: str) -> TranscriptionEvent:
+        snapshot = getattr(self, "_current_profile_snapshot", profile_state.current())
         return TranscriptionEvent(
             text=text,
             engine=engine,
-            profile_id=cfg.active_streamer_profile,
+            profile_id=snapshot.effective_profile_id,
             utterance_id=self._current_utterance_id,
             audio_seconds=self._last_audio_seconds,
             avg_logprob=self._last_avg_logprob,
@@ -385,11 +798,16 @@ class STTEngine:
             segments=getattr(self, "_last_segments", ()),
             overlap_seconds=getattr(self, "_current_overlap_seconds", 0.0),
             vad_cut_reason=getattr(self, "_current_vad_cut_reason", ""),
+            language_probability=getattr(self, "_last_language_probability", None),
+            transcription_id=getattr(self, "_last_transcription_id", ""),
+            profile_snapshot=snapshot,
         )
 
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
+        self._last_language_probability = None
+        self._last_transcription_id = ""
         self._last_sensevoice_error = False
         try:
             res = self._sense_voice.generate(
@@ -415,12 +833,18 @@ class STTEngine:
             self._last_sensevoice_error = True
             return None
 
-    def _transcribe_groq(self, audio: np.ndarray, *, _retrying_other_key: bool = False) -> str | None:
+    def _transcribe_groq(
+        self,
+        audio: np.ndarray,
+        *,
+        _retrying_other_key: bool = False,
+        _attempt_index: int = 1,
+    ) -> str | None:
         started = time.monotonic()
         # Diagnostic-only attempt metadata.  One TranscriptionEvent/utterance may
         # make at most one immediate cross-key retry; these fields make attempts
         # joinable without changing selection, retry, or cooldown behavior.
-        self._current_groq_attempt_index = 2 if _retrying_other_key else 1
+        self._current_groq_attempt_index = _attempt_index
         self._current_groq_key_role = "none"
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
@@ -428,6 +852,8 @@ class STTEngine:
         self._last_timestamp_deduped_segments = 0
         self._last_timestamp_deduped_chars = 0
         self._last_detected_language = ""
+        self._last_language_probability = None
+        self._last_transcription_id = ""
         self._last_foreign_speech_allowed = False
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
@@ -520,7 +946,10 @@ class STTEngine:
             self._last_foreign_speech_allowed = allow_detected_japanese
             text = (getattr(resp, "text", "") or "").strip()
             segments = getattr(resp, "segments", None) or []
-            if _cfg_stt_bool("dedupe_by_timestamp", True):
+            if (
+                _cfg_stt_bool("dedupe_by_timestamp", True)
+                and bool(getattr(self, "_current_overlap_represented", False))
+            ):
                 text, segments, dropped_segments, dropped_chars = _dedupe_segments_by_timestamp(
                     text,
                     list(segments),
@@ -605,6 +1034,21 @@ class STTEngine:
                     audio_stats=audio_stats,
                 )
                 return None
+            text = self._dedupe_current_overlap(text)
+            if not text:
+                self._clear_context_transcript("filtered_overlap_duplicate")
+                self._emit_stt_runtime_event(
+                    audio=audio,
+                    started=started,
+                    status="filtered",
+                    reason="overlap_duplicate",
+                    request_sent=request_sent,
+                    text="",
+                    avg_logprob=stats.logprob if stats else None,
+                    no_speech_prob=stats.no_speech if stats else None,
+                    audio_stats=audio_stats,
+                )
+                return None
             log.debug("Groq: %s", text)
             # L9: reuse `stats` from segment_rejection_reason above —
             # segments were already converted/aggregated once.
@@ -649,7 +1093,11 @@ class STTEngine:
                             audio_stats=audio_stats,
                             will_retry=True,
                         )
-                        return self._transcribe_groq(audio, _retrying_other_key=True)
+                        return self._transcribe_groq(
+                            audio,
+                            _retrying_other_key=True,
+                            _attempt_index=_attempt_index + 1,
+                        )
                     log.warning("Groq STT fallback key rate limited; dropping chunk: %s", e)
                 else:
                     self._groq_rate_limited_until = cooldown_end
@@ -673,7 +1121,11 @@ class STTEngine:
                             audio_stats=audio_stats,
                             will_retry=True,
                         )
-                        return self._transcribe_groq(audio, _retrying_other_key=True)
+                        return self._transcribe_groq(
+                            audio,
+                            _retrying_other_key=True,
+                            _attempt_index=_attempt_index + 1,
+                        )
                     log.warning("Groq STT rate limited; dropping chunk without fallback retry: %s", e)
             else:
                 log.error("Groq STT error: %s", e)
@@ -689,6 +1141,13 @@ class STTEngine:
             return None
 
     def _build_groq_prompt(self) -> str | None:
+        snapshot = getattr(self, "_current_profile_snapshot", None)
+        if snapshot is None:
+            snapshot = profile_state.legacy_snapshot(
+                str(getattr(cfg, "active_streamer_profile", "") or ""),
+                translation_profile_applied=bool(cfg.translation.use_profile),
+                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+            )
         context_transcript = self._context_transcript_for_prompt()
         # Manual activity-keyed hot vocabulary. The automatic scene resolver
         # is record-only and never activates STT terms.
@@ -698,15 +1157,42 @@ class STTEngine:
             normalize_activity(getattr(cfg.translation, "current_activity", "")))
         budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
-            use_profile_glossary=cfg.stt.use_profile_glossary,
-            active_profile=cfg.active_streamer_profile,
+            use_profile_glossary=(cfg.stt.use_profile_glossary and snapshot.stt_glossary_applied),
+            active_profile=snapshot.effective_profile_id,
             last_transcript=context_transcript,
-            glossary_builder=lambda profile_id: build_stt_glossary(
-                profile_id, extra_terms=scene_terms),
+            glossary_builder=(
+                (lambda profile_id: build_stt_glossary(
+                    profile_id, extra_terms=scene_terms
+                ))
+                if snapshot.evidence_source == "legacy_fallback"
+                else (lambda profile_id: build_registry_stt_glossary(
+                    snapshot.registry or profile_state.registry,
+                    profile_id,
+                    extra_terms=scene_terms,
+                ))
+            ),
             max_context_chars=_GROQ_CONTEXT_CHARS,
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
         self._last_prompt_budget = budget
+        self._current_context_provenance = None
+        source = getattr(self, "_last_context_source", None)
+        if budget.context_included and source is not None:
+            # Freeze what this attempt actually selected before the request.
+            # Later response filtering may clear future context eligibility,
+            # but must not rewrite attribution for the request already sent.
+            context_payload = normalize_prompt_text(
+                context_transcript,
+                _GROQ_CONTEXT_CHARS,
+            )
+            self._current_context_provenance = _ContextProvenance(
+                source_utterance_id=source.utterance_id,
+                age_ms=round(max(0.0, time.monotonic() - source.updated_at) * 1000, 2),
+                text_len=len(context_payload),
+                source_engine=source.engine,
+                source_avg_logprob=source.avg_logprob,
+                source_no_speech_prob=source.no_speech_prob,
+            )
         return budget.prompt
 
     def _context_transcript_for_prompt(self) -> str:
@@ -735,6 +1221,7 @@ class STTEngine:
     def _clear_context_transcript(self, reason: str) -> None:
         self._last_context_transcript = ""
         self._last_context_updated_at = None
+        self._last_context_source = None
         self._last_context_gate_reason = reason
 
     def _update_context_transcript(self, text: str, engine: str) -> None:
@@ -757,8 +1244,20 @@ class STTEngine:
                 self._clear_context_transcript("no_speech_prob")
                 return
 
+        updated_at = time.monotonic()
         self._last_context_transcript = text
-        self._last_context_updated_at = time.monotonic()
+        self._last_context_updated_at = updated_at
+        self._last_context_source = _ContextSource(
+            utterance_id=str(getattr(self, "_current_utterance_id", "")),
+            engine=engine,
+            avg_logprob=(
+                getattr(self, "_last_avg_logprob", None) if engine == "groq" else None
+            ),
+            no_speech_prob=(
+                getattr(self, "_last_no_speech_prob", None) if engine == "groq" else None
+            ),
+            updated_at=updated_at,
+        )
         self._last_context_gate_reason = ""
 
     def _emit_stt_runtime_event(
@@ -779,6 +1278,11 @@ class STTEngine:
         # Prompt budget only reflects this request; on skipped paths no prompt
         # was built, so the (possibly stale) budget is intentionally omitted.
         budget = getattr(self, "_last_prompt_budget", None) if request_sent else None
+        provenance = (
+            getattr(self, "_current_context_provenance", None)
+            if request_sent and budget is not None and budget.context_included
+            else None
+        )
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
@@ -793,7 +1297,7 @@ class STTEngine:
             audio_seconds=_audio_seconds(audio),
             latency_ms=round((time.monotonic() - started) * 1000, 2),
             text_len=len(text or ""),
-            profile_id=cfg.active_streamer_profile,
+            **getattr(self, "_current_profile_snapshot", profile_state.current()).as_metadata(),
             avg_logprob=avg_logprob,
             no_speech_prob=no_speech_prob,
             segment_count=len(getattr(self, "_last_segments", ())),
@@ -813,17 +1317,102 @@ class STTEngine:
             glossary_truncated=budget.glossary_truncated if budget else None,
             context_present=budget.context_present if budget else None,
             context_included=budget.context_included if budget else None,
+            context_source_utterance_id=(
+                provenance.source_utterance_id if provenance else None
+            ),
+            context_age_ms=provenance.age_ms if provenance else None,
+            context_text_len=provenance.text_len if provenance else None,
+            context_source_engine=provenance.source_engine if provenance else None,
+            context_source_avg_logprob=(
+                provenance.source_avg_logprob if provenance else None
+            ),
+            context_source_no_speech_prob=(
+                provenance.source_no_speech_prob if provenance else None
+            ),
             context_gated=bool(getattr(self, "_last_prompt_context_gated", False)) if request_sent else False,
             context_gate_reason=getattr(self, "_last_prompt_context_gate_reason", "") if request_sent else "",
             detected_language=str(getattr(self, "_last_detected_language", "")) if request_sent else "",
             foreign_speech_allowed=bool(getattr(self, "_last_foreign_speech_allowed", False)) if request_sent else False,
         )
 
+    def _emit_elevenlabs_runtime_event(
+        self,
+        *,
+        audio: np.ndarray,
+        started: float,
+        status: str,
+        reason: str,
+        request_sent: bool,
+        text: str = "",
+        audio_stats: dict[str, float | bool] | None = None,
+        will_retry: bool = False,
+    ) -> None:
+        audio_stats = audio_stats or {}
+        word_logprobs = [
+            float(segment.logprob)
+            for segment in getattr(self, "_last_segments", ())
+            if segment.logprob is not None and np.isfinite(segment.logprob)
+        ]
+        word_type_counts: dict[str, int] = {}
+        for segment in getattr(self, "_last_segments", ()):
+            word_type = str(segment.word_type or "")
+            if word_type:
+                word_type_counts[word_type] = word_type_counts.get(word_type, 0) + 1
+        runtime_events.emit(
+            "stt",
+            utterance_id=getattr(self, "_current_utterance_id", ""),
+            engine="elevenlabs",
+            model=cfg.stt.elevenlabs_model,
+            status=status,
+            reason=reason,
+            request_sent=request_sent,
+            attempt_index=1,
+            key_role="primary",
+            will_retry=bool(will_retry),
+            audio_seconds=_audio_seconds(audio),
+            latency_ms=round((time.monotonic() - started) * 1000, 2),
+            text_len=len(text or ""),
+            **getattr(self, "_current_profile_snapshot", profile_state.current()).as_metadata(),
+            avg_logprob=None,
+            no_speech_prob=None,
+            segment_count=len(getattr(self, "_last_segments", ())),
+            timestamp_deduped_segments=int(getattr(self, "_last_timestamp_deduped_segments", 0)),
+            timestamp_deduped_chars=int(getattr(self, "_last_timestamp_deduped_chars", 0)),
+            overlap_seconds=round(getattr(self, "_current_overlap_seconds", 0.0), 3),
+            vad_cut_reason=getattr(self, "_current_vad_cut_reason", ""),
+            audio_rms=audio_stats.get("audio_rms"),
+            audio_peak=audio_stats.get("audio_peak"),
+            normalized_rms=audio_stats.get("normalized_rms"),
+            normalized_peak=audio_stats.get("normalized_peak"),
+            normalization_gain=audio_stats.get("normalization_gain"),
+            normalization_limited=audio_stats.get("normalization_limited"),
+            keyterm_count=int(getattr(self, "_last_elevenlabs_keyterm_count", 0)),
+            language_probability=(
+                getattr(self, "_last_language_probability", None)
+                if request_sent else None
+            ),
+            word_count=len(getattr(self, "_last_segments", ())),
+            min_word_logprob=min(word_logprobs) if word_logprobs else None,
+            mean_word_logprob=(
+                round(sum(word_logprobs) / len(word_logprobs), 6)
+                if word_logprobs else None
+            ),
+            word_type_counts=word_type_counts,
+            detected_language=(
+                str(getattr(self, "_last_detected_language", "")) if request_sent else ""
+            ),
+            foreign_speech_allowed=(
+                bool(getattr(self, "_last_foreign_speech_allowed", False))
+                if request_sent
+                else False
+            ),
+        )
+
 
 def start(audio_queue: queue.Queue, text_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None) -> threading.Thread:
-    def run():
+    def run_pipeline():
         engine = STTEngine()
         if not engine.available:
             # Both SenseVoice and Groq failed to load. Don't sit and spin
@@ -841,7 +1430,24 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
         if cfg.stt.dump_audio:
             dump_dir = _AUDIO_DUMP_ROOT / runtime_events.run_id
             log.info("STT audio dump enabled → %s", dump_dir)
+        was_paused = False
         while not stop_event.is_set():
+            if pause_event and pause_event.is_set():
+                if not was_paused:
+                    engine.reset_stream_context("pipeline_paused")
+                    was_paused = True
+                stop_event.wait(0.05)
+                continue
+            if was_paused:
+                # Drop anything that raced with the UI's queue drain and make
+                # the first resumed request independent of pre-pause context.
+                while True:
+                    try:
+                        audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                engine.reset_stream_context("pipeline_resumed")
+                was_paused = False
             has_audio, audio_item = poll_queue(audio_queue, stop_event, pause_event)
             if not has_audio:
                 continue
@@ -864,6 +1470,15 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             metrics.log_summary_if_due()
 
         log.info("STT stopped")
+
+    def run():
+        try:
+            run_pipeline()
+        except Exception as exc:
+            # A dead STT consumer otherwise leaves capture/UI running forever
+            # while audio queues accumulate and no subtitles can be produced.
+            log.error("STT worker aborted: %s", exc, exc_info=True)
+            stop_event.set()
 
     return start_daemon_thread("STT", run)
 

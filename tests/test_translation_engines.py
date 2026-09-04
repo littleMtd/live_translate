@@ -1,8 +1,11 @@
 """Unit tests for engine-level diagnostics helpers (token usage capture)."""
 import unittest
+import json
 from dataclasses import replace
+from unittest.mock import MagicMock, patch
 
 from modules.translation_engines import (
+    effective_engine_chain_names,
     effective_system_prompt_for_engine,
     engine_registry,
     get_last_engine_api_diagnostics,
@@ -11,6 +14,9 @@ from modules.translation_engines import (
     get_last_token_usage_engine,
     reset_last_engine_diagnostics,
     reset_last_token_usage,
+    build_effective_deepseek_messages,
+    build_effective_qwen_messages,
+    DeepSeekTranslationEngine,
 )
 
 
@@ -55,6 +61,21 @@ class TestTokenUsageCapture(unittest.TestCase):
         self.assertEqual(usage["output"], 20)
         self.assertEqual(usage["cache_read"], 80)
         self.assertEqual(usage["cache_write"], 0)
+
+    def test_deepseek_cache_usage_is_captured(self):
+        _log_token_usage(
+            "DeepSeek",
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_cache_hit_tokens": 80,
+                "prompt_cache_miss_tokens": 20,
+            },
+        )
+        usage = get_last_token_usage()
+        self.assertEqual(usage["cache_read"], 80)
+        self.assertEqual(usage["cache_write"], 20)
 
     def test_missing_usage_is_all_none(self):
         _log_token_usage("Groq", None)
@@ -131,15 +152,43 @@ class TestCompactProfileDigest(unittest.TestCase):
 
         self.assertIn("You translate noisy live-stream subtitles", prompt)
         self.assertIn("never invent or complete missing meaning", prompt)
-        self.assertIn("Never copy history into the answer", prompt)
+        self.assertIn("Never copy or import", prompt)
+        self.assertIn("never reverse who does/wants what", prompt)
+        self.assertIn("name, number, or fact that appears only in history", prompt)
+        self.assertIn("Preserve coherent English normally", prompt)
         self.assertIn("[Active profile facts]", prompt)
         self.assertIn("유아렐/유아엘=UR:L", prompt)
         self.assertIn("Wish Me Love", prompt)
         self.assertNotIn("Fixed name renderings", prompt)
         self.assertEqual(
             hashlib.sha256(prompt.encode()).hexdigest(),
-            "b8a1920e8f8aa1ced6a91d9f66d6f44cb3113e6616629b4d12e84e66b5af5d8d",
+            "c98084f74f833f8a3bf24afc185e33b93ef7b2cc760b1cb297c05e8a4f0d07ff",
         )
+
+    def test_deepseek_uses_dedicated_production_contract(self):
+        deepseek = self._compact_prompt("deepseek", "irise", use_profile=True)
+        qwen = self._compact_prompt("openrouter", "irise", use_profile=True)
+
+        self.assertNotEqual(deepseek, qwen)
+        self.assertIn("You translate spoken Korean", deepseek)
+        self.assertIn(
+            "Do not mechanically translate an obviously malformed STT token",
+            deepseek,
+        )
+        self.assertIn("If the source is genuinely ambiguous", deepseek)
+        self.assertIn("Never invent missing clauses", deepseek)
+        self.assertIn("ASR-repair permission never applies", deepseek)
+        self.assertIn("never invent Chinese or Latin aliases", deepseek)
+        self.assertIn("__LT_UNK_n__ and __LT_SEM_n__", deepseek)
+        self.assertIn("Use recent history only for conversational continuity", deepseek)
+        self.assertIn("For incomplete input", deepseek)
+        self.assertIn("Output only the Traditional Chinese translation", deepseek)
+        self.assertIn("[Active profile facts]", deepseek)
+        self.assertIn("키리/KIIRI=KIIRI", deepseek)
+        self.assertNotIn("benchmark", deepseek.lower())
+        self.assertNotIn("무송부", deepseek)
+        self.assertNotIn("무승부", deepseek)
+        self.assertNotIn("You translate noisy live-stream subtitles", deepseek)
 
     def test_wrong_profile_names_do_not_leak(self):
         # 랑코 can't be the probe: it appears in _COMPACT_INVARIANTS itself.
@@ -402,3 +451,124 @@ class TestEngineRegistry(unittest.TestCase):
                     self.assertEqual(spec.is_configured(), spec.factory().available)
         finally:
             object.__setattr__(cfg, "keys", original_keys)
+
+
+class TestDeepSeekTranslationAdapter(unittest.TestCase):
+    @staticmethod
+    def _response(content: str = "翻譯"):
+        response = MagicMock()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        response.read.return_value = json.dumps(
+            {
+                "choices": [
+                    {"message": {"content": content}, "finish_reason": "stop"}
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                    "prompt_cache_hit_tokens": 80,
+                    "prompt_cache_miss_tokens": 20,
+                },
+                "system_fingerprint": "fp-test",
+            }
+        ).encode()
+        return response
+
+    def test_direct_request_contract_and_cost(self):
+        from config import cfg
+
+        engine = DeepSeekTranslationEngine()
+        engine._api_key = "test-key"
+        messages = (("system", "same prompt"), ("user", "input: 안녕"))
+        with patch("urllib.request.urlopen", return_value=self._response()) as urlopen:
+            result = engine.translate_messages(messages)
+
+        self.assertEqual(result, "翻譯")
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.assertEqual(request.full_url, "https://api.deepseek.com/chat/completions")
+        self.assertEqual(headers["authorization"], "Bearer test-key")
+        self.assertEqual(payload["model"], "deepseek-v4-flash")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(
+            payload["messages"],
+            [
+                {"role": "system", "content": "same prompt"},
+                {"role": "user", "content": "input: 안녕"},
+            ],
+        )
+        expected = (
+            80 * cfg.translation.deepseek_cache_hit_usd_per_million
+            + 20 * cfg.translation.deepseek_cache_miss_usd_per_million
+            + 10 * cfg.translation.deepseek_output_usd_per_million
+        ) / 1_000_000
+        self.assertAlmostEqual(
+            get_last_engine_api_diagnostics()["api_cost_usd"], expected, places=10
+        )
+        self.assertEqual(get_last_token_usage()["cache_read"], 80)
+        self.assertEqual(get_last_token_usage()["cache_write"], 20)
+
+    def test_qwen_message_builder_is_immutable(self):
+        messages = build_effective_qwen_messages(
+            "현재 문장",
+            "unused full prompt",
+            False,
+            [("문맥1", "脈絡1"), ("문맥2", "脈絡2")],
+        )
+        self.assertIsInstance(messages, tuple)
+        self.assertTrue(all(isinstance(message, tuple) for message in messages))
+        self.assertEqual(messages[-1][0], "user")
+        self.assertIn("현재 문장", messages[-1][1])
+
+    def test_deepseek_and_qwen_share_structure_but_not_system_prompt(self):
+        history = [("문맥1", "脈絡1"), ("문맥2", "脈絡2")]
+        deepseek = build_effective_deepseek_messages(
+            "현재 문장", "unused full prompt", False, history
+        )
+        qwen = build_effective_qwen_messages(
+            "현재 문장", "unused full prompt", False, history
+        )
+
+        self.assertNotEqual(deepseek[0], qwen[0])
+        self.assertEqual(deepseek[1:], qwen[1:])
+        self.assertIn("overwhelmingly more likely", deepseek[0][1])
+        self.assertIn("You translate noisy live-stream subtitles", qwen[0][1])
+
+    def test_deepseek_cost_is_unknown_when_usage_is_missing_or_incomplete(self):
+        engine = DeepSeekTranslationEngine()
+        self.assertIsNone(engine._cost_usd({}))
+        self.assertIsNone(
+            engine._cost_usd(
+                {"prompt_tokens": 100, "completion_tokens": 10}
+            )
+        )
+
+    def test_deepseek_is_registered_for_protected_production_route(self):
+        self.assertIn("deepseek", engine_registry())
+
+    def test_protected_and_rollback_chains_ignore_dashboard_base_order(self):
+        from config import cfg
+
+        original_route = cfg.translation.deepseek_route
+        original_chain = cfg.translation.engine_chain
+        original_mode = cfg.translation.translation_mode
+        try:
+            object.__setattr__(cfg.translation, "translation_mode", "live")
+            object.__setattr__(cfg.translation, "engine_chain", ("groq",))
+            object.__setattr__(cfg.translation, "deepseek_route", "primary")
+            self.assertEqual(
+                effective_engine_chain_names(),
+                ("deepseek", "openrouter", "deepl", "groq"),
+            )
+            object.__setattr__(cfg.translation, "deepseek_route", "off")
+            self.assertEqual(
+                effective_engine_chain_names(),
+                ("openrouter", "deepl", "groq"),
+            )
+        finally:
+            object.__setattr__(cfg.translation, "deepseek_route", original_route)
+            object.__setattr__(cfg.translation, "engine_chain", original_chain)
+            object.__setattr__(cfg.translation, "translation_mode", original_mode)

@@ -8,6 +8,7 @@ from modules.streamer_profiles import (
     build_stt_glossary,
     get_profile,
     known_profile_ids,
+    profile_stt_terms,
 )
 
 
@@ -217,3 +218,29 @@ def test_url_stt_glossary_contains_official_group_terms():
         "사계",
     ):
         assert term in glossary
+
+
+def test_irise_stt_glossary_contains_current_official_terms():
+    glossary = build_stt_glossary("irise")
+
+    for term in (
+        "아이리제",
+        "IRISÉ",
+        "키리",
+        "KIIRI",
+        "티즈",
+        "TIZ",
+        "이제들",
+        "이재들",
+        "이재 여러분",
+        "이재희 여러분",
+        "IZÉ",
+        "Parable Entertainment",
+        "IRIDESCENT",
+        "LOVEGAME",
+        "Heart Crush",
+    ):
+        assert term in glossary
+
+    # 이제 is an ordinary Korean adverb; do not bias STT globally toward the fandom.
+    assert "이제" not in profile_stt_terms("irise")

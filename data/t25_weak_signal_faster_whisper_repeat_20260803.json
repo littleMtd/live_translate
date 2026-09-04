@@ -1,0 +1,248 @@
+{
+  "phase0_stt_replay_schema": 2,
+  "manifest": "scratch\\analysis\\t25_weak_signal_manifest_20260803.json",
+  "manifest_sha256": "dc5cc5a045829a76debafbcc26f1494c701e6fe05dc38dc251d522bccf944ae4",
+  "engine": "faster_whisper",
+  "model": "large-v3-turbo",
+  "device": "cpu",
+  "runtime_versions": {
+    "python": "3.13.14",
+    "numpy": "2.4.6",
+    "soundfile": "0.14.0",
+    "engine_package": "1.2.1",
+    "engine_runtime": "4.8.1"
+  },
+  "engine_parameters": {
+    "language": "ko",
+    "compute_type": "int8",
+    "cpu_threads": 6,
+    "num_workers": 1,
+    "beam_size": 5,
+    "temperature": 0.0,
+    "vad_filter": false,
+    "condition_on_previous_text": false,
+    "word_timestamps": false,
+    "download_root": "C:\\Users\\user\\.cache\\live_translate\\models\\faster-whisper",
+    "local_files_only": true
+  },
+  "model_artifact_identity_limit": "Model name and runtime parameters are recorded; an immutable upstream artifact revision is not exposed uniformly by both engines.",
+  "groups": [
+    "weak_signal"
+  ],
+  "case_count": 3,
+  "cases": [
+    {
+      "sample_id": "T25-WS-pair-001-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-42"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-42",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 2.816,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.9935883,
+            "no_speech_prob": 0.03325496,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.002921,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "faster_whisper",
+      "candidate_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+      "candidate_current_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-42",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-42.wav",
+          "audio_seconds": 2.816,
+          "text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+          "metadata_tags": [],
+          "raw_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+          "latency_ms": 5843.3,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "faster_whisper_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+      "faster_whisper_current_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+      "faster_whisper_evidence_text": "",
+      "faster_whisper_chunks": [
+        {
+          "utterance_id": "utt-42",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T084530Z-30796\\utt-42.wav",
+          "audio_seconds": 2.816,
+          "text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+          "metadata_tags": [],
+          "raw_text": "으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으으",
+          "latency_ms": 5843.3,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-003-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-16"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-16",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 3.808,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.8223789,
+            "no_speech_prob": 0.11253147,
+            "audio_context": {
+              "vad_cut_reason": "silence",
+              "audio_rms": 0.006389,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "faster_whisper",
+      "candidate_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+      "candidate_current_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-16",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-16.wav",
+          "audio_seconds": 3.808,
+          "text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+          "metadata_tags": [],
+          "raw_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+          "latency_ms": 5491.1,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "faster_whisper_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+      "faster_whisper_current_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+      "faster_whisper_evidence_text": "",
+      "faster_whisper_chunks": [
+        {
+          "utterance_id": "utt-16",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-16.wav",
+          "audio_seconds": 3.808,
+          "text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+          "metadata_tags": [],
+          "raw_text": "디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-디-",
+          "latency_ms": 5491.1,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    },
+    {
+      "sample_id": "T25-WS-pair-007-weak_signal",
+      "root_cause_group": "weak_signal",
+      "ground_truth_status": "unlabeled_candidate",
+      "groq_source_text": "",
+      "groq_diagnostics": {
+        "translation_cut_reason": null,
+        "sentence_cut_reason": null,
+        "source_utterance_ids": [
+          "utt-281"
+        ],
+        "evidence_source_utterance_ids": [],
+        "quality_score": null,
+        "quality_flags": null,
+        "chunks": [
+          {
+            "utterance_id": "utt-281",
+            "chunk_role": "single_stt_chunk",
+            "source_kind": "current",
+            "stt_status": "success",
+            "stt_reason": "",
+            "stt_engine": "groq",
+            "stt_model": "whisper-large-v3",
+            "stt_audio_seconds": 7.392,
+            "stt_latency_ms": null,
+            "avg_logprob": -0.7371297,
+            "no_speech_prob": 0.04522705,
+            "audio_context": {
+              "vad_cut_reason": "soft_max_pause",
+              "audio_rms": 0.002603,
+              "overlap_seconds": 0.0,
+              "context_included": true
+            }
+          }
+        ]
+      },
+      "annotation": null,
+      "engine": "faster_whisper",
+      "candidate_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+      "candidate_current_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+      "candidate_evidence_text": "",
+      "candidate_chunks": [
+        {
+          "utterance_id": "utt-281",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-281.wav",
+          "audio_seconds": 7.392,
+          "text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+          "metadata_tags": [],
+          "raw_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+          "latency_ms": 5397.9,
+          "audio_fingerprint_verified": true
+        }
+      ],
+      "faster_whisper_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+      "faster_whisper_current_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+      "faster_whisper_evidence_text": "",
+      "faster_whisper_chunks": [
+        {
+          "utterance_id": "utt-281",
+          "source_kind": "current",
+          "audio_path": "logs\\audio_dump\\20260802T093732Z-30160\\utt-281.wav",
+          "audio_seconds": 7.392,
+          "text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+          "metadata_tags": [],
+          "raw_text": "어차피 스토리 밀다보면 얘 뽑을 수 있어요. 질문하시면 지금 못 뽑아요. 답변 올 거예요.",
+          "latency_ms": 5397.9,
+          "audio_fingerprint_verified": true
+        }
+      ]
+    }
+  ]
+}

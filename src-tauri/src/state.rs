@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 pub struct AppState {
     pub python_process: Mutex<Option<Child>>,
+    pub python_run_id: Mutex<Option<String>>,
     pub config_cache: Mutex<Option<ConfigDto>>,
 }
 
@@ -11,6 +12,7 @@ impl AppState {
     pub fn new() -> Self {
         AppState {
             python_process: Mutex::new(None),
+            python_run_id: Mutex::new(None),
             config_cache: Mutex::new(None),
         }
     }
@@ -63,6 +65,12 @@ pub struct SttConfig {
     pub avg_logprob_threshold: f32,
     pub max_japanese_chars: u32,
     pub max_repeat_ratio: f32,
+    #[serde(default = "default_true")]
+    pub use_profile_glossary: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
@@ -86,8 +94,14 @@ pub struct TranslationConfig {
     pub translation_mode: String,
     pub streamer_profile: String,
     pub use_profile: bool,
+    #[serde(default = "default_profile_mode")]
+    pub profile_mode: String,
     pub current_activity: String,
     pub slang: HashMap<String, String>,
+}
+
+fn default_profile_mode() -> String {
+    "auto".to_string()
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -183,6 +197,7 @@ mod tests {
                 avg_logprob_threshold: -1.0,
                 max_japanese_chars: 2,
                 max_repeat_ratio: 0.7,
+                use_profile_glossary: true,
             },
             splitter: SplitterConfig {
                 min_wait_seconds: 3,
@@ -200,6 +215,7 @@ mod tests {
                 translation_mode: "live".into(),
                 streamer_profile: "hades_chxxnnx".into(),
                 use_profile: true,
+                profile_mode: "auto".into(),
                 current_activity: String::new(),
                 slang: HashMap::from([("ㅋㅋ".into(), "哈哈".into())]),
             },
@@ -258,6 +274,7 @@ mod tests {
         let cfg = sample_config();
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("zh-TW"));
+        assert!(json.contains("\"use_profile_glossary\":true"));
         assert!(json.contains("openrouter"));
     }
 

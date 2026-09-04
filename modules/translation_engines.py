@@ -14,6 +14,7 @@ from config import cfg
 from modules.activity_context import (
     activity_prompt_capsule,
     effective_activity_value,
+    effective_profile_id,
     normalize_activity,
 )
 from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
@@ -29,9 +30,12 @@ _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_USER_AGENT = "live_translate/1.0"
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
+_DEEPSEEK_USER_AGENT = "live_translate/1.0"
 _DEEPL_FREE_BASE_URL = "https://api-free.deepl.com/v2"
 _DEEPL_PRO_BASE_URL = "https://api.deepl.com/v2"
 _DEEPL_USER_AGENT = "live_translate/1.0"
+_PROTECTED_LIVE_BASE_CHAIN = ("openrouter", "deepl", "groq")
 # Shared invariants for the compact (TPM-budget) prompts. These engines now
 # carry most traffic on nvidia-degradation days, so the systematic error
 # classes observed in runtime logs must be covered even without the full
@@ -392,8 +396,22 @@ def _strip_think_tags(content: str) -> str:
 
 def _build_user_message(text: str, incomplete: bool) -> str:
     if incomplete:
-        return f"input (incomplete sentence, translate as best as possible): {text}"
+        return (
+            "input (incomplete sentence; translate only the meaning that is "
+            f"present and do not complete the missing clause): {text}"
+        )
     return f"input: {text}"
+
+
+def _build_openrouter_history_user_message(text: str) -> str:
+    return f"[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]\nsource: {text}"
+
+
+def _build_openrouter_current_user_message(text: str, incomplete: bool) -> str:
+    return (
+        "[CURRENT INPUT — TRANSLATE ONLY THIS]\n"
+        + _build_user_message(text, incomplete)
+    )
 
 
 def _build_groq_user_message(text: str, incomplete: bool) -> str:
@@ -506,9 +524,71 @@ def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[t
     return _limited_history(history, config_prefix="openrouter")
 
 
+def build_effective_qwen_messages(
+    text: str,
+    system_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    """Freeze the exact role/content sequence used by production Qwen."""
+    return _build_effective_compact_messages(
+        text,
+        _openrouter_system_prompt(system_prompt),
+        incomplete,
+        history,
+    )
+
+
+def build_effective_deepseek_messages(
+    text: str,
+    system_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    """Freeze the exact role/content sequence used by DeepSeek V4 Flash."""
+    return _build_effective_compact_messages(
+        text,
+        _deepseek_system_prompt(system_prompt),
+        incomplete,
+        history,
+    )
+
+
+def _build_effective_compact_messages(
+    text: str,
+    effective_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    """Apply the shared bounded history and current-input message structure."""
+    limited_history = _limited_openrouter_history(history)
+    messages: list[tuple[str, str]] = [("system", effective_prompt)]
+    for source, target in limited_history:
+        messages.append(("user", _build_openrouter_history_user_message(source)))
+        messages.append(("assistant", target))
+    messages.append(("user", _build_openrouter_current_user_message(text, incomplete)))
+    return tuple(messages)
+
+
 def _deepl_base_url(api_key: str) -> str:
     """Select DeepL's API endpoint from the documented Free-key suffix."""
     return _DEEPL_FREE_BASE_URL if (api_key or "").strip().endswith(":fx") else _DEEPL_PRO_BASE_URL
+
+
+@lru_cache(maxsize=1)
+def _deepl_ssl_context():
+    """Return a CA-bundle-backed context for DeepL's certificate chain.
+
+    Python's default Windows OpenSSL store can retain expired Let's Encrypt
+    intermediates and fail to build a chain that the Windows certificate store
+    accepts. Certifi provides a current Mozilla CA bundle while preserving
+    normal hostname and certificate verification.
+    """
+    import ssl
+
+    import certifi
+
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 def _direct_translation_source_lang(text: str) -> str:
@@ -541,7 +621,9 @@ def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
     )
     if activity:
         parts.append(f"Current stream activity: {activity}.")
-    profile_id = str(getattr(cfg, "active_streamer_profile", "") or "").strip()
+    profile_id = effective_profile_id(
+        getattr(cfg, "active_streamer_profile", "")
+    )
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         digest = _compact_profile_digest(profile_id)
         if digest:
@@ -601,7 +683,7 @@ def _compact_profile_digest(profile_id: str) -> str:
 def _groq_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
         return system_prompt
-    profile_id = getattr(cfg, "active_streamer_profile", "")
+    profile_id = effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
     prompt = _COMPACT_SYSTEM_PROMPT
     if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
         prompt += (
@@ -629,7 +711,9 @@ def _openrouter_capsule_prompt(profile_id: str) -> str:
 - Output only the translation. No labels, quotes, notes, explanations, apologies, or alternatives.
 - Translate coherent Korean, English, or Japanese speech. Use Traditional Chinese, never Simplified Chinese.
 - Input comes from STT and may be fragmented, cut off, misheard, or contain hallucinated syllables. Translate only what is actually supported; never invent or complete missing meaning.
-- Use recent message history only to resolve references and continuity. Never copy history into the answer.
+- For incoherent English-like word sequences, omit only the unsupported noise and still translate any coherent Korean; never literalize the noise into a plausible story. Preserve coherent English normally.
+- Preserve grammatical roles, direction, and sentence type: never reverse who does/wants what, and keep questions as questions.
+- Use recent message history only to resolve references and continuity. Never copy or import a name, number, or fact that appears only in history into the answer.
 - Preserve the speaker's tone, emotion, slang, and profanity. Avoid formal or literal phrasing.
 - Obey every exact profile mapping below. Profile rules override generic translation habits.
 - Keep official titles, game/skill names, streamer IDs, brands, and established English names unchanged.
@@ -654,15 +738,51 @@ Final check before answering: translation only; Traditional Chinese; no unsuppor
     return prompt
 
 
+def _deepseek_capsule_prompt(profile_id: str) -> str:
+    """Dedicated real-time production contract for DeepSeek V4 Flash."""
+    facts = get_translation_profile_facts(profile_id).strip()
+    prompt = f"""You translate spoken Korean into natural Traditional Chinese used in Taiwan.
+
+[Translation contract]
+1. Preserve the speaker's intended meaning, tone, grammatical roles and direction, question/statement type, numbers, and units.
+2. The source is live STT and may contain fragments, repetitions, recognition errors, near-homophones, or hallucinated syllables.
+3. Do not mechanically translate an obviously malformed STT token when current-sentence grammar, immediate conversational context, phonetic or orthographic similarity, and ordinary Korean usage together make one correction overwhelmingly more likely than any plausible alternative. Only in that narrow case, interpret the intended ordinary word and translate its meaning.
+4. If the source is genuinely ambiguous, do not guess merely to produce fluent Chinese. Preserve only defensible meaning. Never invent missing clauses, facts, speakers, subjects, roles, entities, or relationships.
+5. The ASR-repair permission never applies to unknown personal or stage names or uncertain entities. Preserve uncertain Hangul names; never invent Chinese or Latin aliases for them.
+6. Treat __LT_UNK_n__ and __LT_SEM_n__ placeholders as immutable. Reproduce every supplied placeholder exactly once, without alteration.
+7. Follow supplied canonical and profile terminology exactly when applicable. Never substitute a related profile, person, group, or entity merely because it appears in context or history.
+8. Use recent history only for conversational continuity, pronoun/reference resolution, and disambiguation. Never copy a name, number, fact, or other content from history unless the current source supports it.
+9. For incomplete input, translate only the meaning currently present. Never complete the missing continuation.
+10. Output only the Traditional Chinese translation. Do not include explanations, notes, reconstructed source text, alternatives, labels, or meta commentary.
+
+[Active profile facts]
+{facts}"""
+    activity = activity_prompt_capsule(
+        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
+    )
+    if activity:
+        prompt += "\n\n" + activity
+    return prompt
+
+
 def _openrouter_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "openrouter_compact_prompt", True)):
         return system_prompt
     profile_id = (
-        getattr(cfg, "active_streamer_profile", "")
+        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
         if bool(getattr(cfg.translation, "use_profile", False))
         else ""
     )
     return _openrouter_capsule_prompt(profile_id)
+
+
+def _deepseek_system_prompt(system_prompt: str) -> str:
+    profile_id = (
+        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
+        if bool(getattr(cfg.translation, "use_profile", False))
+        else ""
+    )
+    return _deepseek_capsule_prompt(profile_id)
 
 
 def _deepl_prompt_signature() -> str:
@@ -696,6 +816,8 @@ def effective_system_prompt_for_engine(
         return _groq_system_prompt(system_prompt)
     if engine_name == "openrouter":
         return _openrouter_system_prompt(system_prompt)
+    if engine_name == "deepseek":
+        return _deepseek_system_prompt(system_prompt)
     if engine_name == "deepl":
         # Not a prompt — DeepL never sees it. It is the engine's cache
         # signature: translator hashes this into prompt_ver, which keys both
@@ -761,8 +883,19 @@ def _log_token_usage(engine: str, usage) -> None:
     prompt_tokens = _usage_value(usage, "prompt_token_count", "promptTokenCount", "input_tokens", "prompt_tokens")
     output_tokens = _usage_value(usage, "candidates_token_count", "candidatesTokenCount", "output_tokens", "response_token_count", "completion_tokens")
     total_tokens = _usage_value(usage, "total_token_count", "totalTokenCount", "total_tokens")
-    cache_write = _usage_value(usage, "cache_creation_input_tokens")
-    cache_read = _usage_value(usage, "cache_read_input_tokens")
+    cache_write = _usage_value(
+        usage,
+        "cache_creation_input_tokens",
+        "prompt_cache_miss_tokens",
+    )
+    cache_read = _usage_value(
+        usage,
+        "cache_read_input_tokens",
+        "prompt_cache_hit_tokens",
+    )
+    if cache_read is None and usage is not None:
+        details = _usage_value(usage, "prompt_tokens_details", "promptTokensDetails")
+        cache_read = _usage_value(details, "cached_tokens", "cachedTokens")
 
     _TOKEN_USAGE.value = {
         "engine": str(engine or "").strip().lower(),
@@ -908,6 +1041,7 @@ def call_engine_with_deadline(
     timeout_seconds: float,
     max_inflight: int,
     deadline_scope: str = "route",
+    messages_frozen: tuple[tuple[str, str], ...] | None = None,
 ) -> str | None:
     """Run one synchronous adapter behind a hard caller-side wall deadline.
 
@@ -951,7 +1085,10 @@ def call_engine_with_deadline(
         reset_last_engine_diagnostics()
         reset_last_token_usage()
         try:
-            result = engine.translate(text, system_prompt, incomplete, history)
+            if messages_frozen is not None and hasattr(engine, "translate_messages"):
+                result = engine.translate_messages(messages_frozen)
+            else:
+                result = engine.translate(text, system_prompt, incomplete, history)
             exception: BaseException | None = None
         except BaseException as exc:
             result = None
@@ -1307,7 +1444,11 @@ class DeepLEngine(TranslationEngine):
             )
 
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as response:
+            with urllib.request.urlopen(
+                req,
+                timeout=self._timeout,
+                context=_deepl_ssl_context(),
+            ) as response:
                 data = _json.loads(response.read())
             result = data["translations"][0]["text"].strip()
             record()
@@ -1671,11 +1812,23 @@ class OpenRouterTranslationEngine(TranslationEngine):
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
+        return self.translate_messages(
+            build_effective_qwen_messages(text, system_prompt, incomplete, history),
+            source_text_char_count=len(text or ""),
+        )
+
+    def translate_messages(
+        self,
+        messages_frozen: tuple[tuple[str, str], ...],
+        *,
+        source_text_char_count: int | None = None,
+    ) -> str | None:
         timeout_config_ms = _timeout_config_ms(self._timeout)
-        source_text_char_count = len(text or "")
-        system_prompt = _openrouter_system_prompt(system_prompt)
-        prompt_char_count = len(system_prompt or "")
-        history = _limited_openrouter_history(history)
+        current_input = messages_frozen[-1][1] if messages_frozen else ""
+        if source_text_char_count is None:
+            source_text_char_count = len(current_input.removeprefix("input: "))
+        prompt_char_count = len(messages_frozen[0][1]) if messages_frozen else 0
+        history_count = max(0, (len(messages_frozen) - 2) // 2)
 
         def record_diagnostics(
             started_at: float | None = None,
@@ -1700,7 +1853,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
                 prompt_char_count=prompt_char_count,
                 request_body_char_count=request_body_char_count,
                 message_count=message_count,
-                context_item_count=len(history or []),
+                context_item_count=history_count,
                 api_error_type=api_error_type,
                 api_error_message_class=api_error_message_class,
                 api_cost_usd=api_cost_usd,
@@ -1713,11 +1866,10 @@ class OpenRouterTranslationEngine(TranslationEngine):
         import urllib.error
         import json as _json
 
-        messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in history:
-            messages.append({"role": "user", "content": f"input: {ko}"})
-            messages.append({"role": "assistant", "content": zh})
-        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+        messages = [
+            {"role": role, "content": content}
+            for role, content in messages_frozen
+        ]
 
         body = {
             "model": self._model,
@@ -1762,7 +1914,7 @@ class OpenRouterTranslationEngine(TranslationEngine):
                 message_count=message_count,
                 api_cost_usd=usage.get("cost"),
             )
-            log.debug("OpenRouter: %.30s -> %s", text, content)
+            log.debug("OpenRouter: %.30s -> %s", current_input, content)
             return content or None
         except urllib.error.HTTPError as e:
             error_body = ""  # L6: don't shadow the request `body` dict
@@ -1801,6 +1953,158 @@ class OpenRouterTranslationEngine(TranslationEngine):
                 request_body_char_count=request_body_char_count,
                 message_count=message_count,
             )
+            return None
+
+
+class DeepSeekTranslationEngine(TranslationEngine):
+    """Direct DeepSeek adapter for the protected primary route."""
+
+    def __init__(self):
+        self._api_key = cfg.keys.deepseek
+        self._model = cfg.translation.deepseek_model
+        self._timeout = cfg.translation.deepseek_timeout
+        self._max_tokens = min(
+            cfg.translation.max_tokens,
+            _clamp_int(cfg.translation.deepseek_max_tokens, 160, 1),
+        )
+        self.last_response_metadata: dict[str, Any] = {}
+
+    @property
+    def engine_name(self) -> str:
+        return "deepseek"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def available(self) -> bool:
+        return bool(self._api_key)
+
+    def translate(
+        self,
+        text: str,
+        system_prompt: str,
+        incomplete: bool,
+        history: list[tuple[str, str]] | None = None,
+    ) -> str | None:
+        return self.translate_messages(
+            build_effective_deepseek_messages(
+                text, system_prompt, incomplete, history
+            )
+        )
+
+    def _cost_usd(self, usage: dict[str, Any]) -> float | None:
+        if self._model != "deepseek-v4-flash":
+            return None
+        prompt_value = _optional_int_diagnostic(usage.get("prompt_tokens"))
+        output_value = _optional_int_diagnostic(usage.get("completion_tokens"))
+        hit_value = _optional_int_diagnostic(usage.get("prompt_cache_hit_tokens"))
+        miss = _optional_int_diagnostic(usage.get("prompt_cache_miss_tokens"))
+        if prompt_value is None or output_value is None:
+            return None
+        if hit_value is None and miss is None:
+            return None
+        prompt = prompt_value
+        hit = hit_value if hit_value is not None else max(0, prompt - int(miss or 0))
+        if miss is None:
+            miss = max(0, prompt - hit)
+        output = output_value
+        return (
+            hit * cfg.translation.deepseek_cache_hit_usd_per_million
+            + miss * cfg.translation.deepseek_cache_miss_usd_per_million
+            + output * cfg.translation.deepseek_output_usd_per_million
+        ) / 1_000_000
+
+    def translate_messages(
+        self,
+        messages: tuple[tuple[str, str], ...],
+    ) -> str | None:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        self.last_response_metadata = {}
+        reset_last_engine_diagnostics()
+        reset_last_token_usage()
+        if not self._api_key:
+            return None
+
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": role, "content": content}
+                for role, content in messages
+            ],
+            "temperature": cfg.translation.temperature,
+            "max_tokens": self._max_tokens,
+            "stream": False,
+            "thinking": {"type": "disabled"},
+        }
+        payload_text = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        request = urllib.request.Request(
+            _DEEPSEEK_BASE_URL,
+            data=payload_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": _DEEPSEEK_USER_AGENT,
+                "Authorization": f"Bearer {self._api_key}",
+            },
+        )
+        started_at = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                data = _json.loads(response.read())
+            usage = data.get("usage") or {}
+            _log_token_usage("DeepSeek", usage)
+            choice = data["choices"][0]
+            content = (choice["message"].get("content") or "").strip()
+            cost = self._cost_usd(usage)
+            self.last_response_metadata = {
+                "finish_reason": str(choice.get("finish_reason") or ""),
+                "system_fingerprint": str(data.get("system_fingerprint") or ""),
+                "pricing_revision": cfg.translation.deepseek_pricing_revision,
+            }
+            _set_last_engine_diagnostics(
+                "deepseek",
+                api_attempt_count=1,
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=_timeout_config_ms(self._timeout),
+                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
+                api_attempt_index=1,
+                prompt_char_count=len(messages[0][1]) if messages else 0,
+                request_body_char_count=len(payload_text),
+                message_count=len(messages),
+                context_item_count=max(0, (len(messages) - 2) // 2),
+                api_cost_usd=cost,
+            )
+            return content or None
+        except Exception as exc:
+            error_type, message_class = _classify_api_error(exc)
+            _set_last_engine_diagnostics(
+                "deepseek",
+                api_attempt_count=1,
+                api_timeout_count=1 if error_type == "timeout" else 0,
+                api_total_wall_ms=_elapsed_ms(started_at),
+                api_final_attempt_ms=_elapsed_ms(started_at),
+                timeout_config_ms=_timeout_config_ms(self._timeout),
+                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
+                api_attempt_index=1,
+                prompt_char_count=len(messages[0][1]) if messages else 0,
+                request_body_char_count=len(payload_text),
+                message_count=len(messages),
+                context_item_count=max(0, (len(messages) - 2) // 2),
+                api_error_type=error_type,
+                api_error_message_class=message_class,
+            )
+            self.last_response_metadata = {
+                "finish_reason": "",
+                "system_fingerprint": "",
+                "pricing_revision": cfg.translation.deepseek_pricing_revision,
+            }
+            log.warning("DeepSeek request failed (%s/%s)", error_type, message_class)
             return None
 
 
@@ -2074,6 +2378,9 @@ _ENGINE_REGISTRY = MappingProxyType({
     "openrouter": EngineSpec(
         OpenRouterTranslationEngine, lambda: bool(cfg.keys.openrouter)
     ),
+    "deepseek": EngineSpec(
+        DeepSeekTranslationEngine, lambda: bool(cfg.keys.deepseek)
+    ),
     "groq": EngineSpec(GroqTranslationEngine, lambda: bool(cfg.keys.groq_fallback)),
 })
 
@@ -2106,6 +2413,7 @@ def engine_chain_config_key() -> tuple:
     return (
         mode,
         backend,
+        getattr(cfg.translation, "deepseek_route", "off"),
         tuple(getattr(cfg.translation, "engine_chain", ())),
         getattr(cfg.translation, "model", ""),
         getattr(cfg.translation, "claude_timeout", ""),
@@ -2117,6 +2425,9 @@ def engine_chain_config_key() -> tuple:
         getattr(cfg.nvidia, "live_timeout", ""),
         getattr(cfg.translation, "openrouter_model", ""),
         getattr(cfg.translation, "openrouter_timeout", ""),
+        getattr(cfg.translation, "deepseek_model", ""),
+        getattr(cfg.translation, "deepseek_timeout", ""),
+        getattr(cfg.translation, "deepseek_max_tokens", ""),
         getattr(cfg.translation, "groq_translation_model", ""),
         getattr(cfg.translation, "groq_translation_reasoning_effort", ""),
         getattr(cfg.translation, "groq_translation_timeout", ""),
@@ -2131,13 +2442,28 @@ def engine_chain_config_key() -> tuple:
     )
 
 
+def effective_engine_chain_names() -> tuple[str, ...]:
+    """Return the protected live chain without dashboard-order influence."""
+    names = tuple(getattr(cfg.translation, "engine_chain", ()))
+    mode = str(getattr(cfg.translation, "translation_mode", "live") or "live")
+    backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
+    if mode == "live" and backend == "anthropic":
+        if str(getattr(cfg.translation, "deepseek_route", "off")) == "primary":
+            return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
+        # The single rollback setting restores the exact former production
+        # route even if a persisted dashboard config changed engine_chain.
+        return _PROTECTED_LIVE_BASE_CHAIN
+    return names
+
+
 def _build_engine_chain() -> "list[TranslationEngine]":
     """Build an ordered list of available engines.
 
     Picks cfg.live_engine or cfg.clip_engine based on current translation_mode.
     "ollama" bypasses engine_chain entirely.
     "nvidia" uses NvidiaEngine first, then appends available engines from engine_chain.
-    "anthropic" (default) uses engine_chain directly as ordered fallback.
+    "anthropic" (default) uses the fixed protected live chain; non-live routes
+    retain their configured engine_chain behavior.
     """
     mode = cfg.translation.translation_mode
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine
@@ -2156,7 +2482,7 @@ def _build_engine_chain() -> "list[TranslationEngine]":
             log.info("NvidiaEngine ready with fallback chain: %s",
                      [fb.engine_name for fb in fallbacks])
         return [e] + fallbacks
-    engines = [e for name in cfg.translation.engine_chain
+    engines = [e for name in effective_engine_chain_names()
                if (e := _make_engine(name)) is not None]
     if not engines:
         log.error("No translation engines available — all engines failed to initialise")

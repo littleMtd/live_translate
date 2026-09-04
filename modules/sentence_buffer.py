@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from modules.pipeline_events import TranscriptionEvent, transcription_text
 from modules.sentence_hold_shadow import analyze_unfinished_tail
@@ -311,6 +311,12 @@ class SentenceCut:
 
 def is_complete(text: str) -> bool:
     stripped = text.rstrip()
+    # Scribe commonly terminates a complete declarative sentence with a full
+    # stop.  The legacy suffix loop intentionally omits ``.`` because decimal,
+    # URL, version, and ellipsis tails are unsafe; reuse the bounded punctuation
+    # classifier so ordinary ``좋다.`` does not wait for the hard force-cut.
+    if _has_safe_terminal_punctuation(stripped):
+        return True
     for ending in _INCOMPLETE_ENDINGS:
         if stripped.endswith(ending):
             return False
@@ -395,6 +401,62 @@ class SentenceBuffer:
                 self._source_no_speech_probs.append(token.no_speech_prob)
         self._chunk_count += 1
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
+
+    def requires_profile_switch(self, token: str | TranscriptionEvent) -> bool:
+        if not self._buffer or not isinstance(token, TranscriptionEvent):
+            return False
+        previous = self._latest_source
+        if previous is None:
+            return False
+        previous_snapshot = previous.profile_snapshot
+        next_snapshot = token.profile_snapshot
+        if previous_snapshot is not None and next_snapshot is not None:
+            return previous_snapshot.cache_identity != next_snapshot.cache_identity
+        return previous.profile_id != token.profile_id
+
+    def flush_profile_switch(self, now: float) -> SentenceCut | None:
+        cut = self.flush(now)
+        if cut is None:
+            return None
+        return replace(cut, cut_reason="profile_switch")
+
+    def provisional_snapshot(self, now: float) -> SentenceCut | None:
+        """Return the current single-source hold without mutating the buffer."""
+        if (
+            not self._buffer
+            or self._first_token_time is None
+            or self._latest_source is None
+            or len(self._source_utterance_ids) != 1
+        ):
+            return None
+        buffered = self._buffer.strip()
+        # A provisional subtitle is still publication. Do not speculate on a
+        # tail that the deterministic grammar owner already knows requires a
+        # continuation; wait for the bounded final cut instead.
+        if _ends_with_incomplete_ending(buffered):
+            return None
+        prefix, _residual, _reason, _boundary = _split_prefix_with_reason(
+            buffered,
+            tuple(self._gap_boundaries) if self._segment_gap_split_enabled else (),
+        )
+        predicts_forced_prefix = bool(
+            prefix and _significant_len(prefix) >= _MIN_PREFIX_SIGNIFICANT
+        )
+        candidate_text = prefix if predicts_forced_prefix else buffered
+        return SentenceCut(
+            text=candidate_text,
+            incomplete=False if predicts_forced_prefix else not is_complete(buffered),
+            source=self._latest_source,
+            elapsed=max(0.0, now - self._first_token_time),
+            forced=False,
+            cut_reason="provisional_hold",
+            chunk_count=self._chunk_count,
+            audio_seconds=round(self._total_audio_seconds, 3),
+            source_utterance_ids=tuple(self._source_utterance_ids),
+            evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
+            source_avg_logprobs=tuple(self._source_avg_logprobs),
+            source_no_speech_probs=tuple(self._source_no_speech_probs),
+        )
 
     def assess_semantic_early_cut(
         self,

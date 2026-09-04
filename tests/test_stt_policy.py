@@ -65,6 +65,24 @@ class TestSttPolicy(unittest.TestCase):
     def test_should_reject_language_allows_unexpected_non_japanese(self):
         self.assertFalse(should_reject_language("en", "hello", logging.getLogger("test")))
 
+    def test_warning_logs_do_not_include_rejected_speech(self):
+        sentinel = "PRIVATE-SPOKEN-CONTENT"
+        logger = logging.getLogger("test.stt.redaction")
+
+        with self.assertLogs(logger, level="WARNING") as captured:
+            self.assertTrue(should_reject_language("ja", sentinel, logger))
+            self.assertTrue(
+                should_reject_segments(
+                    [{"no_speech_prob": 0.9, "avg_logprob": 0.0, "compression_ratio": 1.0}],
+                    text=sentinel,
+                    no_speech_threshold=0.6,
+                    avg_logprob_threshold=-1.0,
+                    logger=logger,
+                )
+            )
+
+        self.assertNotIn(sentinel, "\n".join(captured.output))
+
     def test_segment_stats_averages_segment_metadata(self):
         stats = segment_stats([
             {"no_speech_prob": 0.2, "avg_logprob": -0.4, "compression_ratio": 1.0},

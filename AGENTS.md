@@ -1,43 +1,28 @@
 # Agent Instructions
 
-## Before Implementation: Which Roadmap Docs Apply
+## Compact Onboarding and Documentation Routing
 
-This repo accumulates proposal/roadmap markdown files. Before starting any
-implementation ("施工"), use this tier system to decide which ones are binding
-vs. reference-only. (Same rule is duplicated in `CLAUDE.md` for Claude; if the
-two ever disagree, treat that as a bug and reconcile both.)
+Default reading path:
 
-**Tier 1 — Mandatory, by task scope (see `CLAUDE.md` Task Routing):**
-`system.md` / `sql.md` / `frontend-design.md`.
+1. This file for global process and safety rules.
+2. [`docs/agent/AGENT_BRIEF.md`](docs/agent/AGENT_BRIEF.md) for compact project facts.
+3. [`docs/agent/TASK_INDEX.md`](docs/agent/TASK_INDEX.md) to select task-specific references.
+4. [`docs/agent/VALIDATION_BRIEF.md`](docs/agent/VALIDATION_BRIEF.md) before
+   application/config/data behavior changes or when choosing validation.
 
-**Tier 2 — Current execution plan (defines "what to build now"):**
-- `ARCHITECTURE_RECOMMENDATION_20260613.md` — adopted execution plan.
-- `PHASE0_EVAL_INVENTORY_20260613.md` — Phase 0 decisions/policy; refines or
-  overrides the corresponding parts of the recommendation (e.g. speaker
-  policy). If the two conflict, `PHASE0_EVAL_INVENTORY` (the newer decision)
-  wins.
+Do not read large reference documents in full by default. Search for the relevant section first.
 
-**Tier 3 — Process rules (defines "how"):** this file — the cross-review
-workflow below applies to any implementation task.
+Domain contracts, roadmap documents, detailed runtime references, backlogs,
+and evidence reports are opt-in through `TASK_INDEX.md`. A current user-approved
+task or selected execution decision defines what to build; candidate proposals
+and archived material do not authorize implementation. Read `archive/INDEX.md`
+before relying on archived evidence.
 
-**Tier 4 — Candidate/future directions, NOT implementation-ready:**
-- `ARCHITECTURE_PROPOSALS_20260612.md` — idea pool. Its own stated rule: new
-  ideas go here, do not start work from it directly.
-- `ARCHITECTURE_PROPOSAL_QUALITY_CEILING_20260614.md` +
-  `CODEX_REVIEW_PROMPT_QUALITY_CEILING_20260614.md` — quality-ceiling
-  candidate list. v3 explicitly does not change Phase 0/1 priority; even items
-  marked "can run in parallel" are offline/read-only validation steps, not
-  implementation.
-
-**Core rule:** implementation requires Tier 1 + Tier 2 read first; Tier 3
-governs process; Tier 4 items only become implementation-ready after the user
-explicitly decides to promote one, at which point Tier 2 must be updated (or a
-new execution-plan doc created) — never implement directly from a Tier 4 doc.
-
-Historical reviews, completed proposals, and superseded experiments live under
-`archive/`; they are evidence, not current instructions. Read
-[`archive/INDEX.md`](archive/INDEX.md) before relying on an archived document,
-and prefer the replacement named there.
+Precedence is: current user decision and scope; this file's global process and
+safety rules; task-selected current decisions; scoped domain contracts. Verify
+claims about current behavior against code/runtime evidence. If documents
+conflict, prefer the more specific and newer authorized decision, and update the
+owning document rather than duplicating policy across entry points.
 
 ## Cross-Review Workflow
 
@@ -81,7 +66,7 @@ Parallel direction exploration:
 - Each retained proposal should state its evidence, expected benefit, principal
   cost/risk, dependency, and the cheapest test or runtime signal that could
   confirm or reject it. Unsupported ideas remain hypotheses.
-- Parallel ideation does not bypass the Tier 1/Tier 2 promotion rule, the
+- Parallel ideation does not bypass task routing or proposal-promotion rules, the
   cross-review workflow, evidence gates, or the one-card-at-a-time
   implementation boundary. Multiple agents may explore different cards, but
   they must not concurrently modify overlapping implementation scope.
@@ -157,38 +142,3 @@ Implementation completion reports must include:
 
 Do not push, do not stage, and do not modify review documents unless the user
 explicitly asks.
-
-## Routed Project References (Mandatory)
-
-`AGENTS.md` is the short entry point and owns global precedence, review,
-delegation, completion, commit, and safety rules. Detailed material is split by
-responsibility so agents do not load the entire project history for every task.
-
-Before acting, read each applicable routed file completely:
-
-- [`docs/agent/PROJECT_CONTEXT.md`](docs/agent/PROJECT_CONTEXT.md) — required
-  before code changes, architecture review, diagnosis, or claims about current
-  runtime behavior. Contains the verified repository/runtime map and ownership
-  boundaries.
-- [`docs/agent/VALIDATION.md`](docs/agent/VALIDATION.md) — required before code
-  changes and whenever selecting tests, replay/runtime evidence, labeling, or
-  evaluation methods. Contains existing-tool-first rules and validation routing.
-- [`docs/agent/TOOL_INVENTORY.md`](docs/agent/TOOL_INVENTORY.md) — required
-  before proposing, adding, or substantially changing a script, harness,
-  analyzer, replay, benchmark, sampler, or maintenance command.
-- [`docs/agent/OPTIMIZATION_TODO.md`](docs/agent/OPTIMIZATION_TODO.md) —
-  required for optimization planning, choosing/advancing a TODO card, checking
-  evidence gates, or updating implementation/runtime progress.
-
-Routing rules:
-- Read only the applicable routed files, but read a selected file completely.
-- These files are binding extensions of `AGENTS.md`; `AGENTS.md` wins if they
-  conflict. More specific Tier 1 domain documents still own their stated
-  technical domain, and newer Tier 2 decisions still override older roadmap
-  proposals as defined above.
-- A user request to inspect the whole project or rethink optimization direction
-  requires all four routed files.
-- When a task changes architecture, validation workflow, tool ownership, or
-  TODO status, update the owning routed file instead of growing `AGENTS.md`.
-- Do not duplicate detailed content back into `AGENTS.md`; keep this entry file
-  focused on routing and global process.

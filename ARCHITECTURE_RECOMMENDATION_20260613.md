@@ -12,6 +12,57 @@
 
 因此建議方向是：
 
+## 2026-08-16 execution addendum: protected DeepSeek V4 Flash cutover
+
+This addendum is the current Tier-2 decision for the live translation route.
+The owner explicitly promoted DeepSeek V4 Flash after 407 complete live-shadow
+pairs (404 comparable) and explicitly overrode the former 500-pair and strict
+no-regression pre-cutover gate. Integrity, attribution, rollback, and
+post-cutover validation remain mandatory.
+
+Current implementation note (verified 2026-08-26): the protected provider
+order and emergency-off route remain active, but the record-only DeepSeek
+shadow/model-comparison plumbing, quality retry, Japanese translation
+shadow/active path, and `source_fuzzy_shadow` have since been retired and
+removed. Provider candidates now share the production unknown-name and
+semantic-terminology escrow plus one authoritative finalization path. The
+dated shadow evidence below remains historical evidence, not executable
+production architecture.
+
+The authorized live-chain contract is:
+
+```text
+DeepSeek V4 Flash -> OpenRouter Qwen -> DeepL -> Groq
+```
+
+- Flash is production primary only for the ordinary live chain. Clip, Ollama,
+  NVIDIA, STT, sentence splitting, and subtitle ordering are unchanged.
+- Both Flash and Qwen consume the same immutable Qwen request capsule for the
+  same sentence/profile/activity/history snapshot.
+- A Flash provider failure follows the existing serial fallback and circuit
+  behavior. A Flash output with unexpected non-approved Hangul, Kana,
+  refusal/meta output, or an existing deterministic bad-output signal is a
+  sentence-local content rejection: it immediately falls back to Qwen and must
+  not open the provider circuit.
+- Rejected Flash output must never enter subtitles, cache, history, or
+  selected-route attribution. Candidate corrections and guard
+  diagnostics remain separately attributable.
+- The prior record-only Flash shadow is disabled while Flash is production
+  primary, including while the Flash circuit is open and Qwen is active.
+- One startup-frozen configuration value restores the exact prior Qwen ->
+  DeepL -> Groq route. The dashboard cannot reorder Flash into or out of this
+  protected contract.
+- The existing analyzer owns post-cutover route, guard, latency, cost, cache,
+  QA/canonicalization, and fallback evidence; no new benchmark harness is
+  authorized by this 2026-08-16 decision. A later owner request restored a
+  simplified offline-only runner for the maintained 73-case production
+  semantic regression suite; it is not a prompt/model experiment path.
+
+The original post-cutover observations and rollback criteria below are retained
+as dated decision evidence. Current operational rollback remains
+`LIVE_TRANSLATE_DEEPSEEK_ROUTE=off`; there is no shadow runner to duplicate
+calls.
+
 ```text
 AudioChunk
   -> STT candidates

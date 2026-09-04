@@ -445,9 +445,13 @@ class TestTranslatorThread(unittest.TestCase):
             def translate_event(
                 self, text: str, incomplete: bool = False, *, repetition_evidence=None
             ) -> TranslationOutcome:
+                translations = {
+                    "그래서 뭐 했어요?": "所以做了什麼？",
+                    "그게임 좋아요?": "喜歡那個遊戲嗎？",
+                }
                 return TranslationOutcome(
                     source_text=text,
-                    target_text=f"zh-{text}",
+                    target_text=translations[text],
                     status="success",
                     result_source="api",
                     cache_status="miss",
@@ -459,8 +463,8 @@ class TestTranslatorThread(unittest.TestCase):
             t = translator.start(sentence_q, subtitle_q, stop)
             sentence_q.put({"text": "그래서 뭐 했어요?", "incomplete": False})
             sentence_q.put({"text": "그게임 좋아요?", "incomplete": False})
-            self.assertEqual(subtitle_q.get(timeout=5), "zh-그래서 뭐 했어요?")
-            self.assertEqual(subtitle_q.get(timeout=5), "zh-그게임 좋아요?")
+            self.assertEqual(subtitle_q.get(timeout=5), "所以做了什麼？")
+            self.assertEqual(subtitle_q.get(timeout=5), "喜歡那個遊戲嗎？")
             stop.set()
             t.join(timeout=2)
 
