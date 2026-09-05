@@ -476,12 +476,14 @@ PROFILE_IDENTITY_PROMPT = (
     "a transient guest, chat message, donation, or isolated mention. A clip or "
     "reaction may qualify only when the reviewed identity is the primary sustained "
     "content across distinct frames, not merely a passing appearance. "
-    "Exact visible member names listed below are authoritative strong evidence. "
+    "Exact visible member names listed below are strong candidate evidence, but a "
+    "name alone does not prove that profile owns the sustained content. "
     "Return a marker only when its exact reviewed visible name is clearly readable "
     "inside the supplied player crop; never claim a marker from appearance, similar "
     "text, a longer unrelated string that merely contains it, chat usernames, "
     "donations, browser chrome, or unrelated comments. "
-    "If more than one listed member is visible, return every matching marker. "
+    "If more than one listed member is visible, return every matching marker; a "
+    "multi-member roster or list is not active-owner evidence by itself. "
     "Return exactly one minified JSON object with these two keys: "
     '{{"profile_id":"<reviewed-id-or-unknown>","matched_markers":["<marker-id>"]}}. '
     "Allowed reviewed IDs: {allowed_ids}. If evidence is weak, conflicting, or not "
@@ -592,17 +594,23 @@ def parse_profile_identity_response(
 
 
 class ContentProfileConsensus:
-    """Two distinct frames in one window generation activate a profile."""
+    """Accumulate distinct frames and independent profile-level corroboration."""
 
     def __init__(self):
         self._window_generation = -1
         self._candidate = ""
         self._frame_keys: set[str] = set()
+        self._profile_corroborated = False
 
     def reset(self, window_generation: int = -1) -> None:
         self._window_generation = window_generation
         self._candidate = ""
         self._frame_keys.clear()
+        self._profile_corroborated = False
+
+    @property
+    def profile_corroborated(self) -> bool:
+        return self._profile_corroborated
 
     def observe(
         self,
@@ -610,6 +618,7 @@ class ContentProfileConsensus:
         *,
         frame_key: str,
         window_generation: int,
+        profile_corroborated: bool = True,
     ) -> tuple[int, bool, bool, bool]:
         if window_generation != self._window_generation:
             self.reset(window_generation)
@@ -617,13 +626,22 @@ class ContentProfileConsensus:
         if conflict:
             self._candidate = profile_id
             self._frame_keys = {frame_key}
+            self._profile_corroborated = profile_corroborated
             return 1, False, True, True
         if not self._candidate:
             self._candidate = profile_id
         reused = frame_key in self._frame_keys
         self._frame_keys.add(frame_key)
+        self._profile_corroborated = (
+            self._profile_corroborated or profile_corroborated
+        )
         streak = len(self._frame_keys)
-        return streak, streak >= 2 and not reused, False, not reused
+        return (
+            streak,
+            streak >= 2 and not reused and self._profile_corroborated,
+            False,
+            not reused,
+        )
 
 
 class ProfileResolutionStatusStore:

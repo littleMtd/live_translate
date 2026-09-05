@@ -205,10 +205,11 @@ Context, display, and persistence:
   open-set publication; the resolver never writes
   `cfg.translation.current_activity` and never activates STT hot terms.
 - `modules/profile_context.py`: immutable source/content/effective profile and
-  registry snapshots. Exact reviewed member-name markers in one validated safe
-  player crop are strong one-frame evidence when every marker belongs to the
-  same family; cross-family markers conflict. Reviewed branding markers are
-  medium evidence and retain two-frame consensus. The resolver uses JSON-mode
+  registry snapshots. Exact reviewed member-name markers are strong candidate
+  evidence, but cannot independently authorize a cross-profile switch. A switch
+  requires two distinct validated player frames plus profile-level corroboration
+  from branding or persistent non-member visual evidence; a multi-member roster
+  is not corroboration. Cross-family markers conflict. The resolver uses JSON-mode
   output, a serialization-only bounded retry, five-second seeking/recovery and
   fifteen-second stable cadence, a rolling call-attempt cap, and bounded stale
   profile recovery. A hidden player tab suspends observation while its locked

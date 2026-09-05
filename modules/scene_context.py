@@ -1848,9 +1848,9 @@ class SceneContextUpdater:
             )
             return
         self._leave_profile_recovery()
-        if parsed.strong:
+        current_effective = profile_state.current().effective_profile_id
+        if parsed.strong and candidate == current_effective:
             self._profile_consensus.reset(window_generation)
-            previous_effective = profile_state.current().effective_profile_id
             profile_state.confirm_content(
                 candidate,
                 confidence=1.0,
@@ -1864,9 +1864,10 @@ class SceneContextUpdater:
                 candidate_profile_id=candidate,
                 candidate_streak=1,
                 strong_identity_evidence=True,
+                immediate_activation_eligible=True,
                 resolver_state=self._profile_resolver_state,
                 state_transition="strong_marker_to_stable",
-                previous_effective_profile_id=previous_effective,
+                previous_effective_profile_id=current_effective,
                 new_effective_profile_id=profile_state.current().effective_profile_id,
                 activation_decision="immediate_strong_marker",
                 distinct_frame=True,
@@ -1876,12 +1877,34 @@ class SceneContextUpdater:
                 **profile_state.current().as_metadata(),
             )
             return
+        matched_marker_records = tuple(
+            marker
+            for marker_id in parsed.matched_markers
+            if (marker := registry.marker(marker_id)) is not None
+        )
+        member_marker_count = sum(
+            marker.kind == "member_name" for marker in matched_marker_records
+        )
+        has_group_brand = any(
+            marker.kind == "group_brand" for marker in matched_marker_records
+        )
+        # A member name can be a guest, roster, chat/donation name, or text in a
+        # reaction clip. It is useful candidate evidence but cannot independently
+        # authorize a cross-profile mutation. Corroboration comes from persistent
+        # layout/appearance (no member marker) or one member plus its group brand;
+        # a multi-member roster is deliberately not owner evidence.
+        profile_corroborated = (
+            member_marker_count == 0
+            or (member_marker_count == 1 and has_group_brand)
+        )
         frame_key = hashlib.sha256(frame.thumb or frame.jpeg).hexdigest()[:16]
         streak, confirmed, conflict, evidence_added = self._profile_consensus.observe(
             candidate,
             frame_key=frame_key,
             window_generation=window_generation,
+            profile_corroborated=profile_corroborated,
         )
+        consensus_corroborated = self._profile_consensus.profile_corroborated
         if confirmed:
             profile_state.confirm_content(candidate, confidence=1.0)
             self._profile_confirmed_at = now
@@ -1895,13 +1918,23 @@ class SceneContextUpdater:
             reason="conflict_reset" if conflict else "",
             candidate_profile_id=candidate,
             candidate_streak=streak,
-            strong_identity_evidence=False,
+            strong_identity_evidence=parsed.strong,
+            immediate_activation_eligible=False,
+            member_marker_count=member_marker_count,
+            profile_corroborated=consensus_corroborated,
             resolver_state=self._profile_resolver_state,
             state_transition=(
-                "weak_consensus_to_stable" if confirmed else "request_to_candidate"
+                "cross_profile_consensus_to_stable"
+                if confirmed else "request_to_candidate"
             ),
             activation_decision=(
-                "weak_consensus_confirmed" if confirmed else "awaiting_consensus"
+                "cross_profile_consensus_confirmed"
+                if confirmed
+                else (
+                    "awaiting_profile_corroboration"
+                    if streak >= 2 and not consensus_corroborated
+                    else "awaiting_cross_profile_consensus"
+                )
             ),
             distinct_frame=evidence_added,
             window_generation=window_generation,

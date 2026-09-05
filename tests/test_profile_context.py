@@ -271,3 +271,19 @@ def test_content_consensus_requires_distinct_frames_and_resets_on_conflict():
     assert consensus.observe("url", frame_key="b", window_generation=1) == (2, True, False, True)
     assert consensus.observe("isegye_lilpa", frame_key="c", window_generation=1) == (1, False, True, True)
     assert consensus.observe("isegye_lilpa", frame_key="d", window_generation=2) == (1, False, False, True)
+
+
+def test_content_consensus_requires_profile_corroboration_for_confirmation():
+    consensus = ContentProfileConsensus()
+    assert consensus.observe(
+        "url", frame_key="member-a", window_generation=1,
+        profile_corroborated=False,
+    ) == (1, False, False, True)
+    assert consensus.observe(
+        "url", frame_key="member-b", window_generation=1,
+        profile_corroborated=False,
+    ) == (2, False, False, True)
+    assert consensus.observe(
+        "url", frame_key="brand-c", window_generation=1,
+        profile_corroborated=True,
+    ) == (3, True, False, True)

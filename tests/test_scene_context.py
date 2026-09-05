@@ -261,7 +261,7 @@ def _profile_result(profile_id, *marker_ids):
     )
 
 
-def test_exact_member_marker_activates_profile_in_one_frame():
+def test_cross_profile_member_marker_requires_profile_corroboration():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     answer = _profile_result("url", "url_member_manyang")
     with patch.object(scene_context, "profile_state", state):
@@ -270,26 +270,109 @@ def test_exact_member_marker_activates_profile_in_one_frame():
             profile_resolution_enabled=True,
         )
         updater.tick()
-    assert state.current().effective_profile_id == "url"
-    assert state.current().evidence_source == "scene_exact_member_marker"
+    assert state.current().effective_profile_id == "isegye_lilpa"
     event = next(event for event in events if event["event_type"] == "profile_resolution")
-    assert event["status"] == "confirmed"
+    assert event["status"] == "candidate"
     assert event["candidate_streak"] == 1
     assert event["matched_markers"] == ["url_member_manyang"]
+    assert event["profile_corroborated"] is False
+    assert event["strong_identity_evidence"] is True
+    assert event["immediate_activation_eligible"] is False
+    assert event["activation_decision"] == "awaiting_cross_profile_consensus"
 
 
-def test_two_member_markers_from_same_family_activate_immediately():
+def test_multi_member_roster_is_not_cross_profile_owner_evidence():
     state = ProfileState(profile_state.registry, source_profile_id="url")
     answer = _profile_result(
         "hades_chxxnnx", "hades_member_chaenna", "hades_member_kyma"
     )
     with patch.object(scene_context, "profile_state", state):
-        updater, *_ = make_updater(
+        updater, *_rest, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=QuerySequence([answer, answer]),
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        clock.advance(1)
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+
+
+def test_cross_profile_member_and_brand_require_two_distinct_frames():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answer = _profile_result("url", "url_member_moka", "url_brand_group")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(40), frame(80)],
+            profile_vision_provider=QuerySequence([answer, answer]),
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        assert state.current().effective_profile_id == "isegye_lilpa"
+        clock.advance(1)
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    profile_events = [event for event in events if event["event_type"] == "profile_resolution"]
+    assert [event["status"] for event in profile_events] == ["candidate", "confirmed"]
+    assert all(event["profile_corroborated"] for event in profile_events)
+
+
+def test_current_profile_strong_marker_can_refresh_without_transition():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    answer = _profile_result("isegye_lilpa", "isegye_member_viichan")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
             profile_vision_provider=QuerySequence([answer]),
             profile_resolution_enabled=True,
         )
         updater.tick()
-    assert state.current().effective_profile_id == "hades_chxxnnx"
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    event = next(event for event in events if event["event_type"] == "profile_resolution")
+    assert event["status"] == "confirmed"
+    assert event["activation_decision"] == "immediate_strong_marker"
+    assert event["immediate_activation_eligible"] is True
+
+
+def test_run_20260904_url_marker_provenance_does_not_activate_without_owner_corroboration():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    unknown = _profile_result("unknown")
+    answers = [
+        _profile_result("url", "url_member_ranko"),
+        unknown,
+        _profile_result("url", "url_member_sommyang"),
+        unknown,
+        _profile_result("url", "url_member_manyang"),
+        _profile_result("url", "url_member_manyang"),
+        _profile_result("url", "url_member_sommyang"),
+        _profile_result("url", "url_member_sommyang"),
+        _profile_result(
+            "url",
+            "url_brand_group",
+            "url_member_manyang",
+            "url_member_moka",
+            "url_member_ranko",
+            "url_member_sommyang",
+        ),
+    ]
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _provider, _manual, events, clock = make_updater(
+            frames=[frame(20 + index * 20) for index in range(len(answers))],
+            profile_vision_provider=QuerySequence(answers),
+            profile_resolution_enabled=True,
+        )
+        updater._profile_fast_gap = 0
+        for _answer in answers:
+            updater.tick()
+            assert state.current().effective_profile_id == "isegye_lilpa"
+            clock.advance(1)
+    assert not any(
+        event.get("status") == "confirmed"
+        and event.get("candidate_profile_id") == "url"
+        for event in events
+        if event["event_type"] == "profile_resolution"
+    )
 
 
 def test_medium_brand_marker_keeps_two_frame_consensus():
@@ -322,9 +405,10 @@ def test_schema_failure_retries_once_but_semantic_rejection_does_not():
         )
         updater.tick()
     assert len(provider.calls) == 2
-    assert state.current().effective_profile_id == "url"
+    assert state.current().effective_profile_id == "isegye_lilpa"
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["schema_retry_count"] == 1
+    assert event["status"] == "candidate"
 
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     unsupported = QuerySequence([
@@ -357,11 +441,11 @@ def test_schema_failure_retries_once_but_semantic_rejection_does_not():
 
 def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
-    strong = _profile_result("url", "url_member_moka")
-    provider = QuerySequence([strong, strong])
+    corroborated = _profile_result("url", "url_member_moka", "url_brand_group")
+    provider = QuerySequence([corroborated, corroborated, corroborated])
     with patch.object(scene_context, "profile_state", state):
         updater, _source, _capture, _provider, _manual, _events, clock = make_updater(
-            frames=[frame(40), frame(80)],
+            frames=[frame(40), frame(80), frame(120)],
             profile_vision_provider=provider,
             profile_resolution_enabled=True,
         )
@@ -370,10 +454,13 @@ def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
         updater.tick()
         clock.advance(5)
         updater.tick()
-        assert len(provider.calls) == 1
+        assert len(provider.calls) == 2
         clock.advance(10)
         updater.tick()
-    assert len(provider.calls) == 2
+        assert len(provider.calls) == 2
+        clock.advance(5)
+        updater.tick()
+    assert len(provider.calls) == 3
 
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     unknown_provider = QuerySequence([
@@ -399,15 +486,19 @@ def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
 def test_capture_failure_expires_confirmed_profile_and_enters_fast_recovery():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     unavailable = CaptureFrame(status="capture_unavailable", frame_quality="unavailable")
-    provider = QuerySequence([_profile_result("url", "url_member_moka")])
+    confirmed = _profile_result("url", "url_member_moka", "url_brand_group")
+    provider = QuerySequence([confirmed, confirmed])
     with patch.object(scene_context, "profile_state", state):
         updater, _source, _capture, _provider, _manual, _events, clock = make_updater(
-            frames=[frame(40), unavailable],
+            frames=[frame(40), frame(80), unavailable],
             profile_vision_provider=provider,
             profile_resolution_enabled=True,
         )
         updater._profile_expiry = 300
         updater._profile_recovery_clear_sec = 15
+        updater._profile_fast_gap = 0
+        updater.tick()
+        clock.advance(1)
         updater.tick()
         assert state.current().effective_profile_id == "url"
         clock.advance(5)
@@ -1096,13 +1187,16 @@ def test_resolver_suspends_hidden_player_and_rejects_detectable_hwnd_reuse():
 
 def test_hidden_player_retains_profile_and_same_player_resumes_without_generation_churn():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
-    url = _profile_result("url", "url_member_moka")
+    url = _profile_result("url", "url_member_moka", "url_brand_group")
     with patch.object(scene_context, "profile_state", state):
         updater, source, _capture, _provider, _manual, events, clock = make_updater(
             frames=[frame(40), frame(80)],
             profile_vision_provider=QuerySequence([url, url]),
             profile_resolution_enabled=True,
         )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        clock.advance(1)
         updater.tick()
         confirmed_snapshot = state.current()
         confirmed_generation = state.current().generation
@@ -1140,15 +1234,24 @@ def test_hidden_player_retains_profile_and_same_player_resumes_without_generatio
 def test_hidden_player_can_resume_to_different_supported_player_and_switch_profile():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     answers = QuerySequence([
-        _profile_result("url", "url_member_moka"),
-        _profile_result("hades_chxxnnx", "hades_member_chaenna"),
+        _profile_result("url", "url_member_moka", "url_brand_group"),
+        _profile_result("url", "url_member_moka", "url_brand_group"),
+        _profile_result(
+            "hades_chxxnnx", "hades_member_chaenna", "hades_brand_group"
+        ),
+        _profile_result(
+            "hades_chxxnnx", "hades_member_chaenna", "hades_brand_group"
+        ),
     ])
     with patch.object(scene_context, "profile_state", state):
         updater, source, _capture, _provider, _manual, _events, clock = make_updater(
-            frames=[frame(40), frame(80)],
+            frames=[frame(40), frame(80), frame(120), frame(160)],
             profile_vision_provider=answers,
             profile_resolution_enabled=True,
         )
+        updater._profile_fast_gap = 0
+        updater.tick()
+        clock.advance(1)
         updater.tick()
         url_generation = state.current().generation
         source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
@@ -1161,6 +1264,8 @@ def test_hidden_player_can_resume_to_different_supported_player_and_switch_profi
         ]
         clock.advance(1)
         updater.tick()
+        clock.advance(1)
+        updater.tick()
 
     assert state.current().effective_profile_id == "hades_chxxnnx"
     assert state.current().generation == url_generation + 1
@@ -1168,15 +1273,18 @@ def test_hidden_player_can_resume_to_different_supported_player_and_switch_profi
 
 def test_production_timing_replay_retains_url_during_hidden_tab_interval():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
-    url = _profile_result("url", "url_member_moka")
+    url = _profile_result("url", "url_member_moka", "url_brand_group")
     with patch.object(scene_context, "profile_state", state):
         updater, source, _capture, _provider, _manual, _events, clock = make_updater(
             frames=[frame(40), frame(80)],
             profile_vision_provider=QuerySequence([url, url]),
             profile_resolution_enabled=True,
         )
+        updater._profile_fast_gap = 0
         clock.advance(13)
-        updater.tick()  # 11:50:13 URL confirmed
+        updater.tick()  # 11:50:13 URL candidate
+        clock.advance(1)
+        updater.tick()  # 11:50:14 URL confirmed
         generation = state.current().generation
         source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
         clock.advance(11)
