@@ -101,6 +101,31 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
     assert merged.scene.publish_open_set_activity is True
 
 
+def test_malformed_enum_types_are_ignored_without_crashing_or_losing_valid_fields(tmp_path):
+    base = config_mod._Config()
+    malformed_values = ([], {}, None, 1, 1.5, True)
+
+    for index, malformed in enumerate(malformed_values):
+        json_path = tmp_path / f"malformed-enum-{index}.json"
+        _write(json_path, {
+            "stt": {"primary_engine": malformed},
+            "translation": {
+                "translation_mode": malformed,
+                "profile_mode": malformed,
+            },
+            "live_engine": malformed,
+            "subtitle": {"idle_hide_ms": 12000},
+        })
+
+        merged = config_mod._apply_dashboard_overrides(base, json_path)
+
+        assert merged.stt.primary_engine == base.stt.primary_engine
+        assert merged.translation.translation_mode == base.translation.translation_mode
+        assert merged.translation.profile_mode == base.translation.profile_mode
+        assert merged.live_engine == base.live_engine
+        assert merged.subtitle.idle_hide_ms == 12000
+
+
 def test_duplicate_translation_routes_are_ignored(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "duplicate-routes.json"

@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 
 from modules.subtitle_display import SubtitleWindow
 from modules.provisional_subtitles import SubtitlePayload
@@ -89,3 +90,48 @@ def test_final_revision_replaces_visible_provisional_without_duplicate_hold():
     assert shown == ["暫定字幕", "最終字幕"]
     assert window._current_subtitle_id == subtitle_id
     assert window._pending_text is None
+
+
+def test_late_provisional_cannot_replace_displayed_final_revision():
+    window, _root, _drawn = _window_with_fake_root()
+    shown = []
+    window._show = shown.append
+    subtitle_id = "provisional:utt-late"
+
+    window._queue.put(SubtitlePayload("final", subtitle_id, revision=1, phase="final"))
+    window._poll()
+    window._queue.put(SubtitlePayload("late preview", subtitle_id, revision=0, phase="provisional"))
+    window._poll()
+
+    assert shown == ["final"]
+    assert window._current_subtitle_revision == 1
+
+
+def test_late_provisional_cannot_replace_pending_final_revision():
+    window, _root, _drawn = _window_with_fake_root()
+    window._show_min_ms = 60_000
+    window._show_time = time.monotonic()
+    subtitle_id = "provisional:utt-pending"
+
+    window._queue.put(SubtitlePayload("final", subtitle_id, revision=1, phase="final"))
+    window._queue.put(SubtitlePayload("late preview", subtitle_id, revision=0, phase="provisional"))
+    window._poll()
+
+    assert window._pending_text == SubtitlePayload(
+        "final", subtitle_id, revision=1, phase="final"
+    )
+
+
+def test_newer_revision_still_replaces_pending_older_revision():
+    window, _root, _drawn = _window_with_fake_root()
+    window._show_min_ms = 60_000
+    window._show_time = time.monotonic()
+    subtitle_id = "provisional:utt-forward"
+
+    window._queue.put(SubtitlePayload("preview", subtitle_id, revision=0, phase="provisional"))
+    window._queue.put(SubtitlePayload("final", subtitle_id, revision=1, phase="final"))
+    window._poll()
+
+    assert window._pending_text == SubtitlePayload(
+        "final", subtitle_id, revision=1, phase="final"
+    )

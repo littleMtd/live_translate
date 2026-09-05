@@ -29,6 +29,10 @@ class SubtitleWindow:
         self._drag_y = 0
         self._pending_text: SubtitlePayload | None = None
         self._current_subtitle_id = ""
+        self._current_subtitle_revision = -1
+        # Session ledger: retaining finalized IDs is what makes the invariant
+        # hold even for an arbitrarily delayed producer update.
+        self._accepted_revisions: dict[str, tuple[int, bool]] = {}
         self._show_time: float = 0.0
         self._show_min_ms: int = 0
 
@@ -108,6 +112,25 @@ class SubtitleWindow:
             pass
         self._hide_job = None
 
+    def _accept_revision(self, payload: SubtitlePayload) -> bool:
+        """Enforce one monotonic revision order for queued, pending and shown text."""
+        if not payload.subtitle_id:
+            return True
+        version = (payload.revision, payload.phase == "final")
+        previous = self._accepted_revisions.get(payload.subtitle_id)
+        if previous is not None and version < previous:
+            metrics.increment("subtitle.revision_regression_dropped")
+            runtime_events.emit(
+                "provisional_translation",
+                action="display_dropped",
+                provisional_id=payload.subtitle_id,
+                reason="revision_regression",
+                revision=payload.revision,
+            )
+            return False
+        self._accepted_revisions[payload.subtitle_id] = version
+        return True
+
     def _flash(self, symbol: str, ms: int | None = 1500):
         if self._root is None:
             return
@@ -139,11 +162,14 @@ class SubtitleWindow:
                         )
                     if not isinstance(candidate, SubtitlePayload):
                         continue
+                    if not self._accept_revision(candidate):
+                        continue
                     if (
                         candidate.subtitle_id
                         and candidate.subtitle_id == self._current_subtitle_id
                     ):
                         self._show(candidate.text)
+                        self._current_subtitle_revision = candidate.revision
                         self._pending_text = None
                         metrics.increment("subtitle.revision_replaced")
                         runtime_events.emit(
@@ -175,6 +201,7 @@ class SubtitleWindow:
                 payload = self._pending_text
                 self._show(payload.text)
                 self._current_subtitle_id = payload.subtitle_id
+                self._current_subtitle_revision = payload.revision
                 self._pending_text = None
                 if payload.phase == "provisional":
                     runtime_events.emit(

@@ -148,12 +148,12 @@ const showNotice = (msg: string) => {
 
 const cloneConfig = (value: ConfigDto): ConfigDto => JSON.parse(JSON.stringify(value))
 
-const loadConfig = async () => {
+const loadConfigFrom = async (readConfig: () => Promise<ConfigDto>) => {
   const generation = ++configLoadGeneration
   configLoadState.value = 'loading'
   configLoadError.value = null
   try {
-    const loaded = await client.getConfig()
+    const loaded = await readConfig()
     if (generation !== configLoadGeneration) return
     config.value = cloneConfig(loaded)
     configLoadState.value = 'loaded'
@@ -163,6 +163,9 @@ const loadConfig = async () => {
     configLoadState.value = 'error'
   }
 }
+
+const loadConfig = () => loadConfigFrom(() => client.getConfig())
+const reloadEffectiveConfig = () => loadConfigFrom(() => client.reloadConfig())
 
 const refreshProfileStatus = async () => {
   if (!pythonRunning.value) {
@@ -223,7 +226,9 @@ const startPython = async () => {
     // Wait for Python to initialise, then reconcile real status before loading config.
     setTimeout(async () => {
       await pollStatus()
-      await loadConfig()
+      // Python has now exported the config it actually accepted. Invalidate the
+      // pre-start Rust cache so rejected overrides cannot remain editable/saveable.
+      await reloadEffectiveConfig()
       await activeTabData()
     }, 1500)
   } catch (e) {

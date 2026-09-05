@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from modules.activity_context import ActivitySnapshot
 from modules.profile_context import ProfileSnapshot
@@ -90,10 +90,28 @@ class ProvisionalStore:
         self._closed: set[str] = set()
 
     def publish(self, candidate: ProvisionalCandidate) -> bool:
+        return self.publish_and_enqueue(candidate, lambda: None)
+
+    def publish_and_enqueue(
+        self,
+        candidate: ProvisionalCandidate,
+        enqueue: Callable[[], None],
+    ) -> bool:
+        """Publish a candidate and its preview before a finalizer can close it.
+
+        The enqueue callback deliberately runs under the store lock. This makes
+        preview publication and visibility one transaction relative to close():
+        once a finalizer observes the candidate, its preview is already queued.
+        """
         with self._lock:
             if candidate.provisional_id in self._closed:
                 return False
             self._candidates[candidate.provisional_id] = candidate
+            try:
+                enqueue()
+            except Exception:
+                self._candidates.pop(candidate.provisional_id, None)
+                raise
             return True
 
     def candidate(self, provisional_id: str) -> ProvisionalCandidate | None:

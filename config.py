@@ -686,6 +686,11 @@ def _is_finite_number(value: object) -> bool:
     )
 
 
+def _is_typed_enum(value: object, allowed: set[str]) -> bool:
+    """JSON enum validation that rejects non-strings without invoking hashing."""
+    return isinstance(value, str) and value in allowed
+
+
 def _dashboard_value_is_valid(
     section: str,
     name: str,
@@ -706,7 +711,7 @@ def _dashboard_value_is_valid(
         if name == "vad_max_speech_sec":
             return _is_finite_number(value) and base.audio.vad_min_speech_sec < float(value) <= 30.0
     if section == "stt" and name == "primary_engine":
-        return value in {"elevenlabs", "groq", "sensevoice"}
+        return _is_typed_enum(value, {"elevenlabs", "groq", "sensevoice"})
     if section == "translation":
         if name == "engine_chain":
             return (
@@ -716,7 +721,7 @@ def _dashboard_value_is_valid(
                 and len(set(value)) == len(value)
             )
         if name == "translation_mode":
-            return value in _VALID_TRANSLATION_MODES
+            return _is_typed_enum(value, _VALID_TRANSLATION_MODES)
         if name == "max_tokens":
             return isinstance(value, int) and not isinstance(value, bool) and 10 <= value <= 500
         if name == "target_lang":
@@ -728,7 +733,7 @@ def _dashboard_value_is_valid(
         if name == "use_profile":
             return isinstance(value, bool)
         if name == "profile_mode":
-            return value in {"auto", "manual"}
+            return _is_typed_enum(value, {"auto", "manual"})
     if section == "scene" and name == "publish_open_set_activity":
         return isinstance(value, bool)
     if section == "subtitle":
@@ -794,7 +799,8 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
     top_changes = {
         name: data[name]
         for name in _DASHBOARD_OVERRIDE_TOP
-        if name in data and data[name] in _VALID_BACKEND_MODES
+        if name in data
+        and _is_typed_enum(data[name], _VALID_BACKEND_MODES)
     }
     if not section_updates and not top_changes:
         return base

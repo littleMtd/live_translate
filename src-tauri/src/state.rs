@@ -2,9 +2,13 @@ use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Mutex;
 
+pub struct PythonProcess {
+    pub child: Child,
+    pub run_id: String,
+}
+
 pub struct AppState {
-    pub python_process: Mutex<Option<Child>>,
-    pub python_run_id: Mutex<Option<String>>,
+    pub python_process: Mutex<Option<PythonProcess>>,
     pub config_cache: Mutex<Option<ConfigDto>>,
 }
 
@@ -12,7 +16,6 @@ impl AppState {
     pub fn new() -> Self {
         AppState {
             python_process: Mutex::new(None),
-            python_run_id: Mutex::new(None),
             config_cache: Mutex::new(None),
         }
     }

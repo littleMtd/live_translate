@@ -2813,24 +2813,27 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             usage=usage,
                             diagnostics=diagnostics,
                         )
-                        if not provisional_store.publish(candidate):
+                        preview_payload = SubtitlePayload(
+                            text=display_target,
+                            subtitle_id=request.provisional_id,
+                            revision=0,
+                            phase="provisional",
+                        )
+                        if not provisional_store.publish_and_enqueue(
+                            candidate,
+                            lambda: put_latest(
+                                subtitle_queue,
+                                preview_payload,
+                                log,
+                                "subtitle_queue",
+                            ),
+                        ):
                             runtime_events.emit(
                                 "provisional_translation",
                                 action="cancelled_late",
                                 provisional_id=request.provisional_id,
                             )
                             return
-                        put_latest(
-                            subtitle_queue,
-                            SubtitlePayload(
-                                text=display_target,
-                                subtitle_id=request.provisional_id,
-                                revision=0,
-                                phase="provisional",
-                            ),
-                            log,
-                            "subtitle_queue",
-                        )
                         runtime_events.emit(
                             "provisional_translation",
                             action="succeeded",

@@ -3,6 +3,7 @@ from modules.provisional_subtitles import (
     ProvisionalStore,
     provisional_fingerprint,
 )
+import threading
 
 
 def _fingerprint(**overrides):
@@ -57,3 +58,46 @@ def test_closed_store_rejects_late_preview_publish():
     assert not store.publish(candidate)
     assert store.candidate("preview-1") is None
     assert store.is_closed("preview-1")
+
+
+def test_preview_enqueue_is_ordered_before_finalizer_can_close_candidate():
+    store = ProvisionalStore()
+    candidate = ProvisionalCandidate(
+        provisional_id="preview-atomic",
+        raw_target="preview",
+        display_target="preview",
+        fingerprint=_fingerprint(),
+        engine="deepseek",
+        model="flash",
+        requested_at_monotonic=1.0,
+        completed_at_monotonic=2.0,
+        usage={},
+        diagnostics={},
+    )
+    enqueue_started = threading.Event()
+    allow_enqueue = threading.Event()
+    order = []
+
+    def enqueue():
+        enqueue_started.set()
+        assert allow_enqueue.wait(1.0)
+        order.append("preview_enqueued")
+
+    publisher = threading.Thread(
+        target=lambda: store.publish_and_enqueue(candidate, enqueue)
+    )
+    publisher.start()
+    assert enqueue_started.wait(1.0)
+
+    finalizer = threading.Thread(
+        target=lambda: (store.close(candidate.provisional_id), order.append("closed"))
+    )
+    finalizer.start()
+    assert finalizer.is_alive(), "close must wait for preview publication"
+
+    allow_enqueue.set()
+    publisher.join(1.0)
+    finalizer.join(1.0)
+
+    assert order == ["preview_enqueued", "closed"]
+    assert store.is_closed(candidate.provisional_id)

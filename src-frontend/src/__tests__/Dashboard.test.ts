@@ -410,4 +410,34 @@ describe('Dashboard', () => {
     await flushPromises()
     expect(wrapper.find('button.btn-start').attributes('disabled')).toBeUndefined()
   })
+
+  it('reloads Python effective config after startup instead of using the Rust cache', async () => {
+    const effective = cloneConfig({
+      translation: { ...fakeConfig.translation, engine_chain: ['groq'] },
+    })
+    let started = false
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_config') return Promise.resolve(fakeConfig)
+      if (cmd === 'reload_config') return Promise.resolve(effective)
+      if (cmd === 'get_cache_stats') return Promise.resolve(fakeStats)
+      if (cmd === 'python_status') return Promise.resolve(started)
+      if (cmd === 'start_python') {
+        started = true
+        return Promise.resolve('started')
+      }
+      if (cmd === 'get_profile_status') return Promise.resolve(null)
+      return Promise.resolve(null)
+    })
+    const wrapper = mount(Dashboard)
+    await flushPromises()
+
+    await wrapper.find('button.btn-start').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+
+    expect(mockInvoke).toHaveBeenCalledWith('reload_config')
+    const panel = wrapper.findComponent({ name: 'ConfigPanel' })
+    expect((panel.props('config') as typeof fakeConfig).translation.engine_chain).toEqual(['groq'])
+  })
 })
