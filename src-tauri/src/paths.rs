@@ -1,14 +1,30 @@
 use std::path::{Path, PathBuf};
 
+fn project_root_from(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| {
+            candidate.join("main.py").is_file()
+                && candidate
+                    .join("data")
+                    .join("streamer_profiles.json")
+                    .is_file()
+        })
+        .map(Path::to_path_buf)
+}
+
 pub fn app_root() -> PathBuf {
     let base = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    if let Some(project_root) = base.ancestors().nth(3) {
-        let root = project_root.to_path_buf();
-        if root.join("main.py").exists() {
+    if let Some(root) = project_root_from(&base) {
+        return root;
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(root) = project_root_from(&current_dir) {
             return root;
         }
     }
@@ -106,5 +122,22 @@ mod tests {
             resolve_db_path(&root, "logs/custom.db"),
             root.join("logs").join("custom.db")
         );
+    }
+
+    #[test]
+    fn project_root_search_is_not_tied_to_target_directory_depth() {
+        let root = std::env::temp_dir().join(format!(
+            "live-translate-root-test-{}",
+            std::process::id()
+        ));
+        let nested = root.join("src-tauri").join("target").join("debug").join("deps");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("main.py"), b"").unwrap();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data").join("streamer_profiles.json"), b"{}").unwrap();
+
+        assert_eq!(project_root_from(&nested), Some(root.clone()));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

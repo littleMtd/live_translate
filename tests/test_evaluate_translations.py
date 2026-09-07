@@ -33,6 +33,34 @@ def _case(**overrides) -> EvalCase:
     return EvalCase(**values)
 
 
+def _skip_without_local_runtime_sources(suite_path: Path, raw: dict) -> None:
+    artifacts = raw.get("source_artifacts")
+    if (
+        not isinstance(artifacts, list)
+        or not artifacts
+        or not all(isinstance(artifact, str) and artifact.strip() for artifact in artifacts)
+    ):
+        raise ValueError("provenance suites require source_artifacts")
+    missing = []
+    for artifact in artifacts:
+        artifact_path = Path(artifact)
+        candidates = (
+            (artifact_path,)
+            if artifact_path.is_absolute()
+            else (
+                suite_path.parent / artifact_path,
+                suite_path.parent.parent / artifact_path,
+                Path.cwd() / artifact_path,
+            )
+        )
+        if not any(candidate.is_file() for candidate in candidates):
+            missing.append(artifact)
+    if missing:
+        pytest.skip(
+            "local production evidence is not stored in git: " + ", ".join(missing)
+        )
+
+
 def test_default_eval_cases_are_valid_and_reference_outputs_pass():
     cases = load_eval_cases(DEFAULT_CASES_PATH)
     results = evaluate_cases(cases)
@@ -136,6 +164,8 @@ def test_suite_fixture_covers_recoverability_dimensions_and_exclusions():
         / "semantic_quality_eval_20260812.json"
     )
     raw = json.loads(path.read_text(encoding="utf-8"))
+    load_eval_cases(path, verify_source_artifacts=False)
+    _skip_without_local_runtime_sources(path, raw)
     cases = load_eval_cases(path)
 
     assert {item["run_id"] for item in raw["excluded_runs"]} == {
@@ -330,4 +360,40 @@ def test_main_can_evaluate_embedded_current_baseline():
         / "data"
         / "semantic_quality_eval_20260812.json"
     )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    load_eval_cases(path, verify_source_artifacts=False)
+    _skip_without_local_runtime_sources(path, raw)
     assert main(["--cases", str(path), "--use-current-output"]) == 1
+
+
+def test_structure_validation_does_not_require_local_provenance_file(tmp_path):
+    path = tmp_path / "suite.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset_id": "ci-structure",
+                "provenance_policy": "natural_runtime_and_derived_policy",
+                "source_artifacts": ["missing.jsonl"],
+                "excluded_runs": [],
+                "cases": [
+                    {
+                        "id": "duplicate",
+                        "runtime_ref": {"run_id": "run", "sequence_id": 1},
+                        "source_text": "source",
+                        "reference_output": "target",
+                    },
+                    {
+                        "id": "duplicate",
+                        "runtime_ref": {"run_id": "run", "sequence_id": 2},
+                        "source_text": "source 2",
+                        "reference_output": "target 2",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate eval case id"):
+        load_eval_cases(path, verify_source_artifacts=False)

@@ -164,7 +164,11 @@ def _load_runtime_sources(
     return sources
 
 
-def load_eval_cases(path: Path = DEFAULT_CASES_PATH) -> list[EvalCase]:
+def load_eval_cases(
+    path: Path = DEFAULT_CASES_PATH,
+    *,
+    verify_source_artifacts: bool = True,
+) -> list[EvalCase]:
     data = json.loads(path.read_text(encoding="utf-8"))
     excluded_runs: set[str] = set()
     provenance_policy = ""
@@ -185,7 +189,8 @@ def load_eval_cases(path: Path = DEFAULT_CASES_PATH) -> list[EvalCase]:
                 or not all(isinstance(item, str) and item.strip() for item in artifacts)
             ):
                 raise ValueError("provenance suites require source_artifacts")
-            runtime_sources = _load_runtime_sources(path, artifacts)
+            if verify_source_artifacts:
+                runtime_sources = _load_runtime_sources(path, artifacts)
         raw_exclusions = data.get("excluded_runs", [])
         if not isinstance(raw_exclusions, list):
             raise ValueError("excluded_runs must be a list")
@@ -241,7 +246,7 @@ def load_eval_cases(path: Path = DEFAULT_CASES_PATH) -> list[EvalCase]:
                     f"cases[{index}] derives from excluded run {derived_ref['run_id']}"
                 )
             derived_key = (derived_ref["run_id"], derived_ref["sequence_id"])
-            if provenance_policy and derived_key not in runtime_sources:
+            if provenance_policy and verify_source_artifacts and derived_key not in runtime_sources:
                 raise ValueError(
                     f"cases[{index}] derived runtime_ref was not found"
                 )
@@ -261,7 +266,7 @@ def load_eval_cases(path: Path = DEFAULT_CASES_PATH) -> list[EvalCase]:
                 )
         if not isinstance(source_text, str) or not source_text.strip():
             raise ValueError(f"cases[{index}].source_text must be a non-empty string")
-        if provenance_policy and runtime_ref is not None:
+        if provenance_policy and verify_source_artifacts and runtime_ref is not None:
             runtime_key = (runtime_ref["run_id"], runtime_ref["sequence_id"])
             if runtime_key not in runtime_sources:
                 raise ValueError(f"cases[{index}].runtime_ref was not found")
