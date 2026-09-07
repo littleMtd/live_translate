@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 import scripts.replay_phase0_stt_candidates as replay_module
