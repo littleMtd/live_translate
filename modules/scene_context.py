@@ -59,6 +59,15 @@ from modules.profile_context import (
     profile_resolution_status,
     profile_state,
 )
+from modules.identity_roi import (
+    IDENTITY_ROI_PROMPT,
+    IdentityRoiStore,
+    calibration_key,
+    crop_identity_roi,
+    exact_reviewed_member,
+    normalize_identity,
+    parse_observed_identity,
+)
 from utils.logger import get_logger
 from utils.runtime_events import runtime_events
 
@@ -899,6 +908,16 @@ def _mean_abs_diff(a: bytes, b: bytes) -> float:
     return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
 
 
+def _mean_significant_abs_diff(a: bytes, b: bytes, *, noise_floor: int = 3) -> float:
+    """Measure structural luminance change without amplifying capture shimmer."""
+    if not a or not b or len(a) != len(b):
+        return float("inf")
+    return sum(
+        max(0, abs(x - y) - noise_floor)
+        for x, y in zip(a, b)
+    ) / len(a)
+
+
 class ActivityConsensus:
     """Two genuinely distinct pieces of evidence confirm one activity."""
 
@@ -1015,6 +1034,8 @@ class SceneContextUpdater:
         capture_backend: WindowCaptureBackend | None = None,
         vision_provider: VisionProvider | None = None,
         profile_vision_provider: VisionProvider | None = None,
+        identity_roi_provider: VisionProvider | None = None,
+        identity_roi_store: IdentityRoiStore | None = None,
         profile_resolution_enabled: bool | None = None,
         query: Callable[[bytes], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -1053,6 +1074,13 @@ class SceneContextUpdater:
         )
         self._profile_vision = profile_vision_provider
         self._profile_vision_injected = profile_vision_provider is not None
+        self._identity_roi_vision = identity_roi_provider
+        self._identity_roi_store = identity_roi_store or IdentityRoiStore()
+        self._identity_roi_fingerprint: tuple[int, str, bytes] | None = None
+        # Ignore per-pixel PrintWindow/JPEG shimmer while a localized name or
+        # avatar change still forces a read before the stable polling deadline.
+        self._identity_roi_change_threshold = 0.5
+        self._identity_roi_active = False
         self._profile_registry_identity = profile_state.registry.identity
         if self._profile_enabled and self._profile_vision is None:
             self._profile_vision = build_vision_provider(
@@ -1553,6 +1581,7 @@ class SceneContextUpdater:
     def _expire_profile_if_needed(self, now: float) -> None:
         if (
             not self._profile_enabled
+            or self._identity_roi_active
             or self._profile_confirmed_at is None
             or self._profile_observation_suspended_at is not None
             or now - self._profile_confirmed_at < self._profile_expiry
@@ -1594,6 +1623,19 @@ class SceneContextUpdater:
                 self._profile_vision = build_vision_provider(
                     build_profile_identity_prompt(registry)
                 )
+        roi = self._identity_roi_store.get(calibration_key(identity.platform))
+        if roi is not None:
+            self._identity_roi_active = True
+            self._resolve_authoritative_identity_roi(
+                frame,
+                identity,
+                roi=roi,
+                now=now,
+                resolver_generation=resolver_generation,
+                window_generation=window_generation,
+            )
+            return
+        self._identity_roi_active = False
         starting_snapshot = profile_state.current()
         self._expire_profile_if_needed(now)
         if self._profile_next_call_at is not None and now < self._profile_next_call_at:
@@ -1943,6 +1985,188 @@ class SceneContextUpdater:
             **profile_state.current().as_metadata(),
         )
 
+    def _resolve_authoritative_identity_roi(
+        self,
+        frame: CaptureFrame,
+        identity: WindowIdentity,
+        *,
+        roi,
+        now: float,
+        resolver_generation: int,
+        window_generation: int,
+    ) -> None:
+        """Use a calibrated name block as the sole automatic profile authority."""
+        roi_key = calibration_key(identity.platform)
+        observation = crop_identity_roi(frame.jpeg, roi)
+        roi_available = observation is not None
+        previous = self._identity_roi_fingerprint
+        roi_changed = bool(
+            observation is not None
+            and (
+                previous is None
+                or previous[:2] != (window_generation, roi_key)
+                or _mean_significant_abs_diff(previous[2], observation.thumb)
+                >= self._identity_roi_change_threshold
+            )
+        )
+        if observation is None:
+            self._schedule_profile_resolution(now, "identity_roi_unavailable", stable=False)
+            self._emit_profile_resolution(
+                status="unavailable",
+                reason="identity_roi_crop_unavailable",
+                activation_decision="retain_confirmed_profile",
+                identity_roi_calibration_key=roi_key,
+                identity_roi=roi.as_dict(),
+                identity_roi_available=False,
+                identity_roi_changed=False,
+                identity_read_attempted=False,
+                normalized_observed_identity="",
+                reviewed_member_match="",
+                window_generation=window_generation,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        due = self._profile_next_call_at is None or now >= self._profile_next_call_at
+        if not roi_changed and not due:
+            return
+        self._identity_roi_fingerprint = (
+            window_generation,
+            roi_key,
+            observation.thumb,
+        )
+        validation = self._resolver.validate(identity)
+        discard = self._window_discard_reason(
+            validation,
+            resolver_generation=resolver_generation,
+            window_generation=window_generation,
+        )
+        if discard:
+            self._schedule_profile_resolution(now, "discarded", stable=False)
+            self._emit_profile_resolution(
+                status="discarded",
+                reason=discard,
+                activation_decision="retain_confirmed_profile",
+                identity_roi_calibration_key=roi_key,
+                identity_roi=roi.as_dict(),
+                identity_roi_available=roi_available,
+                identity_roi_changed=roi_changed,
+                identity_read_attempted=False,
+                normalized_observed_identity="",
+                reviewed_member_match="",
+                window_generation=window_generation,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        if self._identity_roi_vision is None:
+            self._identity_roi_vision = build_vision_provider(IDENTITY_ROI_PROMPT)
+        started = self._clock()
+        starting_snapshot = profile_state.current()
+        route_capacity = max(
+            1, len(getattr(self._identity_roi_vision, "route_identities", ()))
+        )
+        if not self._reserve_profile_attempt(now, route_capacity):
+            self._schedule_profile_resolution(now, "rate_limited", stable=False)
+            self._emit_profile_resolution(
+                status="throttled",
+                reason="profile_attempt_budget",
+                activation_decision="retain_confirmed_profile",
+                identity_authority="calibrated_channel_identity_roi",
+                identity_roi_calibration_key=roi_key,
+                identity_roi=roi.as_dict(),
+                identity_roi_available=True,
+                identity_roi_changed=roi_changed,
+                identity_read_attempted=False,
+                normalized_observed_identity="",
+                reviewed_member_match="",
+                profile_attempts_last_minute=len(self._profile_attempt_times),
+                window_generation=window_generation,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        try:
+            result = self._identity_roi_vision.classify(observation.jpeg)
+            raw = result.text if isinstance(result, VisionClassification) else result
+        except Exception as exc:
+            diagnostics = exc.diagnostics if isinstance(exc, VisionProviderFailure) else None
+            used_attempts = max(1, len(diagnostics.attempt_chain)) if diagnostics is not None else 1
+            self._release_unused_profile_attempts(route_capacity, used_attempts)
+            self._schedule_profile_resolution(now, "identity_roi_provider_error", stable=False)
+            self._emit_profile_resolution(
+                status="provider_error",
+                reason=type(exc).__name__,
+                activation_decision="retain_confirmed_profile",
+                identity_roi_calibration_key=roi_key,
+                identity_roi=roi.as_dict(),
+                identity_roi_available=True,
+                identity_roi_changed=roi_changed,
+                identity_read_attempted=True,
+                normalized_observed_identity="",
+                reviewed_member_match="",
+                latency_ms=round((self._clock() - started) * 1000, 2),
+                window_generation=window_generation,
+                **profile_state.current().as_metadata(),
+            )
+            return
+        used_attempts = (
+            max(1, len(result.diagnostics.attempt_chain))
+            if isinstance(result, VisionClassification)
+            else 1
+        )
+        self._release_unused_profile_attempts(route_capacity, used_attempts)
+        discard = self._window_discard_reason(
+            self._resolver.validate(identity),
+            resolver_generation=resolver_generation,
+            window_generation=window_generation,
+        )
+        if (
+            not discard
+            and profile_state.current().cache_identity != starting_snapshot.cache_identity
+        ):
+            discard = "profile_generation_changed"
+        observed = parse_observed_identity(raw)
+        normalized = normalize_identity(observed)
+        marker = exact_reviewed_member(observed, profile_state.registry)
+        if discard:
+            decision = "discard_stale_identity_read"
+            status = "discarded"
+            reason = discard
+        elif marker is None:
+            decision = "retain_confirmed_profile"
+            status = "unknown"
+            reason = "identity_blank_or_not_reviewed"
+        else:
+            profile_state.confirm_content(
+                marker.profile_id,
+                confidence=1.0,
+                evidence_source="authoritative_identity_roi",
+            )
+            self._profile_confirmed_at = now
+            decision = "authoritative_identity_confirmed"
+            status = "confirmed"
+            reason = "exact_reviewed_member_name"
+        self._schedule_profile_resolution(
+            now,
+            "stable" if marker is not None and not discard else "seeking",
+            stable=marker is not None and not discard,
+        )
+        self._emit_profile_resolution(
+            status=status,
+            reason=reason,
+            activation_decision=decision,
+            identity_authority="calibrated_channel_identity_roi",
+            identity_roi_calibration_key=roi_key,
+            identity_roi=roi.as_dict(),
+            identity_roi_available=True,
+            identity_roi_changed=roi_changed,
+            identity_read_attempted=True,
+            normalized_observed_identity=normalized,
+            reviewed_member_match=marker.marker_id if marker is not None else "",
+            candidate_profile_id=marker.profile_id if marker is not None else "",
+            latency_ms=round((self._clock() - started) * 1000, 2),
+            window_generation=window_generation,
+            **profile_state.current().as_metadata(),
+        )
+
     def _window_discard_reason(
         self,
         validation: WindowResolution,
@@ -2014,6 +2238,9 @@ class SceneContextUpdater:
         if resolution.status != "ok" or resolution.identity is None:
             self._handle_invalid_window(resolution)
             return None
+        self._identity_roi_active = self._identity_roi_store.get(
+            calibration_key(resolution.identity.platform)
+        ) is not None
         self._resume_profile_observation(self._clock())
         self._expire_profile_if_needed(self._clock())
         self._last_window_status = "ok"
@@ -2036,18 +2263,41 @@ class SceneContextUpdater:
         frame = self._capture.capture(identity)
         if frame.status != "ok":
             if self._profile_enabled:
-                cleared = self._enter_profile_recovery(
-                    self._clock(),
-                    "capture_failure",
-                    reason="profile_capture_timeout",
-                )
+                if self._identity_roi_active:
+                    cleared = False
+                    self._schedule_profile_resolution(
+                        self._clock(), "identity_roi_capture_unavailable", stable=False
+                    )
+                else:
+                    cleared = self._enter_profile_recovery(
+                        self._clock(),
+                        "capture_failure",
+                        reason="profile_capture_timeout",
+                    )
                 self._emit_profile_resolution(
                     status="capture_failure",
                     reason=frame.status,
                     state_transition="capture_to_recovery",
                     activation_decision=(
-                        "fallback_to_source" if cleared else "retain_during_grace"
+                        "fallback_to_source"
+                        if cleared
+                        else "retain_confirmed_profile"
+                        if self._identity_roi_active
+                        else "retain_during_grace"
                     ),
+                    identity_authority=(
+                        "calibrated_channel_identity_roi"
+                        if self._identity_roi_active
+                        else "whole_scene"
+                    ),
+                    identity_roi_calibration_key=(
+                        calibration_key(identity.platform)
+                        if self._identity_roi_active
+                        else ""
+                    ),
+                    identity_roi_available=False,
+                    identity_roi_changed=False,
+                    identity_read_attempted=False,
                     stale_profile_cleared=cleared,
                     window_generation=capture_window_generation,
                     registry_generation=profile_state.registry.version,

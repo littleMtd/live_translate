@@ -311,6 +311,225 @@ class TestVadState(unittest.TestCase):
 
         self.assertEqual(len(second), 80)
 
+    def test_evidence_selected_adaptive_soft_max_still_requires_a_pause(self):
+        from modules.audio_capture import _VadState
+
+        cfg = self._make_cfg()
+        cfg.audio.sample_rate = 10
+        cfg.audio.vad_min_speech_sec = 0.8
+        cfg.audio.vad_silence_sec = 0.9
+        cfg.audio.vad_max_speech_sec = 6.5
+        cfg.audio.vad_hard_max_speech_sec = 9.0
+        cfg.audio.vad_overlap_sec = 1.0
+        cfg.audio.vad_adaptive_enabled = True
+        cfg.audio.vad_adaptive_silence_sec = 1.1
+        cfg.audio.vad_adaptive_max_speech_sec = 6.5
+        cfg.audio.vad_adaptive_hard_max_speech_sec = 10.0
+        cfg.audio.vad_adaptive_overlap_sec = 1.2
+
+        for adaptive, expected_overlap_samples in ((False, 10), (True, 12)):
+            with self.subTest(adaptive=adaptive):
+                q = queue.Queue()
+                with patch("modules.audio_capture.cfg", cfg), patch(
+                    "modules.audio_capture.runtime_events.emit"
+                ):
+                    vad = _VadState(q)
+                    vad._adaptive_segments_remaining = int(adaptive)
+                    self.assertEqual(vad._silence_gate, 9)
+                    self.assertEqual(vad._adaptive_silence_gate, 11)
+                    self.assertEqual(vad._max_speech, 65)
+                    self.assertEqual(vad._adaptive_max_speech, 65)
+                    self.assertEqual(vad._hard_max_speech, 90)
+                    self.assertEqual(vad._adaptive_hard_max_speech, 100)
+
+                    vad.push(self._loud(65))
+                    self.assertTrue(q.empty(), "continuous speech must not soft-cut")
+                    vad.push(self._quiet(1))
+                    chunk = q.get_nowait()
+
+                self.assertEqual(chunk.vad_cut_reason, "soft_max_pause")
+                self.assertEqual(len(vad._pending_overlap), expected_overlap_samples)
+
+    def test_boundary_shadow_records_candidate_thresholds_without_early_cut(self):
+        from modules.audio_capture import _VadState
+
+        scenarios = (
+            ("silence", 2.0, 20.0, 20.0, [self._loud(100), *[self._quiet(5) for _ in range(40)]]),
+            ("soft_max", 2.0, 7.0, 10.0, [*[self._loud(5) for _ in range(100)], *[self._quiet(5) for _ in range(40)]]),
+            ("hard_max", 2.0, 9.0, 10.0, [self._loud(5) for _ in range(200)]),
+        )
+        expected = {
+            "silence": {"A": 0.75, "B": 0.65},
+            "soft_max": {"A": 5.5, "B": 5.0},
+            "hard_max": {"A": 8.0, "B": 7.5},
+        }
+        for cut_type, silence_sec, soft_sec, hard_sec, frames in scenarios:
+            with self.subTest(cut_type=cut_type):
+                cfg = self._make_cfg()
+                cfg.audio.vad_silence_sec = silence_sec
+                cfg.audio.vad_max_speech_sec = soft_sec
+                cfg.audio.vad_hard_max_speech_sec = hard_sec
+                q = queue.Queue()
+                with patch("modules.audio_capture.cfg", cfg), patch(
+                    "modules.audio_capture.runtime_events.emit"
+                ) as emit:
+                    vad = _VadState(q)
+                    for frame in frames:
+                        vad.push(frame)
+                        if not q.empty():
+                            break
+                shadow = [
+                    call.kwargs
+                    for call in emit.call_args_list
+                    if call.args == ("vad_boundary_shadow",)
+                    and call.kwargs["candidate_cut_type"] == cut_type
+                ]
+                self.assertEqual(
+                    {row["candidate_name"] for row in shadow}, {"A", "B"}
+                )
+                all_candidate_rows = [
+                    call.kwargs
+                    for call in emit.call_args_list
+                    if call.args == ("vad_boundary_shadow",)
+                ]
+                self.assertEqual(len(all_candidate_rows), 2)
+                self.assertEqual(
+                    {
+                        row["candidate_name"]: row["candidate_threshold_seconds"]
+                        for row in shadow
+                    },
+                    expected[cut_type],
+                )
+                self.assertEqual(q.qsize(), 1)
+
+    def test_boundary_shadow_is_byte_and_behavior_equivalent(self):
+        from modules import audio_capture
+        from modules.audio_capture import _VadState
+
+        frames = [self._loud(10), self._quiet(5), self._quiet(5)]
+
+        def run(candidates):
+            q = queue.Queue()
+            with patch("modules.audio_capture.cfg", self._make_cfg()), patch.object(
+                audio_capture, "_VAD_BOUNDARY_SHADOW_CANDIDATES", candidates
+            ), patch("modules.audio_capture.runtime_events.emit"):
+                vad = _VadState(q)
+                for frame in frames:
+                    vad.push(frame)
+                chunk = q.get_nowait()
+                state = (
+                    vad._total_samples,
+                    vad._speech_samples,
+                    vad._silent_samples,
+                    vad._adaptive_segments_remaining,
+                    vad._pending_overlap.copy(),
+                )
+                return chunk, state
+
+        with_shadow, shadow_state = run(audio_capture._VAD_BOUNDARY_SHADOW_CANDIDATES)
+        without_shadow, control_state = run(())
+        np.testing.assert_array_equal(with_shadow.audio, without_shadow.audio)
+        self.assertEqual(with_shadow.vad_cut_reason, without_shadow.vad_cut_reason)
+        self.assertEqual(with_shadow.overlap_seconds, without_shadow.overlap_seconds)
+        self.assertEqual(with_shadow.raw_audio_seconds, without_shadow.raw_audio_seconds)
+        self.assertEqual(shadow_state[:4], control_state[:4])
+        np.testing.assert_array_equal(shadow_state[4], control_state[4])
+
+    def test_candidate_evaluation_does_not_mutate_production_vad_state(self):
+        from modules.audio_capture import _VadState
+
+        cfg = self._make_cfg()
+        cfg.audio.vad_silence_sec = 1.1
+        cfg.audio.vad_max_speech_sec = 20.0
+        cfg.audio.vad_hard_max_speech_sec = 20.0
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", cfg), patch(
+            "modules.audio_capture.runtime_events.emit"
+        ) as emit:
+            vad = _VadState(q)
+            vad.push(self._loud(100))
+            for _ in range(15):
+                vad.push(self._quiet(5))
+        self.assertTrue(q.empty())
+        self.assertEqual(vad._total_samples, 175)
+        self.assertEqual(vad._speech_samples, 100)
+        self.assertEqual(vad._silent_samples, 75)
+        self.assertEqual(sum(len(frame) for frame in vad._buf), 175)
+        emit.assert_not_called()
+
+    def test_resumed_speech_marks_silence_candidate_as_potential_early_cut(self):
+        from modules.audio_capture import _VadState
+
+        cfg = self._make_cfg()
+        cfg.audio.vad_silence_sec = 1.1
+        cfg.audio.vad_max_speech_sec = 20.0
+        cfg.audio.vad_hard_max_speech_sec = 20.0
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", cfg), patch(
+            "modules.audio_capture.runtime_events.emit"
+        ) as emit:
+            vad = _VadState(q)
+            vad.push(self._loud(100))
+            vad.push(self._quiet(65))
+            vad.push(self._quiet(5))
+            vad.push(self._loud(10))
+            vad.push(self._quiet(110))
+        potential = [
+            call.kwargs
+            for call in emit.call_args_list
+            if call.args == ("vad_boundary_shadow",)
+            and call.kwargs["candidate_name"] == "B"
+            and call.kwargs["classification"] == "POTENTIAL_EARLY_CUT"
+        ]
+        self.assertEqual(len(potential), 1)
+        self.assertTrue(potential[0]["speech_resumed_before_production_boundary"])
+        self.assertEqual(potential[0]["speech_resumed_after_candidate_ms"], 50.0)
+        self.assertEqual(potential[0]["production_cut_reason"], "silence")
+        audio_event = next(
+            call.kwargs
+            for call in emit.call_args_list
+            if call.args == ("audio",)
+        )
+        chunk = q.get_nowait()
+        self.assertEqual(potential[0]["audio_chunk_id"], audio_event["audio_chunk_id"])
+        self.assertEqual(chunk.audio_chunk_id, audio_event["audio_chunk_id"])
+
+    def test_boundary_shadow_uses_adaptive_candidate_thresholds(self):
+        from modules.audio_capture import _VadState
+
+        cfg = self._make_cfg()
+        cfg.audio.vad_silence_sec = 1.0
+        cfg.audio.vad_max_speech_sec = 10.0
+        cfg.audio.vad_hard_max_speech_sec = 12.0
+        cfg.audio.vad_adaptive_enabled = True
+        cfg.audio.vad_adaptive_silence_sec = 1.1
+        cfg.audio.vad_adaptive_max_speech_sec = 11.0
+        cfg.audio.vad_adaptive_hard_max_speech_sec = 13.0
+        q = queue.Queue()
+        with patch("modules.audio_capture.cfg", cfg), patch(
+            "modules.audio_capture.runtime_events.emit"
+        ) as emit:
+            vad = _VadState(q)
+            vad._adaptive_segments_remaining = 1
+            vad.push(self._loud(100))
+            vad.push(self._quiet(110))
+        shadow = [
+            call.kwargs
+            for call in emit.call_args_list
+            if call.args == ("vad_boundary_shadow",)
+            and call.kwargs["candidate_cut_type"] == "silence"
+        ]
+        self.assertEqual(
+            {
+                row["candidate_name"]: row["candidate_threshold_seconds"]
+                for row in shadow
+            },
+            {"A": 0.9, "B": 0.8},
+        )
+        self.assertTrue(all(row["adaptive_active"] for row in shadow))
+        self.assertTrue(all(row["production_cut_reason"] == "silence" for row in shadow))
+        self.assertTrue(all(row["classification"] == "SAFE_CANDIDATE" for row in shadow))
+
     def test_reset_at_max_speech_without_speech(self):
         from modules.audio_capture import _VadState
         q = queue.Queue()

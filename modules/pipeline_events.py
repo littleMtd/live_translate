@@ -90,6 +90,8 @@ class AudioChunk:
     overlap_seconds: float = 0.0
     vad_cut_reason: str = ""
     raw_audio_seconds: float = 0.0
+    audio_chunk_id: str = ""
+    audio_session_id: str = ""
 
     def __len__(self) -> int:
         return len(self.audio)

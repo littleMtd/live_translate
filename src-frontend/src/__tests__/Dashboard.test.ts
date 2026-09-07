@@ -70,16 +70,17 @@ describe('Dashboard', () => {
     vi.useRealTimers()
   })
 
-  it('renders four tab buttons', async () => {
+  it('renders dashboard tab buttons', async () => {
     setupDefaultMocks()
     const wrapper = mount(Dashboard)
     await flushPromises()
     const tabs = wrapper.findAll('.tabs button')
-    expect(tabs).toHaveLength(4)
+    expect(tabs).toHaveLength(5)
     expect(tabs[0].text()).toBe('Settings')
     expect(tabs[1].text()).toBe('Cache')
     expect(tabs[2].text()).toBe('Stats')
     expect(tabs[3].text()).toBe('Export')
+    expect(tabs[4].text()).toBe('Identity ROI')
   })
 
   it('shows Settings tab content by default', async () => {

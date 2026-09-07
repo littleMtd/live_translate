@@ -3,6 +3,8 @@ Korean live stream real-time subtitle translator.
 Usage:
     python main.py              # full pipeline
     python main.py --stt-only   # audio → STT → splitter, print sentences, no API calls
+    python main.py --calibrate-identity-roi  # calibrate ROI, then start pipeline
+    python main.py --show-identity-roi       # show saved ROI and exit
 """
 import argparse
 import queue
@@ -229,10 +231,25 @@ def main():
                       help="run STT + splitter only, no translation API calls")
     mode.add_argument("--listen", action="store_true",
                       help="listen mode for Korean lyrics/music: STT-only with relaxed filters")
+    mode.add_argument("--calibrate-identity-roi", action="store_true",
+                      help="calibrate the current SOOP/CHZZK identity ROI, then start normally")
+    mode.add_argument("--show-identity-roi", action="store_true",
+                      help="show the saved ROI for the current SOOP/CHZZK player and exit")
     parser.add_argument("--donation-ocr", action="store_true",
                         help="also launch the donation OCR translation panel "
                              "(donation_ocr/app.py) as a side process")
     args = parser.parse_args()
+
+    if args.calibrate_identity_roi or args.show_identity_roi:
+        from modules.identity_roi import run_identity_roi_ui
+
+        try:
+            saved = run_identity_roi_ui(show_only=args.show_identity_roi)
+        except Exception as exc:
+            log.error("Identity ROI UI failed: %s", exc)
+            raise SystemExit(2) from exc
+        if args.show_identity_roi or not saved:
+            return 0
 
     stt_only = args.stt_only or args.listen
     try:

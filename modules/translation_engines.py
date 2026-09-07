@@ -906,7 +906,10 @@ def _log_token_usage(engine: str, usage) -> None:
         "cache_write": _optional_int_diagnostic(cache_write),
     }
 
-    parts = [f"{engine} tokens"]
+    parts = [
+        f"{engine} tokens",
+        f"profile={effective_profile_id(getattr(cfg, 'active_streamer_profile', '')) or 'general'}",
+    ]
     if prompt_tokens is not None:
         parts.append(f"prompt={prompt_tokens}")
     if output_tokens is not None:

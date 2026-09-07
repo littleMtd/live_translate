@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import json
 import sys
 from dataclasses import replace
@@ -33,6 +34,7 @@ from modules.scene_vision import (
     VisionProviderFailure,
 )
 import modules.scene_vision as scene_vision
+from modules.identity_roi import NormalizedRoi
 
 
 @pytest.fixture
@@ -165,6 +167,25 @@ def frame(value: int, *, delta_index: int | None = None, content_crop=True):
     )
 
 
+def image_frame(value: int = 40):
+    image = Image.new("RGB", (320, 180), (value, value + 10, value + 20))
+    buffer = io.BytesIO()
+    image.save(buffer, "JPEG")
+    base = frame(value)
+    return replace(base, jpeg=buffer.getvalue())
+
+
+def image_frame_with_identity_block(value: int):
+    image = Image.new("RGB", (320, 180), (40, 50, 60))
+    for x in range(0, 140):
+        for y in range(100, 180):
+            image.putpixel((x, y), (value, value, value))
+    buffer = io.BytesIO()
+    image.save(buffer, "JPEG")
+    base = frame(value)
+    return replace(base, jpeg=buffer.getvalue())
+
+
 def make_updater(
     *,
     candidates=None,
@@ -217,9 +238,192 @@ def make_updater(
         refresh_interval_sec=kwargs.pop("refresh_interval_sec", 0),
         change_threshold=kwargs.pop("change_threshold", 1),
         min_frame_diff=kwargs.pop("min_frame_diff", 1),
+        identity_roi_store=kwargs.pop(
+            "identity_roi_store",
+            SimpleNamespace(get=lambda _key: None),
+        ),
         **kwargs,
     )
     return updater, source, capture, provider, manual_box, emitted, clock
+
+
+class FixedRoiStore:
+    def __init__(self, roi):
+        self.roi = roi
+
+    def get(self, _key):
+        return self.roi
+
+
+def test_calibrated_identity_roi_is_authoritative_and_bypasses_whole_scene_markers():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    whole_scene = QuerySequence([
+        '{"profile_id":"isegye_lilpa","matched_markers":["isegye_member_viichan"]}'
+    ])
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame()],
+            profile_resolution_enabled=True,
+            profile_vision_provider=whole_scene,
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    assert state.current().evidence_source == "authoritative_identity_roi"
+    assert len(identity_reader.calls) == 1
+    assert whole_scene.calls == []
+    event = next(item for item in events if item["event_type"] == "profile_resolution")
+    assert event["identity_roi_calibration_key"] == "soop"
+    assert event["normalized_observed_identity"] == "솜망"
+    assert event["reviewed_member_match"] == "url_member_sommyang"
+    assert event["activation_decision"] == "authoritative_identity_confirmed"
+
+
+def test_calibrated_roi_uses_reviewed_sompunch_ocr_alias_from_runtime_evidence():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"숨주먹"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame()],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+    event = next(item for item in events if item["event_type"] == "profile_resolution")
+    assert event["reviewed_member_match"] == "hades_member_sompunch"
+    assert event["activation_decision"] == "authoritative_identity_confirmed"
+
+
+def test_unknown_identity_roi_retains_confirmed_profile_and_does_not_fallback():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    identity_reader = QuerySequence(['{"identity":"unreviewed channel"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame()],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    assert state.current().confirmation_state == "confirmed"
+    event = next(item for item in events if item["event_type"] == "profile_resolution")
+    assert event["status"] == "unknown"
+    assert event["activation_decision"] == "retain_confirmed_profile"
+
+
+def test_calibrated_roi_capture_failure_never_expires_confirmed_profile():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    unavailable = CaptureFrame(status="capture_unavailable", frame_quality="unavailable")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, clock = make_updater(
+            frames=[unavailable],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=QuerySequence([]),
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+        clock.advance(30)
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    profile_events = [item for item in events if item["event_type"] == "profile_resolution"]
+    assert profile_events[-1]["activation_decision"] == "retain_confirmed_profile"
+    assert profile_events[-1]["stale_profile_cleared"] is False
+
+
+def test_changed_identity_roi_cannot_bypass_profile_attempt_budget():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"Ranko"}', '{"identity":"Ranko"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame(40), image_frame(100)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater._profile_max_attempts_per_minute = 1
+        updater.tick()
+        updater.tick()
+    assert len(identity_reader.calls) == 1
+    profile_events = [item for item in events if item["event_type"] == "profile_resolution"]
+    assert profile_events[-1]["status"] == "throttled"
+    assert profile_events[-1]["identity_read_attempted"] is False
+
+
+def test_small_roi_capture_noise_does_not_spend_an_identity_read():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"Ranko"}', '{"identity":"Ranko"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, _clock = make_updater(
+            # Crosses the old 16-level quantization boundary but is still only
+            # a one-level whole-frame brightness fluctuation.
+            frames=[image_frame(39), image_frame(40)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+        updater.tick()
+    assert len(identity_reader.calls) == 1
+
+
+def test_identity_block_change_forces_read_before_stable_poll_deadline():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence([
+        '{"identity":"주르르"}',
+        '{"identity":"숨주먹"}',
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, _clock = make_updater(
+            frames=[
+                image_frame_with_identity_block(30),
+                image_frame_with_identity_block(220),
+            ],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+        )
+        updater.tick()
+        updater.tick()
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+
+
+def test_roi_noise_does_not_exhaust_budget_or_hide_a_real_channel_change():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence([
+        '{"identity":"주르르"}',
+        '{"identity":"숨주먹"}',
+    ])
+    noisy_frames = [image_frame(value) for value in (39, 40, 41, 40, 39) * 3]
+    changed_frame = image_frame_with_identity_block(220)
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, _clock = make_updater(
+            frames=[*noisy_frames, changed_frame],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+        )
+        updater._profile_max_attempts_per_minute = 2
+        for _ in noisy_frames:
+            updater.tick()
+        assert len(identity_reader.calls) == 1
+        updater.tick()
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "hades_chxxnnx"
 
 
 def test_content_profile_requires_two_distinct_frames_and_invalidates_on_destroyed_window():

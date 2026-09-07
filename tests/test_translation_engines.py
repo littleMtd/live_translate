@@ -36,6 +36,18 @@ class TestTokenUsageCapture(unittest.TestCase):
             {"prompt": 12, "output": 5, "total": 17, "cache_read": None, "cache_write": None},
         )
 
+    def test_token_log_always_includes_request_effective_profile(self):
+        with patch("modules.translation_engines.effective_profile_id", return_value="url"):
+            with self.assertLogs("translation_engines", level="INFO") as captured:
+                _log_token_usage(
+                    "DeepSeek",
+                    {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+                )
+        self.assertIn(
+            "DeepSeek tokens | profile=url | prompt=12 | output=5 | total=17",
+            captured.output[-1],
+        )
+
     def test_gemini_style_usage_captured(self):
         class _Usage:
             prompt_token_count = 30

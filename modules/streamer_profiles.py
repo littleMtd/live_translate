@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from modules.entity_registry import ENTITY_REGISTRY
+
 
 @dataclass(frozen=True)
 class StreamerProfile:
@@ -56,10 +58,34 @@ def _load_profile_data(
             raise ValueError(f"duplicate streamer profile id: {profile_id}")
 
         profile_aliases = _string_tuple(raw_profile.get("aliases"), f"profiles[{index}].aliases")
+        entity_refs = _string_tuple(raw_profile.get("entity_refs"), f"profiles[{index}].entity_refs")
+        derived_terms: list[str] = []
+        for entity_id in entity_refs:
+            entity = ENTITY_REGISTRY.entity(entity_id)
+            if entity is None or profile_id not in entity.profile_ids:
+                raise ValueError(f"profiles[{index}] has invalid entity reference: {entity_id}")
+            derived_terms.extend(entity.aliases_for("stt"))
+        raw_terms = _string_tuple(raw_profile.get("stt_terms"), f"profiles[{index}].stt_terms")
+        sequence = raw_profile.get("stt_sequence")
+        if sequence is not None:
+            if raw_terms or not isinstance(sequence, list):
+                raise ValueError(f"profiles[{index}].stt_sequence must replace stt_terms")
+            compiled: list[str] = []
+            for term_index, item in enumerate(sequence):
+                if isinstance(item, str):
+                    compiled.append(item)
+                elif isinstance(item, dict) and set(item) == {"entity_id", "alias"}:
+                    compiled.append(ENTITY_REGISTRY.referenced_alias(
+                        item["entity_id"], item["alias"], "stt", profile_id
+                    ))
+                else:
+                    raise ValueError(f"profiles[{index}].stt_sequence[{term_index}] is invalid")
+            raw_terms = tuple(compiled)
+            derived_terms = []
         profiles[profile_id] = StreamerProfile(
             profile_id=profile_id,
             label=label,
-            stt_terms=_string_tuple(raw_profile.get("stt_terms"), f"profiles[{index}].stt_terms"),
+            stt_terms=tuple(dict.fromkeys((*raw_terms, *derived_terms))),
             aliases=profile_aliases,
         )
         for alias in profile_aliases:

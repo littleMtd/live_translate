@@ -13,6 +13,12 @@ import threading
 import time
 from typing import Iterator
 
+from modules.entity_registry import ENTITY_REGISTRY, EntityRegistry
+from utils.logger import get_logger
+
+
+log = get_logger("profile_context")
+
 
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 _MARKER_ID_RE = re.compile(r"^[a-z0-9_]{1,96}$")
@@ -27,6 +33,7 @@ class ProfileIdentityMarker:
     visible_names: tuple[str, ...]
     strength: str = "strong"
     kind: str = "member_name"
+    ocr_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,7 @@ class ProfileRegistrySnapshot:
     common_stt_terms: tuple[str, ...]
     profile_stt_terms: tuple[tuple[str, tuple[str, ...]], ...]
     identity_markers: tuple[ProfileIdentityMarker, ...]
+    entity_registry: EntityRegistry | None = None
 
     def canonical_id(self, value: object) -> str | None:
         key = str(value or "").strip()
@@ -111,6 +119,8 @@ def load_registry_snapshot(
     rows = data["profiles"]
     if not 1 <= len(rows) <= 64:
         raise ValueError("profiles must contain between 1 and 64 reviewed entries")
+    # Validate profile ownership before compiling any derived entity view.
+    entity_registry = ENTITY_REGISTRY
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(f"profiles[{index}] must be an object")
@@ -125,10 +135,42 @@ def load_registry_snapshot(
             raise ValueError(f"profiles[{index}].label must be a non-empty string")
         ids.add(profile_id)
         row_terms = row.get("stt_terms", [])
+        row_stt_sequence = row.get("stt_sequence")
+        row_entity_refs = row.get("entity_refs", [])
         row_aliases = row.get("aliases", [])
         row_markers = row.get("identity_markers", [])
         if not isinstance(row_terms, list) or not all(isinstance(x, str) for x in row_terms):
             raise ValueError(f"profiles[{index}].stt_terms must be strings")
+        if row_stt_sequence is not None:
+            if row_terms or not isinstance(row_stt_sequence, list):
+                raise ValueError(
+                    f"profiles[{index}].stt_sequence must replace stt_terms"
+                )
+            compiled_terms: list[str] = []
+            for term_index, item in enumerate(row_stt_sequence):
+                if isinstance(item, str):
+                    compiled_terms.append(item)
+                elif isinstance(item, dict) and set(item) == {"entity_id", "alias"}:
+                    compiled_terms.append(entity_registry.referenced_alias(
+                        item["entity_id"], item["alias"], "stt", profile_id
+                    ))
+                else:
+                    raise ValueError(
+                        f"profiles[{index}].stt_sequence[{term_index}] is invalid"
+                    )
+            row_terms = compiled_terms
+        if (
+            not isinstance(row_entity_refs, list)
+            or not all(isinstance(x, str) for x in row_entity_refs)
+            or len(row_entity_refs) != len(set(row_entity_refs))
+        ):
+            raise ValueError(f"profiles[{index}].entity_refs must be unique strings")
+        for entity_id in row_entity_refs:
+            entity = entity_registry.entity(entity_id)
+            if entity is None or profile_id not in entity.profile_ids:
+                raise ValueError(
+                    f"profiles[{index}] has invalid entity reference: {entity_id!r}"
+                )
         if not isinstance(row_aliases, list) or not all(isinstance(x, str) for x in row_aliases):
             raise ValueError(f"profiles[{index}].aliases must be strings")
         if not isinstance(row_markers, list):
@@ -141,6 +183,7 @@ def load_registry_snapshot(
                 )
             marker_id = marker.get("marker_id")
             visible_names = marker.get("visible_names")
+            ocr_aliases = marker.get("ocr_aliases", [])
             strength = marker.get("strength", "strong")
             kind = marker.get("kind", "member_name")
             if (
@@ -155,12 +198,20 @@ def load_registry_snapshot(
                 or not all(isinstance(name, str) and name.strip() for name in visible_names)
             ):
                 raise ValueError(f"identity marker {marker_id!r} must have visible names")
+            if (
+                not isinstance(ocr_aliases, list)
+                or not all(isinstance(name, str) and name.strip() for name in ocr_aliases)
+            ):
+                raise ValueError(f"identity marker {marker_id!r} OCR aliases must be strings")
             if strength not in _MARKER_STRENGTHS:
                 raise ValueError(f"identity marker {marker_id!r} has invalid strength")
             if not isinstance(kind, str) or not _PROFILE_ID_RE.fullmatch(kind):
                 raise ValueError(f"identity marker {marker_id!r} has invalid kind")
             reviewed_names = tuple(dict.fromkeys(name.strip() for name in visible_names))
-            for name in reviewed_names:
+            reviewed_ocr_aliases = tuple(
+                dict.fromkeys(name.strip() for name in ocr_aliases)
+            )
+            for name in (*reviewed_names, *reviewed_ocr_aliases):
                 folded = name.casefold()
                 owner = visible_name_owners.get(folded)
                 if owner is not None and owner != profile_id:
@@ -174,8 +225,39 @@ def load_registry_snapshot(
                     reviewed_names,
                     strength,
                     kind,
+                    reviewed_ocr_aliases,
                 )
             )
+        for entity_id in row_entity_refs:
+            entity = entity_registry.entity(entity_id)
+            assert entity is not None
+            binding = entity.identity
+            if binding is None or binding.profile_id != profile_id:
+                continue
+            reviewed_names = entity.aliases_for("identity_visible")
+            reviewed_ocr_aliases = entity.aliases_for("identity_ocr")
+            for name in (*reviewed_names, *reviewed_ocr_aliases):
+                folded = name.casefold()
+                owner = visible_name_owners.get(folded)
+                if owner is not None and owner != profile_id:
+                    raise ValueError(
+                        f"identity marker visible name conflicts across profiles: {name!r}"
+                    )
+                visible_name_owners[folded] = profile_id
+            if binding.marker_id in marker_ids:
+                raise ValueError(f"duplicate identity marker id: {binding.marker_id!r}")
+            marker_ids.add(binding.marker_id)
+            markers.append(ProfileIdentityMarker(
+                binding.marker_id, profile_id, reviewed_names, binding.strength,
+                binding.kind, reviewed_ocr_aliases,
+            ))
+        if row_stt_sequence is None:
+            derived_stt = []
+            for entity_id in row_entity_refs:
+                entity = entity_registry.entity(entity_id)
+                assert entity is not None
+                derived_stt.extend(entity.aliases_for("stt"))
+            terms[-1] = (profile_id, tuple(dict.fromkeys((*row_terms, *derived_stt))))
         for alias in row_aliases:
             key = alias.strip().casefold()
             if not key:
@@ -197,6 +279,7 @@ def load_registry_snapshot(
         common_stt_terms=tuple(common),
         profile_stt_terms=tuple(sorted(terms)),
         identity_markers=tuple(sorted(markers, key=lambda marker: marker.marker_id)),
+        entity_registry=entity_registry,
     )
 
 
@@ -306,6 +389,20 @@ class ProfileState:
         with self._lock:
             return self._snapshot
 
+    @staticmethod
+    def _log_effective_snapshot(snapshot: ProfileSnapshot, *, action: str) -> None:
+        log.info(
+            "Profile current: effective=%s source=%s content=%s mode=%s "
+            "generation=%s evidence=%s action=%s",
+            snapshot.effective_profile_id or "general",
+            snapshot.source_profile_id or "general",
+            snapshot.content_profile_id or "none",
+            snapshot.mode,
+            snapshot.generation,
+            snapshot.evidence_source,
+            action,
+        )
+
     def legacy_snapshot(
         self,
         profile_id: object,
@@ -372,6 +469,7 @@ class ProfileState:
                     else stt_glossary_applied
                 ),
             )
+            self._log_effective_snapshot(self._snapshot, action="source_configured")
             return self._snapshot
 
     def confirm_content(self, profile_id: str, *, confidence: float = 1.0, evidence_source: str = "scene_vision") -> ProfileSnapshot:
@@ -397,6 +495,7 @@ class ProfileState:
                 translation_profile_applied=old.translation_profile_applied,
                 stt_glossary_applied=old.stt_glossary_applied,
             )
+            self._log_effective_snapshot(self._snapshot, action="content_confirmed")
             return self._snapshot
 
     def clear_content(self, reason: str = "unknown") -> ProfileSnapshot:
@@ -416,6 +515,7 @@ class ProfileState:
                 translation_profile_applied=old.translation_profile_applied,
                 stt_glossary_applied=old.stt_glossary_applied,
             )
+            self._log_effective_snapshot(self._snapshot, action="content_cleared")
             return self._snapshot
 
     def reload_registry(self, path: Path) -> ProfileSnapshot:
@@ -438,6 +538,7 @@ class ProfileState:
                 translation_profile_applied=old.translation_profile_applied,
                 stt_glossary_applied=old.stt_glossary_applied,
             )
+            self._log_effective_snapshot(self._snapshot, action="registry_reloaded")
             return self._snapshot
 
 

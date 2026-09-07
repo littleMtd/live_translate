@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 if __name__ == "__main__" and __package__ in (None, ""):
@@ -25,6 +26,191 @@ from modules.pipeline_events import AudioChunk
 log = get_logger("audio_capture")
 
 _FIXED_BUF_MAX_SAMPLES = 8 * cfg.audio.sample_rate   # 8 seconds
+
+
+@dataclass(frozen=True)
+class _VadShadowCandidate:
+    name: str
+    silence_sec: float
+    soft_max_sec: float
+    hard_max_sec: float
+    adaptive_silence_sec: float
+    adaptive_soft_max_sec: float
+    adaptive_hard_max_sec: float
+
+    def thresholds(self, adaptive: bool) -> tuple[float, float, float]:
+        if adaptive:
+            return (
+                self.adaptive_silence_sec,
+                self.adaptive_soft_max_sec,
+                self.adaptive_hard_max_sec,
+            )
+        return self.silence_sec, self.soft_max_sec, self.hard_max_sec
+
+
+_VAD_BOUNDARY_SHADOW_CANDIDATES = (
+    _VadShadowCandidate("A", 0.75, 5.5, 8.0, 0.90, 6.5, 9.0),
+    _VadShadowCandidate("B", 0.65, 5.0, 7.5, 0.80, 6.0, 8.5),
+)
+
+
+class _VadBoundaryShadow:
+    """Record counterfactual boundaries without owning production VAD state."""
+
+    def __init__(self, sample_rate: int):
+        self._sample_rate = max(1, sample_rate)
+        self._records: list[dict[str, object]] = []
+        self._pending_silence: dict[str, dict[str, object]] = {}
+        self._candidate_recorded: set[str] = set()
+
+    def observe(
+        self,
+        *,
+        total_samples: int,
+        speech_samples: int,
+        silence_samples: int,
+        minimum_speech_samples: int,
+        frame_samples: int,
+        is_speech: bool,
+        adaptive: bool,
+        regular_overlap_samples: int,
+        silence_overlap_samples: int,
+    ) -> None:
+        if is_speech:
+            for name, record in tuple(self._pending_silence.items()):
+                resumed_at_samples = max(0, total_samples - frame_samples)
+                record["classification"] = "POTENTIAL_EARLY_CUT"
+                record["speech_resumed_before_production_boundary"] = True
+                record["speech_resumed_after_candidate_ms"] = round(
+                    (
+                        resumed_at_samples
+                        - int(record["candidate_eligible_total_samples"])
+                    )
+                    * 1000
+                    / self._sample_rate,
+                    2,
+                )
+                self._records.append(record)
+                del self._pending_silence[name]
+
+        if speech_samples < minimum_speech_samples:
+            return
+
+        observed_at = datetime.now(timezone.utc)
+        for candidate in _VAD_BOUNDARY_SHADOW_CANDIDATES:
+            if candidate.name in self._candidate_recorded:
+                continue
+            silence_sec, soft_sec, hard_sec = candidate.thresholds(adaptive)
+            silence_threshold = round(silence_sec * self._sample_rate)
+            soft_threshold = round(soft_sec * self._sample_rate)
+            hard_threshold = round(hard_sec * self._sample_rate)
+
+            cut_type = ""
+            threshold_samples = 0
+            if total_samples >= hard_threshold:
+                cut_type, threshold_samples = "hard_max", hard_threshold
+            elif total_samples >= soft_threshold and silence_samples > 0:
+                cut_type, threshold_samples = "soft_max", soft_threshold
+            if (
+                not cut_type
+                and silence_samples >= silence_threshold
+            ):
+                cut_type, threshold_samples = "silence", silence_threshold
+            if not cut_type:
+                continue
+
+            if cut_type == "hard_max":
+                eligible_total_samples = hard_threshold
+            elif cut_type == "soft_max":
+                first_silence_sample = max(0, total_samples - silence_samples + 1)
+                eligible_total_samples = max(soft_threshold, first_silence_sample)
+            else:
+                eligible_total_samples = total_samples - silence_samples + silence_threshold
+            observation_lag_samples = max(0, total_samples - eligible_total_samples)
+            eligible_at = observed_at - timedelta(
+                seconds=observation_lag_samples / self._sample_rate
+            )
+
+            overlap_samples = (
+                silence_overlap_samples if cut_type == "silence" else regular_overlap_samples
+            )
+            source_samples = (
+                total_samples - silence_samples if cut_type == "silence" else total_samples
+            )
+            record: dict[str, object] = {
+                "candidate_name": candidate.name,
+                "candidate_cut_type": cut_type,
+                "candidate_threshold_seconds": threshold_samples / self._sample_rate,
+                "candidate_eligible_at_utc": eligible_at.isoformat(),
+                "candidate_eligible_total_samples": eligible_total_samples,
+                "candidate_observed_at_utc": observed_at.isoformat(),
+                "candidate_observed_total_samples": total_samples,
+                "candidate_eligible_elapsed_ms": round(
+                    eligible_total_samples * 1000 / self._sample_rate, 2
+                ),
+                "speech_samples_at_candidate": speech_samples,
+                "speech_seconds_at_candidate": round(
+                    speech_samples / self._sample_rate, 3
+                ),
+                "silence_samples_at_candidate": silence_samples,
+                "silence_seconds_at_candidate": round(
+                    silence_samples / self._sample_rate, 3
+                ),
+                "adaptive_active": adaptive,
+                "candidate_silence_seconds": silence_sec,
+                "candidate_soft_max_seconds": soft_sec,
+                "candidate_hard_max_seconds": hard_sec,
+                "speech_resumed_before_production_boundary": False,
+                "speech_resumed_after_candidate_ms": None,
+                "existing_overlap_seconds": round(
+                    overlap_samples / self._sample_rate, 3
+                ),
+                "existing_overlap_would_cover_boundary": bool(
+                    overlap_samples > 0 and source_samples >= overlap_samples
+                ),
+                "classification": (
+                    "SAFE_CANDIDATE" if cut_type == "silence" else "CANDIDATE"
+                ),
+            }
+            self._candidate_recorded.add(candidate.name)
+            if cut_type == "silence":
+                self._pending_silence[candidate.name] = record
+            else:
+                self._records.append(record)
+
+    def finish(
+        self,
+        *,
+        audio_chunk_id: str,
+        audio_session_id: str,
+        production_cut_reason: str,
+        production_total_samples: int,
+    ) -> list[dict[str, object]]:
+        records = [*self._records, *self._pending_silence.values()]
+        production_cut_at = datetime.now(timezone.utc).isoformat()
+        for record in records:
+            record["audio_chunk_id"] = audio_chunk_id
+            record["audio_session_id"] = audio_session_id
+            record["production_cut_at_utc"] = production_cut_at
+            record["production_cut_reason"] = production_cut_reason
+            record["production_total_samples"] = production_total_samples
+            record["theoretical_latency_saved_ms"] = round(
+                max(
+                    0,
+                    production_total_samples
+                    - int(record["candidate_eligible_total_samples"]),
+                )
+                * 1000
+                / self._sample_rate,
+                2,
+            )
+        self.reset()
+        return records
+
+    def reset(self) -> None:
+        self._records.clear()
+        self._pending_silence.clear()
+        self._candidate_recorded.clear()
 
 
 def _cfg_float(name: str, default: float) -> float:
@@ -124,6 +310,8 @@ class _VadState:
         self._silent_samples = 0
         self._pending_overlap = np.zeros(0, dtype=np.float32)
         self._adaptive_segments_remaining = 0
+        self._audio_chunk_sequence = 0
+        self._audio_session_sequence = 1
 
         sr = cfg.audio.sample_rate
         self._silence_gate     = int(cfg.audio.vad_silence_sec    * sr)
@@ -167,6 +355,7 @@ class _VadState:
             * sr
         )
         self._volume_threshold = cfg.audio.volume_threshold
+        self._boundary_shadow = _VadBoundaryShadow(sr)
 
         mode = "Silero" if silero is not None else "RMS"
         log.info(
@@ -197,6 +386,17 @@ class _VadState:
         soft_max_hit = self._total_samples >= max_speech
         hard_max_hit = self._total_samples >= hard_max_speech
         max_hit = hard_max_hit or (soft_max_hit and self._silent_samples > 0)
+        self._boundary_shadow.observe(
+            total_samples=self._total_samples,
+            speech_samples=self._speech_samples,
+            silence_samples=self._silent_samples,
+            minimum_speech_samples=self._min_speech,
+            frame_samples=len(frame),
+            is_speech=is_speech,
+            adaptive=self._adaptive_active(),
+            regular_overlap_samples=overlap_samples,
+            silence_overlap_samples=self._silence_overlap_samples,
+        )
 
         if (silence_hit or max_hit) and self._speech_samples >= self._min_speech:
             if hard_max_hit:
@@ -227,6 +427,7 @@ class _VadState:
         peak_value = float(np.max(np.abs(raw_chunk))) if len(raw_chunk) else 0.0
         if self._near_miss_min_speech <= speech_samples < self._min_speech:
             cut_reason = f"discard_{boundary}_near_miss_overlap"
+            audio_chunk_id = self._next_audio_chunk_id()
             metrics.increment(f"audio.cut.{cut_reason}")
             if boundary == "silence":
                 # Speech sits before the silence tail at a silence-gate discard:
@@ -248,6 +449,8 @@ class _VadState:
             self._reset()
             self._pending_overlap = next_overlap
             self._emit_vad_runtime_event(
+                audio_chunk_id=audio_chunk_id,
+                audio_session_id=self._audio_session_id(),
                 cut_reason=cut_reason,
                 audio_seconds=raw_total_samples / cfg.audio.sample_rate,
                 raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
@@ -265,7 +468,10 @@ class _VadState:
         # Pure-silence resets happen every silence-gate interval while idle;
         # only surface a runtime event when actual speech was thrown away.
         if speech_samples > 0:
+            audio_chunk_id = self._next_audio_chunk_id()
             self._emit_vad_runtime_event(
+                audio_chunk_id=audio_chunk_id,
+                audio_session_id=self._audio_session_id(),
                 cut_reason=cut_reason,
                 audio_seconds=raw_total_samples / cfg.audio.sample_rate,
                 raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
@@ -323,6 +529,13 @@ class _VadState:
         speech_samples = self._speech_samples
         silent_samples = self._silent_samples
         raw_chunk = np.concatenate(self._buf)
+        audio_chunk_id = self._next_audio_chunk_id()
+        shadow_records = self._boundary_shadow.finish(
+            audio_chunk_id=audio_chunk_id,
+            audio_session_id=self._audio_session_id(),
+            production_cut_reason=cut_reason,
+            production_total_samples=raw_total_samples,
+        )
         if self._pending_overlap.size:
             chunk = np.concatenate([self._pending_overlap, raw_chunk])
         else:
@@ -346,12 +559,16 @@ class _VadState:
                 overlap_seconds=overlap_seconds,
                 vad_cut_reason=cut_reason,
                 raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
+                audio_chunk_id=audio_chunk_id,
+                audio_session_id=self._audio_session_id(),
             ),
             log,
             "audio_queue",
             "chunks",
         )
         self._emit_vad_runtime_event(
+            audio_chunk_id=audio_chunk_id,
+            audio_session_id=self._audio_session_id(),
             cut_reason=cut_reason,
             audio_seconds=len(chunk) / cfg.audio.sample_rate,
             raw_audio_seconds=raw_total_samples / cfg.audio.sample_rate,
@@ -363,6 +580,8 @@ class _VadState:
             peak_value=peak_value,
             queue_drained=drained,
         )
+        for record in shadow_records:
+            runtime_events.emit("vad_boundary_shadow", stage="vad", **record)
         if drained == 0:
             log.debug(
                 "VAD chunk emitted: %.2fs (reason=%s adaptive=%s next_overlap=%.2fs)",
@@ -375,6 +594,8 @@ class _VadState:
     @staticmethod
     def _emit_vad_runtime_event(
         *,
+        audio_chunk_id: str,
+        audio_session_id: str,
         cut_reason: str,
         audio_seconds: float,
         raw_audio_seconds: float,
@@ -389,6 +610,8 @@ class _VadState:
         runtime_events.emit(
             "audio",
             stage="vad",
+            audio_chunk_id=audio_chunk_id,
+            audio_session_id=audio_session_id,
             cut_reason=cut_reason,
             audio_seconds=round(audio_seconds, 3),
             raw_audio_seconds=round(raw_audio_seconds, 3),
@@ -401,7 +624,15 @@ class _VadState:
             queue_drained=queue_drained,
         )
 
+    def _next_audio_chunk_id(self) -> str:
+        self._audio_chunk_sequence += 1
+        return f"audio-{self._audio_chunk_sequence:06d}"
+
+    def _audio_session_id(self) -> str:
+        return f"audio-session-{self._audio_session_sequence:04d}"
+
     def _reset(self, *, clear_overlap: bool = False) -> None:
+        self._boundary_shadow.reset()
         self._buf            = []
         self._total_samples  = 0
         self._speech_samples = 0
@@ -414,7 +645,9 @@ class _VadState:
     def reset_stream(self) -> None:
         """Drop buffered audio and model state after a capture discontinuity."""
         self._adaptive_segments_remaining = 0
+        self._boundary_shadow.reset()
         self._reset(clear_overlap=True)
+        self._audio_session_sequence += 1
 
 
 # ---------------------------------------------------------------------------

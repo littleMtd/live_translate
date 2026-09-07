@@ -53,7 +53,7 @@ class _Audio:
     vad_adaptive_enabled:   bool  = True
     vad_adaptive_after_boundary_cuts: int = 1
     vad_adaptive_silence_sec: float = 1.1
-    vad_adaptive_max_speech_sec: float = 7.5
+    vad_adaptive_max_speech_sec: float = 6.5
     vad_adaptive_hard_max_speech_sec: float = 10.0
     vad_adaptive_overlap_sec: float = 1.2
     stt_normalize_enabled: bool  = True

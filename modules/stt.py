@@ -313,6 +313,8 @@ class STTEngine:
         # call (single STT thread, so no lock needed) to correlate downstream events.
         self._utterance_seq = 0
         self._current_utterance_id = ""
+        self._current_audio_chunk_id = ""
+        self._current_audio_session_id = ""
         self._last_audio_seconds = 0.0
         self._last_segments: tuple[SegmentInfo, ...] = ()
         self._last_timestamp_deduped_segments = 0
@@ -436,6 +438,8 @@ class STTEngine:
         audio = chunk.audio
         self._utterance_seq += 1
         self._current_utterance_id = f"utt-{self._utterance_seq}"
+        self._current_audio_chunk_id = str(chunk.audio_chunk_id or "")
+        self._current_audio_session_id = str(chunk.audio_session_id or "")
         self._last_audio_seconds = _audio_seconds(audio)
         self._current_overlap_seconds = float(chunk.overlap_seconds or 0.0)
         self._current_overlap_represented = self._overlap_matches_last_represented_audio(
@@ -1286,6 +1290,8 @@ class STTEngine:
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
+            audio_chunk_id=getattr(self, "_current_audio_chunk_id", ""),
+            audio_session_id=getattr(self, "_current_audio_session_id", ""),
             engine="groq",
             model=cfg.stt.groq_model,
             status=status,
@@ -1361,6 +1367,8 @@ class STTEngine:
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
+            audio_chunk_id=getattr(self, "_current_audio_chunk_id", ""),
+            audio_session_id=getattr(self, "_current_audio_session_id", ""),
             engine="elevenlabs",
             model=cfg.stt.elevenlabs_model,
             status=status,

@@ -703,17 +703,25 @@ class TestTranscribeFallback(unittest.TestCase):
             mock_cfg.stt.no_speech_threshold = 0.6
             mock_cfg.stt.avg_logprob_threshold = -1.0
             mock_cfg.stt.max_japanese_chars = 2
-            first = eng.transcribe_event(self._audio())
+            first = eng.transcribe_event(
+                AudioChunk(audio=self._audio(), audio_chunk_id="audio-000041")
+            )
             first_emit_id = emit.call_args.kwargs["utterance_id"]
-            second = eng.transcribe_event(self._audio())
+            first_audio_chunk_id = emit.call_args.kwargs["audio_chunk_id"]
+            second = eng.transcribe_event(
+                AudioChunk(audio=self._audio(), audio_chunk_id="audio-000042")
+            )
             second_emit_id = emit.call_args.kwargs["utterance_id"]
+            second_audio_chunk_id = emit.call_args.kwargs["audio_chunk_id"]
 
         # Each transcription gets a fresh monotonic id, shared between the
         # returned TranscriptionEvent and its emitted stt runtime event.
         self.assertEqual(first.utterance_id, "utt-1")
         self.assertEqual(first_emit_id, "utt-1")
+        self.assertEqual(first_audio_chunk_id, "audio-000041")
         self.assertEqual(second.utterance_id, "utt-2")
         self.assertEqual(second_emit_id, "utt-2")
+        self.assertEqual(second_audio_chunk_id, "audio-000042")
 
     def test_zero_overlap_keeps_legitimate_repeated_utterance(self):
         eng = _make_engine_groq("same repeated lyric")

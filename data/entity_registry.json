@@ -1,0 +1,1588 @@
+{
+  "schema_version": 1,
+  "entities": [
+    {
+      "entity_id": "isegye_ine",
+      "entity_type": "person",
+      "canonical_source": "아이네",
+      "canonical_target": "아이네",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "아이네",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_ine",
+        "strength": "strong",
+        "kind": "member_name"
+      }
+    },
+    {
+      "entity_id": "isegye_jingburger",
+      "entity_type": "person",
+      "canonical_source": "징버거",
+      "canonical_target": "징버거",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "징버거",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_jingburger",
+        "strength": "strong",
+        "kind": "member_name"
+      }
+    },
+    {
+      "entity_id": "isegye_lilpa_member",
+      "entity_type": "person",
+      "canonical_source": "릴파",
+      "canonical_target": "Lilpa",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "릴파",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Lilpa",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "display": 0,
+            "translation_source": 4
+          }
+        },
+        {
+          "value": "릴파님",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "늘파님",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "늘파",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 3
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_lilpa",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": [
+          "莉爾帕小姐",
+          "莉尔帕小姐",
+          "莉爾帕先生",
+          "莉尔帕先生",
+          "莉帕小姐",
+          "莉帕先生",
+          "Rilpa 小姐",
+          "Rilpa小姐",
+          "Rilpa 先生",
+          "Rilpa先生",
+          "Neulpa 小姐",
+          "Neulpa小姐",
+          "Neulpa 先生",
+          "Neulpa先生",
+          "Lilpa 小姐",
+          "Lilpa小姐",
+          "Lilpa 先生",
+          "Lilpa先生",
+          "릴파",
+          "莉爾帕",
+          "莉尔帕",
+          "莉爾法",
+          "莉尔法",
+          "莉帕",
+          "Rilpa",
+          "瑞爾帕",
+          "瑞尔帕",
+          "Neulpa",
+          "Lilpa"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "isegye_gosegu",
+      "entity_type": "person",
+      "canonical_source": "고세구",
+      "canonical_target": "Gosegu",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "고세구",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Gosegu",
+          "scopes": [
+            "identity_visible",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_gosegu",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "__shared__",
+        "wrong_forms": [
+          "高世久"
+        ]
+      }
+    },
+    {
+      "entity_id": "isegye_jururu",
+      "entity_type": "person",
+      "canonical_source": "주르르",
+      "canonical_target": "Jururu",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "주르르",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Jururu",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "display": 0,
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "주르르님",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_jururu",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": [
+          "주르르",
+          "朱嚕嚕",
+          "朱噜噜",
+          "珠露露",
+          "Jururu"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "isegye_viichan",
+      "entity_type": "person",
+      "canonical_source": "비챤",
+      "canonical_target": "비챤",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "비챤",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_member_viichan",
+        "strength": "strong",
+        "kind": "member_name"
+      }
+    },
+    {
+      "entity_id": "isegye_group",
+      "entity_type": "group",
+      "canonical_source": "이세계아이돌",
+      "canonical_target": "이세계아이돌",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "이세계아이돌",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        },
+        {
+          "value": "이세돌",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "isegye_lilpa",
+        "marker_id": "isegye_brand_group",
+        "strength": "medium",
+        "kind": "group_brand"
+      }
+    },
+    {
+      "entity_id": "hades_sompunch",
+      "entity_type": "person",
+      "canonical_source": "솜주먹",
+      "canonical_target": "Sompunch",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "솜주먹",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "솜펀치",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1,
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "Sompunch",
+          "scopes": [
+            "identity_visible",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "display": 0
+          }
+        },
+        {
+          "value": "숨주먹",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
+        },
+        {
+          "value": "주먹이",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "주먹아",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 3
+          }
+        },
+        {
+          "value": "주먹 언니",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 4
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_member_sompunch",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "솜주먹",
+          "솜펀치",
+          "桑拳頭",
+          "拳頭",
+          "棉拳",
+          "Som Punch"
+        ]
+      }
+    },
+    {
+      "entity_id": "hades_yeon_chorok",
+      "entity_type": "person",
+      "canonical_source": "연초록",
+      "canonical_target": "Yeon Chorok",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "연초록",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        },
+        {
+          "value": "Yeon Chorok",
+          "scopes": [
+            "identity_visible",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_member_yeon_chorok",
+        "strength": "strong",
+        "kind": "member_name"
+      }
+    },
+    {
+      "entity_id": "hades_chaenna",
+      "entity_type": "person",
+      "canonical_source": "챈나",
+      "canonical_target": "Chaenna",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "챈나",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Chxxnnx",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1,
+            "translation_source": 12
+          }
+        },
+        {
+          "value": "CHXXNNX",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "stt": 2,
+            "translation_source": 13
+          }
+        },
+        {
+          "value": "Chaenna",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 3,
+            "stt": 3,
+            "display": 0,
+            "translation_source": 14
+          }
+        },
+        {
+          "value": "챈나미",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "찬나미",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "찬나미들",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 3
+          }
+        },
+        {
+          "value": "챈나롱",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 4,
+            "translation_source": 4
+          }
+        },
+        {
+          "value": "챈나룽",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 5,
+            "translation_source": 5
+          }
+        },
+        {
+          "value": "챈나룬",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 6
+          }
+        },
+        {
+          "value": "챈나로",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 7
+          }
+        },
+        {
+          "value": "김챗나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 8
+          }
+        },
+        {
+          "value": "김챔나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 9
+          }
+        },
+        {
+          "value": "챗나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 10
+          }
+        },
+        {
+          "value": "챔나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 11
+          }
+        },
+        {
+          "value": "첸나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 15
+          }
+        },
+        {
+          "value": "찬나",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 16
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_member_chaenna",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "챈나",
+          "Chxxnnx",
+          "CHXXNNX",
+          "-chan",
+          "-Chan",
+          "-chan娜",
+          "-Chan娜",
+          "-channa",
+          "-Channa",
+          "-chan-na",
+          "-Chan-na",
+          "－chan",
+          "－Chan",
+          "–chan",
+          "–Chan",
+          "—chan",
+          "—Chan",
+          "金chat",
+          "金Chat",
+          "金챗나",
+          "金챔나",
+          "채나",
+          "첸나",
+          "챗나",
+          "챔나",
+          "찬나"
+        ]
+      }
+    },
+    {
+      "entity_id": "hades_singgyul",
+      "entity_type": "person",
+      "canonical_source": "띵귤",
+      "canonical_target": "Singgyul",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "띵귤",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "싱귤",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1,
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "TINGGYUL",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "stt": 2
+          }
+        },
+        {
+          "value": "Singgyul",
+          "scopes": [
+            "identity_visible",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 3,
+            "display": 0
+          }
+        },
+        {
+          "value": "김띵귤",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_member_singgyul",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "띵귤",
+          "싱귤",
+          "TINGGYUL",
+          "TingGyul",
+          "Tinggyul",
+          "金叮菊",
+          "金丁橘",
+          "叮菊",
+          "丁橘"
+        ]
+      }
+    },
+    {
+      "entity_id": "hades_kyma",
+      "entity_type": "person",
+      "canonical_source": "키마",
+      "canonical_target": "Kyma",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "키마",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "큐마",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1,
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "Kyma",
+          "scopes": [
+            "identity_visible",
+            "display"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_member_kyma",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "키마",
+          "큐마",
+          "Kima",
+          "基馬"
+        ]
+      }
+    },
+    {
+      "entity_id": "hades_group",
+      "entity_type": "group",
+      "canonical_source": "HADES",
+      "canonical_target": "HADES",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "HADES",
+          "scopes": [
+            "identity_visible"
+          ],
+          "order": {
+            "identity_visible": 0
+          }
+        },
+        {
+          "value": "하데스",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "hades_chxxnnx",
+        "marker_id": "hades_brand_group",
+        "strength": "medium",
+        "kind": "group_brand"
+      }
+    },
+    {
+      "entity_id": "url_moka",
+      "entity_type": "person",
+      "canonical_source": "모카",
+      "canonical_target": "모카",
+      "profile_ids": [
+        "url"
+      ],
+      "aliases": [
+        {
+          "value": "모카",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "display": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Moka",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "목화",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "모카랑은",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 3
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "url",
+        "marker_id": "url_member_moka",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "url",
+        "wrong_forms": [
+          "모카",
+          "摩卡",
+          "莫卡",
+          "模卡",
+          "木華",
+          "木华",
+          "木花",
+          "모카랑"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "url_ranko",
+      "entity_type": "person",
+      "canonical_source": "랑코",
+      "canonical_target": "랑코",
+      "profile_ids": [
+        "url"
+      ],
+      "aliases": [
+        {
+          "value": "랑코",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "display": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Ranko",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "김랑코",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "url",
+        "marker_id": "url_member_ranko",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "url",
+        "wrong_forms": [
+          "랑코",
+          "金朗考",
+          "蘭子",
+          "兰子",
+          "朗子",
+          "蘭科",
+          "兰科",
+          "朗科",
+          "蘭可",
+          "兰可",
+          "朗可",
+          "朗考",
+          "啦可",
+          "啦科"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "url_manyang",
+      "entity_type": "person",
+      "canonical_source": "마냥",
+      "canonical_target": "마냥",
+      "profile_ids": [
+        "url"
+      ],
+      "aliases": [
+        {
+          "value": "마냥",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display",
+            "stt"
+          ],
+          "requires_context": true,
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "display": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Manyang",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "requires_context": true,
+          "order": {
+            "identity_visible": 1,
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "url",
+        "marker_id": "url_member_manyang",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "url",
+        "wrong_forms": [
+          "마냥",
+          "馬樣",
+          "马样",
+          "馬良",
+          "马良",
+          "馬朗",
+          "马朗",
+          "馬尼亞"
+        ],
+        "publication_policy": "required",
+        "activation_policy": "name_context_required"
+      }
+    },
+    {
+      "entity_id": "url_sommyang",
+      "entity_type": "person",
+      "canonical_source": "솜먕",
+      "canonical_target": "솜먕",
+      "profile_ids": [
+        "url"
+      ],
+      "aliases": [
+        {
+          "value": "솜먕",
+          "scopes": [
+            "identity_visible",
+            "translation_source",
+            "display",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0,
+            "display": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "Sommyang",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "translation_source": 9
+          }
+        },
+        {
+          "value": "솜명",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "translation_source": 3
+          }
+        },
+        {
+          "value": "솜명이",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 3,
+            "translation_source": 4
+          }
+        },
+        {
+          "value": "솜명은",
+          "scopes": [
+            "identity_visible",
+            "translation_source"
+          ],
+          "order": {
+            "identity_visible": 4,
+            "translation_source": 5
+          }
+        },
+        {
+          "value": "솜망",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
+        },
+        {
+          "value": "솔망",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 1
+          }
+        },
+        {
+          "value": "솨먕",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 2
+          }
+        },
+        {
+          "value": "솜먕이",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "솜먕은",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "손명",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 6
+          }
+        },
+        {
+          "value": "손명이",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 7
+          }
+        },
+        {
+          "value": "손명은",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 8
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "url",
+        "marker_id": "url_member_sommyang",
+        "strength": "strong",
+        "kind": "member_name"
+      },
+      "translation": {
+        "scope": "url",
+        "wrong_forms": [
+          "솜먕이",
+          "솜먕은",
+          "솜먕",
+          "솜명이",
+          "솜명은",
+          "솜명",
+          "손명이",
+          "손명은",
+          "손명",
+          "綿明",
+          "绵明",
+          "棉明",
+          "宋明",
+          "手明",
+          "孫明",
+          "孙明"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "url_group",
+      "entity_type": "group",
+      "canonical_source": "UR:L",
+      "canonical_target": "UR:L",
+      "profile_ids": [
+        "url"
+      ],
+      "aliases": [
+        {
+          "value": "UR:L",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 0,
+            "stt": 0
+          }
+        },
+        {
+          "value": "유아렐",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 1,
+            "stt": 1
+          }
+        },
+        {
+          "value": "유아엘",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 2,
+            "stt": 2
+          }
+        },
+        {
+          "value": "YOU ARE LINKED",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 3,
+            "stt": 3
+          }
+        },
+        {
+          "value": "결속아이돌",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 4,
+            "stt": 4
+          }
+        },
+        {
+          "value": "결속 아이돌",
+          "scopes": [
+            "identity_visible",
+            "stt"
+          ],
+          "order": {
+            "identity_visible": 5,
+            "stt": 5
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "identity": {
+        "profile_id": "url",
+        "marker_id": "url_brand_group",
+        "strength": "medium",
+        "kind": "group_brand"
+      }
+    },
+    {
+      "entity_id": "hades_kim_bongjun",
+      "entity_type": "person",
+      "canonical_source": "김봉준",
+      "canonical_target": "Kim Bongjun",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "김봉준",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "봉준",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 1,
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "Kim Bongjun",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "김봉준",
+          "봉준",
+          "Bongjun",
+          "奉俊",
+          "奉主"
+        ]
+      }
+    },
+    {
+      "entity_id": "hades_kim_sungtae",
+      "entity_type": "person",
+      "canonical_source": "성태",
+      "canonical_target": "KimSungtae",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "성태",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "KimSungtae",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "성태",
+          "Sungtae老師",
+          "Sungtae哥",
+          "Sungtae",
+          "成泰",
+          "狀態哥"
+        ]
+      }
+    },
+    {
+      "entity_id": "platform_chzzk",
+      "entity_type": "platform",
+      "canonical_source": "치지직",
+      "canonical_target": "CHZZK",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "치지직",
+          "scopes": [
+            "translation_source",
+            "stt"
+          ],
+          "order": {
+            "stt": 0,
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "CHZZK",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "치지직",
+          "チジ직",
+          "chzzk",
+          "Chzzk"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "hades_memnon",
+      "entity_type": "person",
+      "canonical_source": "멤논",
+      "canonical_target": "Memnon",
+      "profile_ids": [
+        "hades_chxxnnx"
+      ],
+      "aliases": [
+        {
+          "value": "멤논",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "멤논급",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "멤논급이야",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 2
+          }
+        },
+        {
+          "value": "Memnon",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "hades_chxxnnx",
+        "wrong_forms": [
+          "멤논",
+          "成員"
+        ],
+        "publication_policy": "required"
+      }
+    }
+  ]
+}

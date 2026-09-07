@@ -44,61 +44,145 @@
     {
       "profile_id": "isegye_lilpa",
       "label": "Isegye Idol Lilpa",
-      "stt_terms": [
-        "이세계아이돌",
-        "이세돌",
-        "릴파",
-        "아이네",
-        "징버거",
-        "고세구",
-        "주르르",
-        "비챤"
+      "stt_terms": [],
+      "aliases": [],
+      "entity_refs": [
+        "isegye_ine",
+        "isegye_jingburger",
+        "isegye_lilpa_member",
+        "isegye_gosegu",
+        "isegye_jururu",
+        "isegye_viichan",
+        "isegye_group"
       ],
-      "identity_markers": [
-        {"marker_id": "isegye_member_ine", "visible_names": ["아이네"]},
-        {"marker_id": "isegye_member_jingburger", "visible_names": ["징버거"]},
-        {"marker_id": "isegye_member_lilpa", "visible_names": ["릴파", "Lilpa"]},
-        {"marker_id": "isegye_member_gosegu", "visible_names": ["고세구", "Gosegu"]},
-        {"marker_id": "isegye_member_jururu", "visible_names": ["주르르", "Jururu"]},
-        {"marker_id": "isegye_member_viichan", "visible_names": ["비챤"]},
+      "stt_sequence": [
         {
-          "marker_id": "isegye_brand_group",
-          "visible_names": ["이세계아이돌", "이세돌"],
-          "strength": "medium",
-          "kind": "group_brand"
+          "entity_id": "isegye_group",
+          "alias": "이세계아이돌"
+        },
+        {
+          "entity_id": "isegye_group",
+          "alias": "이세돌"
+        },
+        {
+          "entity_id": "isegye_lilpa_member",
+          "alias": "릴파"
+        },
+        {
+          "entity_id": "isegye_ine",
+          "alias": "아이네"
+        },
+        {
+          "entity_id": "isegye_jingburger",
+          "alias": "징버거"
+        },
+        {
+          "entity_id": "isegye_gosegu",
+          "alias": "고세구"
+        },
+        {
+          "entity_id": "isegye_jururu",
+          "alias": "주르르"
+        },
+        {
+          "entity_id": "isegye_viichan",
+          "alias": "비챤"
         }
-      ],
-      "aliases": []
+      ]
     },
     {
       "profile_id": "hades_chxxnnx",
       "label": "Hades Chaenna",
-      "stt_terms": [
-        "하데스",
+      "stt_terms": [],
+      "aliases": [
+        "hades"
+      ],
+      "entity_refs": [
+        "hades_sompunch",
+        "hades_yeon_chorok",
+        "hades_chaenna",
+        "hades_singgyul",
+        "hades_kyma",
+        "hades_group",
+        "hades_kim_bongjun",
+        "hades_kim_sungtae",
+        "platform_chzzk",
+        "hades_memnon"
+      ],
+      "stt_sequence": [
+        {
+          "entity_id": "hades_group",
+          "alias": "하데스"
+        },
         "치즈",
-        "치지직",
+        {
+          "entity_id": "platform_chzzk",
+          "alias": "치지직"
+        },
         "발로란트",
         "Valorant",
-        "챈나",
-        "Chxxnnx",
-        "CHXXNNX",
-        "Chaenna",
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "챈나"
+        },
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "Chxxnnx"
+        },
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "CHXXNNX"
+        },
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "Chaenna"
+        },
         "채나",
-        "챈나롱",
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "챈나롱"
+        },
         "채나롱",
-        "챈나룽",
+        {
+          "entity_id": "hades_chaenna",
+          "alias": "챈나룽"
+        },
         "채나룽",
         "하데쭈",
         "하데스쭈",
-        "솜주먹",
-        "솜펀치",
-        "연초록",
-        "띵귤",
-        "싱귤",
+        {
+          "entity_id": "hades_sompunch",
+          "alias": "솜주먹"
+        },
+        {
+          "entity_id": "hades_sompunch",
+          "alias": "솜펀치"
+        },
+        {
+          "entity_id": "hades_yeon_chorok",
+          "alias": "연초록"
+        },
+        {
+          "entity_id": "hades_singgyul",
+          "alias": "띵귤"
+        },
+        {
+          "entity_id": "hades_singgyul",
+          "alias": "싱귤"
+        },
         "띵띵이",
-        "TINGGYUL",
-        "키마",
-        "큐마",
+        {
+          "entity_id": "hades_singgyul",
+          "alias": "TINGGYUL"
+        },
+        {
+          "entity_id": "hades_kyma",
+          "alias": "키마"
+        },
+        {
+          "entity_id": "hades_kyma",
+          "alias": "큐마"
+        },
         "지옥견",
         "수제비",
         "MEGA PIECE HARMONY",
@@ -107,9 +191,18 @@
         "하데쮸 유치원",
         "하데스 오락실",
         "봉인해제",
-        "봉준",
-        "김봉준",
-        "성태",
+        {
+          "entity_id": "hades_kim_bongjun",
+          "alias": "봉준"
+        },
+        {
+          "entity_id": "hades_kim_bongjun",
+          "alias": "김봉준"
+        },
+        {
+          "entity_id": "hades_kim_sungtae",
+          "alias": "성태"
+        },
         "마크",
         "마인크래프트",
         "섭주",
@@ -139,21 +232,7 @@
         "슈의 라면 가게",
         "슈의 라면가게",
         "피맛"
-      ],
-      "identity_markers": [
-        {"marker_id": "hades_member_sompunch", "visible_names": ["솜주먹", "솜펀치", "Sompunch"]},
-        {"marker_id": "hades_member_yeon_chorok", "visible_names": ["연초록", "Yeon Chorok"]},
-        {"marker_id": "hades_member_chaenna", "visible_names": ["챈나", "Chxxnnx", "CHXXNNX", "Chaenna"]},
-        {"marker_id": "hades_member_singgyul", "visible_names": ["띵귤", "싱귤", "TINGGYUL", "Singgyul"]},
-        {"marker_id": "hades_member_kyma", "visible_names": ["키마", "큐마", "Kyma"]},
-        {
-          "marker_id": "hades_brand_group",
-          "visible_names": ["HADES", "하데스"],
-          "strength": "medium",
-          "kind": "group_brand"
-        }
-      ],
-      "aliases": ["hades"]
+      ]
     },
     {
       "profile_id": "mwmeu",
@@ -227,18 +306,62 @@
     {
       "profile_id": "url",
       "label": "UR:L",
-      "stt_terms": [
-        "UR:L",
+      "stt_terms": [],
+      "aliases": [
         "유아렐",
         "유아엘",
         "URL",
-        "YOU ARE LINKED",
-        "결속아이돌",
-        "결속 아이돌",
-        "모카",
-        "랑코",
-        "마냥",
-        "솜먕",
+        "결속아이돌"
+      ],
+      "entity_refs": [
+        "url_moka",
+        "url_ranko",
+        "url_manyang",
+        "url_sommyang",
+        "url_group"
+      ],
+      "stt_sequence": [
+        {
+          "entity_id": "url_group",
+          "alias": "UR:L"
+        },
+        {
+          "entity_id": "url_group",
+          "alias": "유아렐"
+        },
+        {
+          "entity_id": "url_group",
+          "alias": "유아엘"
+        },
+        "URL",
+        {
+          "entity_id": "url_group",
+          "alias": "YOU ARE LINKED"
+        },
+        {
+          "entity_id": "url_group",
+          "alias": "결속아이돌"
+        },
+        {
+          "entity_id": "url_group",
+          "alias": "결속 아이돌"
+        },
+        {
+          "entity_id": "url_moka",
+          "alias": "모카"
+        },
+        {
+          "entity_id": "url_ranko",
+          "alias": "랑코"
+        },
+        {
+          "entity_id": "url_manyang",
+          "alias": "마냥"
+        },
+        {
+          "entity_id": "url_sommyang",
+          "alias": "솜먕"
+        },
         "오아",
         "바밍",
         "샌드박스네트워크",
@@ -255,24 +378,6 @@
         "조금 더 가까이",
         "사계",
         "ORIGINAL 3D SHOWCASE"
-      ],
-      "identity_markers": [
-        {"marker_id": "url_member_moka", "visible_names": ["모카", "Moka"]},
-        {"marker_id": "url_member_ranko", "visible_names": ["랑코", "Ranko"]},
-        {"marker_id": "url_member_manyang", "visible_names": ["마냥", "Manyang"]},
-        {"marker_id": "url_member_sommyang", "visible_names": ["솜먕", "Sommyang", "솜명", "솜명이", "솜명은"]},
-        {
-          "marker_id": "url_brand_group",
-          "visible_names": ["UR:L", "유아렐", "유아엘", "YOU ARE LINKED", "결속아이돌", "결속 아이돌"],
-          "strength": "medium",
-          "kind": "group_brand"
-        }
-      ],
-      "aliases": [
-        "유아렐",
-        "유아엘",
-        "URL",
-        "결속아이돌"
       ]
     }
   ]

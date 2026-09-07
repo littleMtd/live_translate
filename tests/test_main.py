@@ -433,3 +433,68 @@ def test_shutdown_bundle_export_is_fail_soft(monkeypatch):
     )
 
     assert main_module._export_chatgpt_bundle_on_shutdown(status="failed") is None
+
+
+def test_identity_roi_calibration_cancel_exits_before_pipeline_start(monkeypatch):
+    import main as main_module
+    import modules.identity_roi as identity_roi
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--calibrate-identity-roi"])
+    ui = MagicMock(return_value=False)
+    monkeypatch.setattr(identity_roi, "run_identity_roi_ui", ui)
+    validate = MagicMock()
+    monkeypatch.setattr(main_module, "_validate_config", validate)
+
+    assert main_module.main() == 0
+    ui.assert_called_once_with(show_only=False)
+    validate.assert_not_called()
+
+
+def test_identity_roi_save_continues_into_normal_startup(monkeypatch):
+    import main as main_module
+    import modules.identity_roi as identity_roi
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--calibrate-identity-roi"])
+    monkeypatch.setattr(identity_roi, "run_identity_roi_ui", MagicMock(return_value=True))
+    validate = MagicMock(side_effect=SystemExit(7))
+    monkeypatch.setattr(main_module, "_validate_config", validate)
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", MagicMock())
+
+    with pytest.raises(SystemExit) as captured:
+        main_module.main()
+    assert captured.value.code == 7
+    validate.assert_called_once_with(False)
+
+
+def test_show_identity_roi_exits_without_starting_runtime(monkeypatch):
+    import main as main_module
+    import modules.identity_roi as identity_roi
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--show-identity-roi"])
+    ui = MagicMock(return_value=False)
+    monkeypatch.setattr(identity_roi, "run_identity_roi_ui", ui)
+    validate = MagicMock()
+    monkeypatch.setattr(main_module, "_validate_config", validate)
+
+    assert main_module.main() == 0
+    ui.assert_called_once_with(show_only=True)
+    validate.assert_not_called()
+
+
+def test_identity_roi_unavailable_fails_before_runtime_and_preserves_state(monkeypatch):
+    import main as main_module
+    import modules.identity_roi as identity_roi
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--calibrate-identity-roi"])
+    monkeypatch.setattr(
+        identity_roi,
+        "run_identity_roi_ui",
+        MagicMock(side_effect=RuntimeError("supported player unavailable")),
+    )
+    validate = MagicMock()
+    monkeypatch.setattr(main_module, "_validate_config", validate)
+
+    with pytest.raises(SystemExit) as captured:
+        main_module.main()
+    assert captured.value.code == 2
+    validate.assert_not_called()

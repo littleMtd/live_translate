@@ -42,6 +42,10 @@ export class TauriClient {
     return invoke<ProfileStatus>('get_profile_status')
   }
 
+  async launchIdentityRoiCalibration(): Promise<string> {
+    return invoke<string>('launch_identity_roi_calibration')
+  }
+
   async listExportableRuns(): Promise<ExportableRun[]> {
     return invoke<ExportableRun[]>('list_exportable_runs')
   }

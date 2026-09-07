@@ -310,6 +310,16 @@ class TestConfig(unittest.TestCase):
 
 class TestVadConfig(unittest.TestCase):
 
+    def test_evidence_selected_adaptive_soft_max_is_the_only_changed_vad_default(self):
+        self.assertEqual(cfg.audio.vad_silence_sec, 0.9)
+        self.assertEqual(cfg.audio.vad_adaptive_silence_sec, 1.1)
+        self.assertEqual(cfg.audio.vad_max_speech_sec, 6.5)
+        self.assertEqual(cfg.audio.vad_adaptive_max_speech_sec, 6.5)
+        self.assertEqual(cfg.audio.vad_hard_max_speech_sec, 9.0)
+        self.assertEqual(cfg.audio.vad_adaptive_hard_max_speech_sec, 10.0)
+        self.assertEqual(cfg.audio.vad_overlap_sec, 1.0)
+        self.assertEqual(cfg.audio.vad_adaptive_overlap_sec, 1.2)
+
     def test_vad_enabled_is_bool(self):
         self.assertIsInstance(cfg.audio.vad_enabled, bool)
 

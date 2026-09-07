@@ -23,6 +23,7 @@ fn main() {
             handlers::python::stop_python,
             handlers::python::python_status,
             handlers::profile::get_profile_status,
+            handlers::identity_roi::launch_identity_roi_calibration,
             handlers::bundle::list_exportable_runs,
             handlers::bundle::export_chatgpt_bundle,
         ])

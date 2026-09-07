@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from modules.entity_registry import ENTITY_REGISTRY
+
 
 _CORRECTIONS_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "translation_corrections.json"
@@ -153,10 +155,31 @@ def _name_rendering_rules(value: Any, field_name: str) -> tuple[NameRenderingRul
         raise ValueError(f"{field_name} must be a list")
 
     rules: list[NameRenderingRule] = []
+    referenced_entities: set[str] = set()
     for index, raw_rule in enumerate(value):
         rule_name = f"{field_name}[{index}]"
         if not isinstance(raw_rule, dict):
             raise ValueError(f"{rule_name} must be an object")
+        if set(raw_rule) == {"entity_id"}:
+            entity_id = raw_rule["entity_id"]
+            entity = ENTITY_REGISTRY.entity(entity_id) if isinstance(entity_id, str) else None
+            if entity is None or entity.translation is None:
+                raise ValueError(f"{rule_name} has invalid entity reference")
+            if entity_id in referenced_entities:
+                raise ValueError(f"{rule_name} duplicates entity reference {entity_id!r}")
+            referenced_entities.add(entity_id)
+            entity_rule = entity.translation
+            rules.append(NameRenderingRule(
+                scope=entity_rule.scope,
+                source_aliases=entity.aliases_for("translation_source"),
+                wrong_forms=entity_rule.wrong_forms,
+                canonical=entity.canonical_target,
+                publication_policy=entity_rule.publication_policy,
+                condition_id=entity_rule.condition_id,
+                activation_policy=entity_rule.activation_policy,
+                repair_requires_name_context=entity_rule.repair_requires_name_context,
+            ))
+            continue
         scope = raw_rule.get("scope")
         canonical = raw_rule.get("canonical")
         if not isinstance(scope, str) or not isinstance(canonical, str):

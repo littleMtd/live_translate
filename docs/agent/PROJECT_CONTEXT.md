@@ -219,6 +219,14 @@ Context, display, and persistence:
   observation feed runtime telemetry and dashboard status. Manual is a complete
   effective-profile hard lock. Profile generation is part of STT, sentence,
   provisional, history, request, and cache isolation.
+- `modules/identity_roi.py`: owns normalized SOOP/CHZZK channel-identity ROI
+  state in `logs/identity_rois.json`, exact reviewed member-name matching, and
+  calibration snapshots from the same PrintWindow/player crop used by
+  production. `python main.py --calibrate-identity-roi` opens the shared native
+  calibration UI and continues normal startup after Save; the dashboard only
+  launches that same UI. A valid saved ROI becomes the sole automatic profile identity
+  authority. Blank, unknown, unreadable, or unavailable reads retain the
+  confirmed profile; whole-scene member markers cannot override it.
 - `modules/profile_control.py`: validates and atomically hot-reloads dashboard
   profile selection and `data/streamer_profiles.json`; invalid reloads retain
   the prior valid generation and a privacy-safe status file feeds the dashboard.

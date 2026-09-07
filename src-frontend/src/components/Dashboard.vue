@@ -47,6 +47,7 @@
       />
       <SystemStats v-if="activeTab === 'Stats'" :stats="systemStats" />
       <ExportBundle v-if="activeTab === 'Export'" />
+      <IdentityRoiCalibration v-if="activeTab === 'Identity ROI'" />
     </main>
 
     <div v-if="errorMsg" class="error-banner">{{ errorMsg }}</div>
@@ -61,10 +62,11 @@ import ConfigPanel from './ConfigPanel.vue'
 import CacheStats from './CacheStats.vue'
 import SystemStats from './SystemStats.vue'
 import ExportBundle from './ExportBundle.vue'
+import IdentityRoiCalibration from './IdentityRoiCalibration.vue'
 import type { ConfigDto, CacheStats as CacheStatsType, SystemStats as SystemStatsType, ProfileStatus } from '../types/config'
 
 const activeTab = ref('Settings')
-const tabs = ['Settings', 'Cache', 'Stats', 'Export']
+const tabs = ['Settings', 'Cache', 'Stats', 'Export', 'Identity ROI']
 const config = ref<ConfigDto | null>(null)
 const configLoadState = ref<'loading' | 'error' | 'loaded'>('loading')
 const configLoadError = ref<string | null>(null)

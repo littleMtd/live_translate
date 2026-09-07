@@ -46,6 +46,30 @@ def test_confirmed_content_overrides_source_and_unknown_falls_back(tmp_path):
     assert fallback.generation == confirmed.generation + 1
 
 
+def test_profile_state_logs_current_effective_profile_on_published_changes(tmp_path, caplog):
+    registry = load_registry_snapshot(_registry(tmp_path), version=1)
+    state = ProfileState(registry, source_profile_id="isegye_lilpa")
+    with caplog.at_level("INFO", logger="profile_context"):
+        state.configure_source("isegye_lilpa", mode="auto")
+        state.confirm_content(
+            "url", confidence=1.0, evidence_source="authoritative_identity_roi"
+        )
+        state.confirm_content(
+            "url", confidence=1.0, evidence_source="authoritative_identity_roi"
+        )
+        state.clear_content("profile_expired")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 3
+    assert "effective=isegye_lilpa" in messages[0]
+    assert "action=source_configured" in messages[0]
+    assert "effective=url" in messages[1]
+    assert "generation=2" in messages[1]
+    assert "evidence=authoritative_identity_roi" in messages[1]
+    assert "effective=isegye_lilpa" in messages[2]
+    assert "action=content_cleared" in messages[2]
+
+
 def test_manual_mode_is_a_hard_effective_profile_lock(tmp_path):
     state = ProfileState(
         load_registry_snapshot(_registry(tmp_path), version=1),
@@ -170,6 +194,20 @@ def test_every_reviewed_member_marker_maps_to_its_profile(
     )
     assert parsed.status == "accepted"
     assert parsed.strong
+
+
+def test_roi_ocr_aliases_are_reviewed_but_not_advertised_as_visible_scene_names():
+    marker = profile_state.registry.marker("url_member_sommyang")
+    assert marker is not None
+    assert marker.ocr_aliases == ("솜망", "솔망", "솨먕")
+    prompt = build_profile_identity_prompt(profile_state.registry)
+    assert "솜망" not in prompt
+    assert "솔망" not in prompt
+    assert "솨먕" not in prompt
+    sompunch = profile_state.registry.marker("hades_member_sompunch")
+    assert sompunch is not None
+    assert sompunch.ocr_aliases == ("숨주먹",)
+    assert "숨주먹" not in prompt
 
 
 @pytest.mark.parametrize(
