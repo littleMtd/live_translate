@@ -613,9 +613,15 @@ def _direct_translation_source_lang(text: str) -> str:
     return "KO"
 
 
-def _deepl_context(history: list[tuple[str, str]] | None) -> tuple[str, int]:
+def _deepl_context(
+    history: list[tuple[str, str]] | None,
+    system_prompt: str = "",
+) -> tuple[str, int]:
     """Build the small, non-billed context supported by DeepL's text API."""
     parts = ["Livestream subtitles for a Taiwan audience."]
+    entity_capsule = _request_entity_capsule(system_prompt)
+    if entity_capsule:
+        parts.append(entity_capsule)
     activity = effective_activity_value(
         getattr(cfg.translation, "current_activity", "")
     )
@@ -680,6 +686,26 @@ def _compact_profile_digest(profile_id: str) -> str:
     return "".join(sections)
 
 
+_REQUEST_ENTITY_MARKER = "[Request entity mappings]"
+_REQUEST_ENTITY_END_MARKER = "[End request entity mappings]"
+
+
+def _request_entity_capsule(system_prompt: str) -> str:
+    marker_start = system_prompt.find(_REQUEST_ENTITY_MARKER)
+    if marker_start < 0:
+        return ""
+    marker_end = system_prompt.find(_REQUEST_ENTITY_END_MARKER, marker_start)
+    if marker_end < 0:
+        return ""
+    end = marker_end + len(_REQUEST_ENTITY_END_MARKER)
+    return system_prompt[marker_start:end]
+
+
+def _append_request_entity_capsule(prompt: str, source_prompt: str) -> str:
+    capsule = _request_entity_capsule(source_prompt)
+    return prompt + ("\n\n" + capsule if capsule else "")
+
+
 def _groq_system_prompt(system_prompt: str) -> str:
     if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
         return system_prompt
@@ -699,7 +725,7 @@ def _groq_system_prompt(system_prompt: str) -> str:
             "\n\nFinal check before answering: output only the Traditional Chinese "
             "translation; never output background metadata."
         )
-    return prompt
+    return _append_request_entity_capsule(prompt, system_prompt)
 
 
 def _openrouter_capsule_prompt(profile_id: str) -> str:
@@ -773,7 +799,9 @@ def _openrouter_system_prompt(system_prompt: str) -> str:
         if bool(getattr(cfg.translation, "use_profile", False))
         else ""
     )
-    return _openrouter_capsule_prompt(profile_id)
+    return _append_request_entity_capsule(
+        _openrouter_capsule_prompt(profile_id), system_prompt
+    )
 
 
 def _deepseek_system_prompt(system_prompt: str) -> str:
@@ -782,7 +810,9 @@ def _deepseek_system_prompt(system_prompt: str) -> str:
         if bool(getattr(cfg.translation, "use_profile", False))
         else ""
     )
-    return _deepseek_capsule_prompt(profile_id)
+    return _append_request_entity_capsule(
+        _deepseek_capsule_prompt(profile_id), system_prompt
+    )
 
 
 def _deepl_prompt_signature() -> str:
@@ -1394,7 +1424,7 @@ class DeepLEngine(TranslationEngine):
     def available(self) -> bool:
         return bool(self._api_key)
 
-    def translate(self, text: str, _system_prompt: str, _incomplete: bool,
+    def translate(self, text: str, system_prompt: str, _incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
         if not self._api_key:
             return None
@@ -1403,7 +1433,7 @@ class DeepLEngine(TranslationEngine):
         import urllib.error
         import urllib.request
 
-        context, context_item_count = _deepl_context(history)
+        context, context_item_count = _deepl_context(history, system_prompt)
         body: dict[str, object] = {
             "text": [text],
             "source_lang": _direct_translation_source_lang(text),

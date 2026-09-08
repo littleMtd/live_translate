@@ -102,7 +102,7 @@ def test_loader_rejects_wrong_profile_and_scope_leakage(tmp_path):
         load_entity_registry(_write_registry(tmp_path, [leaked]))
 
 
-def test_loader_rejects_missing_activation_and_lost_context_policy(tmp_path):
+def test_loader_rejects_missing_activation_and_preserves_alias_context_policy(tmp_path):
     missing = _entity(
         aliases=[{"value": "Only OCR", "scopes": ["identity_ocr"]}],
         translation={"scope": "url", "wrong_forms": []},
@@ -120,5 +120,5 @@ def test_loader_rejects_missing_activation_and_lost_context_policy(tmp_path):
         ],
         translation={"scope": "url", "wrong_forms": []},
     )
-    with pytest.raises(ValueError, match="loses required alias context"):
-        load_entity_registry(_write_registry(tmp_path, [ambiguous]))
+    registry = load_entity_registry(_write_registry(tmp_path, [ambiguous]))
+    assert registry.entities[0].aliases[0].requires_context is True

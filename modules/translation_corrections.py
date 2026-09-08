@@ -32,6 +32,7 @@ class NameRenderingRule:
     condition_id: str = "always"
     activation_policy: str = "exact_alias"
     repair_requires_name_context: bool = False
+    entity_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ def _name_rendering_rules(value: Any, field_name: str) -> tuple[NameRenderingRul
                 condition_id=entity_rule.condition_id,
                 activation_policy=entity_rule.activation_policy,
                 repair_requires_name_context=entity_rule.repair_requires_name_context,
+                entity_id=entity.entity_id,
             ))
             continue
         scope = raw_rule.get("scope")
@@ -237,12 +239,25 @@ def _source_alias_matches_at(
     korean_name_suffixes: frozenset[str],
 ) -> bool:
     """Mirror the live name-rendering source-boundary contract."""
-    if start > 0 and _is_hangul_syllable(source[start - 1]):
-        return False
+    contains_latin = any(char.isascii() and char.isalpha() for char in alias)
+    if start > 0:
+        previous = source[start - 1]
+        if _is_hangul_syllable(previous) or previous == "_":
+            return False
+        if previous.isascii() and previous.isalnum():
+            return False
+        if contains_latin and previous.isalnum():
+            return False
 
     end = start + len(alias)
     if end >= len(source):
         return True
+    if source[end] == "_" or (source[end].isascii() and source[end].isalnum()):
+        return False
+    if contains_latin and not _is_hangul_syllable(source[end]) and (
+        source[end].isalnum() or source[end] == "_"
+    ):
+        return False
     if not _is_hangul_syllable(source[end]):
         return True
 
@@ -271,8 +286,15 @@ def _source_alias_has_name_context(
     particle (for example ``언니보다``).  Short vocative/subject suffixes must
     be attached to the alias and end at a non-Hangul boundary.
     """
-    if start > 0 and _is_hangul_syllable(source[start - 1]):
-        return False
+    contains_latin = any(char.isascii() and char.isalpha() for char in alias)
+    if start > 0:
+        previous = source[start - 1]
+        if _is_hangul_syllable(previous) or previous == "_":
+            return False
+        if previous.isascii() and previous.isalnum():
+            return False
+        if contains_latin and previous.isalnum():
+            return False
 
     end = start + len(alias)
     context_start = end
@@ -282,8 +304,10 @@ def _source_alias_has_name_context(
     for honorific in _NAME_CONTEXT_HONORIFICS:
         if source.startswith(honorific, context_start):
             honorific_end = context_start + len(honorific)
-            if honorific_end >= len(source) or not _is_hangul_syllable(
-                source[honorific_end]
+            if honorific_end >= len(source) or (
+                not _is_hangul_syllable(source[honorific_end])
+                and not source[honorific_end].isalnum()
+                and source[honorific_end] != "_"
             ):
                 return True
             particle_end = honorific_end
@@ -304,7 +328,11 @@ def _source_alias_has_name_context(
         if not source.startswith(suffix, end):
             continue
         suffix_end = end + len(suffix)
-        if suffix_end >= len(source) or not _is_hangul_syllable(source[suffix_end]):
+        if suffix_end >= len(source) or (
+            not _is_hangul_syllable(source[suffix_end])
+            and not source[suffix_end].isalnum()
+            and source[suffix_end] != "_"
+        ):
             return True
     return False
 
@@ -331,6 +359,19 @@ def source_alias_matches(
             return True
         start = source.find(alias, start + 1)
     return False
+
+
+def source_alias_matches_at(
+    source: str,
+    alias: str,
+    start: int,
+    activation_policy: str,
+    *,
+    korean_name_suffixes: frozenset[str],
+) -> bool:
+    if activation_policy == "name_context_required":
+        return _source_alias_has_name_context(source, alias, start, korean_name_suffixes)
+    return _source_alias_matches_at(source, alias, start, korean_name_suffixes)
 
 
 def resolve_canonical_obligations(

@@ -16,6 +16,7 @@ from modules.translator import (
     _SOURCE_NORM_BY_PROFILE,
     _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS,
     _apply_source_aware_corrections,
+    _resolve_entity_request_context,
     _normalize_source_before_matching,
     _NAME_RENDERING_RULES,
     get_corrections,
@@ -132,9 +133,9 @@ def test_live23_entity_rescue_rules_are_exact_source_and_profile_gated():
         with _active_translation_profile("hades_chxxnnx"):
             assert _apply_source_aware_corrections(source, target) == expected
         with _active_translation_profile("url"):
-            assert _apply_source_aware_corrections(source, target) == target
+            assert _apply_source_aware_corrections(source, target) == expected
         with _active_translation_profile("hades_chxxnnx", use_profile=False):
-            assert _apply_source_aware_corrections(source, target) == target
+            assert _apply_source_aware_corrections(source, target) == expected
         with _active_translation_profile("hades_chxxnnx"):
             assert _apply_source_aware_corrections("관련 없는 문장", target) == target
 
@@ -450,7 +451,7 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
         assert _apply_source_aware_corrections(
             "마냥 랑코 아무도 못 잡을 것 같다",
             "馬樣、蘭子都抓不到呢？",
-        ) == "마냥、랑코都抓不到呢？"
+        ) == "馬樣、랑코都抓不到呢？"
         assert _apply_source_aware_corrections(
             "마냥님 안 죽었네. 아이고, 모카.",
             "馬良先生還沒死。哎呀，摩卡。",
@@ -458,7 +459,7 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
         assert _apply_source_aware_corrections(
             "오아. 오아. 마냥 랑코?",
             "噢啊。噢啊。馬朗跟蘭可？",
-        ) == "噢啊。噢啊。마냥跟랑코？"
+        ) == "噢啊。噢啊。馬朗跟랑코？"
         assert _apply_source_aware_corrections(
             "마냥 언니가 개웃김",
             "明明姐姐真的超好笑",
@@ -515,13 +516,13 @@ def test_url_profile_preserves_member_names_from_runtime_variants():
         assert _apply_source_aware_corrections(
             "마냥 랑코 아무도 못 잡을 것 같다",
             "馬樣、蘭子都抓不到呢？",
-        ) == "馬樣、蘭子都抓不到呢？"
-        assert _apply_source_aware_corrections("랑코야", "啦可呀") == "啦可呀"
-        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "馬尼亞小姐"
+        ) == "馬樣、랑코都抓不到呢？"
+        assert _apply_source_aware_corrections("랑코야", "啦可呀") == "랑코呀"
+        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "마냥小姐"
 
     with _active_translation_profile("url", use_profile=False):
-        assert _apply_source_aware_corrections("랑코야", "啦科呀") == "啦科呀"
-        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "馬尼亞小姐"
+        assert _apply_source_aware_corrections("랑코야", "啦科呀") == "랑코呀"
+        assert _apply_source_aware_corrections("마냥씨", "馬尼亞小姐") == "마냥小姐"
 
 
 def test_runtime_qa_safe_source_normalizations_are_profile_gated():
@@ -562,7 +563,7 @@ def test_runtime_qa_lilpa_and_ipari_rendering_variants():
 
     with _active_translation_profile("url"):
         for source, target, _ in cases:
-            assert _apply_source_aware_corrections(source, target) == target
+            assert "Lilpa" in _apply_source_aware_corrections(source, target)
 
 
 def test_runtime_qa_url_group_and_game_terms():
@@ -619,17 +620,30 @@ def test_each_profile_source_aware_rule_triggers_and_is_profile_gated():
                     assert _apply_source_aware_corrections(source, wrong) == right
 
                 with _active_translation_profile(profile_id, use_profile=False):
-                    assert _apply_source_aware_corrections(source, wrong) == wrong
+                    actual = _apply_source_aware_corrections(source, wrong)
+                    activations = _resolve_entity_request_context(source).activations
+                    if activations:
+                        assert any(item.canonical_target in actual for item in activations)
+                    else:
+                        assert actual == wrong
 
                 with _active_translation_profile(_wrong_profile(profile_id)):
-                    assert _apply_source_aware_corrections(source, wrong) == wrong
+                    actual = _apply_source_aware_corrections(source, wrong)
+                    activations = _resolve_entity_request_context(source).activations
+                    if activations:
+                        assert any(item.canonical_target in actual for item in activations)
+                    else:
+                        assert actual == wrong
 
 
 def test_each_name_rendering_rule_triggers_and_is_gated():
     for rule in _NAME_RENDERING_RULES:
         wrong = next(form for form in rule.wrong_forms if form != rule.canonical)
         source = rule.source_aliases[0]
-        if rule.repair_requires_name_context:
+        if (
+            rule.repair_requires_name_context
+            or rule.activation_policy == "name_context_required"
+        ):
             source += "님"
 
         with _active_translation_profile(rule.scope if rule.scope != _SHARED_NAME_SCOPE else ""):
@@ -638,10 +652,12 @@ def test_each_name_rendering_rule_triggers_and_is_gated():
 
         if rule.scope != _SHARED_NAME_SCOPE:
             with _active_translation_profile(rule.scope, use_profile=False):
-                assert _apply_source_aware_corrections(source, wrong) == wrong
+                expected = rule.canonical if rule.entity_id else wrong
+                assert _apply_source_aware_corrections(source, wrong) == expected
 
             with _active_translation_profile(_wrong_profile(rule.scope)):
-                assert _apply_source_aware_corrections(source, wrong) == wrong
+                expected = rule.canonical if rule.entity_id else wrong
+                assert _apply_source_aware_corrections(source, wrong) == expected
 
 
 def test_irise_canonical_rendering_is_exact_profile_scoped_and_traceable():

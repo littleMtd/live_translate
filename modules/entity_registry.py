@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -71,10 +71,44 @@ class ReviewedEntity:
 
 
 @dataclass(frozen=True)
+class EntityActivation:
+    entity: ReviewedEntity
+    matched_alias: str
+    source_spans: tuple[tuple[int, int], ...]
+
+    @property
+    def canonical_target(self) -> str:
+        return self.entity.canonical_target
+
+
+@dataclass(frozen=True)
 class EntityRegistry:
     schema_version: int
     identity: str
     entities: tuple[ReviewedEntity, ...]
+    _translation_alias_index: dict[str, tuple[tuple[str, ReviewedEntity, bool], ...]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        index: dict[str, list[tuple[str, ReviewedEntity, bool]]] = {}
+        for entity in self.entities:
+            if entity.review_status != "reviewed" or entity.translation is None:
+                continue
+            seen: set[str] = set()
+            for alias in entity.aliases:
+                if "translation_source" not in alias.scopes:
+                    continue
+                if alias.value in seen:
+                    continue
+                seen.add(alias.value)
+                index.setdefault(alias.value[0], []).append(
+                    (alias.value, entity, alias.requires_context)
+                )
+        object.__setattr__(self, "_translation_alias_index", {
+            key: tuple(sorted(rows, key=lambda row: (-len(row[0]), row[0], row[1].entity_id)))
+            for key, rows in index.items()
+        })
 
     def entity(self, entity_id: str) -> ReviewedEntity | None:
         return next((row for row in self.entities if row.entity_id == entity_id), None)
@@ -101,6 +135,71 @@ class EntityRegistry:
                 f"entity {entity_id!r} has no unique {scope} alias {value!r}"
             )
         return matches[0]
+
+    def translation_mentions(
+        self,
+        source: str,
+        *,
+        alias_matches: Any,
+    ) -> tuple[EntityActivation, ...]:
+        """Return unambiguous reviewed entities explicitly mentioned in source.
+
+        The supplied matcher is the translation layer's established boundary and
+        context-policy implementation.  The registry index only narrows candidates;
+        it never promotes identity/OCR/STT-only aliases into translation evidence.
+        """
+        candidates: dict[str, tuple[ReviewedEntity, str, list[tuple[int, int]]]] = {}
+        ambiguous: set[str] = set()
+        for start, char in enumerate(source):
+            for alias, entity, requires_context in self._translation_alias_index.get(char, ()):
+                if not source.startswith(alias, start):
+                    continue
+                policy = "name_context_required" if (
+                    requires_context
+                    or entity.translation.activation_policy == "name_context_required"
+                ) else "exact_alias"
+                if not alias_matches(source, alias, start, policy):
+                    continue
+                owners = {
+                    row[1].entity_id
+                    for row in self._translation_alias_index.get(char, ())
+                    if row[0] == alias
+                    and source.startswith(row[0], start)
+                    and alias_matches(
+                        source,
+                        row[0],
+                        start,
+                        "name_context_required" if (
+                            row[2]
+                            or row[1].translation.activation_policy == "name_context_required"
+                        ) else "exact_alias",
+                    )
+                }
+                if len(owners) != 1:
+                    ambiguous.update(owners)
+                    continue
+                current = candidates.get(entity.entity_id)
+                span = (start, start + len(alias))
+                if current is None:
+                    candidates[entity.entity_id] = (entity, alias, [span])
+                elif span not in current[2]:
+                    current[2].append(span)
+        result: list[EntityActivation] = []
+        for entity_id, (entity, alias, spans) in candidates.items():
+            if entity_id in ambiguous:
+                continue
+            longest_by_start: dict[int, tuple[int, int]] = {}
+            for span in spans:
+                current = longest_by_start.get(span[0])
+                if current is None or span[1] > current[1]:
+                    longest_by_start[span[0]] = span
+            non_overlapping: list[tuple[int, int]] = []
+            for span in sorted(longest_by_start.values()):
+                if non_overlapping and span[0] < non_overlapping[-1][1]:
+                    continue
+                non_overlapping.append(span)
+            result.append(EntityActivation(entity, alias, tuple(non_overlapping)))
+        return tuple(result)
 
 
 def _strings(value: Any, field: str, *, nonempty: bool = False) -> tuple[str, ...]:
@@ -224,8 +323,6 @@ def load_entity_registry(path: Path = _DATA_PATH, *, known_profiles: frozenset[s
                 raise ValueError(f"{field}.translation has invalid condition fields")
             if not any("translation_source" in alias.scopes for alias in aliases):
                 raise ValueError(f"{field}.translation lacks source activation data")
-            if any(alias.requires_context for alias in aliases) and activation != "name_context_required":
-                raise ValueError(f"{field} loses required alias context policy")
             translation = EntityTranslationRule(
                 scope, _strings(raw_translation.get("wrong_forms"), f"{field}.translation.wrong_forms"),
                 policy, condition, activation, repair_context,

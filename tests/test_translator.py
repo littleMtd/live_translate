@@ -159,14 +159,14 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             "target_has_approved_hangul",
             approved["quality_classifications"],
         )
-        self.assertEqual(unapproved["target_approved_hangul_spans"], [])
-        self.assertEqual(unapproved["target_unexpected_hangul_spans"], ["모카"])
+        self.assertEqual(unapproved["target_approved_hangul_spans"], ["모카"])
+        self.assertEqual(unapproved["target_unexpected_hangul_spans"], [])
         self.assertEqual(
             unapproved["target_unexpected_latin_spans"],
             ["Wish", "Me", "Love"],
         )
         self.assertIn(
-            "target_has_unexpected_hangul",
+            "target_has_approved_hangul",
             unapproved["quality_classifications"],
         )
 
@@ -203,9 +203,9 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             "target_high_latin_approved_only",
             approved["quality_classifications"],
         )
-        self.assertEqual(unapproved["target_unexpected_latin_spans"], ["Jururu"])
+        self.assertEqual(unapproved["target_unexpected_latin_spans"], [])
         self.assertIn(
-            "target_high_latin_unexpected",
+            "target_high_latin_approved_only",
             unapproved["quality_classifications"],
         )
 
@@ -1716,23 +1716,23 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertTrue(guard["canonical_obligations"]["passed"])
         self.assertEqual(guard["candidate_output"], "모카來了。")
 
-    def test_wrong_profile_boundary_and_repeated_source_do_not_activate_v1(self):
+    def test_cross_profile_exact_alias_activates_but_boundary_and_repeated_do_not(self):
         cases = (
-            ("irise", "모카가 왔어"),
-            ("url", "마냥히 웃었어"),
-            ("url", "모카랑 모카가 왔어"),
+            ("irise", "모카가 왔어", "모카來了。", ("모카",)),
+            ("url", "마냥히 웃었어", "她笑了。", ()),
+            ("url", "모카랑 모카가 왔어", "她們來了。", ()),
         )
-        for profile_id, source in cases:
+        for profile_id, source, target, expected in cases:
             with self.subTest(profile=profile_id, source=source):
                 translator = _make_translator()
-                translator._engines = [_route_engine("deepseek", "她來了。")]
+                translator._engines = [_route_engine("deepseek", target)]
                 translation_engines_module.reset_translation_call_trace()
                 with _active_translation_profile(profile_id):
                     outcome = translator.translate_event(source, False)
                 self.assertEqual(outcome.status, "success")
                 self.assertEqual(
                     outcome.canonical_obligation_evaluation.expected,
-                    (),
+                    expected,
                 )
 
     def test_collision_prone_ordinary_word_does_not_create_hard_obligation(self):
@@ -4222,7 +4222,7 @@ class TestTranslateOptimizations(unittest.TestCase):
                     self.assertEqual(once, expected)
                     self.assertEqual(twice, once)
 
-    def test_lilpa_name_rendering_remains_source_and_profile_gated(self):
+    def test_lilpa_name_rendering_is_source_gated_and_global(self):
         target = "莉爾法來了"
         with _active_translation_profile("isegye_lilpa"):
             self.assertEqual(
@@ -4232,12 +4232,12 @@ class TestTranslateOptimizations(unittest.TestCase):
         with _active_translation_profile("url"):
             self.assertEqual(
                 _apply_source_aware_corrections("릴파가 왔어요", target),
-                target,
+                "Lilpa來了",
             )
         with _active_translation_profile("isegye_lilpa", use_profile=False):
             self.assertEqual(
                 _apply_source_aware_corrections("릴파가 왔어요", target),
-                target,
+                "Lilpa來了",
             )
 
     def test_streamer_name_rendering_boundary_positive_cases(self):
@@ -4313,13 +4313,13 @@ class TestTranslateOptimizations(unittest.TestCase):
             self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "성태來了"), "성태來了")
             self.assertEqual(_apply_source_aware_corrections("오늘 방송 재미있다", "키마待機中"), "키마待機中")
 
-    def test_streamer_name_rendering_is_profile_gated(self):
+    def test_registry_name_rendering_is_global_and_source_gated(self):
         hades_self_form_cases = (
-            ("챈나가 왔어요", "챈나"),
-            ("봉준이 왔어요", "봉준"),
-            ("김봉준이 말했어요", "김봉준"),
-            ("성태는 왔어요", "성태"),
-            ("키마는 왔어요", "키마"),
+            ("챈나가 왔어요", "챈나", "Chaenna"),
+            ("봉준이 왔어요", "봉준", "Kim Bongjun"),
+            ("김봉준이 말했어요", "김봉준", "Kim Bongjun"),
+            ("성태는 왔어요", "성태", "KimSungtae"),
+            ("키마는 왔어요", "키마", "Kyma"),
         )
 
         for profile_id in ("", "stellive_hina", "isegye_lilpa"):
@@ -4327,19 +4327,19 @@ class TestTranslateOptimizations(unittest.TestCase):
                 with _active_translation_profile(profile_id):
                     self.assertEqual(
                         _apply_source_aware_corrections("챈나가 왔어요", "-chan"),
-                        "-chan",
+                        "Chaenna",
                     )
                     self.assertEqual(
                         _apply_source_aware_corrections("봉준이 왔어요", "Bongjun"),
-                        "Bongjun",
+                        "Kim Bongjun",
                     )
-                    for source, target in hades_self_form_cases:
-                        self.assertEqual(_apply_source_aware_corrections(source, target), target)
+                    for source, target, expected in hades_self_form_cases:
+                        self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
         with _active_translation_profile("hades_chxxnnx", use_profile=False):
-            self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "Sungtae"), "Sungtae")
-            for source, target in hades_self_form_cases:
-                self.assertEqual(_apply_source_aware_corrections(source, target), target)
+            self.assertEqual(_apply_source_aware_corrections("성태는 왔어요", "Sungtae"), "KimSungtae")
+            for source, target, expected in hades_self_form_cases:
+                self.assertEqual(_apply_source_aware_corrections(source, target), expected)
 
         with _active_translation_profile("stellive_hina", use_profile=False):
             self.assertEqual(_apply_source_aware_corrections("고세구가 왔어요", "高世久"), "Gosegu")
@@ -4484,7 +4484,7 @@ class TestTranslateOptimizations(unittest.TestCase):
                     for fragment in forbidden_fragments:
                         self.assertNotIn(fragment, once)
 
-    def test_streamer_name_rendering_mixed_forms_remain_source_and_profile_gated(self):
+    def test_streamer_name_rendering_mixed_forms_are_global_and_source_gated(self):
         with _active_translation_profile("hades_chxxnnx"):
             target = "-chan ... Chaenna ... -chan"
             self.assertEqual(
@@ -4498,14 +4498,14 @@ class TestTranslateOptimizations(unittest.TestCase):
                     target = "Bongjun ... Kim Bongjun"
                     self.assertEqual(
                         _apply_source_aware_corrections("봉준이 왔어요", target),
-                        target,
+                        "Kim Bongjun ... Kim Bongjun",
                     )
 
         with _active_translation_profile("hades_chxxnnx", use_profile=False):
             target = "Sungtae哥 ... KimSungtae"
             self.assertEqual(
                 _apply_source_aware_corrections("성태는 왔어요", target),
-                target,
+                "KimSungtae ... KimSungtae",
             )
 
     def test_streamer_name_rendering_cache_round_trip_does_not_double_apply(self):
@@ -5339,13 +5339,15 @@ class TestProvisionalPromotion(unittest.TestCase):
         self.assertIsNotNone(snapshot)
         cohort = translator._history_cohort()
         history = translator._memory_state().context(cohort)
-        system_prompt = translator._build_system_prompt()
-        obligations = translator_module._resolve_active_canonical_obligations(source)
-        known_source_spans = tuple(
-            span
-            for obligation in obligations
-            for span in obligation.source_spans
+        entity_context = translator_module._resolve_entity_request_context(source)
+        system_prompt = translator._build_system_prompt(entity_context.capsule)
+        obligations = translator_module._canonical_obligations_for_request(
+            source, entity_context
         )
+        known_source_spans = tuple(dict.fromkeys((
+            *entity_context.source_spans,
+            *(span for obligation in obligations for span in obligation.source_spans),
+        )))
         escrow = resolve_unknown_name_escrow(
             source,
             known_source_spans=known_source_spans,

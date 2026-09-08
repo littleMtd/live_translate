@@ -68,6 +68,7 @@ from modules.translation_engines import (
     build_effective_deepseek_messages,
     build_effective_qwen_messages,
     effective_system_prompt_for_engine,
+    _request_entity_capsule,
     engine_chain_config_key,
     get_last_engine_api_diagnostics,
     get_last_engine_diagnostics,
@@ -97,6 +98,7 @@ from modules.semantic_terminology import (
     SemanticTerminologyEscrow,
     resolve_semantic_terminology,
 )
+from modules.entity_registry import ENTITY_REGISTRY, EntityActivation
 from modules.translation_corrections import (
     CanonicalObligation,
     CanonicalObligationEvaluation,
@@ -105,6 +107,7 @@ from modules.translation_corrections import (
     load_translation_corrections,
     resolve_canonical_obligations,
     source_alias_matches,
+    source_alias_matches_at,
 )
 
 log = get_logger("translator")
@@ -436,6 +439,10 @@ def _source_has_name_alias(
 
 
 def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
+    # Registry-backed rules activate only through the sentence retrieval result,
+    # including its global collision and context checks.
+    if rule.entity_id:
+        return False
     if rule.scope == _SHARED_NAME_SCOPE:
         return True
     return effective_profile_applied(cfg.translation.use_profile) and effective_profile_id(
@@ -443,7 +450,7 @@ def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
     ) == rule.scope
 
 
-def _resolve_active_canonical_obligations(
+def _resolve_legacy_canonical_obligations(
     source: str,
 ) -> tuple[CanonicalObligation, ...]:
     profile_applied = effective_profile_applied(
@@ -458,9 +465,94 @@ def _resolve_active_canonical_obligations(
         source,
         profile_id=profile_id,
         profile_applied=profile_applied,
-        rules=_NAME_RENDERING_RULES,
+        rules=tuple(rule for rule in _NAME_RENDERING_RULES if not rule.entity_id),
         korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
     )
+
+
+@dataclass(frozen=True)
+class _EntityRequestContext:
+    activations: tuple[EntityActivation, ...] = ()
+    obligations: tuple[CanonicalObligation, ...] = ()
+    capsule: str = ""
+
+    @property
+    def source_spans(self) -> tuple[tuple[int, int], ...]:
+        return tuple(span for activation in self.activations for span in activation.source_spans)
+
+
+def _resolve_entity_request_context(source: str) -> _EntityRequestContext:
+    activations = ENTITY_REGISTRY.translation_mentions(
+        source,
+        alias_matches=lambda text, alias, start, policy: source_alias_matches_at(
+            text,
+            alias,
+            start,
+            policy,
+            korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
+        ),
+    )
+    obligations: list[CanonicalObligation] = []
+    capsule_rows: list[str] = []
+    for activation in activations:
+        entity = activation.entity
+        rule = entity.translation
+        assert rule is not None
+        capsule_rows.append(
+            f"- {activation.matched_alias} => {entity.canonical_target}"
+        )
+        if (
+            rule.publication_policy == "required"
+            and rule.condition_id == "always"
+            and len(activation.source_spans) == 1
+        ):
+            obligations.append(CanonicalObligation(
+                rule_id=f"entity:{entity.entity_id}",
+                profile_id=(
+                    rule.scope if rule.scope != _SHARED_NAME_SCOPE
+                    else (entity.profile_ids[0] if entity.profile_ids else "")
+                ),
+                matched_alias=activation.matched_alias,
+                source_spans=activation.source_spans,
+                canonical_target=entity.canonical_target,
+                condition_id=rule.condition_id,
+            ))
+    capsule = ""
+    if capsule_rows:
+        capsule = (
+            "[Request entity mappings]\n"
+            "Apply only to entities explicitly present in this source sentence. "
+            "Render each source alias exactly as mapped:\n"
+            + "\n".join(capsule_rows)
+            + "\n[End request entity mappings]"
+        )
+    return _EntityRequestContext(activations, tuple(obligations), capsule)
+
+
+def _canonical_obligations_for_request(
+    source: str,
+    entity_context: _EntityRequestContext,
+) -> tuple[CanonicalObligation, ...]:
+    combined = (*entity_context.obligations, *_resolve_legacy_canonical_obligations(source))
+    result: list[CanonicalObligation] = []
+    seen: set[tuple[str, tuple[tuple[int, int], ...], str]] = set()
+    for obligation in combined:
+        key = (
+            obligation.canonical_target,
+            obligation.source_spans,
+            obligation.condition_id,
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(obligation)
+    return tuple(result)
+
+
+def _resolve_active_canonical_obligations(
+    source: str,
+) -> tuple[CanonicalObligation, ...]:
+    entity_context = _resolve_entity_request_context(source)
+    return _canonical_obligations_for_request(source, entity_context)
 
 
 def _source_activated_name_canonicals(
@@ -475,8 +567,12 @@ def _source_activated_name_canonicals(
         rule_enabled = lambda rule: rule.scope in (
             profile_id,
             _SHARED_NAME_SCOPE,
-        )
-    return frozenset(
+        ) and not rule.entity_id
+    registry_canonicals = frozenset(
+        activation.canonical_target
+        for activation in _resolve_entity_request_context(source).activations
+    )
+    return registry_canonicals | frozenset(
         rule.canonical
         for rule in _NAME_RENDERING_RULES
         if rule_enabled(rule)
@@ -669,11 +765,21 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
     return _apply_source_gated_name_rendering(source, corrected)
 
 
-def _apply_source_gated_name_rendering(source: str, result: str) -> str:
+def _apply_source_gated_name_rendering(
+    source: str,
+    result: str,
+) -> str:
     """Apply only exact, source-proven canonical name rendering rules."""
     corrected = result
+    activated_entity_ids = frozenset(
+        activation.entity.entity_id
+        for activation in _resolve_entity_request_context(source).activations
+    )
     for rule in _NAME_RENDERING_RULES:
-        if not _name_rendering_rule_enabled(rule):
+        if not (
+            rule.entity_id in activated_entity_ids
+            or _name_rendering_rule_enabled(rule)
+        ):
             continue
         if not _source_has_name_alias(
             source,
@@ -798,7 +904,8 @@ def _translation_output_guard(
     violation, and only when those rules alone remove all residue of that type.
     """
     if obligations is None:
-        obligations = _resolve_active_canonical_obligations(source)
+        entity_context = _resolve_entity_request_context(source)
+        obligations = _canonical_obligations_for_request(source, entity_context)
     if unknown_name_escrow is None:
         unknown_name_escrow = UnknownNameEscrow(source, source)
     if semantic_terminology is None:
@@ -1235,13 +1342,15 @@ class TranslationOutcome:
         profile_applied = bool(metadata.get("profile_applied"))
         obligation_evaluation = self.canonical_obligation_evaluation
         if obligation_evaluation is None:
-            obligations = resolve_canonical_obligations(
+            entity_context = _resolve_entity_request_context(self.source_text)
+            legacy_obligations = resolve_canonical_obligations(
                 self.source_text,
                 profile_id=profile_id,
                 profile_applied=profile_applied,
-                rules=_NAME_RENDERING_RULES,
+                rules=tuple(rule for rule in _NAME_RENDERING_RULES if not rule.entity_id),
                 korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
             )
+            obligations = tuple((*entity_context.obligations, *legacy_obligations))
             obligation_evaluation = evaluate_canonical_obligations(
                 self.target_text, obligations
             )
@@ -1721,12 +1830,12 @@ class Translator:
             )
 
         text = _normalize_source_before_matching(text)
-        canonical_obligations = _resolve_active_canonical_obligations(text)
-        known_source_spans = tuple(
-            span
-            for obligation in canonical_obligations
-            for span in obligation.source_spans
-        )
+        entity_context = _resolve_entity_request_context(text)
+        canonical_obligations = _canonical_obligations_for_request(text, entity_context)
+        known_source_spans = tuple(dict.fromkeys((
+            *entity_context.source_spans,
+            *(span for obligation in canonical_obligations for span in obligation.source_spans),
+        )))
         unknown_name_escrow = resolve_unknown_name_escrow(
             text,
             known_source_spans=known_source_spans,
@@ -1774,7 +1883,7 @@ class Translator:
 
         # 根据当前模型选择对应的 prompt
         self._refresh_engines_if_needed()
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(entity_context.capsule)
         engine = self._active_engine()
         prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
         self._log_prompt_mode_once()
@@ -2219,8 +2328,8 @@ class Translator:
             log.info("Using Qwen-optimized system prompt (shorter, more direct)")
             self._qwen_log_once = True
 
-    def _build_system_prompt(self) -> str:
-        return _compose_system_prompt()
+    def _build_system_prompt(self, entity_capsule: str = "") -> str:
+        return _compose_system_prompt(entity_capsule)
 
     @staticmethod
     def _prompt_version(system_prompt: str) -> str:
@@ -2255,6 +2364,12 @@ class Translator:
         # not change cohort_epoch; actual scene/profile transitions do.
         return self._prompt_version(
             effective_prompt
+            + (
+                "\n[request-entity-capsule] " + _request_entity_capsule(system_prompt)
+                if _request_entity_capsule(system_prompt)
+                and _request_entity_capsule(system_prompt) not in effective_prompt
+                else ""
+            )
             + "\n[canonical-publication-policy] "
             + _CANONICAL_PUBLICATION_POLICY_VERSION
             + "\n[request-cache-cohort] "
@@ -2289,7 +2404,10 @@ class Translator:
         the active engine, which intentionally stays on primary."""
         source_text = source_text or text
         if canonical_obligations is None:
-            canonical_obligations = _resolve_active_canonical_obligations(source_text)
+            entity_context = _resolve_entity_request_context(source_text)
+            canonical_obligations = _canonical_obligations_for_request(
+                source_text, entity_context
+            )
         if unknown_name_escrow is None:
             unknown_name_escrow = UnknownNameEscrow(source_text, source_text)
         if semantic_terminology is None:
@@ -2438,7 +2556,7 @@ def _stop_drain_timeout_sec() -> float:
     return max(_TRANSLATION_LOOP_POLL_SEC, join_timeout - _STOP_DRAIN_TIMEOUT_MARGIN_SEC)
 
 
-def _compose_system_prompt() -> str:
+def _compose_system_prompt(entity_capsule: str = "") -> str:
     """Shared between Translator._build_system_prompt and the probe thread (L5).
 
     Pure function of config since PromptEvolver was removed (2026-06-12):
@@ -2461,6 +2579,9 @@ def _compose_system_prompt() -> str:
     )
     if activity_capsule:
         system_prompt += "\n\n" + activity_capsule
+
+    if entity_capsule:
+        system_prompt += "\n\n" + entity_capsule
 
     # Output rules go last so profile/background sections never sit after the
     # final instruction the model is supposed to obey.
@@ -2692,14 +2813,14 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         prepared_source = _normalize_source_before_matching(
                             prepared_source
                         )
-                        obligations = _resolve_active_canonical_obligations(
-                            prepared_source
+                        entity_context = _resolve_entity_request_context(prepared_source)
+                        obligations = _canonical_obligations_for_request(
+                            prepared_source, entity_context
                         )
-                        known_source_spans = tuple(
-                            span
-                            for obligation in obligations
-                            for span in obligation.source_spans
-                        )
+                        known_source_spans = tuple(dict.fromkeys((
+                            *entity_context.source_spans,
+                            *(span for obligation in obligations for span in obligation.source_spans),
+                        )))
                         unknown_name_escrow = resolve_unknown_name_escrow(
                             prepared_source,
                             known_source_spans=known_source_spans,
@@ -2707,7 +2828,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         semantic_terminology = resolve_semantic_terminology(
                             unknown_name_escrow.provider_source
                         )
-                        system_prompt = preview_translator._build_system_prompt()
+                        system_prompt = preview_translator._build_system_prompt(
+                            entity_context.capsule
+                        )
                         history_cohort = _history_cohort_for(
                             request.activity_snapshot,
                             request_profile_snapshot.cache_identity,
