@@ -1636,6 +1636,48 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 self.assertIn(expected_name, outcome.target_text)
                 self.assertNotIn("__LT_", outcome.target_text)
 
+    def test_explicit_unknown_identity_is_restored_and_approved_sentence_locally(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "我的暱稱是__LT_UNK_1__。")
+        ]
+
+        outcome = translator.translate_event("제 닉네임은 새봄이에요", False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "我的暱稱是새봄。")
+        event = outcome.as_event_fields(1.0, {"profile_id": "url"})
+        self.assertEqual(event["target_unknown_name_escrow_terms"], ["새봄"])
+        self.assertNotIn(
+            "target_has_unexpected_hangul", event["quality_classifications"]
+        )
+
+    def test_known_registry_identity_declaration_bypasses_unknown_escrow(self):
+        translator = _make_translator()
+        engine = _route_engine("deepseek", "我的暱稱是랑코。")
+        translator._engines = [engine]
+
+        with _active_translation_profile("hades_chxxnnx"):
+            outcome = translator.translate_event("제 닉네임은 랑코예요", False)
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "我的暱稱是랑코。")
+        self.assertEqual(outcome.unknown_name_approved_terms, ())
+        current_message = engine.translate_messages.call_args.args[0][-1][1]
+        self.assertIn("랑코", current_message)
+        self.assertNotIn("__LT_UNK_", current_message)
+
+    def test_unactivated_common_noun_does_not_weaken_hangul_guard(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "我的名字是학생。")]
+
+        outcome = translator.translate_event("제 이름은 학생이에요", False)
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertIsNone(outcome.target_text)
+        attempt = translation_engines_module.get_translation_attempts()[-1]
+        self.assertEqual(attempt["output_guard"]["reason"], "unexpected_hangul")
+
     def test_placeholder_plus_invented_alias_is_content_rejection(self):
         translator = _make_translator()
         translator._engines = [

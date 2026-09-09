@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "reviewed_exact_names": [
+    {
+      "source_name": "사옥쌤",
+      "allowed_suffixes": ["이랑"],
+      "allow_bare_boundary": true,
+      "forbidden_aliases": ["師玉"],
+      "evidence": ["translation_prompt_benchmark_20260822"]
+    },
+    {
+      "source_name": "푸코",
+      "allowed_suffixes": ["도"],
+      "forbidden_aliases": ["Fuko"],
+      "evidence": ["translation_prompt_benchmark_20260822"]
+    },
+    {
+      "source_name": "푸순",
+      "allowed_suffixes": ["이에요"],
+      "forbidden_aliases": ["普順"],
+      "evidence": ["translation_prompt_benchmark_20260822"]
+    },
+    {
+      "source_name": "모찌",
+      "allowed_suffixes": ["한테", "야"],
+      "forbidden_aliases": ["Mochi", "莫奇"],
+      "evidence": ["translation_prompt_benchmark_20260822"]
+    }
+  ],
+  "explicit_identity_contexts": [
+    {
+      "rule_id": "first_person_identity_declaration",
+      "prefixes": [
+        "제 이름은", "내 이름은", "저의 이름은",
+        "제 닉네임은", "내 닉네임은", "저의 닉네임은",
+        "제 활동명은", "내 활동명은", "저의 활동명은",
+        "제 예명은", "내 예명은", "저의 예명은"
+      ],
+      "suffixes": ["이에요", "예요", "입니다"],
+      "min_syllables": 2,
+      "max_syllables": 6,
+      "excluded_candidates": [
+        "비밀", "학생", "휴학생", "사람", "여자", "남자",
+        "고양이", "강아지", "이름", "닉네임", "활동명", "예명",
+        "게임", "캐릭터"
+      ]
+    }
+  ]
+}

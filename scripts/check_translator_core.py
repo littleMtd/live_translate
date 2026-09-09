@@ -22,6 +22,7 @@ JSON_FIXTURES = [
     PROJECT_ROOT / "data" / "default_slang.json",
     PROJECT_ROOT / "data" / "streamer_profiles.json",
     PROJECT_ROOT / "data" / "translation_corrections.json",
+    PROJECT_ROOT / "data" / "unknown_name_escrow.json",
     PROJECT_ROOT / "data" / "translation_profiles.json",
     PROJECT_ROOT / "data" / "eval_cases.json",
 ]
