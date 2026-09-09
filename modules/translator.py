@@ -10,7 +10,10 @@ from contextlib import nullcontext
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
+
+from zhconv import convert as convert_chinese
 
 from config import cfg
 from modules.activity_context import (
@@ -123,6 +126,7 @@ _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switchin
 _LIVE_FALLBACK_THRESHOLD = 1
 _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
+_MIN_SIMPLIFIED_SCRIPT_EVIDENCE = 2  # Avoid one-character name/variant ambiguity.
 _TRANSLATION_LOOP_POLL_SEC = 0.05
 _MODEL_REFUSAL_RE = re.compile(
     r"^\s*(?:"
@@ -765,6 +769,59 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
     return _apply_source_gated_name_rendering(source, corrected)
 
 
+def _target_has_bounded_term(target: str, term: str) -> bool:
+    """Match a canonical target as a token, not as part of another name."""
+    start = target.find(term)
+    while start >= 0:
+        end = start + len(term)
+        left = target[start - 1] if start else ""
+        right = target[end] if end < len(target) else ""
+        if not (
+            left and term[0].isascii() and term[0].isalnum()
+            and left.isascii() and left.isalnum()
+        ) and not (
+            right and term[-1].isascii() and term[-1].isalnum()
+            and right.isascii() and right.isalnum()
+        ) and not (
+            left and _is_hangul_syllable(term[0]) and _is_hangul_syllable(left)
+        ) and not (
+            right and _is_hangul_syllable(term[-1]) and _is_hangul_syllable(right)
+        ):
+            return True
+        start = target.find(term, start + 1)
+    return False
+
+
+@lru_cache(maxsize=4096)
+def _has_simplified_mapping(char: str) -> bool:
+    return (
+        len(char) == 1
+        and "\u3400" <= char <= "\u9fff"
+        and convert_chinese(char, "zh-hant") != char
+    )
+
+
+def _simplified_chinese_evidence(target: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        char for char in target if _has_simplified_mapping(char)
+    ))
+
+
+def _unactivated_registry_targets(source: str, target: str) -> tuple[str, ...]:
+    """Reject reviewed entity renderings that lack sentence-local source proof."""
+    activated_ids = {
+        activation.entity.entity_id
+        for activation in _resolve_entity_request_context(source).activations
+    }
+    return tuple(
+        entity.canonical_target
+        for entity in ENTITY_REGISTRY.entities
+        if entity.translation is not None
+        and entity.entity_id not in activated_ids
+        and _target_has_bounded_term(target, entity.canonical_target)
+    )
+
+
 def _apply_source_gated_name_rendering(
     source: str,
     result: str,
@@ -929,6 +986,8 @@ def _translation_output_guard(
         else terminology_restored
     )
     corrected, corrections = _preview_source_aware_corrections(source, restored_result)
+    unactivated_entity_targets = _unactivated_registry_targets(source, corrected)
+    simplified_chinese_spans = _simplified_chinese_evidence(corrected)
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
         if bool(getattr(cfg.translation, "use_profile", False))
@@ -1006,6 +1065,10 @@ def _translation_output_guard(
         reason = terminology_reason
     elif not escrow_evaluation.passed:
         reason = escrow_evaluation.reason
+    elif unactivated_entity_targets:
+        reason = "unactivated_entity_target"
+    elif len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE:
+        reason = "simplified_chinese"
     elif not obligation_evaluation.passed:
         reason = "canonical_obligation_missing"
     elif "unexpected_japanese" in corrected_script_violations:
@@ -1038,6 +1101,8 @@ def _translation_output_guard(
         "candidate_raw_quality_flags": sorted(raw_flags),
         "candidate_raw_quality_classifications": sorted(raw_classifications),
         "canonical_obligations": obligation_evaluation.as_dict(),
+        "unactivated_entity_targets": list(unactivated_entity_targets),
+        "simplified_chinese_spans": list(simplified_chinese_spans),
         "semantic_terminology": {
             "active": semantic_terminology.active,
             "rule_ids": [term.rule_id for term in semantic_terminology.terms],
@@ -2108,6 +2173,10 @@ class Translator:
         final_obligation_evaluation = evaluate_canonical_obligations(
             result, canonical_obligations
         )
+        unactivated_entity_targets = _unactivated_registry_targets(
+            prepared_text, result
+        )
+        simplified_chinese_spans = _simplified_chinese_evidence(result)
         common_failure = {
             "source_text": raw_text,
             "target_text": None,
@@ -2165,6 +2234,26 @@ class Translator:
                 **common_failure,
                 status="failed",
                 filter_reason="canonical_obligation_missing",
+                canonical_obligation_evaluation=final_obligation_evaluation,
+            )
+
+        if unactivated_entity_targets:
+            metrics.increment("translation.entity_target.final_rejected")
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="failed",
+                filter_reason="unactivated_entity_target",
+                canonical_obligation_evaluation=final_obligation_evaluation,
+            )
+
+        if len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE:
+            metrics.increment("translation.target_script.final_rejected")
+            self._reset_failed_input()
+            return TranslationOutcome(
+                **common_failure,
+                status="failed",
+                filter_reason="simplified_chinese",
                 canonical_obligation_evaluation=final_obligation_evaluation,
             )
 

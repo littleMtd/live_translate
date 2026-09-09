@@ -412,6 +412,90 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             "unexpected_hangul",
         )
 
+    def test_run_20260909_provisional_simplified_output_is_rejected(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        guard = _translation_output_guard(
+            engine,
+            "哇，太夸张了。像感冒的人一样鼻子塞住了。啊！啊！",
+            "와, 너무 과장이다. 감기 걸린 사람처럼 코가 막혀버렸어. 아! 아!",
+        )
+
+        self.assertEqual(guard["reason"], "simplified_chinese")
+        self.assertEqual(
+            guard["simplified_chinese_spans"],
+            ["夸", "张", "样"],
+        )
+
+    def test_traditional_script_guard_preserves_existing_traditional_and_names(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        target = "Chaenna現在確認修改版。"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            guard = _translation_output_guard(engine, target, "챈나가 수정본을 확인해.")
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["candidate_output"], target)
+        self.assertEqual(guard["candidate_corrections"], [])
+
+    def test_run_20260909_unactivated_profile_name_is_rejected(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            guard = _translation_output_guard(
+                engine,
+                "所以說，Chaenna 說要請你來驗收這個東西。",
+                "그래가지고 찬양님이 이제 이거를 검수해달라 그랬어.",
+            )
+
+        self.assertEqual(guard["reason"], "unactivated_entity_target")
+        self.assertEqual(guard["unactivated_entity_targets"], ["Chaenna"])
+
+    def test_unactivated_entity_target_uses_fallback_without_switching_route(self):
+        translator = _make_translator()
+        primary = _route_engine("deepseek", "Chaenna說要驗收。")
+        fallback = _route_engine("openrouter", "有人說要驗收。")
+        translator._engines = [primary, fallback]
+
+        with _active_translation_profile("hades_chxxnnx"):
+            outcome = translator.translate_event("찬양님이 검수해달라 그랬어.")
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "有人說要驗收。")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(translator._active_idx, 0)
+
+    def test_final_provider_output_uses_same_traditional_guard_and_fallback(self):
+        translator = _make_translator()
+        primary = _route_engine("deepseek", "后台的样子很夸张。")
+        fallback = _route_engine("openrouter", "後臺的樣子很誇張。")
+        translator._engines = [primary, fallback]
+
+        outcome = translator.translate_event("백스테이지 모습이 너무 과장됐어.")
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "後臺的樣子很誇張。")
+        self.assertEqual(outcome.engine, "openrouter")
+
+    def test_uncertain_honorific_source_is_not_claimed_by_translation_guard(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        guard = _translation_output_guard(
+            engine,
+            "現在車長（副站長）確認過之後就會上傳。",
+            "이제 차장님이 확인해 보시고 올리지 않을까?",
+        )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(
+            guard["candidate_output"],
+            "現在車長（副站長）確認過之後就會上傳。",
+        )
+
     def test_source_gated_name_render_can_rescue_its_raw_script_violation(self):
         engine = MagicMock()
         engine.engine_name = "deepseek"
