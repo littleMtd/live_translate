@@ -321,9 +321,6 @@ def _referent_context_matches(
     source: str,
     rule: SourceGroundedReferentContextRule,
 ) -> tuple[tuple[int, int, str], ...]:
-    suffix_pattern = "|".join(
-        re.escape(value) for value in sorted(rule.suffixes, key=len, reverse=True)
-    )
     continuation_pattern = "|".join(
         re.escape(value)
         for value in (
@@ -331,16 +328,51 @@ def _referent_context_matches(
             "를", "도", "와", "과", "의", "로",
         )
     )
-    pattern = re.compile(
-        rf"(?<![가-힣])"
-        rf"(?P<name>[가-힣]{{{rule.min_syllables},{rule.max_syllables}}}?)"
-        rf"(?:{suffix_pattern})"
-        rf"(?=$|[^가-힣]|(?:{continuation_pattern})(?=$|[^가-힣]))"
-    )
+    candidates: list[tuple[int, int, int, str, bool]] = []
+    for suffix in rule.suffixes:
+        pattern = re.compile(
+            rf"(?<![가-힣])"
+            rf"(?P<name>[가-힣]{{{rule.min_syllables},{rule.max_syllables}}}?)"
+            rf"{re.escape(suffix)}"
+            rf"(?=$|[^가-힣]|(?:{continuation_pattern})(?=$|[^가-힣]))"
+        )
+        for match in pattern.finditer(source):
+            name = match.group("name")
+            candidates.append(
+                (
+                    match.start("name"),
+                    match.end(),
+                    match.end("name"),
+                    name,
+                    name in rule.excluded_candidates,
+                )
+            )
+
+    # A surface such as ``하음이라는 멤버`` admits both 하음+이라는 and
+    # 하음이+라는.  Source morphology alone does not identify which span is
+    # the referent, so neither candidate may acquire preservation ownership.
+    ambiguous_surfaces = {
+        (start, surface_end)
+        for start, surface_end, _name_end, _name, _excluded in candidates
+        if len(
+            {
+                candidate_name
+                for (
+                    candidate_start,
+                    candidate_end,
+                    _candidate_name_end,
+                    candidate_name,
+                    _excluded,
+                ) in candidates
+                if (candidate_start, candidate_end) == (start, surface_end)
+            }
+        )
+        > 1
+    }
     return tuple(
-        (match.start("name"), match.end("name"), match.group("name"))
-        for match in pattern.finditer(source)
-        if match.group("name") not in rule.excluded_candidates
+        (start, name_end, name)
+        for start, surface_end, name_end, name, excluded in candidates
+        if not excluded and (start, surface_end) not in ambiguous_surfaces
     )
 
 

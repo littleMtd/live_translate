@@ -1106,6 +1106,9 @@ class SceneContextUpdater:
             getattr(cfg.scene, "profile_identity_recovery_clear_sec", 15.0)
         )
         self._profile_recovery_started_at: float | None = None
+        self._unsupported_identity_candidate = ""
+        self._unsupported_identity_started_at: float | None = None
+        self._unsupported_identity_observations = 0
         self._profile_expiry = float(
             getattr(cfg.scene, "profile_identity_expiry_sec", 300.0)
         )
@@ -1567,6 +1570,29 @@ class SceneContextUpdater:
         self._profile_recovery_started_at = None
         self._profile_provider_failure_streak = 0
 
+    def _reset_unsupported_identity_evidence(self) -> None:
+        self._unsupported_identity_candidate = ""
+        self._unsupported_identity_started_at = None
+        self._unsupported_identity_observations = 0
+
+    def _observe_unsupported_identity(self, normalized: str, now: float) -> bool:
+        """Require repeated, time-stable positive evidence before going neutral."""
+        if not normalized:
+            self._reset_unsupported_identity_evidence()
+            return False
+        if normalized != self._unsupported_identity_candidate:
+            self._unsupported_identity_candidate = normalized
+            self._unsupported_identity_started_at = now
+            self._unsupported_identity_observations = 1
+            return False
+        self._unsupported_identity_observations += 1
+        started_at = self._unsupported_identity_started_at
+        return (
+            self._unsupported_identity_observations >= 2
+            and started_at is not None
+            and now - started_at >= self._profile_recovery_clear_sec
+        )
+
     def _expire_profile_if_needed(self, now: float) -> None:
         if (
             not self._profile_enabled
@@ -1996,6 +2022,7 @@ class SceneContextUpdater:
             )
         )
         if observation is None:
+            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "identity_roi_unavailable", stable=False)
             self._emit_profile_resolution(
                 status="unavailable",
@@ -2027,6 +2054,7 @@ class SceneContextUpdater:
             window_generation=window_generation,
         )
         if discard:
+            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "discarded", stable=False)
             self._emit_profile_resolution(
                 status="discarded",
@@ -2051,6 +2079,7 @@ class SceneContextUpdater:
             1, len(getattr(self._identity_roi_vision, "route_identities", ()))
         )
         if not self._reserve_profile_attempt(now, route_capacity):
+            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "rate_limited", stable=False)
             self._emit_profile_resolution(
                 status="throttled",
@@ -2073,6 +2102,7 @@ class SceneContextUpdater:
             result = self._identity_roi_vision.classify(observation.jpeg)
             raw = result.text if isinstance(result, VisionClassification) else result
         except Exception as exc:
+            self._reset_unsupported_identity_evidence()
             diagnostics = exc.diagnostics if isinstance(exc, VisionProviderFailure) else None
             used_attempts = max(1, len(diagnostics.attempt_chain)) if diagnostics is not None else 1
             self._release_unused_profile_attempts(route_capacity, used_attempts)
@@ -2113,14 +2143,23 @@ class SceneContextUpdater:
         normalized = normalize_identity(observed)
         marker = exact_reviewed_member(observed, profile_state.registry)
         if discard:
+            self._reset_unsupported_identity_evidence()
             decision = "discard_stale_identity_read"
             status = "discarded"
             reason = discard
         elif marker is None:
-            decision = "retain_confirmed_profile"
-            status = "unknown"
-            reason = "identity_blank_or_not_reviewed"
+            if self._observe_unsupported_identity(normalized, now):
+                profile_state.confirm_no_profile()
+                self._profile_confirmed_at = now
+                decision = "unsupported_identity_confirmed_no_profile"
+                status = "confirmed_no_profile"
+                reason = "stable_identity_not_reviewed"
+            else:
+                decision = "retain_confirmed_profile"
+                status = "unknown"
+                reason = "identity_blank_or_not_reviewed"
         else:
+            self._reset_unsupported_identity_evidence()
             profile_state.confirm_content(
                 marker.profile_id,
                 confidence=1.0,
@@ -2132,8 +2171,10 @@ class SceneContextUpdater:
             reason = "exact_reviewed_member_name"
         self._schedule_profile_resolution(
             now,
-            "stable" if marker is not None and not discard else "seeking",
-            stable=marker is not None and not discard,
+            "stable"
+            if not discard and status in {"confirmed", "confirmed_no_profile"}
+            else "seeking",
+            stable=not discard and status in {"confirmed", "confirmed_no_profile"},
         )
         self._emit_profile_resolution(
             status=status,

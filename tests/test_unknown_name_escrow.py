@@ -80,13 +80,17 @@ def test_generic_identity_context_rejects_ordinary_and_ambiguous_forms():
 
 
 def test_explicit_member_reference_escrows_source_grounded_referent():
-    escrow = resolve_unknown_name_escrow("하음이라는 멤버가 새로 들어왔어요")
+    escrow = resolve_unknown_name_escrow("키야라는 멤버가 새로 들어왔어요")
 
-    assert escrow.approved_hangul_terms == ("하음",)
-    assert escrow.provider_source == "__LT_UNK_1__이라는 멤버가 새로 들어왔어요"
+    assert escrow.approved_hangul_terms == ("키야",)
+    assert escrow.provider_source == "__LT_UNK_1__라는 멤버가 새로 들어왔어요"
     assert escrow.restore_provider_candidate(
         "新加入了一位叫__LT_UNK_1__的成員。"
-    ) == "新加入了一位叫하음的成員。"
+    ) == "新加入了一位叫키야的成員。"
+
+
+def test_member_reference_rejects_ambiguous_copula_segmentation():
+    assert not resolve_unknown_name_escrow("????? ??? ?? ?????").active
 
 
 def test_member_reference_context_keeps_high_precision_boundaries():

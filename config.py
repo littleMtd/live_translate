@@ -522,6 +522,8 @@ class _Scene:
     profile_identity_stable_call_gap_sec: float = 15.0
     profile_identity_schema_retry_limit: int = 1
     profile_identity_max_attempts_per_minute: int = 12
+    # Minimum duration of repeated, non-empty unsupported identity evidence
+    # before auto profile ownership transitions to confirmed no-profile.
     profile_identity_recovery_clear_sec: float = 15.0
     profile_identity_expiry_sec: float = 300.0
 

@@ -46,6 +46,34 @@ def test_confirmed_content_overrides_source_and_unknown_falls_back(tmp_path):
     assert fallback.generation == confirmed.generation + 1
 
 
+def test_confirmed_no_profile_cannot_be_reclaimed_by_source_configuration(tmp_path):
+    registry = load_registry_snapshot(_registry(tmp_path), version=1)
+    state = ProfileState(registry, source_profile_id="isegye_lilpa")
+
+    neutral = state.confirm_no_profile()
+    reconfigured = state.configure_source("url", mode="auto")
+
+    assert neutral.effective_profile_id == ""
+    assert neutral.confirmation_state == "confirmed_no_profile"
+    assert reconfigured.effective_profile_id == ""
+    assert reconfigured.source_profile_id == "url"
+    assert reconfigured.confirmation_state == "confirmed_no_profile"
+
+
+def test_reviewed_identity_can_take_ownership_from_confirmed_no_profile(tmp_path):
+    registry = load_registry_snapshot(_registry(tmp_path), version=1)
+    state = ProfileState(registry, source_profile_id="isegye_lilpa")
+    neutral = state.confirm_no_profile()
+
+    confirmed = state.confirm_content(
+        "url", evidence_source="authoritative_identity_roi"
+    )
+
+    assert confirmed.effective_profile_id == "url"
+    assert confirmed.confirmation_state == "confirmed"
+    assert confirmed.generation == neutral.generation + 1
+
+
 def test_profile_state_logs_current_effective_profile_on_published_changes(tmp_path, caplog):
     registry = load_registry_snapshot(_registry(tmp_path), version=1)
     state = ProfileState(registry, source_profile_id="isegye_lilpa")

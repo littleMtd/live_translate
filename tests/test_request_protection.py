@@ -5,7 +5,7 @@ from modules.request_protection import (
 
 
 def test_one_request_contract_owns_resolved_unresolved_and_semantic_spans():
-    source = "랑코가 하음이라는 멤버와 막 명조 막 이런 거면 그럴 수 있지"
+    source = "랑코가 키야라는 멤버와 막 명조 막 이런 거면 그럴 수 있지"
     protection = resolve_request_protection(
         source,
         resolved_spans=(ProtectedSourceSpan(
@@ -24,7 +24,7 @@ def test_one_request_contract_owns_resolved_unresolved_and_semantic_spans():
         "semantic_term",
     ]
     assert "랑코" in protection.provider_source
-    assert "하음" not in protection.provider_source
+    assert "키야" not in protection.provider_source
     assert "명조" not in protection.provider_source
     assert protection.provider_source.count("__LT_UNK_1__") == 1
     assert protection.provider_source.count("__LT_SEM_1__") == 1
@@ -33,12 +33,12 @@ def test_one_request_contract_owns_resolved_unresolved_and_semantic_spans():
         "랑코和__LT_UNK_1__一起玩__LT_SEM_1__。"
     )
     assert evaluation.passed
-    assert evaluation.restored_candidate == "랑코和하음一起玩鳴潮。"
+    assert evaluation.restored_candidate == "랑코和키야一起玩鳴潮。"
     assert protection.evaluate_final(evaluation.restored_candidate).passed
 
 
 def test_request_contract_rejects_loss_and_has_mapping_sensitive_identity():
-    source = "하음이라는 멤버가 왔어요"
+    source = "키야라는 멤버가 왔어요"
     first = resolve_request_protection(source)
     second = resolve_request_protection(source)
 
@@ -50,7 +50,7 @@ def test_request_contract_rejects_loss_and_has_mapping_sensitive_identity():
         source,
         resolved_spans=(ProtectedSourceSpan(
             owner="resolved_entity",
-            source_text="하음",
+            source_text="키야",
             source_spans=((0, 2),),
             rendering="Reviewed Target",
             rule_id="entity:reviewed",

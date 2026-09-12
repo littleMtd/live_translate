@@ -2156,15 +2156,13 @@ class Translator:
                 }
         if not promoted:
             result, used_engine = self._call_with_fallback(
-                provider_text,
+                request_protection,
                 system_prompt,
                 incomplete,
                 history,
                 deadline_at=deadline_at,
                 frozen_messages_by_engine=frozen_messages_by_engine,
                 canonical_obligations=canonical_obligations,
-                source_text=text,
-                request_protection=request_protection,
             )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
@@ -2548,7 +2546,10 @@ class Translator:
         )
 
     def _call_with_fallback(
-        self, text: str, system_prompt: str, incomplete: bool,
+        self,
+        request_protection: RequestProtection,
+        system_prompt: str,
+        incomplete: bool,
         history: list[tuple[str, str]] | None = None,
         *,
         deadline_at: float | None = None,
@@ -2556,24 +2557,16 @@ class Translator:
             str, tuple[tuple[str, str], ...]
         ] | None = None,
         canonical_obligations: tuple[CanonicalObligation, ...] | None = None,
-        source_text: str | None = None,
-        request_protection: RequestProtection | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
         actually produced the result — on a soft fallback this differs from
         the active engine, which intentionally stays on primary."""
-        source_text = source_text or text
+        source_text = request_protection.original_source
+        provider_source = request_protection.provider_source
         if canonical_obligations is None:
             entity_context = _resolve_entity_request_context(source_text)
             canonical_obligations = _canonical_obligations_for_request(
                 source_text, entity_context
-            )
-        if request_protection is None:
-            entity_context = _resolve_entity_request_context(source_text)
-            request_protection = _request_protection_for(
-                source_text,
-                entity_context,
-                canonical_obligations,
             )
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
@@ -2587,7 +2580,7 @@ class Translator:
         result, used_idx = call_with_fallback(
             self._engines,
             state,
-            text,
+            provider_source,
             system_prompt,
             incomplete,
             history,

@@ -33,7 +33,10 @@ from modules.translation_prompts import (
     translation_profile_ids,
 )
 from modules.translation_policy import RepetitionEvidence
-from modules.request_protection import FinalProtectionEvaluation
+from modules.request_protection import (
+    FinalProtectionEvaluation,
+    resolve_request_protection,
+)
 from modules.translator import (
     _apply_source_aware_corrections,
     _is_legitimate_preserve_as_is,
@@ -1667,7 +1670,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertNotIn("\uc0ac\uc625\uc324", current_message)
 
     def test_member_referent_protection_survives_primary_rejection_and_fallback(self):
-        primary = _route_engine("deepseek", "有位叫하음的成員加入了。")
+        primary = _route_engine("deepseek", "有位叫키야的成員加入了。")
         fallback = _route_engine(
             "openrouter", "有位叫__LT_UNK_1__的成員加入了。"
         )
@@ -1678,24 +1681,42 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         with _active_translation_profile("url"):
             history_before = translator._history_cohort()
             outcome = translator.translate_event(
-                "하음이라는 멤버가 새로 들어왔어요", False
+                "키야라는 멤버가 새로 들어왔어요", False
             )
             history_after = translator._history_cohort()
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.engine, "openrouter")
-        self.assertEqual(outcome.target_text, "有位叫하음的成員加入了。")
+        self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
         self.assertEqual(history_before, history_after)
         for engine in (primary, fallback):
             current_message = engine.translate_messages.call_args.args[0][-1][1]
             self.assertIn("__LT_UNK_1__", current_message)
-            self.assertNotIn("하음", current_message)
+            self.assertNotIn("키야", current_message)
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(
             attempts[0]["output_guard"]["reason"],
             "unknown_name_placeholder_invalid",
         )
         self.assertEqual(attempts[1]["status"], "success")
+
+    def test_fallback_api_derives_provider_source_from_request_protection(self):
+        engine = _route_engine(
+            "deepseek", "有位叫__LT_UNK_1__的成員加入了。"
+        )
+        translator = _make_translator()
+        translator._engines = [engine]
+        protection = resolve_request_protection("키야라는 멤버가 새로 들어왔어요")
+
+        result, used_engine = translator._call_with_fallback(
+            protection, "system prompt", False
+        )
+
+        self.assertEqual(result, "有位叫__LT_UNK_1__的成員加入了。")
+        self.assertIs(used_engine, engine)
+        provider_source = engine.translate.call_args.args[0]
+        self.assertIn("__LT_UNK_1__", provider_source)
+        self.assertNotIn("키야", provider_source)
 
     def test_protected_member_referent_bypasses_unprotected_cache_lookup(self):
         translator = _make_translator()
@@ -1706,11 +1727,11 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator._lookup_existing_translation_event = MagicMock()
 
         outcome = translator.translate_event(
-            "하음이라는 멤버가 새로 들어왔어요", False
+            "키야라는 멤버가 새로 들어왔어요", False
         )
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "有位叫하음的成員加入了。")
+        self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
         translator._lookup_existing_translation_event.assert_not_called()
 
     def test_excluded_common_member_noun_keeps_unexpected_hangul_guard(self):

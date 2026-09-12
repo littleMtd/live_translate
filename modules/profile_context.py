@@ -368,7 +368,19 @@ class ProfileState:
         mode = values.get("mode", "auto")
         if mode not in {"auto", "manual"}:
             raise ValueError("profile mode must be auto or manual")
-        effective = source if mode == "manual" or not content else content
+        confirmation_state = values.get("confirmation_state", "source_fallback")
+        confirmed_no_profile = (
+            mode == "auto" and confirmation_state == "confirmed_no_profile"
+        )
+        effective = (
+            source
+            if mode == "manual"
+            else content
+            if content
+            else ""
+            if confirmed_no_profile
+            else source
+        )
         return ProfileSnapshot(
             source_profile_id=source,
             content_profile_id="" if mode == "manual" else content,
@@ -378,7 +390,7 @@ class ProfileState:
             registry_version=self._registry.version,
             evidence_source=values.get("evidence_source", "source_default"),
             confidence=values.get("confidence"),
-            confirmation_state=values.get("confirmation_state", "source_fallback"),
+            confirmation_state=confirmation_state,
             mode=mode,
             translation_profile_applied=bool(values.get("translation_profile_applied", True)),
             stt_glossary_applied=bool(values.get("stt_glossary_applied", True)),
@@ -451,13 +463,26 @@ class ProfileState:
             old = self._snapshot
             next_mode = mode or old.mode
             self._generation += 1
+            preserve_observed_state = old.mode == "auto" and next_mode == "auto"
             self._snapshot = self._build(
                 source_profile_id=source_profile_id,
                 content_profile_id=old.content_profile_id if next_mode == "auto" else "",
                 mode=next_mode,
-                evidence_source="manual_hard_lock" if next_mode == "manual" else "source_default",
+                evidence_source=(
+                    "manual_hard_lock"
+                    if next_mode == "manual"
+                    else old.evidence_source
+                    if preserve_observed_state
+                    else "source_default"
+                ),
                 confidence=1.0 if next_mode == "manual" else old.confidence,
-                confirmation_state="manual_locked" if next_mode == "manual" else "source_fallback",
+                confirmation_state=(
+                    "manual_locked"
+                    if next_mode == "manual"
+                    else old.confirmation_state
+                    if preserve_observed_state
+                    else "source_fallback"
+                ),
                 translation_profile_applied=(
                     old.translation_profile_applied
                     if translation_profile_applied is None
@@ -498,10 +523,38 @@ class ProfileState:
             self._log_effective_snapshot(self._snapshot, action="content_confirmed")
             return self._snapshot
 
+    def confirm_no_profile(
+        self,
+        *,
+        evidence_source: str = "authoritative_identity_unsupported",
+    ) -> ProfileSnapshot:
+        """Publish positive evidence that no reviewed profile owns the scene."""
+        with self._lock:
+            old = self._snapshot
+            if old.mode == "manual":
+                return old
+            if old.confirmation_state == "confirmed_no_profile":
+                self._confirmed_at = self._clock()
+                return old
+            self._generation += 1
+            self._confirmed_at = self._clock()
+            self._snapshot = self._build(
+                source_profile_id=old.source_profile_id,
+                content_profile_id="",
+                mode=old.mode,
+                evidence_source=evidence_source,
+                confidence=1.0,
+                confirmation_state="confirmed_no_profile",
+                translation_profile_applied=old.translation_profile_applied,
+                stt_glossary_applied=old.stt_glossary_applied,
+            )
+            self._log_effective_snapshot(self._snapshot, action="no_profile_confirmed")
+            return self._snapshot
+
     def clear_content(self, reason: str = "unknown") -> ProfileSnapshot:
         with self._lock:
             old = self._snapshot
-            if old.mode == "manual" or not old.content_profile_id:
+            if old.mode == "manual" or old.confirmation_state == "source_fallback":
                 return old
             self._generation += 1
             self._confirmed_at = None

@@ -321,6 +321,58 @@ def test_unknown_identity_roi_retains_confirmed_profile_and_does_not_fallback():
     assert event["activation_decision"] == "retain_confirmed_profile"
 
 
+def test_stable_unsupported_identity_roi_confirms_no_profile_after_grace():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    identity_reader = QuerySequence([
+        '{"identity":"unsupported channel"}',
+        '{"identity":"unsupported channel"}',
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, clock = make_updater(
+            frames=[image_frame(40), image_frame(100)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater._profile_recovery_clear_sec = 15
+        updater.tick()
+        clock.advance(15)
+        updater.tick()
+
+    assert state.current().effective_profile_id == ""
+    assert state.current().confirmation_state == "confirmed_no_profile"
+    event = [
+        item for item in events if item["event_type"] == "profile_resolution"
+    ][-1]
+    assert event["activation_decision"] == "unsupported_identity_confirmed_no_profile"
+
+
+def test_unsupported_identity_evidence_must_be_consistent_and_nonempty():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    identity_reader = QuerySequence([
+        '{"identity":"first unsupported"}',
+        '{"identity":""}',
+        '{"identity":"second unsupported"}',
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, clock = make_updater(
+            frames=[image_frame(40), image_frame(100), image_frame(180)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        for _ in range(3):
+            updater.tick()
+            clock.advance(15)
+
+    assert state.current().effective_profile_id == "url"
+    assert state.current().confirmation_state == "confirmed"
+
+
 def test_calibrated_roi_capture_failure_never_expires_confirmed_profile():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     state.confirm_content("url", evidence_source="authoritative_identity_roi")
