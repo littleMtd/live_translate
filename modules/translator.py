@@ -771,24 +771,27 @@ def _apply_source_aware_corrections(source: str, result: str) -> str:
 
 def _target_has_bounded_term(target: str, term: str) -> bool:
     """Match a canonical target as a token, not as part of another name."""
-    start = target.find(term)
+    latin_target = any(_is_latin_letter(char) for char in term)
+    search_target = target.casefold() if latin_target else target
+    search_term = term.casefold() if latin_target else term
+    start = search_target.find(search_term)
     while start >= 0:
-        end = start + len(term)
-        left = target[start - 1] if start else ""
-        right = target[end] if end < len(target) else ""
+        end = start + len(search_term)
+        left = search_target[start - 1] if start else ""
+        right = search_target[end] if end < len(search_target) else ""
         if not (
-            left and term[0].isascii() and term[0].isalnum()
+            left and search_term[0].isascii() and search_term[0].isalnum()
             and left.isascii() and left.isalnum()
         ) and not (
-            right and term[-1].isascii() and term[-1].isalnum()
+            right and search_term[-1].isascii() and search_term[-1].isalnum()
             and right.isascii() and right.isalnum()
         ) and not (
-            left and _is_hangul_syllable(term[0]) and _is_hangul_syllable(left)
+            left and _is_hangul_syllable(search_term[0]) and _is_hangul_syllable(left)
         ) and not (
-            right and _is_hangul_syllable(term[-1]) and _is_hangul_syllable(right)
+            right and _is_hangul_syllable(search_term[-1]) and _is_hangul_syllable(right)
         ):
             return True
-        start = target.find(term, start + 1)
+        start = search_target.find(search_term, start + 1)
     return False
 
 
@@ -945,7 +948,7 @@ def _preview_source_aware_corrections(
 
 
 def _translation_output_guard(
-    engine: TranslationEngine,
+    engine: TranslationEngine | None,
     result: str,
     source: str,
     *,
@@ -1919,12 +1922,19 @@ class Translator:
             else self._translate_slang(text, incomplete)
         )
         if slang_result:
-            slang_preview, _ = _preview_source_aware_corrections(text, slang_result)
-            slang_evaluation = evaluate_canonical_obligations(
-                slang_preview, canonical_obligations
+            slang_guard = _translation_output_guard(
+                None,
+                slang_result,
+                text,
+                obligations=canonical_obligations,
             )
-            if slang_evaluation.passed:
-                slang_result = _apply_source_aware_corrections(text, slang_result)
+            if not slang_guard.get("reason"):
+                slang_result = str(
+                    slang_guard.get("candidate_output") or slang_result
+                )
+                slang_evaluation = evaluate_canonical_obligations(
+                    slang_result, canonical_obligations
+                )
                 success_commit = lambda: self._record_direct_success(
                     text,
                     slang_result,
@@ -1944,7 +1954,9 @@ class Translator:
                     canonical_obligation_evaluation=slang_evaluation,
                     deferred_success=success_commit,
                 )
-            metrics.increment("translation.canonical_obligation.slang_rejected")
+            metrics.increment(
+                "translation.publication_invariant.slang_rejected"
+            )
 
         # 根据当前模型选择对应的 prompt
         self._refresh_engines_if_needed()
@@ -1961,24 +1973,45 @@ class Translator:
             )
         )
         if lookup.result:
-            target_preview, _ = _preview_source_aware_corrections(text, lookup.result)
-            cache_evaluation = evaluate_canonical_obligations(
-                target_preview, canonical_obligations
+            cache_guard = _translation_output_guard(
+                None,
+                lookup.result,
+                text,
+                obligations=canonical_obligations,
             )
-            if not cache_evaluation.passed:
-                metrics.increment("translation.canonical_obligation.cache_rejected")
+            if cache_guard.get("reason"):
+                metrics.increment(
+                    "translation.publication_invariant.cache_rejected"
+                )
                 self._invalidate_cached_translation(
-                    text, incomplete, prompt_ver, engine, lookup.result
+                    text,
+                    incomplete,
+                    prompt_ver,
+                    engine,
+                    lookup.result,
+                    history_cohort,
                 )
                 lookup = MemoryLookup(None, "miss")
             else:
-                target_text = _apply_source_aware_corrections(text, lookup.result)
+                target_text = str(
+                    cache_guard.get("candidate_output") or lookup.result
+                )
+                cache_evaluation = evaluate_canonical_obligations(
+                    target_text, canonical_obligations
+                )
         if lookup.result:
             if (
                 _looks_like_meta_garbage_output(target_text)
                 or _looks_like_model_refusal(target_text)
             ):
-                self._invalidate_cached_translation(text, incomplete, prompt_ver, engine, lookup.result)
+                self._invalidate_cached_translation(
+                    text,
+                    incomplete,
+                    prompt_ver,
+                    engine,
+                    lookup.result,
+                    history_cohort,
+                )
                 self._reset_failed_input()
                 return TranslationOutcome(
                     source_text=raw_text,
@@ -2398,10 +2431,16 @@ class Translator:
         prompt_ver: str,
         active_engine: TranslationEngine | None,
         result: str | None,
+        cohort: HistoryCohort | None = None,
     ) -> None:
         with self._state_guard():
             self._memory_state().invalidate_memory(
-                text, incomplete, prompt_ver, active_engine, result
+                text,
+                incomplete,
+                prompt_ver,
+                active_engine,
+                result,
+                cohort,
             )
         # DB delete outside the shared lock (M1). The delete is NOT gated on
         # _db_cache_enabled(): stale rows must be purged even if the cache layer

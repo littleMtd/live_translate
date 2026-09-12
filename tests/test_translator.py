@@ -454,6 +454,25 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(guard["reason"], "unactivated_entity_target")
         self.assertEqual(guard["unactivated_entity_targets"], ["Chaenna"])
 
+    def test_unactivated_latin_entity_target_is_case_insensitive(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            for target in ("CHAENNA說要驗收。", "chaenna說要驗收。"):
+                with self.subTest(target=target):
+                    guard = _translation_output_guard(
+                        engine,
+                        target,
+                        "찬양님이 검수해달라 그랬어.",
+                    )
+                    self.assertEqual(
+                        guard["reason"], "unactivated_entity_target"
+                    )
+                    self.assertEqual(
+                        guard["unactivated_entity_targets"], ["Chaenna"]
+                    )
+
     def test_unactivated_entity_target_uses_fallback_without_switching_route(self):
         translator = _make_translator()
         primary = _route_engine("deepseek", "Chaenna說要驗收。")
@@ -1899,6 +1918,79 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertEqual(outcome.result_source, "api")
         self.assertEqual(outcome.target_text, "모카來了。")
 
+    def test_cache_with_unactivated_entity_target_is_invalidated(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "有人要驗收。")]
+        invalidator = MagicMock()
+        translator._invalidate_cached_translation = invalidator
+        translator._lookup_existing_translation_event = MagicMock(
+            return_value=translator_module.MemoryLookup(
+                "CHAENNA說要驗收。", "memory_hit"
+            )
+        )
+
+        with _active_translation_profile("hades_chxxnnx"):
+            outcome = translator.translate_event("찬양님이 검수해달라 그랬어.")
+
+        invalidator.assert_called_once()
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "有人要驗收。")
+
+    def test_rejected_cache_is_removed_from_its_profile_history_cohort(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "有人要驗收。")]
+        source = "찬양님이 검수해달라 그랬어."
+        cached = "CHAENNA說要驗收。"
+
+        with _active_translation_profile("hades_chxxnnx"):
+            engine = translator._active_engine()
+            prompt_ver = translator._get_prompt_version_hash()
+            cohort = translator._history_cohort()
+            translator._memory.cache_store(
+                source, False, cached, prompt_ver, engine
+            )
+
+            outcome = translator.translate_event(source)
+            context = translator._memory.context(cohort)
+
+        self.assertEqual(outcome.target_text, "有人要驗收。")
+        self.assertNotIn((source, cached), context)
+        self.assertIn((source, "有人要驗收。"), context)
+
+    def test_cache_with_simplified_script_is_invalidated(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "後臺樣子很誇張。")]
+        invalidator = MagicMock()
+        translator._invalidate_cached_translation = invalidator
+        translator._lookup_existing_translation_event = MagicMock(
+            return_value=translator_module.MemoryLookup(
+                "后台样子很夸张。", "memory_hit"
+            )
+        )
+
+        outcome = translator.translate_event("백스테이지 모습이 너무 과장됐어.")
+
+        invalidator.assert_called_once()
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "後臺樣子很誇張。")
+
+    def test_cache_with_unexpected_japanese_is_invalidated(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "這是測試。")]
+        invalidator = MagicMock()
+        translator._invalidate_cached_translation = invalidator
+        translator._lookup_existing_translation_event = MagicMock(
+            return_value=translator_module.MemoryLookup(
+                "這是テスト。", "memory_hit"
+            )
+        )
+
+        outcome = translator.translate_event("이건 테스트야.")
+
+        invalidator.assert_called_once()
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "這是測試。")
+
     def test_slang_missing_canonical_falls_through_to_provider(self):
         translator = _make_translator()
         translator._engines = [_route_engine("deepseek", "모카來了。")]
@@ -1909,6 +2001,18 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
         self.assertEqual(outcome.result_source, "api")
         self.assertEqual(outcome.target_text, "모카來了。")
+        translator._engines[0].translate_messages.assert_called_once()
+
+    def test_slang_with_unactivated_entity_target_falls_through_to_provider(self):
+        translator = _make_translator()
+        translator._engines = [_route_engine("deepseek", "有人要驗收。")]
+        translator._translate_slang = MagicMock(return_value="Chaenna說要驗收。")
+
+        with _active_translation_profile("hades_chxxnnx"):
+            outcome = translator.translate_event("찬양님이 검수해달라 그랬어.")
+
+        self.assertEqual(outcome.result_source, "api")
+        self.assertEqual(outcome.target_text, "有人要驗收。")
         translator._engines[0].translate_messages.assert_called_once()
 
     def test_required_canonical_matrix_resolves_and_accepts(self):

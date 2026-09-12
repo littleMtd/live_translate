@@ -193,10 +193,11 @@ class TranslationMemory:
         prompt_ver: str,
         active_engine: TranslationEngine | None = None,
         result: str | None = None,
+        cohort: HistoryCohort | None = None,
     ) -> None:
         """In-memory part of invalidate; caller does the DB delete outside."""
         self.cache.pop(self._cache_key(text, incomplete, prompt_ver, active_engine), None)
-        self._forget_recent(text, result)
+        self._forget_recent(text, result, cohort)
 
     def invalidate_db(
         self, text: str, active_engine: TranslationEngine, prompt_ver: str
