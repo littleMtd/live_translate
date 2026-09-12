@@ -1463,32 +1463,33 @@ class SceneContextUpdater:
         self._prev_thumb = None
         self._pending_change = True
         if self._profile_enabled:
-            self._profile_consensus.reset()
-            profile_state.clear_content(status)
+            # Observation loss can retire pending evidence, but it cannot
+            # prove that the confirmed broadcaster changed.
+            self._profile_consensus.reset(self._resolver.window_generation)
             self._profile_next_call_at = None
             self._profile_resolver_state = status
-            self._profile_recovery_started_at = None
+            if self._profile_recovery_started_at is None:
+                self._profile_recovery_started_at = now
             self._profile_observation_suspended_at = None
             if had_profile_content:
                 self._emit_profile_resolution(
-                status="invalidated",
-                reason=status,
-                state_transition="window_to_invalid",
-                activation_decision="fallback_to_source",
-                window_generation=self._resolver.window_generation,
-                registry_generation=profile_state.registry.version,
-                **profile_state.current().as_metadata(),
-            )
+                    status="suspended",
+                    reason=status,
+                    state_transition="window_to_observation_lost",
+                    activation_decision="retain_confirmed_profile",
+                    stale_profile_cleared=False,
+                    window_generation=self._resolver.window_generation,
+                    registry_generation=profile_state.registry.version,
+                    **profile_state.current().as_metadata(),
+                )
         self._sync_publication("invalid_window")
         self._expire_if_needed()
 
     def _clear_for_window_generation(
         self,
         reason: str,
-        *,
-        retain_profile: bool = False,
     ) -> None:
-        """A confirmed activity is scoped to exactly one window generation."""
+        """Reset window-scoped evidence while retaining confirmed identity."""
         had_profile_content = bool(profile_state.current().content_profile_id)
         self._confirmed = None
         self._invalid_until = None
@@ -1496,24 +1497,21 @@ class SceneContextUpdater:
         self._open_set_identity_cap_exhausted = False
         if self._profile_enabled:
             self._profile_consensus.reset(self._resolver.window_generation)
-            if not retain_profile:
-                profile_state.clear_content(reason)
             self._profile_next_call_at = None
-            self._profile_resolver_state = (
-                "revalidating_visible_player" if retain_profile else "window_changed"
-            )
+            self._profile_resolver_state = "revalidating_visible_player"
             self._profile_recovery_started_at = None
             self._profile_observation_suspended_at = None
-            if had_profile_content and not retain_profile:
+            if had_profile_content:
                 self._emit_profile_resolution(
-                status="invalidated",
-                reason=reason,
-                state_transition="window_generation_changed",
-                activation_decision="fallback_to_source",
-                window_generation=self._resolver.window_generation,
-                registry_generation=profile_state.registry.version,
-                **profile_state.current().as_metadata(),
-            )
+                    status="revalidating",
+                    reason=reason,
+                    state_transition="window_generation_changed",
+                    activation_decision="retain_confirmed_profile",
+                    stale_profile_cleared=False,
+                    window_generation=self._resolver.window_generation,
+                    registry_generation=profile_state.registry.version,
+                    **profile_state.current().as_metadata(),
+                )
         self._sync_publication(reason)
 
     def _schedule_profile_resolution(
@@ -1562,17 +1560,8 @@ class SceneContextUpdater:
     ) -> bool:
         if self._profile_recovery_started_at is None:
             self._profile_recovery_started_at = now
-        cleared = False
-        if (
-            profile_state.current().content_profile_id
-            and now - self._profile_recovery_started_at >= self._profile_recovery_clear_sec
-        ):
-            profile_state.clear_content(reason)
-            self._profile_confirmed_at = None
-            self._profile_consensus.reset(self._resolver.window_generation)
-            cleared = True
         self._schedule_profile_resolution(now, state, stable=False, gap=gap)
-        return cleared
+        return False
 
     def _leave_profile_recovery(self) -> None:
         self._profile_recovery_started_at = None
@@ -1589,10 +1578,9 @@ class SceneContextUpdater:
             return
         self._profile_confirmed_at = None
         self._profile_consensus.reset(self._resolver.window_generation)
-        profile_state.clear_content("profile_expired")
         self._profile_next_call_at = None
         self._profile_resolver_state = "expired"
-        self._profile_recovery_started_at = None
+        self._profile_recovery_started_at = now
 
     def _resolve_content_profile(
         self,
@@ -1647,7 +1635,6 @@ class SceneContextUpdater:
             window_generation=window_generation,
         )
         if discard:
-            profile_state.clear_content(discard)
             self._profile_consensus.reset(window_generation)
             return
         started = self._clock()
@@ -1803,7 +1790,6 @@ class SceneContextUpdater:
             window_generation=window_generation,
         )
         if discard:
-            profile_state.clear_content(discard)
             self._profile_consensus.reset(window_generation)
             self._schedule_profile_resolution(now, "discarded", stable=False)
             self._emit_profile_resolution(
@@ -2250,7 +2236,6 @@ class SceneContextUpdater:
         if self._resolver.window_generation != self._consensus_window_generation:
             self._clear_for_window_generation(
                 "window_generation_changed",
-                retain_profile=not resolution.ownership_changed,
             )
             self._consensus.reset()
             self._last_distinct_evidence_at = None

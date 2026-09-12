@@ -314,7 +314,9 @@ def test_unknown_identity_roi_retains_confirmed_profile_and_does_not_fallback():
         updater.tick()
     assert state.current().effective_profile_id == "url"
     assert state.current().confirmation_state == "confirmed"
-    event = next(item for item in events if item["event_type"] == "profile_resolution")
+    event = [
+        item for item in events if item["event_type"] == "profile_resolution"
+    ][-1]
     assert event["status"] == "unknown"
     assert event["activation_decision"] == "retain_confirmed_profile"
 
@@ -426,7 +428,7 @@ def test_roi_noise_does_not_exhaust_budget_or_hide_a_real_channel_change():
     assert state.current().effective_profile_id == "hades_chxxnnx"
 
 
-def test_content_profile_requires_two_distinct_frames_and_invalidates_on_destroyed_window():
+def test_destroyed_window_retains_confirmed_profile_until_new_identity_is_confirmed():
     state = ProfileState(profile_state.registry, source_profile_id="url")
     profile_provider = QuerySequence([
         '{"profile_id":"isegye_lilpa","matched_markers":[]}',
@@ -446,6 +448,7 @@ def test_content_profile_requires_two_distinct_frames_and_invalidates_on_destroy
         updater.tick()
         assert state.current().content_profile_id == "isegye_lilpa"
         assert state.current().effective_profile_id == "isegye_lilpa"
+        confirmed_snapshot = state.current()
         assert [event["status"] for event in events if event["event_type"] == "profile_resolution"] == [
             "candidate",
             "confirmed",
@@ -454,8 +457,33 @@ def test_content_profile_requires_two_distinct_frames_and_invalidates_on_destroy
         source.candidates = []
         clock.advance(1)
         updater.tick()
-        assert state.current().content_profile_id == ""
-        assert state.current().effective_profile_id == "url"
+        assert state.current() is confirmed_snapshot
+        assert state.current().content_profile_id == "isegye_lilpa"
+        assert state.current().effective_profile_id == "isegye_lilpa"
+        profile_event = [
+            event for event in events
+            if event["event_type"] == "profile_resolution"
+        ][-1]
+        assert profile_event["state_transition"] == "window_to_observation_lost"
+        assert profile_event["activation_decision"] == "retain_confirmed_profile"
+
+
+def test_runtime_url_profile_does_not_fall_back_to_isegye_on_window_loss():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    confirmed = state.current()
+    with patch.object(scene_context, "profile_state", state):
+        updater, source, *_rest = make_updater(
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+        )
+        source.candidates = []
+        updater.tick()
+
+    assert state.current() is confirmed
+    assert state.current().effective_profile_id == "url"
+    assert state.current().generation == confirmed.generation
+    assert state.current().cache_identity == confirmed.cache_identity
 
 
 def _profile_result(profile_id, *marker_ids):
@@ -687,7 +715,7 @@ def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
     assert len(unknown_provider.calls) == 2
 
 
-def test_capture_failure_expires_confirmed_profile_and_enters_fast_recovery():
+def test_sustained_capture_failure_retains_confirmed_profile_and_recovers_fast():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     unavailable = CaptureFrame(status="capture_unavailable", frame_quality="unavailable")
     confirmed = _profile_result("url", "url_member_moka", "url_brand_group")
@@ -710,8 +738,8 @@ def test_capture_failure_expires_confirmed_profile_and_enters_fast_recovery():
         assert state.current().effective_profile_id == "url"
         clock.advance(15)
         updater.tick()
-    assert state.current().content_profile_id == ""
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().content_profile_id == "url"
+    assert state.current().effective_profile_id == "url"
     assert updater._profile_resolver_state == "capture_failure"
     assert updater._profile_next_call_at == clock.now + updater._profile_fast_gap
 
