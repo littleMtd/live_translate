@@ -20,6 +20,15 @@
             "identity_visible": 0,
             "stt": 0
           }
+        },
+        {
+          "value": "아이네🎵",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
         }
       ],
       "provenance": "migrated_reviewed_production_data",
@@ -49,6 +58,15 @@
           "order": {
             "identity_visible": 0,
             "stt": 0
+          }
+        },
+        {
+          "value": "징버거☆",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
           }
         }
       ],
@@ -103,6 +121,15 @@
           ],
           "order": {
             "translation_source": 1
+          }
+        },
+        {
+          "value": "릴파🎵",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
           }
         },
         {
@@ -199,6 +226,15 @@
           "order": {
             "identity_visible": 1,
             "display": 0
+          }
+        },
+        {
+          "value": "고세구!",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
           }
         }
       ],
@@ -486,6 +522,15 @@
           "order": {
             "identity_visible": 1,
             "display": 0
+          }
+        },
+        {
+          "value": "연초록🎵",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
           }
         }
       ],
@@ -788,6 +833,15 @@
           "order": {
             "translation_source": 1
           }
+        },
+        {
+          "value": "띵귤_",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
         }
       ],
       "provenance": "migrated_reviewed_production_data",
@@ -953,6 +1007,15 @@
           }
         },
         {
+          "value": "모카:b",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
+        },
+        {
           "value": "목화",
           "scopes": [
             "translation_source"
@@ -1112,6 +1175,15 @@
           "order": {
             "identity_visible": 1,
             "translation_source": 1
+          }
+        },
+        {
+          "value": "마냥_",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
           }
         }
       ],

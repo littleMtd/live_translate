@@ -54,11 +54,23 @@ def test_alias_scopes_are_isolated_and_lookup_is_exact():
     assert translation_only and translation_only.entity_id == "url_ranko"
     assert ENTITY_REGISTRY.exact_lookup("김랑코", "stt", "url") is None
 
-    ranko_roi = ENTITY_REGISTRY.exact_lookup("랑코_", "identity_ocr", "url")
-    assert ranko_roi and ranko_roi.entity_id == "url_ranko"
-    assert ENTITY_REGISTRY.exact_lookup("랑코_", "identity_visible", "url") is None
-    assert ENTITY_REGISTRY.exact_lookup("랑코_", "stt", "url") is None
-    assert ENTITY_REGISTRY.exact_lookup("랑코_", "translation_source", "url") is None
+    reviewed_roi_aliases = (
+        ("랑코_", "url", "url_ranko"),
+        ("마냥_", "url", "url_manyang"),
+        ("모카:b", "url", "url_moka"),
+        ("고세구!", "isegye_lilpa", "isegye_gosegu"),
+        ("징버거☆", "isegye_lilpa", "isegye_jingburger"),
+        ("릴파🎵", "isegye_lilpa", "isegye_lilpa_member"),
+        ("아이네🎵", "isegye_lilpa", "isegye_ine"),
+        ("띵귤_", "hades_chxxnnx", "hades_singgyul"),
+        ("연초록🎵", "hades_chxxnnx", "hades_yeon_chorok"),
+    )
+    for alias, profile_id, entity_id in reviewed_roi_aliases:
+        roi = ENTITY_REGISTRY.exact_lookup(alias, "identity_ocr", profile_id)
+        assert roi and roi.entity_id == entity_id
+        assert ENTITY_REGISTRY.exact_lookup(alias, "identity_visible", profile_id) is None
+        assert ENTITY_REGISTRY.exact_lookup(alias, "stt", profile_id) is None
+        assert ENTITY_REGISTRY.exact_lookup(alias, "translation_source", profile_id) is None
 
 
 def test_context_required_collision_policy_survives_migration():
