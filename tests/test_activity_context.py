@@ -64,6 +64,8 @@ def test_source_local_lol_activity_is_exact_and_fail_closed():
         "롤을 접을까?",
         "롤게임 하자",
         "와드 지우고 바텀 가요",
+        "갈리오 내려놔. 나 궁 한 개 가능.",
+        "녹턴도 간다. 나 궁 있어.",
     ):
         snapshot = infer_source_local_activity(source)
         assert snapshot is not None
@@ -81,6 +83,7 @@ def test_source_local_lol_activity_is_exact_and_fail_closed():
         "I study CS at university",
         "CS 고객센터에 문의하세요",
         "lol that was funny",
+        "이거 없다. A 완전 A. 나 궁 갈게.",
     ):
         assert infer_source_local_activity(source) is None
 

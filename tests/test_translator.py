@@ -55,6 +55,7 @@ from modules.activity_context import (
     bind_activity_snapshot,
     bind_profile_id,
     capture_activity_snapshot,
+    capture_effective_activity_snapshot,
     effective_activity_value,
     effective_profile_id,
 )
@@ -5755,6 +5756,30 @@ class TestProvisionalPromotion(unittest.TestCase):
 
 
 class TestSemanticTerminologyIntegration(unittest.TestCase):
+    def test_runtime_lol_ultimate_is_restored_before_publication(self):
+        translator = _make_translator()
+        engine = _route_engine(
+            "deepseek",
+            "加里歐來了。我可以用一次__LT_SEM_1__。",
+        )
+        translator._engines = [engine]
+        source = "갈리오 왔다. 나 궁 한 개 가능."
+        snapshot = capture_effective_activity_snapshot(
+            "",
+            automatic_enabled=False,
+            source_text=source,
+        )
+
+        with bind_activity_snapshot(snapshot):
+            outcome = translator.translate_event(source)
+
+        self.assertEqual(snapshot.activity_id, "league_of_legends")
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "加里歐來了。我可以用一次大招。")
+        sent = engine.translate_messages.call_args.args[0][-1][1]
+        self.assertIn("__LT_SEM_1__", sent)
+        self.assertNotIn("궁", sent)
+
     def test_final_terminology_rejection_allows_identical_input_retry(self):
         translator = _make_translator()
         engine = _route_engine("deepseek", "我變成__LT_SEM_1__了")

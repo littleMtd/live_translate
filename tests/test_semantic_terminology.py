@@ -1,3 +1,4 @@
+from modules.activity_context import bind_activity_snapshot, capture_activity_snapshot
 from modules.semantic_terminology import resolve_semantic_terminology
 
 
@@ -86,3 +87,34 @@ def test_amplification_release_does_not_generalize_from_unrelated_pulda():
         "마이크 해제해 주시면 됩니다",
     ):
         assert not resolve_semantic_terminology(source).active
+
+
+def test_lol_ultimate_is_enforced_only_under_bound_lol_activity():
+    snapshot = capture_activity_snapshot("League of Legends", source="local_source")
+    with bind_activity_snapshot(snapshot):
+        escrow = resolve_semantic_terminology(
+            "갈리오 왔다. 나 궁 한 개 가능."
+        )
+
+    assert [term.rule_id for term in escrow.terms] == ["lol_ultimate"]
+    assert escrow.provider_source == "갈리오 왔다. 나 __LT_SEM_1__ 한 개 가능."
+    assert escrow.evaluate_provider_candidate("我可以用一次__LT_SEM_1__。") == (
+        True,
+        "",
+    )
+    restored = escrow.restore_provider_candidate("我可以用一次__LT_SEM_1__。")
+    assert restored == "我可以用一次大招。"
+    assert escrow.evaluate_final(restored) == (True, "")
+
+
+def test_lol_ultimate_rule_rejects_unbound_and_ordinary_palace_words():
+    assert not resolve_semantic_terminology("나 궁 한 개 가능.").active
+
+    snapshot = capture_activity_snapshot("League of Legends", source="local_source")
+    with bind_activity_snapshot(snapshot):
+        for source in (
+            "경복궁에 갔어요.",
+            "궁금한 게 있어요.",
+            "활과 화살을 준비했어요.",
+        ):
+            assert not resolve_semantic_terminology(source).active

@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from modules.activity_context import bound_activity_snapshot
+
 
 _PLACEHOLDER_RE = re.compile(r"__LT_SEM_[1-9][0-9]*__")
 
@@ -98,11 +100,26 @@ _RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
 )
 
+_ACTIVITY_RULES: dict[str, tuple[tuple[str, re.Pattern[str], str], ...]] = {
+    "league_of_legends": (
+        (
+            "lol_ultimate",
+            re.compile(r"(?<![가-힣])궁(?=$|[^가-힣]|[이가은는을를도만과와로에])"),
+            "大招",
+        ),
+    ),
+}
+
 
 def resolve_semantic_terminology(source: str) -> SemanticTerminologyEscrow:
     """Resolve at most one exact occurrence of each v1 semantic term."""
     matches: list[tuple[int, int, str, str, str]] = []
-    for rule_id, pattern, target in _RULES:
+    snapshot = bound_activity_snapshot()
+    activity_rules = _ACTIVITY_RULES.get(
+        snapshot.activity_id if snapshot is not None else "",
+        (),
+    )
+    for rule_id, pattern, target in (*_RULES, *activity_rules):
         found = list(pattern.finditer(source))
         if len(found) != 1:
             continue
