@@ -54,6 +54,12 @@ def test_alias_scopes_are_isolated_and_lookup_is_exact():
     assert translation_only and translation_only.entity_id == "url_ranko"
     assert ENTITY_REGISTRY.exact_lookup("김랑코", "stt", "url") is None
 
+    ranko_roi = ENTITY_REGISTRY.exact_lookup("랑코_", "identity_ocr", "url")
+    assert ranko_roi and ranko_roi.entity_id == "url_ranko"
+    assert ENTITY_REGISTRY.exact_lookup("랑코_", "identity_visible", "url") is None
+    assert ENTITY_REGISTRY.exact_lookup("랑코_", "stt", "url") is None
+    assert ENTITY_REGISTRY.exact_lookup("랑코_", "translation_source", "url") is None
+
 
 def test_context_required_collision_policy_survives_migration():
     rules = {rule.canonical: rule for rule in load_translation_corrections().name_rendering_rules if rule.scope == "url"}

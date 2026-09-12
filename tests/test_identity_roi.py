@@ -63,6 +63,7 @@ def test_identity_parser_and_lookup_are_exact_and_conservative():
     assert parse_observed_identity('{"identity":"  Ranko  "}') == "Ranko"
     assert normalize_identity("  RANKO ") == "ranko"
     assert exact_reviewed_member("RANKO", registry).marker_id == "url_member_ranko"
+    assert exact_reviewed_member("랑코_", registry).marker_id == "url_member_ranko"
     assert exact_reviewed_member("솜망", registry).marker_id == "url_member_sommyang"
     assert exact_reviewed_member("솔망", registry).marker_id == "url_member_sommyang"
     assert exact_reviewed_member("솨먕", registry).marker_id == "url_member_sommyang"

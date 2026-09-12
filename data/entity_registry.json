@@ -1030,6 +1030,15 @@
           }
         },
         {
+          "value": "랑코_",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
+        },
+        {
           "value": "김랑코",
           "scopes": [
             "translation_source"
