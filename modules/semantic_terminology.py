@@ -23,6 +23,7 @@ class SemanticTerm:
     source_text: str
     target_text: str
     placeholder: str
+    source_spans: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,8 @@ def resolve_semantic_terminology(source: str) -> SemanticTerminologyEscrow:
     ):
         placeholder = f"__LT_SEM_{index}__"
         provider = provider[:start] + placeholder + provider[end:]
-        terms.append(SemanticTerm(rule_id, matched, target, placeholder))
+        terms.append(SemanticTerm(
+            rule_id, matched, target, placeholder, ((start, end),)
+        ))
     terms.reverse()
     return SemanticTerminologyEscrow(source, provider, tuple(terms))

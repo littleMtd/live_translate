@@ -93,13 +93,10 @@ from modules.translation_runtime import (
 )
 from modules.translation_memory import HistoryCohort, MemoryLookup, TranslationMemory
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
-from modules.unknown_name_escrow import (
-    UnknownNameEscrow,
-    resolve_unknown_name_escrow,
-)
-from modules.semantic_terminology import (
-    SemanticTerminologyEscrow,
-    resolve_semantic_terminology,
+from modules.request_protection import (
+    ProtectedSourceSpan,
+    RequestProtection,
+    resolve_request_protection,
 )
 from modules.entity_registry import ENTITY_REGISTRY, EntityActivation
 from modules.translation_corrections import (
@@ -552,6 +549,48 @@ def _canonical_obligations_for_request(
     return tuple(result)
 
 
+def _request_protection_for(
+    source: str,
+    entity_context: _EntityRequestContext,
+    obligations: tuple[CanonicalObligation, ...],
+) -> RequestProtection:
+    """Freeze all deterministic source ownership before provider routing."""
+    resolved: list[ProtectedSourceSpan] = []
+    seen: set[tuple[tuple[tuple[int, int], ...], str]] = set()
+    for activation in entity_context.activations:
+        key = (activation.source_spans, activation.canonical_target)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(ProtectedSourceSpan(
+            owner="resolved_entity",
+            source_text=activation.matched_alias,
+            source_spans=activation.source_spans,
+            rendering=activation.canonical_target,
+            rule_id=f"entity:{activation.entity.entity_id}",
+        ))
+    for obligation in obligations:
+        key = (obligation.source_spans, obligation.canonical_target)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(ProtectedSourceSpan(
+            owner="resolved_entity",
+            source_text=obligation.matched_alias,
+            source_spans=obligation.source_spans,
+            rendering=obligation.canonical_target,
+            rule_id=obligation.rule_id,
+        ))
+    known_source_spans = tuple(dict.fromkeys(
+        span for item in resolved for span in item.source_spans
+    ))
+    return resolve_request_protection(
+        source,
+        resolved_spans=tuple(resolved),
+        known_source_spans=known_source_spans,
+    )
+
+
 def _resolve_active_canonical_obligations(
     source: str,
 ) -> tuple[CanonicalObligation, ...]:
@@ -953,8 +992,7 @@ def _translation_output_guard(
     source: str,
     *,
     obligations: tuple[CanonicalObligation, ...] | None = None,
-    unknown_name_escrow: UnknownNameEscrow | None = None,
-    semantic_terminology: SemanticTerminologyEscrow | None = None,
+    request_protection: RequestProtection | None = None,
 ) -> dict[str, object]:
     """Enforce publication script safety plus narrow Flash-specific guards.
 
@@ -966,28 +1004,18 @@ def _translation_output_guard(
     if obligations is None:
         entity_context = _resolve_entity_request_context(source)
         obligations = _canonical_obligations_for_request(source, entity_context)
-    if unknown_name_escrow is None:
-        unknown_name_escrow = UnknownNameEscrow(source, source)
-    if semantic_terminology is None:
-        semantic_terminology = SemanticTerminologyEscrow(source, source)
+    if request_protection is None:
+        entity_context = _resolve_entity_request_context(source)
+        request_protection = _request_protection_for(
+            source, entity_context, obligations
+        )
     engine_name = str(getattr(engine, "engine_name", "") or "")
     is_deepseek = engine_name == "deepseek"
-    terminology_passed, terminology_reason = (
-        semantic_terminology.evaluate_provider_candidate(result)
-    )
-    terminology_restored = (
-        semantic_terminology.restore_provider_candidate(result)
-        if terminology_passed
-        else result
-    )
-    escrow_evaluation = unknown_name_escrow.evaluate_provider_candidate(
-        terminology_restored
-    )
-    restored_result = (
-        unknown_name_escrow.restore_provider_candidate(terminology_restored)
-        if escrow_evaluation.passed
-        else terminology_restored
-    )
+    protection_evaluation = request_protection.evaluate_provider_candidate(result)
+    terminology_passed = protection_evaluation.semantic_passed
+    terminology_reason = protection_evaluation.semantic_reason
+    escrow_evaluation = protection_evaluation.unresolved_evaluation
+    restored_result = protection_evaluation.restored_candidate
     corrected, corrections = _preview_source_aware_corrections(source, restored_result)
     unactivated_entity_targets = _unactivated_registry_targets(source, corrected)
     simplified_chinese_spans = _simplified_chinese_evidence(corrected)
@@ -1002,7 +1030,7 @@ def _translation_output_guard(
     # and from its activated obligations remains a script violation.
     approved_terms.update(source_proven_quality_terms(source))
     approved_terms.update(_source_activated_name_canonicals(source))
-    approved_terms.update(unknown_name_escrow.approved_hangul_terms)
+    approved_terms.update(request_protection.approved_hangul_terms)
     approved_terms = frozenset(approved_terms)
     obligation_evaluation = evaluate_canonical_obligations(corrected, obligations)
     raw_quality = translation_quality(
@@ -1107,20 +1135,27 @@ def _translation_output_guard(
         "unactivated_entity_targets": list(unactivated_entity_targets),
         "simplified_chinese_spans": list(simplified_chinese_spans),
         "semantic_terminology": {
-            "active": semantic_terminology.active,
-            "rule_ids": [term.rule_id for term in semantic_terminology.terms],
+            "active": request_protection.semantic_terms.active,
+            "rule_ids": [
+                term.rule_id for term in request_protection.semantic_terms.terms
+            ],
             "passed": terminology_passed,
         },
         "unknown_name_escrow": {
-            "active": unknown_name_escrow.active,
+            "active": request_protection.unresolved_referents.active,
             "expected": list(escrow_evaluation.expected),
             "missing": list(escrow_evaluation.missing),
             "duplicated": list(escrow_evaluation.duplicated),
             "mutated_placeholder": escrow_evaluation.mutated_placeholder,
             "invented_aliases": list(escrow_evaluation.invented_aliases),
             "approved_hangul_terms": list(
-                unknown_name_escrow.approved_hangul_terms
+                request_protection.approved_hangul_terms
             ),
+        },
+        "request_protection": {
+            "identity": request_protection.identity,
+            "active": request_protection.active,
+            "spans": [span.identity_row() for span in request_protection.spans],
         },
     }
     if reason:
@@ -1900,25 +1935,19 @@ class Translator:
         text = _normalize_source_before_matching(text)
         entity_context = _resolve_entity_request_context(text)
         canonical_obligations = _canonical_obligations_for_request(text, entity_context)
-        known_source_spans = tuple(dict.fromkeys((
-            *entity_context.source_spans,
-            *(span for obligation in canonical_obligations for span in obligation.source_spans),
-        )))
-        unknown_name_escrow = resolve_unknown_name_escrow(
+        request_protection = _request_protection_for(
             text,
-            known_source_spans=known_source_spans,
+            entity_context,
+            canonical_obligations,
         )
-        semantic_terminology = resolve_semantic_terminology(
-            unknown_name_escrow.provider_source
-        )
-        provider_text = semantic_terminology.provider_source
+        provider_text = request_protection.provider_source
 
         # Direct paths predate escrow and cannot preserve its provider token.
         # Keep them unavailable for the narrowly escrowed sentences rather than
         # allowing a cache/slang result to bypass the final identity invariant.
         slang_result = (
             None
-            if unknown_name_escrow.active or semantic_terminology.active
+            if request_protection.requires_provider_protection
             else self._translate_slang(text, incomplete)
         )
         if slang_result:
@@ -1962,12 +1991,16 @@ class Translator:
         self._refresh_engines_if_needed()
         system_prompt = self._build_system_prompt(entity_context.capsule)
         engine = self._active_engine()
-        prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
+        prompt_ver = self._prompt_version_for_engine(
+            engine,
+            system_prompt,
+            protection_identity=request_protection.fingerprint_identity,
+        )
         self._log_prompt_mode_once()
 
         lookup = (
             MemoryLookup(None, "miss")
-            if unknown_name_escrow.active or semantic_terminology.active
+            if request_protection.requires_provider_protection
             else self._lookup_existing_translation_event(
                 text, incomplete, prompt_ver, engine, history_cohort
             )
@@ -2082,6 +2115,7 @@ class Translator:
                 history_cohort=history_cohort,
                 messages=effective_deepseek_messages,
                 incomplete=incomplete,
+                protection_identity=request_protection.fingerprint_identity,
             )
             if fingerprint == provisional_candidate.fingerprint:
                 provisional_engine = DeepSeekTranslationEngine()
@@ -2090,8 +2124,7 @@ class Translator:
                     provisional_candidate.raw_target,
                     text,
                     obligations=canonical_obligations,
-                    unknown_name_escrow=unknown_name_escrow,
-                    semantic_terminology=semantic_terminology,
+                    request_protection=request_protection,
                 )
                 if not guard.get("reason"):
                     result = str(
@@ -2131,15 +2164,18 @@ class Translator:
                 frozen_messages_by_engine=frozen_messages_by_engine,
                 canonical_obligations=canonical_obligations,
                 source_text=text,
-                unknown_name_escrow=unknown_name_escrow,
-                semantic_terminology=semantic_terminology,
+                request_protection=request_protection,
             )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
         # _active_engine() here mislabeled the result source, API diagnostics
         # and the DB cache row.
         engine = used_engine or self._active_engine()
-        prompt_ver = self._prompt_version_for_engine(engine, system_prompt)
+        prompt_ver = self._prompt_version_for_engine(
+            engine,
+            system_prompt,
+            protection_identity=request_protection.fingerprint_identity,
+        )
         return self._finalize_translation_result(
             raw_text=raw_text,
             prepared_text=text,
@@ -2150,8 +2186,7 @@ class Translator:
             cache_status=lookup.source,
             incomplete=incomplete,
             canonical_obligations=canonical_obligations,
-            unknown_name_escrow=unknown_name_escrow,
-            semantic_terminology=semantic_terminology,
+            request_protection=request_protection,
             history_cohort=history_cohort,
         )
 
@@ -2175,8 +2210,7 @@ class Translator:
         cache_status: str,
         incomplete: bool,
         canonical_obligations: tuple[CanonicalObligation, ...],
-        unknown_name_escrow: UnknownNameEscrow,
-        semantic_terminology: SemanticTerminologyEscrow,
+        request_protection: RequestProtection,
         history_cohort: HistoryCohort,
     ) -> TranslationOutcome:
         """Sole finalizer for primary, fallback, and provisional candidates."""
@@ -2199,8 +2233,7 @@ class Translator:
 
         result = provider_result
         if not promoted:
-            result = unknown_name_escrow.restore_provider_candidate(result)
-            result = semantic_terminology.restore_provider_candidate(result)
+            result = request_protection.restore_provider_candidate(result)
         result = _apply_source_aware_corrections(prepared_text, result)
 
         final_obligation_evaluation = evaluate_canonical_obligations(
@@ -2237,27 +2270,20 @@ class Translator:
                 canonical_obligation_evaluation=final_obligation_evaluation,
             )
 
-        final_escrow_evaluation = unknown_name_escrow.evaluate_final(result)
-        if not final_escrow_evaluation.passed:
-            metrics.increment("translation.unknown_name_escrow.final_rejected")
-            self._reset_failed_input()
-            return TranslationOutcome(
-                **common_failure,
-                status="failed",
-                filter_reason=final_escrow_evaluation.reason,
-                canonical_obligation_evaluation=final_obligation_evaluation,
+        final_protection_evaluation = request_protection.evaluate_final(result)
+        if not final_protection_evaluation.passed:
+            metric = (
+                "translation.unknown_name_escrow.final_rejected"
+                if final_protection_evaluation.reason.startswith("unknown_name_")
+                else "translation.semantic_terminology.final_rejected"
             )
-
-        terminology_passed, terminology_reason = semantic_terminology.evaluate_final(
-            result
-        )
-        if not terminology_passed:
-            metrics.increment("translation.semantic_terminology.final_rejected")
+            metrics.increment(metric)
             self._reset_failed_input()
             return TranslationOutcome(
                 **common_failure,
                 status="failed",
-                filter_reason=terminology_reason,
+                filter_reason=final_protection_evaluation.reason,
+                canonical_obligation_evaluation=final_obligation_evaluation,
             )
 
         if not final_obligation_evaluation.passed:
@@ -2312,7 +2338,7 @@ class Translator:
             model=engine.model_name if engine else "",
             prompt_version=prompt_version,
             canonical_obligation_evaluation=final_obligation_evaluation,
-            unknown_name_approved_terms=unknown_name_escrow.approved_hangul_terms,
+            unknown_name_approved_terms=request_protection.approved_hangul_terms,
             deferred_success=success_commit,
         )
 
@@ -2467,6 +2493,8 @@ class Translator:
         self,
         engine: TranslationEngine | None,
         system_prompt: str,
+        *,
+        protection_identity: str = "",
     ) -> str:
         snapshot = bound_activity_snapshot()
         if snapshot is None:
@@ -2500,6 +2528,11 @@ class Translator:
             )
             + "\n[canonical-publication-policy] "
             + _CANONICAL_PUBLICATION_POLICY_VERSION
+            + (
+                "\n[request-protection] " + protection_identity
+                if protection_identity
+                else ""
+            )
             + "\n[request-cache-cohort] "
             + f"{cohort[0]}:{cohort[1]}:{cohort[2]}"
             + (
@@ -2524,8 +2557,7 @@ class Translator:
         ] | None = None,
         canonical_obligations: tuple[CanonicalObligation, ...] | None = None,
         source_text: str | None = None,
-        unknown_name_escrow: UnknownNameEscrow | None = None,
-        semantic_terminology: SemanticTerminologyEscrow | None = None,
+        request_protection: RequestProtection | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
         actually produced the result — on a soft fallback this differs from
@@ -2536,11 +2568,12 @@ class Translator:
             canonical_obligations = _canonical_obligations_for_request(
                 source_text, entity_context
             )
-        if unknown_name_escrow is None:
-            unknown_name_escrow = UnknownNameEscrow(source_text, source_text)
-        if semantic_terminology is None:
-            semantic_terminology = SemanticTerminologyEscrow(
-                source_text, source_text
+        if request_protection is None:
+            entity_context = _resolve_entity_request_context(source_text)
+            request_protection = _request_protection_for(
+                source_text,
+                entity_context,
+                canonical_obligations,
             )
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
@@ -2574,8 +2607,7 @@ class Translator:
                     candidate,
                     source_text,
                     obligations=canonical_obligations,
-                    unknown_name_escrow=unknown_name_escrow,
-                    semantic_terminology=semantic_terminology,
+                    request_protection=request_protection,
                 )
             ),
         )
@@ -2945,16 +2977,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         obligations = _canonical_obligations_for_request(
                             prepared_source, entity_context
                         )
-                        known_source_spans = tuple(dict.fromkeys((
-                            *entity_context.source_spans,
-                            *(span for obligation in obligations for span in obligation.source_spans),
-                        )))
-                        unknown_name_escrow = resolve_unknown_name_escrow(
+                        request_protection = _request_protection_for(
                             prepared_source,
-                            known_source_spans=known_source_spans,
-                        )
-                        semantic_terminology = resolve_semantic_terminology(
-                            unknown_name_escrow.provider_source
+                            entity_context,
+                            obligations,
                         )
                         system_prompt = preview_translator._build_system_prompt(
                             entity_context.capsule
@@ -2966,7 +2992,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         with shared_state.lock:
                             history = shared_state.memory.context(history_cohort)
                         messages = build_effective_deepseek_messages(
-                            semantic_terminology.provider_source,
+                            request_protection.provider_source,
                             system_prompt,
                             request.incomplete,
                             history,
@@ -2985,6 +3011,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             history_cohort=history_cohort,
                             messages=messages,
                             incomplete=request.incomplete,
+                            protection_identity=request_protection.fingerprint_identity,
                         )
                         # Re-check at the actual call boundary so stale queued work
                         # cannot reach DeepSeek after the emergency route is disabled.
@@ -3034,8 +3061,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             raw_target,
                             prepared_source,
                             obligations=obligations,
-                            unknown_name_escrow=unknown_name_escrow,
-                            semantic_terminology=semantic_terminology,
+                            request_protection=request_protection,
                         )
                         if guard.get("reason"):
                             runtime_events.emit(

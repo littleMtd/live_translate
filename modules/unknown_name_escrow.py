@@ -146,10 +146,20 @@ class ExplicitIdentityContextRule:
 
 
 @dataclass(frozen=True)
+class SourceGroundedReferentContextRule:
+    rule_id: str
+    suffixes: tuple[str, ...]
+    min_syllables: int
+    max_syllables: int
+    excluded_candidates: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class UnknownNamePolicy:
     schema_version: int
     exact_rules: tuple[ExactNameEvidenceRule, ...]
     identity_contexts: tuple[ExplicitIdentityContextRule, ...]
+    referent_contexts: tuple[SourceGroundedReferentContextRule, ...] = ()
 
 
 def _strings(value: Any, field: str, *, nonempty: bool = False) -> tuple[str, ...]:
@@ -165,8 +175,8 @@ def _strings(value: Any, field: str, *, nonempty: bool = False) -> tuple[str, ..
 
 def load_unknown_name_policy(path: Path = _DATA_PATH) -> UnknownNamePolicy:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise ValueError("unknown-name escrow requires schema_version 1")
+    if not isinstance(data, dict) or data.get("schema_version") not in (1, 2):
+        raise ValueError("unknown-name escrow requires schema_version 1 or 2")
     raw_exact = data.get("reviewed_exact_names")
     raw_contexts = data.get("explicit_identity_contexts")
     if not isinstance(raw_exact, list) or not isinstance(raw_contexts, list):
@@ -222,7 +232,46 @@ def load_unknown_name_policy(path: Path = _DATA_PATH) -> UnknownNamePolicy:
             maximum,
             frozenset(excluded),
         ))
-    return UnknownNamePolicy(1, tuple(exact_rules), tuple(context_rules))
+    referent_rules: list[SourceGroundedReferentContextRule] = []
+    raw_referent_contexts = data.get("source_grounded_referent_contexts", [])
+    if not isinstance(raw_referent_contexts, list):
+        raise ValueError("source-grounded referent contexts must be a list")
+    for index, row in enumerate(raw_referent_contexts):
+        field = f"source_grounded_referent_contexts[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{field} must be an object")
+        rule_id = row.get("rule_id")
+        minimum = row.get("min_syllables")
+        maximum = row.get("max_syllables")
+        if not isinstance(rule_id, str) or not rule_id or rule_id in seen_ids:
+            raise ValueError(f"{field}.rule_id must be unique and non-empty")
+        if not isinstance(minimum, int) or not isinstance(maximum, int) or not (
+            2 <= minimum <= maximum <= 12
+        ):
+            raise ValueError(f"{field} has invalid syllable bounds")
+        seen_ids.add(rule_id)
+        excluded = _strings(
+            row.get("excluded_candidates", []), f"{field}.excluded_candidates"
+        )
+        if any(not _HANGUL_NAME_RE.fullmatch(value) for value in excluded):
+            raise ValueError(
+                f"{field}.excluded_candidates must contain only Hangul syllables"
+            )
+        referent_rules.append(SourceGroundedReferentContextRule(
+            rule_id=rule_id,
+            suffixes=_strings(
+                row.get("suffixes"), f"{field}.suffixes", nonempty=True
+            ),
+            min_syllables=minimum,
+            max_syllables=maximum,
+            excluded_candidates=frozenset(excluded),
+        ))
+    return UnknownNamePolicy(
+        int(data["schema_version"]),
+        tuple(exact_rules),
+        tuple(context_rules),
+        tuple(referent_rules),
+    )
 
 
 UNKNOWN_NAME_POLICY = load_unknown_name_policy()
@@ -268,6 +317,33 @@ def _identity_context_matches(
     return tuple(matches)
 
 
+def _referent_context_matches(
+    source: str,
+    rule: SourceGroundedReferentContextRule,
+) -> tuple[tuple[int, int, str], ...]:
+    suffix_pattern = "|".join(
+        re.escape(value) for value in sorted(rule.suffixes, key=len, reverse=True)
+    )
+    continuation_pattern = "|".join(
+        re.escape(value)
+        for value in (
+            "이라고", "라며", "인데", "였다", "가", "는",
+            "를", "도", "와", "과", "의", "로",
+        )
+    )
+    pattern = re.compile(
+        rf"(?<![가-힣])"
+        rf"(?P<name>[가-힣]{{{rule.min_syllables},{rule.max_syllables}}}?)"
+        rf"(?:{suffix_pattern})"
+        rf"(?=$|[^가-힣]|(?:{continuation_pattern})(?=$|[^가-힣]))"
+    )
+    return tuple(
+        (match.start("name"), match.end("name"), match.group("name"))
+        for match in pattern.finditer(source)
+        if match.group("name") not in rule.excluded_candidates
+    )
+
+
 def resolve_unknown_name_escrow(
     source: str,
     *,
@@ -290,6 +366,15 @@ def resolve_unknown_name_escrow(
 
     for rule in policy.identity_contexts:
         for start, end, name in _identity_context_matches(source, rule):
+            overlaps_known = any(
+                start < known_end and end > known_start
+                for known_start, known_end in known_source_spans
+            )
+            if not overlaps_known:
+                matches.append((start, end, name, ()))
+
+    for rule in policy.referent_contexts:
+        for start, end, name in _referent_context_matches(source, rule):
             overlaps_known = any(
                 start < known_end and end > known_start
                 for known_start, known_end in known_source_spans

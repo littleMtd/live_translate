@@ -33,8 +33,7 @@ from modules.translation_prompts import (
     translation_profile_ids,
 )
 from modules.translation_policy import RepetitionEvidence
-from modules.unknown_name_escrow import resolve_unknown_name_escrow
-from modules.semantic_terminology import resolve_semantic_terminology
+from modules.request_protection import FinalProtectionEvaluation
 from modules.translator import (
     _apply_source_aware_corrections,
     _is_legitimate_preserve_as_is,
@@ -1667,6 +1666,67 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertIn("__LT_UNK_1__", current_message)
         self.assertNotIn("\uc0ac\uc625\uc324", current_message)
 
+    def test_member_referent_protection_survives_primary_rejection_and_fallback(self):
+        primary = _route_engine("deepseek", "有位叫하음的成員加入了。")
+        fallback = _route_engine(
+            "openrouter", "有位叫__LT_UNK_1__的成員加入了。"
+        )
+        translator = _make_translator()
+        translator._engines = [primary, fallback]
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("url"):
+            history_before = translator._history_cohort()
+            outcome = translator.translate_event(
+                "하음이라는 멤버가 새로 들어왔어요", False
+            )
+            history_after = translator._history_cohort()
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.target_text, "有位叫하음的成員加入了。")
+        self.assertEqual(history_before, history_after)
+        for engine in (primary, fallback):
+            current_message = engine.translate_messages.call_args.args[0][-1][1]
+            self.assertIn("__LT_UNK_1__", current_message)
+            self.assertNotIn("하음", current_message)
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "unknown_name_placeholder_invalid",
+        )
+        self.assertEqual(attempts[1]["status"], "success")
+
+    def test_protected_member_referent_bypasses_unprotected_cache_lookup(self):
+        translator = _make_translator()
+        engine = _route_engine(
+            "deepseek", "有位叫__LT_UNK_1__的成員加入了。"
+        )
+        translator._engines = [engine]
+        translator._lookup_existing_translation_event = MagicMock()
+
+        outcome = translator.translate_event(
+            "하음이라는 멤버가 새로 들어왔어요", False
+        )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.target_text, "有位叫하음的成員加入了。")
+        translator._lookup_existing_translation_event.assert_not_called()
+
+    def test_excluded_common_member_noun_keeps_unexpected_hangul_guard(self):
+        translator = _make_translator()
+        translator._engines = [
+            _route_engine("deepseek", "有個叫사람的成員加入了。")
+        ]
+
+        outcome = translator.translate_event(
+            "사람이라는 멤버가 새로 들어왔어요", False
+        )
+
+        self.assertEqual(outcome.status, "failed")
+        attempt = translation_engines_module.get_translation_attempts()[-1]
+        self.assertEqual(attempt["output_guard"]["reason"], "unexpected_hangul")
+
     def test_mixed_known_canonical_and_unknown_escrow_both_remain_required(self):
         translator = _make_translator()
         translator._engines = [
@@ -2053,7 +2113,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 "今天是모카的直播",
                 "오늘 방송이야",
             )
-        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertEqual(guard["reason"], "unactivated_entity_target")
         self.assertEqual(guard["canonical_obligations"]["expected"], [])
 
     def test_obligation_preview_telemetry_does_not_contaminate_selected_trace(self):
@@ -5516,6 +5576,20 @@ class TestDbCacheGating(unittest.TestCase):
             object.__setattr__(cfg.database, "live_db_cache", original_flag)
             self._set_mode(original)
 
+    def test_request_protection_identity_is_part_of_cache_fingerprint(self):
+        translator = _make_translator()
+        engine = translator._active_engine()
+        prompt = translator._build_system_prompt()
+
+        plain = translator._prompt_version_for_engine(engine, prompt)
+        protected = translator._prompt_version_for_engine(
+            engine,
+            prompt,
+            protection_identity="request-protection-mapping-a",
+        )
+
+        self.assertNotEqual(plain, protected)
+
 
 class TestProvisionalPromotion(unittest.TestCase):
     def test_route_off_defensively_rejects_queued_provisional_work(self):
@@ -5581,17 +5655,11 @@ class TestProvisionalPromotion(unittest.TestCase):
         obligations = translator_module._canonical_obligations_for_request(
             source, entity_context
         )
-        known_source_spans = tuple(dict.fromkeys((
-            *entity_context.source_spans,
-            *(span for obligation in obligations for span in obligation.source_spans),
-        )))
-        escrow = resolve_unknown_name_escrow(
-            source,
-            known_source_spans=known_source_spans,
+        request_protection = translator_module._request_protection_for(
+            source, entity_context, obligations
         )
-        semantic_terminology = resolve_semantic_terminology(escrow.provider_source)
         messages = build_effective_deepseek_messages(
-            semantic_terminology.provider_source, system_prompt, incomplete, history
+            request_protection.provider_source, system_prompt, incomplete, history
         )
         return ProvisionalCandidate(
             provisional_id="provisional:utt-preview",
@@ -5606,6 +5674,7 @@ class TestProvisionalPromotion(unittest.TestCase):
                 history_cohort=cohort,
                 messages=messages,
                 incomplete=incomplete,
+                protection_identity=request_protection.fingerprint_identity,
             ),
             engine="deepseek",
             model="deepseek-v4-flash",
@@ -5793,9 +5862,11 @@ class TestSemanticTerminologyIntegration(unittest.TestCase):
         source = "내가 좀 사패가 되는 것 같아"
 
         with patch.object(
-            translator_module.SemanticTerminologyEscrow,
+            translator_module.RequestProtection,
             "evaluate_final",
-            return_value=(False, "semantic_terminology_cardinality_mismatch"),
+            return_value=FinalProtectionEvaluation(
+                False, "semantic_terminology_cardinality_mismatch"
+            ),
         ):
             first = translator.translate_event(source)
             second = translator.translate_event(source)

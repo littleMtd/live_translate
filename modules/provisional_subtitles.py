@@ -63,6 +63,7 @@ def provisional_fingerprint(
     messages: tuple[tuple[str, str], ...],
     incomplete: bool,
     profile_cache_identity: str = "",
+    protection_identity: str = "",
 ) -> str:
     payload = {
         "source": prepared_source,
@@ -74,6 +75,7 @@ def provisional_fingerprint(
         "history_cohort": list(history_cohort),
         "messages": [list(message) for message in messages],
         "incomplete": bool(incomplete),
+        "request_protection": protection_identity,
     }
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")

@@ -79,6 +79,40 @@ def test_generic_identity_context_rejects_ordinary_and_ambiguous_forms():
         assert not resolve_unknown_name_escrow(source).active
 
 
+def test_explicit_member_reference_escrows_source_grounded_referent():
+    escrow = resolve_unknown_name_escrow("하음이라는 멤버가 새로 들어왔어요")
+
+    assert escrow.approved_hangul_terms == ("하음",)
+    assert escrow.provider_source == "__LT_UNK_1__이라는 멤버가 새로 들어왔어요"
+    assert escrow.restore_provider_candidate(
+        "新加入了一位叫__LT_UNK_1__的成員。"
+    ) == "新加入了一位叫하음的成員。"
+
+
+def test_member_reference_context_keeps_high_precision_boundaries():
+    for source in (
+        "사람이라는 멤버가 필요해요",
+        "학생이라는 멤버가 왔어요",
+        "친구라는 멤버를 소개할게요",
+        "고양이라는 멤버가 있어요",
+        "막내라는 멤버를 소개할게요",
+        "팀원이라는 멤버가 필요해요",
+        "좋은 멤버가 필요해요",
+        "학생이라는 멤버십을 샀어요",
+        "대표님이 왔어요",
+        "키가 작아요",
+        "문제가 있어요",
+    ):
+        assert not resolve_unknown_name_escrow(source).active
+
+
+def test_known_member_reference_span_stays_registry_owned():
+    source = "랑코라는 멤버가 왔어요"
+    escrow = resolve_unknown_name_escrow(source, known_source_spans=((0, 2),))
+
+    assert not escrow.active
+
+
 def test_multiple_explicit_unknown_names_have_stable_placeholders():
     escrow = resolve_unknown_name_escrow(
         "제 닉네임은 루미예요. 저의 활동명은 새봄입니다."

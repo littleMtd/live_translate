@@ -33,6 +33,7 @@ def test_fingerprint_is_stable_and_every_contract_dimension_matters():
         {"history_cohort": ("url", "chatting", 2)},
         {"messages": (("system", "changed"),)},
         {"incomplete": False},
+        {"protection_identity": "request-protection-v1:changed"},
     )
     for variation in variations:
         assert _fingerprint(**variation) != baseline

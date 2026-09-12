@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "reviewed_exact_names": [
     {
       "source_name": "사옥쌤",
@@ -57,6 +57,23 @@
         "고양이", "강아지", "이름", "닉네임", "활동명", "예명",
         "게임", "캐릭터"
       ]
+    }
+  ],
+  "source_grounded_referent_contexts": [
+    {
+      "rule_id": "explicit_member_reference",
+      "suffixes": ["이라는 멤버", "라는 멤버"],
+      "min_syllables": 2,
+      "max_syllables": 6,
+      "excluded_candidates": [
+        "비밀", "사람", "학생", "휴학생", "여자", "남자", "아이",
+        "어린이", "친구", "본인", "누구", "무엇", "이것", "그것",
+        "저것", "고양", "고양이", "강아지", "어린", "이름", "닉네임",
+        "활동명", "예명",
+        "게임", "캐릭터", "선수", "스트리머", "시청자", "팀원",
+        "리더", "막내", "신입", "게스트"
+      ],
+      "evidence": ["runtime_20260912_utt325"]
     }
   ]
 }
