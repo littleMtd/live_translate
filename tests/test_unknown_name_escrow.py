@@ -15,6 +15,8 @@ def test_confirmed_unknown_names_are_escrowed_only_in_reviewed_contexts():
         ("저 여고생 푸순이에요", "푸순"),
         ("모찌한테 가야 돼. 모찌한테", "모찌"),
         ("모찌야, 어디 가?", "모찌"),
+        ("근데 랑콘님은 저는 사실", "랑콘"),
+        ("아채리. 아채리가 말했어요", "아채리"),
     )
 
     for source, name in cases:
@@ -37,6 +39,8 @@ def test_detection_does_not_generalize_to_arbitrary_honorific_or_bare_forms():
         "\ud478\ucf54\ub3c4\ub451\uc774 \uc654\uc5b4\uc694",
         "\ud478\uc21c\uc774\uc5d0\uc694\ub77c고 \ud588\uc5b4\uc694",
         "\ubaa8\ucc0c\ud55c\ud14c\ub098 \ubb3c\uc5b4\ubd10",
+        "랑콘서트가 열렸어요",
+        "아채리움에 갔어요",
     ):
         escrow = resolve_unknown_name_escrow(source)
         assert not escrow.active

@@ -25,6 +25,19 @@
       "allowed_suffixes": ["한테", "야"],
       "forbidden_aliases": ["Mochi", "莫奇"],
       "evidence": ["translation_prompt_benchmark_20260822"]
+    },
+    {
+      "source_name": "랑콘",
+      "allowed_suffixes": ["님", "님은"],
+      "forbidden_aliases": ["Rangcon", "Langcon", "Rangkon"],
+      "evidence": ["runtime_20260912_seq6"]
+    },
+    {
+      "source_name": "아채리",
+      "allowed_suffixes": ["가"],
+      "allow_bare_boundary": true,
+      "forbidden_aliases": ["阿彩里", "阿采里", "Achae-ri"],
+      "evidence": ["runtime_20260912_seq17"]
     }
   ],
   "explicit_identity_contexts": [

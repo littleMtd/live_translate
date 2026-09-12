@@ -1728,6 +1728,12 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             ("푸코도 같이 가요", "__LT_UNK_1__也一起去", "푸코"),
             ("저는 푸순이에요", "我是__LT_UNK_1__", "푸순"),
             ("모찌한테 가야 돼", "得去找__LT_UNK_1__", "모찌"),
+            ("근데 랑콘님은 저는 사실", "可是__LT_UNK_1__，我其實", "랑콘"),
+            (
+                "아채리. 아채리가 말했어요",
+                "__LT_UNK_1__。__LT_UNK_1__說了。",
+                "아채리",
+            ),
         )
         for source, candidate, expected_name in cases:
             with self.subTest(source=source):
