@@ -588,7 +588,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 
         self.assertNotIn("reason", guard)
         self.assertEqual(guard["candidate_output"], "모카是邊唱火影忍者的歌邊跑。")
-        self.assertEqual(guard["canonical_obligations"]["expected"], [])
+        self.assertEqual(guard["canonical_obligations"]["expected"], ["모카"])
 
     def test_name_render_without_source_evidence_cannot_rescue_raw_hangul(self):
         engine = MagicMock()
@@ -1714,9 +1714,9 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
         self.assertEqual(result, "有位叫__LT_UNK_1__的成員加入了。")
         self.assertIs(used_engine, engine)
-        provider_source = engine.translate.call_args.args[0]
-        self.assertIn("__LT_UNK_1__", provider_source)
-        self.assertNotIn("키야", provider_source)
+        current_message = engine.translate_messages.call_args.args[0][-1][1]
+        self.assertIn("__LT_UNK_1__", current_message)
+        self.assertNotIn("키야", current_message)
 
     def test_protected_member_referent_bypasses_unprotected_cache_lookup(self):
         translator = _make_translator()
@@ -1914,6 +1914,28 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertEqual(evidence["obligations"][0]["matched_alias"], "모카")
         self.assertEqual(evidence["obligations"][0]["source_spans"], [[0, 2]])
 
+    def test_repeated_reviewed_entity_keeps_canonical_publication_ownership(self):
+        primary = _route_engine("deepseek", "她來了又走了。")
+        fallback = _route_engine("openrouter", "랑코來了又走了。")
+        translator = _make_translator()
+        translator._engines = [primary, fallback]
+        translation_engines_module.reset_translation_call_trace()
+
+        with _active_translation_profile("isegye_lilpa"):
+            outcome = translator.translate_event(
+                "랑코가 오고 랑코가 갔어", False
+            )
+
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.engine, "openrouter")
+        attempts = translation_engines_module.get_translation_attempts()
+        evidence = attempts[0]["output_guard"]["canonical_obligations"]
+        self.assertEqual(attempts[0]["output_guard"]["reason"], "canonical_obligation_missing")
+        self.assertEqual(evidence["expected"], ["랑코"])
+        self.assertEqual(
+            evidence["obligations"][0]["source_spans"], [[0, 2], [7, 9]]
+        )
+
     def test_arbitrary_unknown_rendering_cannot_satisfy_required_canonical(self):
         translator = _make_translator()
         translator._engines = [
@@ -1949,11 +1971,11 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertTrue(guard["canonical_obligations"]["passed"])
         self.assertEqual(guard["candidate_output"], "모카來了。")
 
-    def test_cross_profile_exact_alias_activates_but_boundary_and_repeated_do_not(self):
+    def test_cross_profile_exact_alias_activates_and_boundary_stays_isolated(self):
         cases = (
             ("irise", "모카가 왔어", "모카來了。", ("모카",)),
             ("url", "마냥히 웃었어", "她笑了。", ()),
-            ("url", "모카랑 모카가 왔어", "她們來了。", ()),
+            ("url", "모카랑 모카가 왔어", "모카來了。", ("모카",)),
         )
         for profile_id, source, target, expected in cases:
             with self.subTest(profile=profile_id, source=source):

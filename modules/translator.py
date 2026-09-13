@@ -505,7 +505,7 @@ def _resolve_entity_request_context(source: str) -> _EntityRequestContext:
         if (
             rule.publication_policy == "required"
             and rule.condition_id == "always"
-            and len(activation.source_spans) == 1
+            and activation.source_spans
         ):
             obligations.append(CanonicalObligation(
                 rule_id=f"entity:{entity.entity_id}",
@@ -2161,7 +2161,6 @@ class Translator:
                 incomplete,
                 history,
                 deadline_at=deadline_at,
-                frozen_messages_by_engine=frozen_messages_by_engine,
                 canonical_obligations=canonical_obligations,
             )
         # Attribute the outcome to the engine that actually produced it: on a
@@ -2553,9 +2552,6 @@ class Translator:
         history: list[tuple[str, str]] | None = None,
         *,
         deadline_at: float | None = None,
-        frozen_messages_by_engine: dict[
-            str, tuple[tuple[str, str], ...]
-        ] | None = None,
         canonical_obligations: tuple[CanonicalObligation, ...] | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
@@ -2563,6 +2559,14 @@ class Translator:
         the active engine, which intentionally stays on primary."""
         source_text = request_protection.original_source
         provider_source = request_protection.provider_source
+        frozen_messages_by_engine = {
+            "deepseek": build_effective_deepseek_messages(
+                provider_source, system_prompt, incomplete, history
+            ),
+            "openrouter": build_effective_qwen_messages(
+                provider_source, system_prompt, incomplete, history
+            ),
+        }
         if canonical_obligations is None:
             entity_context = _resolve_entity_request_context(source_text)
             canonical_obligations = _canonical_obligations_for_request(

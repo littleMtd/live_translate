@@ -55,8 +55,25 @@ def test_placeholder_loss_duplication_and_mutation_fail_closed():
         assert reason == "semantic_terminology_placeholder_cardinality"
 
 
-def test_multiple_occurrences_are_not_escrowed_in_v1():
-    assert not resolve_semantic_terminology("닉값도 닉값이고 참 그렇다").active
+def test_multiple_occurrences_share_one_cardinality_checked_placeholder():
+    escrow = resolve_semantic_terminology("명조, 명조 둘 다 해요")
+
+    assert escrow.active
+    assert escrow.provider_source == (
+        "__LT_SEM_1__, __LT_SEM_1__ 둘 다 해요"
+    )
+    assert escrow.terms[0].source_spans == ((0, 2), (4, 6))
+    assert escrow.evaluate_provider_candidate(
+        "__LT_SEM_1__, __LT_SEM_1__ 둘 다 해요"
+    ) == (True, "")
+    assert escrow.evaluate_provider_candidate("__LT_SEM_1__만 해요") == (
+        False,
+        "semantic_terminology_placeholder_cardinality",
+    )
+    restored = escrow.restore_provider_candidate(
+        "__LT_SEM_1__, __LT_SEM_1__ 둘 다 해요"
+    )
+    assert escrow.evaluate_final(restored) == (True, "")
 
 
 def test_amplification_release_is_a_source_grounded_direction_anchor():

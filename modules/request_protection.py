@@ -173,16 +173,10 @@ def resolve_request_protection(
         for entry in unresolved.entries
     )
     for term in semantic.terms:
-        starts: list[tuple[int, int]] = []
-        start = source.find(term.source_text)
-        while start >= 0:
-            starts.append((start, start + len(term.source_text)))
-            start = source.find(term.source_text, start + 1)
-        source_spans = tuple(starts) if len(starts) == 1 else ()
         protected.append(ProtectedSourceSpan(
             owner="semantic_term",
             source_text=term.source_text,
-            source_spans=source_spans,
+            source_spans=term.source_spans,
             rendering=term.target_text,
             rule_id=term.rule_id,
             placeholder=term.placeholder,

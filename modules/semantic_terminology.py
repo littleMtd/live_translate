@@ -25,6 +25,10 @@ class SemanticTerm:
     placeholder: str
     source_spans: tuple[tuple[int, int], ...] = ()
 
+    @property
+    def expected_count(self) -> int:
+        return len(self.source_spans)
+
 
 @dataclass(frozen=True)
 class SemanticTerminologyEscrow:
@@ -40,7 +44,7 @@ class SemanticTerminologyEscrow:
         text = candidate or ""
         for term in self.terms:
             count = text.count(term.placeholder)
-            if count != 1:
+            if count != term.expected_count:
                 return False, "semantic_terminology_placeholder_cardinality"
             text = text.replace(term.placeholder, "")
         if _PLACEHOLDER_RE.search(text) or "__LT_SEM_" in text:
@@ -56,7 +60,7 @@ class SemanticTerminologyEscrow:
     def evaluate_final(self, candidate: str | None) -> tuple[bool, str]:
         text = candidate or ""
         for term in self.terms:
-            if text.count(term.target_text) != 1:
+            if text.count(term.target_text) != term.expected_count:
                 return False, "semantic_terminology_final_cardinality"
         if _PLACEHOLDER_RE.search(text) or "__LT_SEM_" in text:
             return False, "semantic_terminology_final_cardinality"
@@ -113,8 +117,8 @@ _ACTIVITY_RULES: dict[str, tuple[tuple[str, re.Pattern[str], str], ...]] = {
 
 
 def resolve_semantic_terminology(source: str) -> SemanticTerminologyEscrow:
-    """Resolve at most one exact occurrence of each v1 semantic term."""
-    matches: list[tuple[int, int, str, str, str]] = []
+    """Resolve every exact occurrence of each reviewed semantic term."""
+    matches: list[tuple[int, str, str, tuple[tuple[int, int], ...]]] = []
     snapshot = bound_activity_snapshot()
     activity_rules = _ACTIVITY_RULES.get(
         snapshot.activity_id if snapshot is not None else "",
@@ -122,10 +126,10 @@ def resolve_semantic_terminology(source: str) -> SemanticTerminologyEscrow:
     )
     for rule_id, pattern, target in (*_RULES, *activity_rules):
         found = list(pattern.finditer(source))
-        if len(found) != 1:
+        if not found:
             continue
-        match = found[0]
-        matches.append((match.start(), match.end(), rule_id, match.group(0), target))
+        spans = tuple((match.start(), match.end()) for match in found)
+        matches.append((spans[0][0], rule_id, target, spans))
 
     if not matches:
         return SemanticTerminologyEscrow(source, source)
@@ -133,13 +137,19 @@ def resolve_semantic_terminology(source: str) -> SemanticTerminologyEscrow:
     matches.sort()
     provider = source
     terms: list[SemanticTerm] = []
-    for index, (start, end, rule_id, matched, target) in reversed(
-        list(enumerate(matches, start=1))
-    ):
+    replacements: list[tuple[int, int, str]] = []
+    for index, (_first_start, rule_id, target, spans) in enumerate(matches, start=1):
         placeholder = f"__LT_SEM_{index}__"
-        provider = provider[:start] + placeholder + provider[end:]
         terms.append(SemanticTerm(
-            rule_id, matched, target, placeholder, ((start, end),)
+            rule_id,
+            source[spans[0][0]:spans[0][1]],
+            target,
+            placeholder,
+            spans,
         ))
-    terms.reverse()
+        replacements.extend(
+            (start, end, placeholder) for start, end in spans
+        )
+    for start, end, placeholder in sorted(replacements, reverse=True):
+        provider = provider[:start] + placeholder + provider[end:]
     return SemanticTerminologyEscrow(source, provider, tuple(terms))
