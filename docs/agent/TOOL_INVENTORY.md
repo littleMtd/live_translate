@@ -18,6 +18,7 @@ Core scripts worth checking first:
 - `scripts/sample_labeling_cases.py`
 - `scripts/labeling_review_server.py`
 - `scripts/analyze_runtime_events.py`
+- `scripts/analyze_forensics_bundle.py`
 - `scripts/analyze_latency_tail.py`
 - `scripts/analyze_groq_error_bursts.py`
 - `scripts/analyze_cache.py`
@@ -37,6 +38,12 @@ Core scripts worth checking first:
   unbound snapshot. Normal Python teardown invokes the same exporter
   automatically for its own run, without WAV copies; dashboard-forced shutdown
   exports its launcher-assigned run after the child terminates.
+- `scripts/analyze_forensics_bundle.py`: validates manifest/file hashes,
+  request-contract references and internal component hashes, then emits an
+  evidence-only audio-to-publication causal chain for every translation event.
+  Missing or ambiguous lineage stays unresolved. `--json-output` writes the
+  machine report and `--report-output` writes compact Markdown; exit code 2
+  means an integrity error was found.
 
 Situational scripts:
 - `scripts/evaluate_translation_prompt_benchmark.py`: maintained offline scorer
@@ -69,6 +76,14 @@ Runtime/log analysis:
 .\live-subtitle-env\Scripts\python.exe scripts\analyze_runtime_events.py `
   --events logs\runtime_events_YYYYMMDD.jsonl [logs\runtime_events_NEXTDAY.jsonl] `
   --top 10
+```
+
+Bundle causal validation:
+```powershell
+.\live-subtitle-env\Scripts\python.exe scripts\analyze_forensics_bundle.py `
+  scratch\chatgpt_bundles\chatgpt_bundle_RUN_ID `
+  --json-output scratch\analysis\RUN_ID.forensics.json `
+  --report-output scratch\analysis\RUN_ID.forensics.md
 ```
 
 Use this for broad runtime summaries: translation/STT/audio counts, audio
