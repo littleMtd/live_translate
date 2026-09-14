@@ -28,7 +28,7 @@ TranslationPolicy sanitize/filter
   -> unknown-name escrow excluding known canonical spans
   -> semantic terminology escrow
   -> immutable effective provider request/messages
-  -> DeepSeek Flash -> OpenRouter Qwen -> DeepL -> Groq
+  -> DeepSeek Flash -> Groq
   -> deterministic restore and source-aware corrections
   -> canonical/name/terminology occurrence invariants
   -> Hangul/Kana/meta/content guards
@@ -39,7 +39,7 @@ TranslationPolicy sanitize/filter
 
 The same frozen escrow mapping and correctness finalization apply across fallbacks. Known canonical obligations always precede unknown-name detection. Unknown names authorize only exact restored source-grounded Hangul spans; there is no global Hangul allowance. Semantic terminology is a separate exact/narrow deterministic owner.
 
-Primary success, fallback success, and exact provisional promotion converge on the same authoritative finalization behavior. A provisional candidate is one-shot and may be promoted only when its fingerprint exactly matches the final source/profile/activity/context contract; mismatch follows the normal final route. Provisional output never weakens final ordering or invariants.
+Primary, fallback, cache, and exact provisional candidates use one structured adjudication boundary for deterministic restore/correction, request protection, canonical/entity provenance, and script safety. Finalization runs that same adjudicator authoritatively before recording history or publishing. A provisional candidate is one-shot and may be promoted only when its fingerprint exactly matches the final source/profile/activity/context contract; mismatch follows the normal final route. Provisional output never weakens final ordering or invariants.
 
 Translation profile identity is generation-scoped. `source_profile` is the stable configured startup default. In Auto mode, exact reviewed member-name markers from the hot-reloaded profile registry are strong candidate evidence but cannot independently authorize a cross-profile mutation. A cross-profile switch requires two distinct agreeing frames in the same validated window generation plus profile-level corroboration from group branding or persistent non-member visual evidence; a multi-member roster is not owner corroboration, and markers from different profile families conflict. A strong marker for the already-effective profile may refresh that confirmation immediately. Profile vision uses bounded JSON output, precise schema/semantic rejection, and one serialization-only retry. Sampling is adaptive: seeking/recovery wakes at five seconds, stable confirmation backs off to fifteen seconds, and a rolling attempt cap plus provider-error cooldown bounds traffic. Unknown, conflict, provider, capture, and window-lifecycle failures retire pending evidence and trigger revalidation but cannot replace a confirmed content profile with the startup default; only a newly confirmed reviewed identity or an explicit lifecycle/control change may change it. Manual mode is a complete effective-profile hard lock: scene evidence cannot override it. STT glossary, sentence boundaries, provisional fingerprints, request/cache identity, and history cohorts all consume one immutable `ProfileSnapshot`; already-running final translations finish with their captured generation.
 
@@ -47,8 +47,8 @@ Translation profile identity is generation-scoped. `source_profile` is the stabl
 
 The ordinary live backend name remains `anthropic` for compatibility; it does not mean Claude is primary.
 
-- `deepseek_route="primary"` (default): DeepSeek `deepseek-v4-flash` -> OpenRouter `qwen/qwen3-next-80b-a3b-instruct` -> DeepL `ZH-HANT` -> Groq `openai/gpt-oss-120b`.
-- `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off`: OpenRouter Qwen -> DeepL -> Groq. This is the operational emergency rollback.
+- `deepseek_route="primary"` (default): DeepSeek `deepseek-v4-flash` -> Groq `openai/gpt-oss-120b`.
+- `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off`: Groq only. This is the operational emergency rollback.
 - `nvidia`: NVIDIA primary plus configured available `engine_chain` routes.
 - `ollama`: local Ollama only.
 

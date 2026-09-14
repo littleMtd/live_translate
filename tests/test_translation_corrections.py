@@ -53,6 +53,7 @@ def test_translation_correction_data_snapshot_counts():
         "url": 13,
     }
     assert tables.boundary_source_norm_shared == {}
+    assert tables.target_script_normalization == {"会": "會", "话": "話"}
     assert {
         profile: len(values)
         for profile, values in tables.boundary_source_norm_by_profile.items()

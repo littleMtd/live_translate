@@ -145,6 +145,10 @@
       }
     }
   },
+  "target_script_normalization": {
+    "会": "會",
+    "话": "話"
+  },
   "conditional_source_norm": {
     "shared": [],
     "profiles": {

@@ -38,6 +38,7 @@ from modules.request_protection import (
     resolve_request_protection,
 )
 from modules.translator import (
+    _adjudicate_translation_candidate,
     _apply_source_aware_corrections,
     _is_legitimate_preserve_as_is,
     _looks_like_meta_garbage_output,
@@ -415,6 +416,59 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             "unexpected_hangul",
         )
 
+    def test_candidate_adjudication_owns_structured_script_rejection(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        adjudication = _adjudicate_translation_candidate(
+            engine,
+            "這是느졋",
+            "늦었어",
+        )
+
+        self.assertFalse(adjudication.accepted)
+        self.assertEqual(adjudication.reason, "unexpected_hangul")
+        self.assertEqual(adjudication.rejection_owner, "script_safety")
+        self.assertEqual(adjudication.candidate_output, "這是느졋")
+        self.assertEqual(
+            _translation_output_guard(engine, "這是느졋", "늦었어"),
+            adjudication.evidence,
+        )
+
+    def test_candidate_adjudication_restores_before_publication_decision(self):
+        source = "랑콘님 고마워요."
+        protection = resolve_request_protection(source)
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        adjudication = _adjudicate_translation_candidate(
+            engine,
+            "__LT_UNK_1__，謝謝你。",
+            source,
+            request_protection=protection,
+            publication=True,
+        )
+
+        self.assertTrue(adjudication.accepted)
+        self.assertEqual(adjudication.candidate_output, "랑콘，謝謝你。")
+
+    def test_publication_meta_rejection_precedes_missing_canonical(self):
+        source = "모카가 왔어."
+        engine = MagicMock()
+        engine.engine_name = "fallback"
+
+        with _active_translation_profile("url"):
+            adjudication = _adjudicate_translation_candidate(
+                engine,
+                "（無法理解的STT亂碼，無明確語義）",
+                source,
+                publication=True,
+            )
+
+        self.assertFalse(adjudication.canonical_evaluation.passed)
+        self.assertEqual(adjudication.reason, "meta_garbage_output")
+        self.assertEqual(adjudication.rejection_owner, "model_output")
+
     def test_run_20260909_provisional_simplified_output_is_rejected(self):
         engine = MagicMock()
         engine.engine_name = "deepseek"
@@ -442,6 +496,37 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertNotIn("reason", guard)
         self.assertEqual(guard["candidate_output"], target)
         self.assertEqual(guard["candidate_corrections"], [])
+
+    def test_taiwan_valid_eating_and_swimming_are_not_simplified_evidence(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        guard = _translation_output_guard(
+            engine,
+            "吃飯後去游泳。",
+            "밥 먹고 수영하러 가요.",
+        )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["simplified_chinese_spans"], ["游"])
+
+    def test_reviewed_single_character_simplified_slips_are_normalized(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        guard = _translation_output_guard(
+            engine,
+            "如果有信心的话就会成功。",
+            "자신이 있으면 성공할 거야.",
+        )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["candidate_output"], "如果有信心的話就會成功。")
+        self.assertEqual(guard["simplified_chinese_spans"], [])
+        self.assertEqual(
+            [row["stage"] for row in guard["candidate_corrections"]],
+            ["target_script_normalization", "target_script_normalization"],
+        )
 
     def test_run_20260909_unactivated_profile_name_is_rejected(self):
         engine = MagicMock()
@@ -475,6 +560,19 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
                     self.assertEqual(
                         guard["unactivated_entity_targets"], ["Chaenna"]
                     )
+
+    def test_exact_canonical_target_in_source_is_not_unactivated_invention(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        guard = _translation_output_guard(
+            engine,
+            "我還買了新泳衣呢。哼，CHZZK！",
+            "나 새 수영복도 샀는데. 흥, CHZZK!",
+        )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["unactivated_entity_targets"], [])
 
     def test_unactivated_entity_target_uses_fallback_without_switching_route(self):
         translator = _make_translator()
@@ -2368,8 +2466,6 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "Flash느졋"),
-            _route_engine("openrouter", "Qwen느졋"),
-            _route_engine("deepl", "DeepLテスト"),
             _route_engine("groq", "Groq느졋"),
         ]
         translator._active_idx = 0
@@ -2383,7 +2479,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(
             [row["engine"] for row in attempts],
-            ["deepseek", "openrouter", "deepl", "groq"],
+            ["deepseek", "groq"],
         )
         self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
         self.assertFalse(any(row["selected_for_output"] for row in attempts))
@@ -2431,10 +2527,10 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertEqual(translator_module.cfg.live_engine, "anthropic")
         self.assertEqual(
             [engine.engine_name for engine in engines],
-            ["deepseek", "openrouter", "deepl", "groq"],
+            ["deepseek", "groq"],
         )
 
-    def test_deepseek_route_off_restores_exact_previous_chain(self):
+    def test_deepseek_route_off_uses_protected_base_chain(self):
         original_route = translator_module.cfg.translation.deepseek_route
         try:
             object.__setattr__(translator_module.cfg.translation, "deepseek_route", "off")
@@ -2452,7 +2548,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             )
         self.assertEqual(
             [engine.engine_name for engine in engines],
-            ["openrouter", "deepl", "groq"],
+            ["groq"],
         )
 
     def test_nvidia_backend_uses_openrouter_before_deepl_and_groq(self):

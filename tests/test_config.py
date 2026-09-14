@@ -45,7 +45,7 @@ class TestConfig(unittest.TestCase):
             _Translation(deepseek_route="automatic")
         self.assertEqual(
             _Translation(deepseek_route="off").engine_chain,
-            ("openrouter", "deepl", "groq"),
+            ("groq",),
         )
         with self.assertRaisesRegex(ValueError, "positive integer"):
             _Translation(deepseek_max_tokens=0)
@@ -55,7 +55,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.clip_engine, "anthropic")
         self.assertEqual(
             cfg.translation.engine_chain,
-            ("openrouter", "deepl", "groq"),
+            ("groq",),
         )
         self.assertEqual(
             cfg.translation.openrouter_model,

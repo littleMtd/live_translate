@@ -35,7 +35,7 @@ _DEEPSEEK_USER_AGENT = "live_translate/1.0"
 _DEEPL_FREE_BASE_URL = "https://api-free.deepl.com/v2"
 _DEEPL_PRO_BASE_URL = "https://api.deepl.com/v2"
 _DEEPL_USER_AGENT = "live_translate/1.0"
-_PROTECTED_LIVE_BASE_CHAIN = ("openrouter", "deepl", "groq")
+_PROTECTED_LIVE_BASE_CHAIN = ("groq",)
 # Shared invariants for the compact (TPM-budget) prompts. These engines now
 # carry most traffic on nvidia-degradation days, so the systematic error
 # classes observed in runtime logs must be covered even without the full
@@ -779,7 +779,7 @@ def _deepseek_capsule_prompt(profile_id: str) -> str:
 7. Follow supplied canonical and profile terminology exactly when applicable. Never substitute a related profile, person, group, or entity merely because it appears in context or history.
 8. Use recent history only for conversational continuity, pronoun/reference resolution, and disambiguation. Never copy a name, number, fact, or other content from history unless the current source supports it.
 9. For incomplete input, translate only the meaning currently present. Never complete the missing continuation.
-10. Output only the Traditional Chinese translation. Do not include explanations, notes, reconstructed source text, alternatives, labels, or meta commentary.
+10. Output only Taiwan Traditional Chinese characters, never Simplified Chinese. Before answering, silently replace any Simplified character with its Taiwan Traditional form. Do not include explanations, notes, reconstructed source text, alternatives, labels, or meta commentary.
 
 [Active profile facts]
 {facts}"""
@@ -2483,8 +2483,8 @@ def effective_engine_chain_names() -> tuple[str, ...]:
     if mode == "live" and backend == "anthropic":
         if str(getattr(cfg.translation, "deepseek_route", "off")) == "primary":
             return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
-        # The single rollback setting restores the exact former production
-        # route even if a persisted dashboard config changed engine_chain.
+        # The rollback setting selects the fixed Groq-only emergency route even
+        # if a persisted dashboard config changed engine_chain.
         return _PROTECTED_LIVE_BASE_CHAIN
     return names
 

@@ -11,12 +11,12 @@ VB-CABLE / sounddevice input
   → sentence assembly + optional one-shot provisional translation
   → source normalization → canonical obligations
   → unknown-name escrow → semantic terminology escrow
-  → DeepSeek V4 Flash → OpenRouter Qwen → DeepL → Groq
+  → DeepSeek V4 Flash → Groq
   → deterministic restore/corrections + publication guards
   → final fail-closed invariants → ordered subtitle publication
 ```
 
-`LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` 是現行緊急 provider rollback，會把 ordinary live translation route 切回 `OpenRouter Qwen → DeepL → Groq`。Dashboard 的 `engine_chain` 編輯不能重排這條受保護的 route。
+`LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` 是現行緊急 provider rollback，會把 ordinary live translation route 切回 `Groq`。Dashboard 的 `engine_chain` 編輯不能重排這條受保護的 route。
 
 已退休的 translation quality retry、Japanese translation shadow/active、DeepSeek record-only shadow、`source_fuzzy_shadow` 與舊 prompt/model comparison 不會在 production 執行。Kana/Hangul guards、歷史 analyzer 相容性及 frozen evidence 仍保留。
 
@@ -40,7 +40,7 @@ Copy-Item .env.example .env
 .\live-subtitle-env\Scripts\python.exe main.py --listen
 ```
 
-依實際 route 在 `.env` 設定 API keys。不要提交或輸出 `.env`。ordinary live 預設使用 ElevenLabs、DeepSeek、OpenRouter、DeepL，並可能使用 Groq STT/translation fallback；缺少後段 fallback key 時，未設定的 provider 會被跳過。
+依實際 route 在 `.env` 設定 API keys。不要提交或輸出 `.env`。ordinary live 預設使用 ElevenLabs、DeepSeek，並可能使用 Groq STT/translation fallback；缺少 fallback key 時，未設定的 provider 會被跳過。
 
 主要設定 owner 是 [`config.py`](config.py)。Dashboard 只可透過白名單欄位把 override 寫入 `logs/live_translate_config.json`，並於下次 Python 啟動套用；它不是第二套無限制設定來源。
 

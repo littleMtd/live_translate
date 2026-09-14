@@ -241,6 +241,9 @@ _SOURCE_NORM_SHARED = _CORRECTION_TABLES.source_norm_shared
 _SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.source_norm_by_profile
 _BOUNDARY_SOURCE_NORM_SHARED = _CORRECTION_TABLES.boundary_source_norm_shared
 _BOUNDARY_SOURCE_NORM_BY_PROFILE = _CORRECTION_TABLES.boundary_source_norm_by_profile
+_TARGET_SCRIPT_NORMALIZATION = tuple(
+    _CORRECTION_TABLES.target_script_normalization.items()
+)
 _CONDITIONAL_SOURCE_NORM_SHARED = tuple(
     (group.source_terms, group.replacements, group.match_all)
     for group in _CORRECTION_TABLES.conditional_source_norm_shared
@@ -784,6 +787,14 @@ def _source_terms_match(source: str, source_terms: tuple[str, ...], match_all: b
 
 def _apply_source_aware_corrections(source: str, result: str) -> str:
     corrected = result
+    for wrong, right in _TARGET_SCRIPT_NORMALIZATION:
+        corrected = _replace_recording(
+            corrected,
+            wrong,
+            right,
+            stage="target_script_normalization",
+            rule_id=f"zh-tw:{wrong}->{right}",
+        )
     for source_terms, replacements, match_all in _SOURCE_AWARE_TARGET_REPLACEMENTS:
         if not _source_terms_match(source, source_terms, match_all):
             continue
@@ -839,7 +850,7 @@ def _has_simplified_mapping(char: str) -> bool:
     return (
         len(char) == 1
         and "\u3400" <= char <= "\u9fff"
-        and convert_chinese(char, "zh-hant") != char
+        and convert_chinese(char, "zh-tw") != char
     )
 
 
@@ -860,6 +871,7 @@ def _unactivated_registry_targets(source: str, target: str) -> tuple[str, ...]:
         for entity in ENTITY_REGISTRY.entities
         if entity.translation is not None
         and entity.entity_id not in activated_ids
+        and not _target_has_bounded_term(source, entity.canonical_target)
         and _target_has_bounded_term(target, entity.canonical_target)
     )
 
@@ -986,15 +998,33 @@ def _preview_source_aware_corrections(
     return corrected, corrections
 
 
-def _translation_output_guard(
+@dataclass(frozen=True)
+class _CandidateAdjudication:
+    """One candidate's deterministic restore and publication decision."""
+
+    candidate_output: str
+    reason: str
+    rejection_owner: str
+    canonical_evaluation: CanonicalObligationEvaluation
+    evidence: dict[str, object]
+    accepted_after_name_render: tuple[str, ...] = ()
+
+    @property
+    def accepted(self) -> bool:
+        return not self.reason
+
+
+def _adjudicate_translation_candidate(
     engine: TranslationEngine | None,
     result: str,
     source: str,
     *,
     obligations: tuple[CanonicalObligation, ...] | None = None,
     request_protection: RequestProtection | None = None,
-) -> dict[str, object]:
-    """Enforce publication script safety plus narrow Flash-specific guards.
+    record_corrections: bool = False,
+    publication: bool = False,
+) -> _CandidateAdjudication:
+    """Restore and adjudicate one provider/cache/provisional candidate.
 
     Every provider is judged after deterministic corrections for unexpected
     Hangul/Kana residue. Flash additionally retains its raw-output boundary:
@@ -1016,7 +1046,14 @@ def _translation_output_guard(
     terminology_reason = protection_evaluation.semantic_reason
     escrow_evaluation = protection_evaluation.unresolved_evaluation
     restored_result = protection_evaluation.restored_candidate
-    corrected, corrections = _preview_source_aware_corrections(source, restored_result)
+    if record_corrections:
+        corrected = _apply_source_aware_corrections(source, restored_result)
+        corrections = get_corrections()
+    else:
+        corrected, corrections = _preview_source_aware_corrections(
+            source, restored_result
+        )
+    final_protection_evaluation = request_protection.evaluate_final(corrected)
     unactivated_entity_targets = _unactivated_registry_targets(source, corrected)
     simplified_chinese_spans = _simplified_chinese_evidence(corrected)
     profile_id = (
@@ -1092,36 +1129,62 @@ def _translation_output_guard(
             )
 
     reason = ""
-    if not terminology_passed:
+    rejection_owner = ""
+    publication_meta_rejection = publication and (
+        _looks_like_meta_garbage_output(corrected)
+        or _looks_like_model_refusal(corrected)
+    )
+    if publication_meta_rejection:
+        # Preserve the historical finalizer contract: a non-translation is
+        # filtered as model output even when it also violates another invariant.
+        reason = "meta_garbage_output"
+        rejection_owner = "model_output"
+    elif not terminology_passed:
         reason = terminology_reason
+        rejection_owner = "request_protection"
     elif not escrow_evaluation.passed:
         reason = escrow_evaluation.reason
+        rejection_owner = "request_protection"
+    elif not final_protection_evaluation.passed:
+        reason = final_protection_evaluation.reason
+        rejection_owner = "request_protection"
     elif unactivated_entity_targets:
         reason = "unactivated_entity_target"
+        rejection_owner = "entity_provenance"
     elif len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE:
         reason = "simplified_chinese"
+        rejection_owner = "script_safety"
     elif not obligation_evaluation.passed:
         reason = "canonical_obligation_missing"
+        rejection_owner = "canonical_obligation"
     elif "unexpected_japanese" in corrected_script_violations:
         reason = "unexpected_japanese"
+        rejection_owner = "script_safety"
     elif "unexpected_hangul" in corrected_script_violations:
         reason = "unexpected_hangul"
+        rejection_owner = "script_safety"
     elif is_deepseek and "unexpected_japanese" in (
         raw_script_violations - name_render_rescued
     ):
         reason = "unexpected_japanese"
+        rejection_owner = "script_safety"
     elif is_deepseek and "unexpected_hangul" in (
         raw_script_violations - name_render_rescued
     ):
         reason = "unexpected_hangul"
+        rejection_owner = "script_safety"
     elif is_deepseek and _looks_like_meta_garbage_output(corrected):
         reason = "meta_garbage_output"
+        rejection_owner = "model_output"
     elif is_deepseek and _looks_like_model_refusal(corrected):
         reason = "model_refusal"
+        rejection_owner = "model_output"
     elif is_deepseek and "target_meta_leak" in flags:
         reason = "target_meta_leak"
+        rejection_owner = "model_output"
     elif is_deepseek and "repetitive_target" in flags:
         reason = "repetitive_target"
+        rejection_owner = "model_output"
     evidence = {
         "version": 1,
         "candidate_raw_output": result,
@@ -1162,9 +1225,39 @@ def _translation_output_guard(
         evidence["reason"] = reason
     elif name_render_rescued:
         evidence["accepted_after_name_render"] = sorted(name_render_rescued)
-    elif not is_deepseek:
+    return _CandidateAdjudication(
+        candidate_output=corrected,
+        reason=reason,
+        rejection_owner=rejection_owner,
+        canonical_evaluation=obligation_evaluation,
+        evidence=evidence,
+        accepted_after_name_render=tuple(sorted(name_render_rescued)),
+    )
+
+
+def _translation_output_guard(
+    engine: TranslationEngine | None,
+    result: str,
+    source: str,
+    *,
+    obligations: tuple[CanonicalObligation, ...] | None = None,
+    request_protection: RequestProtection | None = None,
+) -> dict[str, object]:
+    """Compatibility adapter exposing adjudication to fallback telemetry."""
+    adjudication = _adjudicate_translation_candidate(
+        engine,
+        result,
+        source,
+        obligations=obligations,
+        request_protection=request_protection,
+    )
+    if (
+        not adjudication.reason
+        and not adjudication.accepted_after_name_render
+        and str(getattr(engine, "engine_name", "") or "") != "deepseek"
+    ):
         return {}
-    return evidence
+    return adjudication.evidence
 
 
 def _quality_telemetry_approved_terms(
@@ -2127,10 +2220,10 @@ class Translator:
                     request_protection=request_protection,
                 )
                 if not guard.get("reason"):
-                    result = str(
-                        guard.get("candidate_output")
-                        or provisional_candidate.raw_target
-                    )
+                    # Keep the provider candidate intact. The authoritative
+                    # final adjudication owns restore/correction for promoted
+                    # output exactly as it does for primary and fallback.
+                    result = provisional_candidate.raw_target
                     used_engine = provisional_engine
                     promoted = True
                     self._last_provisional_trace = {
@@ -2228,18 +2321,17 @@ class Translator:
                 ),
             )
 
-        result = provider_result
-        if not promoted:
-            result = request_protection.restore_provider_candidate(result)
-        result = _apply_source_aware_corrections(prepared_text, result)
-
-        final_obligation_evaluation = evaluate_canonical_obligations(
-            result, canonical_obligations
+        adjudication = _adjudicate_translation_candidate(
+            engine,
+            provider_result,
+            prepared_text,
+            obligations=canonical_obligations,
+            request_protection=request_protection,
+            record_corrections=True,
+            publication=True,
         )
-        unactivated_entity_targets = _unactivated_registry_targets(
-            prepared_text, result
-        )
-        simplified_chinese_spans = _simplified_chinese_evidence(result)
+        result = adjudication.candidate_output
+        final_obligation_evaluation = adjudication.canonical_evaluation
         common_failure = {
             "source_text": raw_text,
             "target_text": None,
@@ -2250,66 +2342,38 @@ class Translator:
             "model": engine.model_name if engine else "",
             "prompt_version": prompt_version,
         }
-        if (
-            _looks_like_meta_garbage_output(result)
-            or _looks_like_model_refusal(result)
-        ):
+        if adjudication.reason:
+            reason = adjudication.reason
+            status = "filtered" if reason == "meta_garbage_output" else "failed"
             log.debug(
-                "Filtering meta garbage translation output: %.40s -> %.40s",
+                "Rejecting translation candidate (%s/%s): %.40s -> %.40s",
+                adjudication.rejection_owner,
+                reason,
                 prepared_text,
                 result,
             )
-            self._reset_failed_input()
-            return TranslationOutcome(
-                **common_failure,
-                status="filtered",
-                filter_reason="meta_garbage_output",
-                canonical_obligation_evaluation=final_obligation_evaluation,
-            )
-
-        final_protection_evaluation = request_protection.evaluate_final(result)
-        if not final_protection_evaluation.passed:
+            metric_by_owner = {
+                "canonical_obligation": "translation.canonical_obligation.final_rejected",
+                "entity_provenance": "translation.entity_target.final_rejected",
+                "script_safety": "translation.target_script.final_rejected",
+                "model_output": "translation.model_output.final_rejected",
+            }
             metric = (
                 "translation.unknown_name_escrow.final_rejected"
-                if final_protection_evaluation.reason.startswith("unknown_name_")
+                if reason.startswith("unknown_name_")
                 else "translation.semantic_terminology.final_rejected"
+                if reason.startswith("semantic_terminology_")
+                else metric_by_owner.get(
+                    adjudication.rejection_owner,
+                    "translation.publication_invariant.final_rejected",
+                )
             )
             metrics.increment(metric)
             self._reset_failed_input()
             return TranslationOutcome(
                 **common_failure,
-                status="failed",
-                filter_reason=final_protection_evaluation.reason,
-                canonical_obligation_evaluation=final_obligation_evaluation,
-            )
-
-        if not final_obligation_evaluation.passed:
-            metrics.increment("translation.canonical_obligation.final_rejected")
-            self._reset_failed_input()
-            return TranslationOutcome(
-                **common_failure,
-                status="failed",
-                filter_reason="canonical_obligation_missing",
-                canonical_obligation_evaluation=final_obligation_evaluation,
-            )
-
-        if unactivated_entity_targets:
-            metrics.increment("translation.entity_target.final_rejected")
-            self._reset_failed_input()
-            return TranslationOutcome(
-                **common_failure,
-                status="failed",
-                filter_reason="unactivated_entity_target",
-                canonical_obligation_evaluation=final_obligation_evaluation,
-            )
-
-        if len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE:
-            metrics.increment("translation.target_script.final_rejected")
-            self._reset_failed_input()
-            return TranslationOutcome(
-                **common_failure,
-                status="failed",
-                filter_reason="simplified_chinese",
+                status=status,
+                filter_reason=reason,
                 canonical_obligation_evaluation=final_obligation_evaluation,
             )
 

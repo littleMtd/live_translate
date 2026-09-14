@@ -89,6 +89,7 @@ class TranslationCorrectionTables:
     source_norm_by_profile: dict[str, dict[str, str]]
     boundary_source_norm_shared: dict[str, str]
     boundary_source_norm_by_profile: dict[str, dict[str, str]]
+    target_script_normalization: dict[str, str]
     conditional_source_norm_shared: tuple[ReplacementGroup, ...]
     conditional_source_norm_by_profile: dict[str, tuple[ReplacementGroup, ...]]
     source_aware_target_replacements: tuple[ReplacementGroup, ...]
@@ -524,6 +525,18 @@ def load_translation_corrections(
     if not isinstance(raw_conditional_profiles, dict):
         raise ValueError("conditional_source_norm.profiles must be an object")
 
+    target_script_normalization = _string_map(
+        data.get("target_script_normalization"),
+        "target_script_normalization",
+    )
+    if any(
+        len(wrong) != 1 or len(right) != 1 or wrong == right
+        for wrong, right in target_script_normalization.items()
+    ):
+        raise ValueError(
+            "target_script_normalization must map distinct single characters"
+        )
+
     profile_source_aware = data.get("profile_source_aware_target_replacements")
     if not isinstance(profile_source_aware, dict):
         raise ValueError("profile_source_aware_target_replacements must be an object")
@@ -547,6 +560,7 @@ def load_translation_corrections(
             for profile, values in raw_boundary_profiles.items()
             if isinstance(profile, str)
         },
+        target_script_normalization=target_script_normalization,
         conditional_source_norm_shared=_replacement_groups(
             raw_conditional_source_norm.get("shared"),
             "conditional_source_norm.shared",

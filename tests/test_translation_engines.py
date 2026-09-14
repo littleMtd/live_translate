@@ -194,7 +194,9 @@ class TestCompactProfileDigest(unittest.TestCase):
         self.assertIn("__LT_UNK_n__ and __LT_SEM_n__", deepseek)
         self.assertIn("Use recent history only for conversational continuity", deepseek)
         self.assertIn("For incomplete input", deepseek)
-        self.assertIn("Output only the Traditional Chinese translation", deepseek)
+        self.assertIn("Output only Taiwan Traditional Chinese characters", deepseek)
+        self.assertIn("never Simplified Chinese", deepseek)
+        self.assertIn("silently replace any Simplified character", deepseek)
         self.assertIn("[Active profile facts]", deepseek)
         self.assertIn("키리/KIIRI=KIIRI", deepseek)
         self.assertNotIn("benchmark", deepseek.lower())
@@ -573,12 +575,12 @@ class TestDeepSeekTranslationAdapter(unittest.TestCase):
             object.__setattr__(cfg.translation, "deepseek_route", "primary")
             self.assertEqual(
                 effective_engine_chain_names(),
-                ("deepseek", "openrouter", "deepl", "groq"),
+                ("deepseek", "groq"),
             )
             object.__setattr__(cfg.translation, "deepseek_route", "off")
             self.assertEqual(
                 effective_engine_chain_names(),
-                ("openrouter", "deepl", "groq"),
+                ("groq",),
             )
         finally:
             object.__setattr__(cfg.translation, "deepseek_route", original_route)

@@ -187,7 +187,7 @@ class _Translation:
     # -------------------------------------------------------------------------
     # Configurable fallback list. In ordinary live ``anthropic`` mode the
     # protected route is assembled separately by translation_engines.py:
-    # DeepSeek -> OpenRouter Qwen -> DeepL -> Groq (or Qwen -> DeepL -> Groq
+    # DeepSeek -> Groq (or Groq
     # when deepseek_route="off"). Dashboard edits cannot reorder that route.
     # This tuple remains configurable for NVIDIA/clip/other applicable paths.
     #
@@ -205,9 +205,9 @@ class _Translation:
     #   4. Register the name in _make_engine() in translator.py.
     # -------------------------------------------------------------------------
     # Configured fallback chain for NVIDIA/clip/other applicable paths.
-    # OpenRouter uses the benchmarked Qwen3-Next capsule; DeepL is the fast
-    # non-LLM safety net and Groq remains last.
-    engine_chain:   tuple        = ("openrouter", "deepl", "groq")
+    # Groq is the sole production fallback. Other registered engines remain
+    # available only to explicit NVIDIA/clip/custom chains.
+    engine_chain:   tuple        = ("groq",)
 
     # --- Model / API settings (one block per engine) -------------------------
     # Claude model selection (change to switch modes):
@@ -244,8 +244,8 @@ class _Translation:
     google_translate_lang:    str = "zh-TW"
     google_translate_timeout: float = 5.0
     # Owner-authorized protected live route. ``primary`` selects the fixed
-    # Flash -> Qwen -> DeepL -> Groq chain; ``off`` restores the exact fixed
-    # Qwen -> DeepL -> Groq chain. Dashboard engine ordering cannot alter it.
+    # Flash -> Groq chain; ``off`` restores the exact fixed Groq-only chain.
+    # Dashboard engine ordering cannot alter it.
     deepseek_route: str = os.environ.get(
         "LIVE_TRANSLATE_DEEPSEEK_ROUTE", "primary"
     ).strip().lower()
