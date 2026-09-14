@@ -19,9 +19,9 @@ log = get_logger("runtime_events")
 
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
-# Version 5 adds the record-only translation-shadow pairing contract. Fields
-# remain additive; analyzers continue accepting older JSONL records without it.
-_SCHEMA_VERSION = 5
+# Version 6 adds request-contract and stage-level adjudication provenance.
+# Fields remain additive; analyzers continue accepting older JSONL records.
+_SCHEMA_VERSION = 6
 _RUN_KINDS = frozenset({"live", "test", "replay", "benchmark"})
 
 # Types that are safe to pass straight to json.dumps without coercion.
@@ -153,6 +153,8 @@ class RuntimeEventWriter:
         self.git_sha = detected_sha if git_sha is None else str(git_sha)
         self.git_dirty = detected_dirty if git_dirty is None else bool(git_dirty)
         self._lock = threading.Lock()
+        self._once_lock = threading.Lock()
+        self._emitted_once: set[tuple[str, str]] = set()
         self._warned = False
 
     @property
@@ -206,6 +208,16 @@ class RuntimeEventWriter:
             if not self._warned:
                 log.warning("Runtime event write failed: %s", exc)
                 self._warned = True
+
+    def emit_once(self, event_type: str, identity: str, **fields: Any) -> bool:
+        """Emit one immutable manifest once per writer/run identity."""
+        key = (str(event_type), str(identity))
+        with self._once_lock:
+            if key in self._emitted_once:
+                return False
+            self._emitted_once.add(key)
+        self.emit(event_type, **fields)
+        return True
 
 
 def _ratio(text: str, predicate) -> float:

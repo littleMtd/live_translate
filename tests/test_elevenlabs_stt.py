@@ -117,6 +117,11 @@ def test_scribe_v2_success_returns_elevenlabs_event_and_observability():
     assert emit.call_args.kwargs["status"] == "success"
     assert emit.call_args.kwargs["keyterm_count"] == 3
     assert "keyterms" not in emit.call_args.kwargs
+    contract_call = emit.call_args_list[0]
+    assert contract_call.args == ("stt_request_contract",)
+    assert contract_call.kwargs["request_parameters"]["keyterms"] == request["keyterms"]
+    assert contract_call.kwargs["keyterm_manifest"][0]["provenance"] == "registry_common"
+    assert emit.call_args.kwargs["stt_request_contract_id"] == contract_call.kwargs["stt_request_contract_id"]
 
 
 def test_scribe_v2_removes_first_proven_cross_boundary_overlap():
@@ -324,7 +329,8 @@ def test_provider_failure_retries_same_chunk_with_sequential_attempt_index():
     assert engine._use_elevenlabs is True
     assert engine._use_groq is False
     assert engine._elevenlabs_retry_after > 0
-    assert [call.kwargs["attempt_index"] for call in emit.call_args_list] == [1, 2]
+    stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
+    assert [call.kwargs["attempt_index"] for call in stt_calls] == [1, 2]
 
 
 def test_elevenlabs_then_groq_cross_key_retry_uses_attempts_one_two_three():
@@ -352,7 +358,8 @@ def test_elevenlabs_then_groq_cross_key_retry_uses_attempts_one_two_three():
     assert event is not None
     assert event.engine == "groq"
     assert event.text == "Fallback key result"
-    assert [call.kwargs["attempt_index"] for call in emit.call_args_list] == [1, 2, 3]
+    stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
+    assert [call.kwargs["attempt_index"] for call in stt_calls] == [1, 2, 3]
 
 
 def test_filtered_empty_response_does_not_fallback_to_second_provider():
@@ -381,6 +388,10 @@ def test_keyterm_filter_is_bounded_and_drops_unsupported_entries():
         terms = engine._elevenlabs_keyterms()
 
     assert terms == ["scene", "common"]
+    assert engine._last_elevenlabs_keyterm_manifest == (
+        {"term": "scene", "provenance": "activity"},
+        {"term": "common", "provenance": "registry_common"},
+    )
 
 
 def test_scribe_metadata_is_retained_without_raw_identifier_telemetry():

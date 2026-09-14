@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-BUNDLE_SCHEMA_VERSION = 1
+BUNDLE_SCHEMA_VERSION = 2
 DEFAULT_MAX_PART_BYTES = 50 * 1024 * 1024
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
 _BASIC_AUTH = re.compile(r"(?i)(?:authorization\s*:\s*)?basic\s+[A-Za-z0-9+/=]+")
@@ -339,6 +339,7 @@ def _profile_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
 def _manifest(
     rows: list[SourceEvent], *, run_id: str, event_files: list[str], subtitles: list[dict[str, Any]],
     audio: list[dict[str, Any]], redaction_count: int, config_available: bool, snapshot_cutoff: str,
+    request_contract_count: int = 0,
 ) -> dict[str, Any]:
     events = [row.event for row in rows]
     timestamps = [_parse_timestamp(event.get("created_at")) for event in events]
@@ -383,6 +384,7 @@ def _manifest(
             "completion_note": "run_complete is true only when a persisted terminal lifecycle event exists",
         },
         "event_count": len(events),
+        "request_contract_count": request_contract_count,
         "event_counts": dict(sorted(event_counts.items())),
         "runtime_event_files": event_files,
         "profiles": _profile_summary(events),
@@ -407,12 +409,12 @@ def _manifest(
             "file": "config_sanitized.json" if config_available else None,
             "basis": "latest_unbound_dashboard_snapshot; not guaranteed to equal the historical run config",
         },
-        "derived_files": ["CHATGPT_PROJECT_README.md", "manifest.json", "subtitles.tsv", "audio_index.json"],
+        "derived_files": ["CHATGPT_PROJECT_README.md", "manifest.json", "request_contracts.json", "subtitles.tsv", "audio_index.json"],
         "event_source_provenance": [
             {"ordinal": row.ordinal, "source_file": row.source_file.name, "source_line": row.source_line}
             for row in rows
         ],
-        "analysis_order": ["CHATGPT_PROJECT_README.md", "manifest.json", *event_files, "subtitles.tsv", "audio_index.json"],
+        "analysis_order": ["CHATGPT_PROJECT_README.md", "manifest.json", "request_contracts.json", *event_files, "subtitles.tsv", "audio_index.json"],
     }
 
 
@@ -427,6 +429,7 @@ def _markdown(manifest: dict[str, Any], subtitles: list[dict[str, Any]]) -> str:
         f"- Observed event-span duration: `{runtime['observed_event_duration_seconds']}` seconds",
         f"- Persisted terminal event: `{runtime['run_complete']}`",
         f"- Events: `{manifest['event_count']}`",
+        f"- Exact request contracts: `{manifest['request_contract_count']}`",
         f"- Subtitles: `{manifest['subtitle_count']}`; provisional observations: `{manifest['provisional_count']}`",
         f"- Fallbacks: `{manifest['fallback_count']}`; rejections: `{manifest['rejection_count']}`; errors/warnings: `{manifest['error_warning_count']}`",
         f"- Source/content/effective/profile IDs: `{profiles}`",
@@ -441,14 +444,16 @@ def _markdown(manifest: dict[str, Any], subtitles: list[dict[str, Any]]) -> str:
         "", "## Event-type glossary", "",
     ]
     glossary = {
-        "audio": "capture/VAD evidence", "stt": "speech-to-text request/result and provider attribution",
+        "audio": "capture/VAD evidence", "stt": "speech-to-text result linked to its exact request contract",
+        "stt_request_contract": "exact STT parameters, glossary/prompt provenance, profile and artifact identities",
         "sentence": "sentence-buffer/splitter decision", "translation": "translation request/result/publication evidence",
+        "translation_request_contract": "exact provider messages, history, protected spans, canonical obligations and policy/data identities",
         "translation_fallback": "translation fallback decision", "subtitle": "subtitle display lifecycle",
         "profile_resolution": "scene/profile resolver observation or activation",
     }
     for event_type, count in manifest["event_counts"].items():
         lines.append(f"- `{event_type}` ({count}): {glossary.get(event_type, 'retained runtime event; inspect raw fields without assuming undocumented semantics')}")
-    lines += ["", "## Chronological published subtitles", ""]
+    lines += ["", "Join attempts and results through `request_contract_id` or `stt_request_contract_id`. Candidate `output_guard` records retain raw, restored, corrected stages and every failed invariant.", "", "## Chronological published subtitles", ""]
     headers = ["timestamp", "source Korean", "final zh-TW", "provider", "effective profile", "sentence/provisional/final IDs", "raw event"]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join("---" for _ in headers) + " |")
@@ -482,6 +487,15 @@ def export_bundle(
             clean, count = sanitize_value(row.event, project_root=project_root)
             sanitized_events.append(clean)
             redactions += count
+        request_contracts = [
+            event for event in sanitized_events
+            if event.get("event_type") in {
+                "translation_request_contract", "stt_request_contract"
+            }
+        ]
+        (temp_dir / "request_contracts.json").write_text(
+            _json_dump(request_contracts, pretty=True) + "\n", encoding="utf-8"
+        )
         part_names = _write_event_parts(sanitized_events, temp_dir, max_part_bytes)
         subtitles = _subtitle_rows(rows)
         clean_subtitles = []
@@ -516,13 +530,14 @@ def export_bundle(
             redactions += count
             (temp_dir / "config_sanitized.json").write_text(_json_dump(config, pretty=True) + "\n", encoding="utf-8")
         snapshot_cutoff = datetime.now(timezone.utc).isoformat()
-        manifest = _manifest(rows, run_id=run_id, event_files=part_names, subtitles=clean_subtitles, audio=audio, redaction_count=redactions, config_available=config_available, snapshot_cutoff=snapshot_cutoff)
+        manifest = _manifest(rows, run_id=run_id, event_files=part_names, subtitles=clean_subtitles, audio=audio, redaction_count=redactions, config_available=config_available, snapshot_cutoff=snapshot_cutoff, request_contract_count=len(request_contracts))
         manifest["integrity"] = {
             name: {"sha256": hashlib.sha256((temp_dir / name).read_bytes()).hexdigest(), "size_bytes": (temp_dir / name).stat().st_size}
             for name in [
                 *part_names,
                 "subtitles.tsv",
                 "audio_index.json",
+                "request_contracts.json",
                 *(["config_sanitized.json"] if config_available else []),
                 *(item["bundle_path"] for item in audio if item["bundle_path"]),
             ]

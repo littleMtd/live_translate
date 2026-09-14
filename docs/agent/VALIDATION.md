@@ -242,11 +242,11 @@ an unconstrained "latest" run.
   `--skip-replay-update` unless accepting the snapshot is explicitly intended).
 
 The LLM reviewer is the semantic discovery/triage owner, not a confidence gate
-or regression oracle. For current schema-v5 runs, use `--mode broad` when the
+or regression oracle. For current schema-v6 runs, use `--mode broad` when the
 goal is to inspect every published translation rather than only deterministic
-anomalies. Reviewer context is limited to earlier published same-cohort rows and
-is labeled approximate because runtime telemetry does not retain the byte-exact
-provider history payload; future subtitles are never supplied as context.
+anomalies. Schema-v6 `translation_request_contract` rows retain the exact
+selected history and provider messages; older runs remain approximate. Future
+subtitles are never supplied as context.
 Review output is fail-closed and requires one strict semantic verdict per case.
 `summary.json` records reviewer calls/model, tokens, reported cost, latency,
 coverage, suspicious rate, and category counts. `--calibration-cases` builds
@@ -277,8 +277,8 @@ without source/context/root-cause verification and matched negative controls.
 - input preparation: `download_audio.py`.
 
 The collection/sampling scripts currently hard-code target schema v2 while live
-runtime events are schema v5. Until those tools are upgraded and tested, do not
-claim a schema-v5 run is “ready for sampling” merely because the runtime analyzer can
+runtime events are schema v6. Until those tools are upgraded and tested, do not
+claim a schema-v6 run is “ready for sampling” merely because the runtime analyzer can
 read it.
 
 `replay_phase0_stt_candidates.py` defaults to the legacy SenseVoice behavior

@@ -72,7 +72,7 @@ Selective secondary-ASR source replacement is not active. Retained replay does n
 
 Translation workers share policy, memory/history, and fallback state. The in-memory LRU is active. SQLite schema v2 provides optional prompt-versioned persistence; live DB cache is disabled by default, while clip mode may use it.
 
-Runtime JSONL uses schema v5 at `logs/runtime_events_YYYYMMDD.jsonl`. Current event types include `audio_startup`, `audio`, `stt`, `sentence`, `translation`, `scene`, and `translation_fallback`. Every row carries `run_id`; sequence IDs restart per run. Translation events retain attempt chains, selected route, provider/content disposition, latency/token/cost data when available, deterministic ownership/evaluation, quality diagnostics, provisional disposition, and publication result.
+Runtime JSONL uses schema v6 at `logs/runtime_events_YYYYMMDD.jsonl`. `stt_request_contract` records the exact provider prompt/keyterms, their provenance, profile/activity identity, and hashed data inputs. `translation_request_contract` records exact messages, selected history, protected source spans, canonical obligations, profile/activity identity, and policy/data hashes. STT results and translation attempts reference those immutable contracts by ID. Candidate adjudication retains raw, protection-restored, and corrected text plus every failed invariant and its owning layer. These additive events let an exported runtime bundle reconstruct the causal request and publication path without guessing from the final subtitle.
 
 After normal pipeline teardown joins its workers, Python emits a terminal
 `runtime_lifecycle` event and automatically creates a default ChatGPT bundle

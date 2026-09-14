@@ -40,7 +40,7 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
     assert len(files) == 1
     assert files[0].name == "runtime_events_20260514.jsonl"
     record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["schema_version"] == 5
+    assert record["schema_version"] == 6
     assert record["event_type"] == "translation"
     assert record["run_id"] == "test-run"
     assert record["run_kind"] == "benchmark"
@@ -48,6 +48,27 @@ def test_runtime_event_writer_appends_jsonl(tmp_path):
     assert record["git_dirty"] is True
     assert record["source_text"] == "안녕하세요"
     assert record["target_text"] == "你好"
+
+
+def test_runtime_event_writer_emit_once_deduplicates_identity(tmp_path):
+    writer = RuntimeEventWriter(
+        log_dir=tmp_path,
+        run_id="test-run",
+        clock=lambda: "2026-05-14T00:00:00+00:00",
+        filename_timezone=timezone.utc,
+    )
+
+    assert writer.emit_once("translation_request_contract", "same", value=1)
+    assert not writer.emit_once("translation_request_contract", "same", value=2)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "runtime_events_20260514.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["value"] == 1
 
 
 def test_runtime_event_writer_filename_follows_injected_clock(tmp_path):

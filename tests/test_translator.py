@@ -429,6 +429,20 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertFalse(adjudication.accepted)
         self.assertEqual(adjudication.reason, "unexpected_hangul")
         self.assertEqual(adjudication.rejection_owner, "script_safety")
+        self.assertEqual(
+            adjudication.evidence["policy_version"],
+            "candidate-adjudication-v2",
+        )
+        self.assertEqual(adjudication.evidence["disposition"], "rejected")
+        self.assertIn(
+            {"reason": "unexpected_hangul", "owner": "script_safety"},
+            adjudication.evidence["failed_invariants"],
+        )
+        stages = adjudication.evidence["candidate_stages"]
+        self.assertEqual(
+            stages["raw_provider"]["text"],
+            stages["source_corrected"]["text"],
+        )
         self.assertEqual(adjudication.candidate_output, "這是느졋")
         self.assertEqual(
             _translation_output_guard(engine, "這是느졋", "늦었어"),
@@ -1815,6 +1829,37 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         current_message = engine.translate_messages.call_args.args[0][-1][1]
         self.assertIn("__LT_UNK_1__", current_message)
         self.assertNotIn("키야", current_message)
+
+    def test_fallback_api_emits_exact_request_contract_and_links_attempt(self):
+        engine = _route_engine("deepseek", "translated")
+        translator = _make_translator()
+        translator._engines = [engine]
+        source = "plain source"
+        protection = resolve_request_protection(source)
+
+        with patch("modules.translator.runtime_events.emit_once") as emit_once:
+            result, _ = translator._call_with_fallback(
+                protection,
+                "system prompt",
+                False,
+                [("prior source", "prior target")],
+            )
+
+        self.assertEqual(result, "translated")
+        call = next(
+            row for row in emit_once.call_args_list
+            if row.args[0] == "translation_request_contract"
+        )
+        fields = call.kwargs
+        self.assertEqual(fields["original_source"], source)
+        self.assertEqual(fields["provider_source"], source)
+        self.assertEqual(fields["history"][0]["source"], "prior source")
+        self.assertEqual(fields["messages"][-1]["role"], "user")
+        attempts = translation_engines_module.get_translation_attempts()
+        self.assertEqual(
+            attempts[-1]["request_contract_id"],
+            fields["request_contract_id"],
+        )
 
     def test_protected_member_referent_bypasses_unprotected_cache_lookup(self):
         translator = _make_translator()

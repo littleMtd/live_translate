@@ -79,8 +79,9 @@ context provenance, and per-run summaries. The provenance summary is backward
 compatible: old included-context rows are counted as legacy/unavailable rather
 than violations. Groq sources are joined only to earlier successful same-run
 Groq STT events; non-Groq sources are counted separately because SenseVoice
-successes do not currently emit equivalent STT runtime rows. Samples contain
-IDs and numeric metadata only, never context text or a text hash. Always select
+successes do not currently emit equivalent STT runtime rows. Legacy analyzer
+samples contain IDs and numeric metadata only. Schema-v6 raw bundles separately
+retain exact request context in content-addressed contract events. Always select
 `--run-id` when a daily file contains multiple runs. Historical schema-v5 files
 can also expose the retired `translation_model_shadow` Qwen-versus-Flash pair
 summary: integrity,

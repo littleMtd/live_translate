@@ -22,7 +22,8 @@ from modules.unknown_name_escrow import (
 )
 
 
-_PROTECTION_POLICY_VERSION = "request-source-protection-v1"
+PROTECTION_POLICY_VERSION = "request-source-protection-v1"
+_PROTECTION_POLICY_VERSION = PROTECTION_POLICY_VERSION
 
 
 @dataclass(frozen=True)

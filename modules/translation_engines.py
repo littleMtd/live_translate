@@ -554,6 +554,24 @@ def build_effective_deepseek_messages(
     )
 
 
+def build_effective_groq_messages(
+    text: str,
+    system_prompt: str,
+    incomplete: bool,
+    history: list[tuple[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    """Freeze the exact role/content sequence used by Groq translation."""
+    limited_history = _limited_groq_history(history)
+    messages: list[tuple[str, str]] = [
+        ("system", _groq_system_prompt(system_prompt))
+    ]
+    for source, target in limited_history:
+        messages.append(("user", f"input: {source}"))
+        messages.append(("assistant", target))
+    messages.append(("user", _build_groq_user_message(text, incomplete)))
+    return tuple(messages)
+
+
 def _build_effective_compact_messages(
     text: str,
     effective_prompt: str,
@@ -2178,7 +2196,10 @@ class GroqTranslationEngine(TranslationEngine):
     def translate(self, text: str, system_prompt: str, incomplete: bool,
                   history: list[tuple[str, str]] | None = None) -> str | None:
         timeout_config_ms = _timeout_config_ms(self._timeout)
-        system_prompt = _groq_system_prompt(system_prompt)
+        messages_contract = build_effective_groq_messages(
+            text, system_prompt, incomplete, history
+        )
+        system_prompt = messages_contract[0][1]
         history = _limited_groq_history(history)
         api_attempt_count = 0
         api_timeout_count = 0
@@ -2240,11 +2261,10 @@ class GroqTranslationEngine(TranslationEngine):
         import urllib.error
         import json as _json
 
-        messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in (history or []):
-            messages.append({"role": "user", "content": f"input: {ko}"})
-            messages.append({"role": "assistant", "content": zh})
-        messages.append({"role": "user", "content": _build_groq_user_message(text, incomplete)})
+        messages = [
+            {"role": role, "content": content}
+            for role, content in messages_contract
+        ]
 
         payload_data = {
             "model": self._model,

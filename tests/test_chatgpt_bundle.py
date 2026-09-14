@@ -90,6 +90,34 @@ def test_recursive_secret_redaction_does_not_remove_token_telemetry(tmp_path):
     assert '\"api_key\": \"secret\"' not in contents
 
 
+def test_bundle_exports_request_contract_index(tmp_path):
+    project = tmp_path / "project"
+    logs = project / "logs"
+    contract = _event(
+        "translation_request_contract",
+        request_contract_id="contract-1",
+        messages=[{"role": "user", "content": "source"}],
+    )
+    _write_events(logs / "runtime_events_20260903.jsonl", [contract])
+
+    result = export_bundle(
+        run_id="run-a",
+        log_dir=logs,
+        output_root=project / "exports",
+        project_root=project,
+    )
+    bundle = Path(result["output_path"])
+    contracts = json.loads(
+        (bundle / "request_contracts.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+
+    assert contracts == [contract]
+    assert manifest["request_contract_count"] == 1
+    assert "request_contracts.json" in manifest["integrity"]
+    assert manifest["analysis_order"][2] == "request_contracts.json"
+
+
 def test_runtime_nested_headers_tokens_and_screenshot_payload_are_sanitized(tmp_path):
     clean, count = sanitize_value(
         {

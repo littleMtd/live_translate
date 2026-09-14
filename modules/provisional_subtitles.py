@@ -42,6 +42,7 @@ class ProvisionalCandidate:
     completed_at_monotonic: float
     usage: dict[str, Any]
     diagnostics: dict[str, Any]
+    request_contract_id: str = ""
 
 
 @dataclass(frozen=True)

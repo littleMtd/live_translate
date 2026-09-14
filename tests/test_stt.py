@@ -405,21 +405,22 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertTrue(any("retrying same chunk with fallback key" in line for line in cm.output))
         eng._groq_client.audio.transcriptions.create.assert_called_once()
         fallback_client.audio.transcriptions.create.assert_called_once()
-        self.assertEqual(emit.call_count, 2)
-        self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
-        self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
-        self.assertEqual(emit.call_args_list[0].kwargs["attempt_index"], 1)
-        self.assertEqual(emit.call_args_list[0].kwargs["key_role"], "primary")
-        self.assertTrue(emit.call_args_list[0].kwargs["will_retry"])
-        self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
-        self.assertEqual(emit.call_args_list[1].kwargs["attempt_index"], 2)
-        self.assertEqual(emit.call_args_list[1].kwargs["key_role"], "fallback")
-        self.assertFalse(emit.call_args_list[1].kwargs["will_retry"])
+        stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
+        self.assertEqual(len(stt_calls), 2)
+        self.assertEqual(stt_calls[0].kwargs["status"], "failed")
+        self.assertEqual(stt_calls[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(stt_calls[0].kwargs["attempt_index"], 1)
+        self.assertEqual(stt_calls[0].kwargs["key_role"], "primary")
+        self.assertTrue(stt_calls[0].kwargs["will_retry"])
+        self.assertEqual(stt_calls[1].kwargs["status"], "success")
+        self.assertEqual(stt_calls[1].kwargs["attempt_index"], 2)
+        self.assertEqual(stt_calls[1].kwargs["key_role"], "fallback")
+        self.assertFalse(stt_calls[1].kwargs["will_retry"])
         self.assertGreater(eng._groq_rate_limited_until, time.monotonic())
         self.assertLessEqual(eng._groq_fallback_rate_limited_until, time.monotonic())
         self.assertTrue(eng._groq_prefer_fallback_key)
-        first_provenance = emit.call_args_list[0].kwargs
-        second_provenance = emit.call_args_list[1].kwargs
+        first_provenance = stt_calls[0].kwargs
+        second_provenance = stt_calls[1].kwargs
         self.assertEqual(first_provenance["context_source_utterance_id"], "utt-7")
         self.assertEqual(second_provenance["context_source_utterance_id"], "utt-7")
         self.assertEqual(first_provenance["context_source_engine"], "groq")
@@ -502,16 +503,17 @@ class TestTranscribeGroq(unittest.TestCase):
         self.assertTrue(any("retrying same chunk with primary key" in line for line in cm.output))
         fallback_client.audio.transcriptions.create.assert_called_once()
         eng._groq_client.audio.transcriptions.create.assert_called_once()
-        self.assertEqual(emit.call_count, 2)
-        self.assertEqual(emit.call_args_list[0].kwargs["status"], "failed")
-        self.assertEqual(emit.call_args_list[0].kwargs["reason"], "rate_limited")
-        self.assertEqual(emit.call_args_list[0].kwargs["attempt_index"], 1)
-        self.assertEqual(emit.call_args_list[0].kwargs["key_role"], "fallback")
-        self.assertTrue(emit.call_args_list[0].kwargs["will_retry"])
-        self.assertEqual(emit.call_args_list[1].kwargs["status"], "success")
-        self.assertEqual(emit.call_args_list[1].kwargs["attempt_index"], 2)
-        self.assertEqual(emit.call_args_list[1].kwargs["key_role"], "primary")
-        self.assertFalse(emit.call_args_list[1].kwargs["will_retry"])
+        stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
+        self.assertEqual(len(stt_calls), 2)
+        self.assertEqual(stt_calls[0].kwargs["status"], "failed")
+        self.assertEqual(stt_calls[0].kwargs["reason"], "rate_limited")
+        self.assertEqual(stt_calls[0].kwargs["attempt_index"], 1)
+        self.assertEqual(stt_calls[0].kwargs["key_role"], "fallback")
+        self.assertTrue(stt_calls[0].kwargs["will_retry"])
+        self.assertEqual(stt_calls[1].kwargs["status"], "success")
+        self.assertEqual(stt_calls[1].kwargs["attempt_index"], 2)
+        self.assertEqual(stt_calls[1].kwargs["key_role"], "primary")
+        self.assertFalse(stt_calls[1].kwargs["will_retry"])
         self.assertFalse(eng._groq_prefer_fallback_key)
 
     def test_zero_cooldown_rate_limits_still_stop_after_one_cross_key_retry(self):
@@ -1466,8 +1468,9 @@ class TestGroqPromptBuilder(unittest.TestCase):
         self.assertEqual(second.text, "두번째 문장")
         second_prompt = eng._groq_client.audio.transcriptions.create.call_args_list[1].kwargs["prompt"]
         self.assertEqual(second_prompt, "seed prompt")
-        self.assertTrue(emit.call_args_list[1].kwargs["context_gated"])
-        self.assertEqual(emit.call_args_list[1].kwargs["context_gate_reason"], "avg_logprob")
+        stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
+        self.assertTrue(stt_calls[1].kwargs["context_gated"])
+        self.assertEqual(stt_calls[1].kwargs["context_gate_reason"], "avg_logprob")
 
     @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
     def test_filtered_groq_result_clears_prompt_context(self):

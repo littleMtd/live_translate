@@ -52,7 +52,7 @@ Copy-Item .env.example .env
 - `modules/semantic_terminology.py`：精準觸發的 production semantic terminology。
 - `modules/translator.py`：provider/content failure 分離、fallback、finalization、cache/history、provisional promotion、publication invariants 與 ordered output。
 - `modules/provisional_subtitles.py`：one-shot provisional candidate 與 exact fingerprint promotion。
-- `utils/runtime_events.py`：schema-v5 runtime telemetry 與 quality diagnostics。
+- `utils/runtime_events.py`：schema-v6 causal request contracts、runtime telemetry 與 quality diagnostics。
 
 所有 provider candidate 都必須經過相同的 restore/corrections、canonical/name/terminology cardinality、Hangul/Kana/meta guards 與 final fail-closed invariant。被拒絕的 candidate 不得進入 subtitle、cache 或 history。
 

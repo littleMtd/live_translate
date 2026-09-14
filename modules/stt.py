@@ -1,4 +1,5 @@
 import io
+import hashlib
 import queue
 import threading
 import time
@@ -9,6 +10,12 @@ import soundfile as sf
 
 from config import cfg
 from modules.activity_context import normalize_activity
+from modules.forensics_contract import (
+    STT_REQUEST_CONTRACT_SCHEMA_VERSION,
+    artifact_hashes,
+    sha256_text,
+    stable_identity,
+)
 from utils.audio import rms as _rms, write_wav
 from utils.logger import get_logger
 from utils.metrics import metrics
@@ -50,6 +57,12 @@ _GROQ_PROMPT_MAX_CHARS = 896
 _TIMESTAMP_DEDUPE_MARGIN_SEC = 0.3
 _AUDIO_DUMP_ROOT = Path(__file__).resolve().parent.parent / "logs" / "audio_dump"
 _ELEVENLABS_UNSUPPORTED_KEYTERM_CHARS = frozenset("<>{}[]\\")
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_STT_ARTIFACT_PATHS = (
+    "data/entity_registry.json",
+    "data/streamer_profiles.json",
+    "data/scene_stt_terms.json",
+)
 
 
 @dataclass(frozen=True)
@@ -309,6 +322,10 @@ class STTEngine:
         self._last_elevenlabs_error = False
         self._elevenlabs_retry_after = 0.0
         self._last_elevenlabs_keyterm_count = 0
+        self._last_elevenlabs_keyterms: tuple[str, ...] = ()
+        self._last_elevenlabs_keyterm_manifest: tuple[dict[str, str], ...] = ()
+        self._last_groq_prompt: str | None = None
+        self._last_groq_prompt_inputs: dict[str, object] = {}
         # Monotonic per-transcription counter; minted once per transcribe_event
         # call (single STT thread, so no lock needed) to correlate downstream events.
         self._utterance_seq = 0
@@ -317,6 +334,11 @@ class STTEngine:
         self._current_audio_session_id = ""
         self._last_audio_seconds = 0.0
         self._last_segments: tuple[SegmentInfo, ...] = ()
+        self._last_provider_raw_text = ""
+        self._last_provider_raw_segments: tuple[dict[str, object], ...] = ()
+        self._last_request_audio_wav_sha256 = ""
+        self._last_request_audio_sample_count = 0
+        self._current_stt_request_contract_id = ""
         self._last_timestamp_deduped_segments = 0
         self._last_timestamp_deduped_chars = 0
         self._current_overlap_seconds = 0.0
@@ -556,19 +578,22 @@ class STTEngine:
                 stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
             )
         if not snapshot.stt_glossary_applied or not _cfg_stt_bool("use_profile_glossary", True):
+            self._last_elevenlabs_keyterm_manifest = ()
             return []
         scene_terms = terms_for_activity(
             normalize_activity(getattr(cfg.translation, "current_activity", ""))
         )
+        registry = snapshot.registry or profile_state.registry
         candidates = (
-            *scene_terms,
-            *(snapshot.registry or profile_state.registry).common_stt_terms,
-            *(snapshot.registry or profile_state.registry).terms_for(snapshot.effective_profile_id),
+            *((term, "activity") for term in scene_terms),
+            *((term, "registry_common") for term in registry.common_stt_terms),
+            *((term, "registry_profile") for term in registry.terms_for(snapshot.effective_profile_id)),
         )
         limit = max(0, min(100, _cfg_stt_int("elevenlabs_max_keyterms", 100)))
         unique: list[str] = []
+        manifest: list[dict[str, str]] = []
         seen: set[str] = set()
-        for candidate in candidates:
+        for candidate, provenance in candidates:
             term = str(candidate or "").strip()
             if (
                 not term
@@ -580,8 +605,10 @@ class STTEngine:
                 continue
             seen.add(term)
             unique.append(term)
+            manifest.append({"term": term, "provenance": provenance})
             if len(unique) >= limit:
                 break
+        self._last_elevenlabs_keyterm_manifest = tuple(manifest)
         return unique
 
     def _transcribe_elevenlabs(self, audio: np.ndarray) -> str | None:
@@ -590,6 +617,11 @@ class STTEngine:
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
         self._last_segments = ()
+        self._last_provider_raw_text = ""
+        self._last_provider_raw_segments = ()
+        self._last_request_audio_wav_sha256 = ""
+        self._last_request_audio_sample_count = 0
+        self._current_stt_request_contract_id = ""
         self._last_timestamp_deduped_segments = 0
         self._last_timestamp_deduped_chars = 0
         self._last_detected_language = ""
@@ -597,6 +629,8 @@ class STTEngine:
         self._last_transcription_id = ""
         self._last_foreign_speech_allowed = False
         self._last_elevenlabs_keyterm_count = 0
+        self._last_elevenlabs_keyterms = ()
+        self._last_elevenlabs_keyterm_manifest = ()
 
         if self._elevenlabs_client is None:
             self._last_elevenlabs_error = True
@@ -639,7 +673,12 @@ class STTEngine:
             sf.write(buf, request_audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
             buf.seek(0)
             buf.name = "audio.wav"
+            self._last_request_audio_wav_sha256 = hashlib.sha256(
+                buf.getvalue()
+            ).hexdigest()
+            self._last_request_audio_sample_count = len(request_audio)
             keyterms = self._elevenlabs_keyterms()
+            self._last_elevenlabs_keyterms = tuple(keyterms)
             self._last_elevenlabs_keyterm_count = len(keyterms)
             request_kwargs = {
                 "file": buf,
@@ -652,9 +691,24 @@ class STTEngine:
             if keyterms:
                 request_kwargs["keyterms"] = keyterms
             request_sent = True
+            self._current_stt_request_contract_id = self._emit_stt_request_contract(
+                "elevenlabs", cfg.stt.elevenlabs_model
+            )
             resp = self._elevenlabs_client.speech_to_text.convert(**request_kwargs)
             text = str(getattr(resp, "text", "") or "").strip()
             words = list(getattr(resp, "words", None) or [])
+            self._last_provider_raw_text = text
+            self._last_provider_raw_segments = tuple(
+                {
+                    "start": _float_or_none(getattr(word, "start", None)),
+                    "end": _float_or_none(getattr(word, "end", None)),
+                    "text": str(getattr(word, "text", "") or ""),
+                    "logprob": _float_or_none(getattr(word, "logprob", None)),
+                    "word_type": str(getattr(word, "type", "") or ""),
+                    "speaker_id": str(getattr(word, "speaker_id", "") or ""),
+                }
+                for word in words
+            )
             language_probability = _float_or_none(
                 getattr(resp, "language_probability", None)
             )
@@ -810,6 +864,11 @@ class STTEngine:
     def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
+        self._last_provider_raw_text = ""
+        self._last_provider_raw_segments = ()
+        self._last_request_audio_wav_sha256 = ""
+        self._last_request_audio_sample_count = 0
+        self._current_stt_request_contract_id = ""
         self._last_language_probability = None
         self._last_transcription_id = ""
         self._last_sensevoice_error = False
@@ -849,6 +908,8 @@ class STTEngine:
         # make at most one immediate cross-key retry; these fields make attempts
         # joinable without changing selection, retry, or cooldown behavior.
         self._current_groq_attempt_index = _attempt_index
+        self._last_groq_prompt = None
+        self._last_groq_prompt_inputs = {}
         self._current_groq_key_role = "none"
         self._last_avg_logprob = None
         self._last_no_speech_prob = None
@@ -927,10 +988,18 @@ class STTEngine:
             sf.write(buf, request_audio, cfg.audio.sample_rate, format="WAV", subtype="PCM_16")
             buf.seek(0)
             buf.name = "audio.wav"
+            self._last_request_audio_wav_sha256 = hashlib.sha256(
+                buf.getvalue()
+            ).hexdigest()
+            self._last_request_audio_sample_count = len(request_audio)
             dynamic_prompt = self._build_groq_prompt()
+            self._last_groq_prompt = dynamic_prompt
 
             self._current_groq_key_role = "fallback" if using_fallback else "primary"
             request_sent = True
+            self._current_stt_request_contract_id = self._emit_stt_request_contract(
+                "groq", cfg.stt.groq_model
+            )
             resp = active_client.audio.transcriptions.create(
                 model=cfg.stt.groq_model,
                 file=buf,
@@ -950,6 +1019,36 @@ class STTEngine:
             self._last_foreign_speech_allowed = allow_detected_japanese
             text = (getattr(resp, "text", "") or "").strip()
             segments = getattr(resp, "segments", None) or []
+            self._last_provider_raw_text = text
+            self._last_provider_raw_segments = tuple(
+                {
+                    "start": _float_or_none(
+                        segment.get("start") if isinstance(segment, dict)
+                        else getattr(segment, "start", None)
+                    ),
+                    "end": _float_or_none(
+                        segment.get("end") if isinstance(segment, dict)
+                        else getattr(segment, "end", None)
+                    ),
+                    "text": str(
+                        (segment.get("text") if isinstance(segment, dict)
+                         else getattr(segment, "text", "")) or ""
+                    ),
+                    "avg_logprob": _float_or_none(
+                        segment.get("avg_logprob") if isinstance(segment, dict)
+                        else getattr(segment, "avg_logprob", None)
+                    ),
+                    "no_speech_prob": _float_or_none(
+                        segment.get("no_speech_prob") if isinstance(segment, dict)
+                        else getattr(segment, "no_speech_prob", None)
+                    ),
+                    "compression_ratio": _float_or_none(
+                        segment.get("compression_ratio") if isinstance(segment, dict)
+                        else getattr(segment, "compression_ratio", None)
+                    ),
+                }
+                for segment in segments
+            )
             if (
                 _cfg_stt_bool("dedupe_by_timestamp", True)
                 and bool(getattr(self, "_current_overlap_represented", False))
@@ -1159,22 +1258,36 @@ class STTEngine:
         # mishears are prevented at the source (메가태화←메가진화 class).
         scene_terms = terms_for_activity(
             normalize_activity(getattr(cfg.translation, "current_activity", "")))
+        glossary_builder = (
+            (lambda profile_id: build_stt_glossary(
+                profile_id, extra_terms=scene_terms
+            ))
+            if snapshot.evidence_source == "legacy_fallback"
+            else (lambda profile_id: build_registry_stt_glossary(
+                snapshot.registry or profile_state.registry,
+                profile_id,
+                extra_terms=scene_terms,
+            ))
+        )
+        selected_glossary = (
+            glossary_builder(snapshot.effective_profile_id)
+            if cfg.stt.use_profile_glossary and snapshot.stt_glossary_applied
+            else ""
+        )
+        self._last_groq_prompt_inputs = {
+            "seed_prompt": cfg.stt.groq_prompt,
+            "selected_glossary": selected_glossary,
+            "scene_terms": list(scene_terms),
+            "context_transcript": context_transcript,
+            "profile_id": snapshot.effective_profile_id,
+            "profile_evidence_source": snapshot.evidence_source,
+        }
         budget = build_groq_prompt_budget(
             seed_prompt=cfg.stt.groq_prompt,
             use_profile_glossary=(cfg.stt.use_profile_glossary and snapshot.stt_glossary_applied),
             active_profile=snapshot.effective_profile_id,
             last_transcript=context_transcript,
-            glossary_builder=(
-                (lambda profile_id: build_stt_glossary(
-                    profile_id, extra_terms=scene_terms
-                ))
-                if snapshot.evidence_source == "legacy_fallback"
-                else (lambda profile_id: build_registry_stt_glossary(
-                    snapshot.registry or profile_state.registry,
-                    profile_id,
-                    extra_terms=scene_terms,
-                ))
-            ),
+            glossary_builder=lambda _profile_id: selected_glossary,
             max_context_chars=_GROQ_CONTEXT_CHARS,
             max_prompt_chars=_GROQ_PROMPT_MAX_CHARS,
         )
@@ -1264,6 +1377,100 @@ class STTEngine:
         )
         self._last_context_gate_reason = ""
 
+    def _emit_stt_request_contract(self, engine: str, model: str) -> str:
+        snapshot = getattr(self, "_current_profile_snapshot", profile_state.current())
+        profile_metadata = (
+            snapshot.as_metadata()
+            if callable(getattr(snapshot, "as_metadata", None))
+            else {
+                "effective_profile_id": str(
+                    getattr(snapshot, "effective_profile_id", "") or ""
+                ),
+                "profile_generation": getattr(snapshot, "generation", None),
+            }
+        )
+        profile_cache_identity = str(
+            getattr(snapshot, "cache_identity", "") or ""
+        )
+        if engine == "groq":
+            prompt = getattr(self, "_last_groq_prompt", None)
+            request_parameters = {
+                "language": cfg.stt.language,
+                "response_format": "verbose_json",
+                "temperature": 0.0,
+                "prompt": prompt,
+            }
+            glossary = []
+            key_role = str(getattr(self, "_current_groq_key_role", "none"))
+            attempt_index = int(getattr(self, "_current_groq_attempt_index", 1))
+        else:
+            keyterms = list(getattr(self, "_last_elevenlabs_keyterms", ()))
+            request_parameters = {
+                "language_code": cfg.stt.language,
+                "timestamps_granularity": "word",
+                "tag_audio_events": False,
+                "diarize": False,
+                "keyterms": keyterms,
+            }
+            prompt = None
+            glossary = list(
+                getattr(self, "_last_elevenlabs_keyterm_manifest", ())
+            )
+            key_role = "primary"
+            attempt_index = 1
+        payload = {
+            "schema_version": STT_REQUEST_CONTRACT_SCHEMA_VERSION,
+            "utterance_id": getattr(self, "_current_utterance_id", ""),
+            "audio_chunk_id": getattr(self, "_current_audio_chunk_id", ""),
+            "engine": engine,
+            "model": model,
+            "attempt_index": attempt_index,
+            "key_role": key_role,
+            "request_parameters": request_parameters,
+            "profile_cache_identity": profile_cache_identity,
+            "activity_id": normalize_activity(
+                getattr(cfg.translation, "current_activity", "")
+            ),
+        }
+        contract_id = stable_identity(payload)
+        runtime_events.emit_once(
+            "stt_request_contract",
+            contract_id,
+            stt_request_contract_id=contract_id,
+            stt_request_contract_schema_version=STT_REQUEST_CONTRACT_SCHEMA_VERSION,
+            utterance_id=payload["utterance_id"],
+            audio_chunk_id=payload["audio_chunk_id"],
+            audio_session_id=getattr(self, "_current_audio_session_id", ""),
+            engine=engine,
+            model=model,
+            attempt_index=attempt_index,
+            key_role=key_role,
+            request_parameters=request_parameters,
+            prompt_sha256=sha256_text(prompt or "") if prompt is not None else "",
+            prompt_inputs=(
+                dict(getattr(self, "_last_groq_prompt_inputs", {}))
+                if engine == "groq" else {}
+            ),
+            keyterm_manifest=glossary,
+            keyterms_sha256=stable_identity({"keyterms": request_parameters.get("keyterms", [])}),
+            context_provenance=(
+                vars(self._current_context_provenance)
+                if engine == "groq" and self._current_context_provenance is not None
+                else None
+            ),
+            profile=profile_metadata,
+            activity_id=payload["activity_id"],
+            artifact_hashes=artifact_hashes(_PROJECT_ROOT, _STT_ARTIFACT_PATHS),
+            request_audio_wav_sha256=getattr(
+                self, "_last_request_audio_wav_sha256", ""
+            ),
+            request_audio_sample_count=int(
+                getattr(self, "_last_request_audio_sample_count", 0)
+            ),
+            request_audio_sample_rate=cfg.audio.sample_rate,
+        )
+        return contract_id
+
     def _emit_stt_runtime_event(
         self,
         *,
@@ -1287,6 +1494,10 @@ class STTEngine:
             if request_sent and budget is not None and budget.context_included
             else None
         )
+        contract_id = (
+            str(getattr(self, "_current_stt_request_contract_id", ""))
+            if request_sent else ""
+        )
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
@@ -1297,12 +1508,33 @@ class STTEngine:
             status=status,
             reason=reason,
             request_sent=request_sent,
+            stt_request_contract_id=contract_id,
             attempt_index=int(getattr(self, "_current_groq_attempt_index", 1)),
             key_role=str(getattr(self, "_current_groq_key_role", "none")),
             will_retry=bool(will_retry),
             audio_seconds=_audio_seconds(audio),
             latency_ms=round((time.monotonic() - started) * 1000, 2),
             text_len=len(text or ""),
+            provider_raw_text=getattr(self, "_last_provider_raw_text", ""),
+            provider_raw_text_sha256=sha256_text(
+                getattr(self, "_last_provider_raw_text", "")
+            ),
+            accepted_text=text or "",
+            accepted_text_sha256=sha256_text(text or ""),
+            provider_raw_segments=list(
+                getattr(self, "_last_provider_raw_segments", ())
+            ),
+            accepted_segments=[
+                {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text,
+                    "logprob": segment.logprob,
+                    "word_type": segment.word_type,
+                    "speaker_id": segment.speaker_id,
+                }
+                for segment in getattr(self, "_last_segments", ())
+            ],
             **getattr(self, "_current_profile_snapshot", profile_state.current()).as_metadata(),
             avg_logprob=avg_logprob,
             no_speech_prob=no_speech_prob,
@@ -1364,6 +1596,10 @@ class STTEngine:
             word_type = str(segment.word_type or "")
             if word_type:
                 word_type_counts[word_type] = word_type_counts.get(word_type, 0) + 1
+        contract_id = (
+            str(getattr(self, "_current_stt_request_contract_id", ""))
+            if request_sent else ""
+        )
         runtime_events.emit(
             "stt",
             utterance_id=getattr(self, "_current_utterance_id", ""),
@@ -1374,12 +1610,33 @@ class STTEngine:
             status=status,
             reason=reason,
             request_sent=request_sent,
+            stt_request_contract_id=contract_id,
             attempt_index=1,
             key_role="primary",
             will_retry=bool(will_retry),
             audio_seconds=_audio_seconds(audio),
             latency_ms=round((time.monotonic() - started) * 1000, 2),
             text_len=len(text or ""),
+            provider_raw_text=getattr(self, "_last_provider_raw_text", ""),
+            provider_raw_text_sha256=sha256_text(
+                getattr(self, "_last_provider_raw_text", "")
+            ),
+            accepted_text=text or "",
+            accepted_text_sha256=sha256_text(text or ""),
+            provider_raw_segments=list(
+                getattr(self, "_last_provider_raw_segments", ())
+            ),
+            accepted_segments=[
+                {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text,
+                    "logprob": segment.logprob,
+                    "word_type": segment.word_type,
+                    "speaker_id": segment.speaker_id,
+                }
+                for segment in getattr(self, "_last_segments", ())
+            ],
             **getattr(self, "_current_profile_snapshot", profile_state.current()).as_metadata(),
             avg_logprob=None,
             no_speech_prob=None,

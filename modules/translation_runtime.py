@@ -280,6 +280,7 @@ def call_with_fallback(
     frozen_messages_by_engine: Mapping[
         str, tuple[tuple[str, str], ...]
     ] | None = None,
+    request_contract_ids: Mapping[str, str] | None = None,
     output_guard: OutputGuard | None = None,
 ) -> tuple[str | None, int]:
     """Returns (result, engine_idx) where engine_idx is the engine that
@@ -311,7 +312,12 @@ def call_with_fallback(
             ),
         )
     except Exception as exc:
-        record_translation_attempt(primary, phase="fallback_chain", exception=exc)
+        attempt = record_translation_attempt(primary, phase="fallback_chain", exception=exc)
+        attempt["request_contract_id"] = str(
+            (request_contract_ids or {}).get(
+                f"{primary.engine_name}:{primary.model_name}", ""
+            )
+        )
         raise
     primary_bad, primary_guard = _output_rejection(
         primary, result, text, looks_untranslated, output_guard
@@ -321,6 +327,11 @@ def call_with_fallback(
         phase="fallback_chain",
         result=result,
         rejected_output=primary_bad,
+    )
+    primary_attempt["request_contract_id"] = str(
+        (request_contract_ids or {}).get(
+            f"{primary.engine_name}:{primary.model_name}", ""
+        )
     )
     primary_failure_scope = _attempt_failure_scope(primary_attempt)
     primary_attempt["failure_scope"] = primary_failure_scope
@@ -395,7 +406,12 @@ def call_with_fallback(
                 ),
             )
         except Exception as exc:
-            record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
+            attempt = record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
+            attempt["request_contract_id"] = str(
+                (request_contract_ids or {}).get(
+                    f"{fallback.engine_name}:{fallback.model_name}", ""
+                )
+            )
             raise
         fallback_bad, fallback_guard = _output_rejection(
             fallback, fb_result, text, looks_untranslated, output_guard
@@ -405,6 +421,11 @@ def call_with_fallback(
             phase="fallback_chain",
             result=fb_result,
             rejected_output=fallback_bad,
+        )
+        fallback_attempt["request_contract_id"] = str(
+            (request_contract_ids or {}).get(
+                f"{fallback.engine_name}:{fallback.model_name}", ""
+            )
         )
         fallback_attempt["failure_scope"] = _attempt_failure_scope(fallback_attempt)
         if fallback_guard:

@@ -69,6 +69,7 @@ from modules.translation_engines import (
     DeepSeekTranslationEngine,
     _build_engine_chain,
     build_effective_deepseek_messages,
+    build_effective_groq_messages,
     build_effective_qwen_messages,
     effective_system_prompt_for_engine,
     _request_entity_capsule,
@@ -85,6 +86,15 @@ from modules.translation_engines import (
     reset_translation_call_trace,
     translation_route_id,
 )
+from modules.forensics_contract import (
+    ADJUDICATION_POLICY_VERSION,
+    REQUEST_CONTRACT_SCHEMA_VERSION,
+    artifact_hashes,
+    history_manifest,
+    message_manifest,
+    sha256_text,
+    stable_identity,
+)
 from modules.translation_runtime import (
     FallbackState,
     active_engine,
@@ -94,6 +104,7 @@ from modules.translation_runtime import (
 from modules.translation_memory import HistoryCohort, MemoryLookup, TranslationMemory
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 from modules.request_protection import (
+    PROTECTION_POLICY_VERSION,
     ProtectedSourceSpan,
     RequestProtection,
     resolve_request_protection,
@@ -139,6 +150,7 @@ _MODEL_REFUSAL_RE = re.compile(
     re.IGNORECASE,
 )
 _API_EVENT_DEFAULTS = {
+    "request_contract_id": "",
     "api_attempt_count": 0,
     "api_timeout_count": 0,
     "api_total_wall_ms": None,
@@ -267,6 +279,34 @@ _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS = {
 _KOREAN_NAME_SUFFIXES = _CORRECTION_TABLES.korean_name_suffixes
 _NAME_RENDERING_RULES = _CORRECTION_TABLES.name_rendering_rules
 _CANONICAL_PUBLICATION_POLICY_VERSION = "canonical-obligations-v1"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_FORENSIC_ARTIFACT_PATHS = (
+    "data/entity_registry.json",
+    "data/streamer_profiles.json",
+    "data/translation_profiles.json",
+    "data/translation_corrections.json",
+    "data/unknown_name_escrow.json",
+)
+
+
+@lru_cache(maxsize=8)
+def _artifact_hash_manifest(
+    signature: tuple[tuple[str, int, int], ...],
+) -> dict[str, str]:
+    del signature
+    return artifact_hashes(_PROJECT_ROOT, _FORENSIC_ARTIFACT_PATHS)
+
+
+def _current_artifact_hashes() -> dict[str, str]:
+    signature: list[tuple[str, int, int]] = []
+    for relative in _FORENSIC_ARTIFACT_PATHS:
+        path = _PROJECT_ROOT / relative
+        try:
+            stat = path.stat()
+            signature.append((relative, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            signature.append((relative, 0, 0))
+    return _artifact_hash_manifest(tuple(signature))
 
 
 def _sorted_norm_items(norm: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -1185,8 +1225,41 @@ def _adjudicate_translation_candidate(
     elif is_deepseek and "repetitive_target" in flags:
         reason = "repetitive_target"
         rejection_owner = "model_output"
+    failed_invariants: list[dict[str, str]] = []
+    def add_failure(condition: bool, failure_reason: str, owner: str) -> None:
+        if condition and not any(
+            row["reason"] == failure_reason and row["owner"] == owner
+            for row in failed_invariants
+        ):
+            failed_invariants.append({"reason": failure_reason, "owner": owner})
+
+    add_failure(publication_meta_rejection, "meta_garbage_output", "model_output")
+    add_failure(not terminology_passed, terminology_reason, "request_protection")
+    add_failure(not escrow_evaluation.passed, escrow_evaluation.reason, "request_protection")
+    add_failure(not final_protection_evaluation.passed, final_protection_evaluation.reason, "request_protection")
+    add_failure(bool(unactivated_entity_targets), "unactivated_entity_target", "entity_provenance")
+    add_failure(len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE, "simplified_chinese", "script_safety")
+    add_failure(not obligation_evaluation.passed, "canonical_obligation_missing", "canonical_obligation")
+    add_failure("unexpected_japanese" in corrected_script_violations, "unexpected_japanese", "script_safety")
+    add_failure("unexpected_hangul" in corrected_script_violations, "unexpected_hangul", "script_safety")
+    add_failure(is_deepseek and "unexpected_japanese" in (raw_script_violations - name_render_rescued), "raw_unexpected_japanese", "script_safety")
+    add_failure(is_deepseek and "unexpected_hangul" in (raw_script_violations - name_render_rescued), "raw_unexpected_hangul", "script_safety")
+    add_failure(is_deepseek and _looks_like_meta_garbage_output(corrected), "meta_garbage_output", "model_output")
+    add_failure(is_deepseek and _looks_like_model_refusal(corrected), "model_refusal", "model_output")
+    add_failure(is_deepseek and "target_meta_leak" in flags, "target_meta_leak", "model_output")
+    add_failure(is_deepseek and "repetitive_target" in flags, "repetitive_target", "model_output")
     evidence = {
-        "version": 1,
+        "version": 2,
+        "policy_version": ADJUDICATION_POLICY_VERSION,
+        "disposition": "rejected" if reason else "accepted",
+        "primary_reason": reason,
+        "rejection_owner": rejection_owner,
+        "failed_invariants": failed_invariants,
+        "candidate_stages": {
+            "raw_provider": {"text": result, "sha256": sha256_text(result)},
+            "protection_restored": {"text": restored_result, "sha256": sha256_text(restored_result)},
+            "source_corrected": {"text": corrected, "sha256": sha256_text(corrected)},
+        },
         "candidate_raw_output": result,
         "candidate_output": corrected,
         "candidate_corrections": corrections,
@@ -1513,6 +1586,8 @@ class TranslationOutcome:
     result_source: str
     cache_status: str
     incomplete: bool
+    prepared_source_text: str = ""
+    request_contract_id: str = ""
     engine: str = ""
     model: str = ""
     prompt_version: str = ""
@@ -1582,8 +1657,23 @@ class TranslationOutcome:
             ),
             "canonical_obligation_evaluation": obligation_evaluation.as_dict(),
         }
+        cache_key_payload = {
+            "prepared_source_text": self.prepared_source_text,
+            "incomplete": self.incomplete,
+            "prompt_version": self.prompt_version,
+            "request_contract_id": self.request_contract_id,
+            "route_id": self.route_id,
+            "history_cohort_id": str(metadata.get("history_cohort_id") or ""),
+        }
+        cache_contract = {
+            **cache_key_payload,
+            "cache_key_sha256": stable_identity(cache_key_payload),
+            "lookup_result": self.cache_status,
+            "result_source": self.result_source,
+        }
         return {
             "source_text": self.source_text,
+            "prepared_source_text": self.prepared_source_text,
             "target_text": self.target_text,
             "status": self.status,
             "result_source": self.result_source,
@@ -1593,6 +1683,8 @@ class TranslationOutcome:
             "model": self.model,
             "route_id": self.route_id,
             "prompt_version": self.prompt_version,
+            "request_contract_id": self.request_contract_id,
+            "cache_lookup_contract": cache_contract,
             "filter_reason": self.filter_reason,
             "target_unknown_name_escrow_terms": list(
                 self.unknown_name_approved_terms
@@ -2068,6 +2160,7 @@ class Translator:
                     success_commit = None
                 return TranslationOutcome(
                     source_text=raw_text,
+                    prepared_source_text=text,
                     target_text=slang_result,
                     status="success",
                     result_source="slang",
@@ -2141,6 +2234,7 @@ class Translator:
                 self._reset_failed_input()
                 return TranslationOutcome(
                     source_text=raw_text,
+                    prepared_source_text=text,
                     target_text=None,
                     status="filtered",
                     result_source="post_policy",
@@ -2161,6 +2255,7 @@ class Translator:
                 )
             return TranslationOutcome(
                 source_text=raw_text,
+                prepared_source_text=text,
                 target_text=target_text,
                 status="success",
                 result_source=lookup.source,
@@ -2266,6 +2361,15 @@ class Translator:
             system_prompt,
             protection_identity=request_protection.fingerprint_identity,
         )
+        request_contract_id = (
+            provisional_candidate.request_contract_id
+            if promoted and provisional_candidate is not None
+            else str(
+                (get_selected_translation_attempt() or {}).get(
+                    "request_contract_id", ""
+                )
+            )
+        )
         return self._finalize_translation_result(
             raw_text=raw_text,
             prepared_text=text,
@@ -2278,6 +2382,7 @@ class Translator:
             canonical_obligations=canonical_obligations,
             request_protection=request_protection,
             history_cohort=history_cohort,
+            request_contract_id=request_contract_id,
         )
 
     def _reset_failed_input(self) -> None:
@@ -2302,12 +2407,14 @@ class Translator:
         canonical_obligations: tuple[CanonicalObligation, ...],
         request_protection: RequestProtection,
         history_cohort: HistoryCohort,
+        request_contract_id: str = "",
     ) -> TranslationOutcome:
         """Sole finalizer for primary, fallback, and provisional candidates."""
         if not provider_result:
             self._reset_failed_input()
             return TranslationOutcome(
                 source_text=raw_text,
+                prepared_source_text=prepared_text,
                 target_text=None,
                 status="failed",
                 result_source="none",
@@ -2316,6 +2423,7 @@ class Translator:
                 engine=engine.engine_name if engine else "",
                 model=engine.model_name if engine else "",
                 prompt_version=prompt_version,
+                request_contract_id=request_contract_id,
                 canonical_obligation_evaluation=evaluate_canonical_obligations(
                     None, canonical_obligations
                 ),
@@ -2334,6 +2442,7 @@ class Translator:
         final_obligation_evaluation = adjudication.canonical_evaluation
         common_failure = {
             "source_text": raw_text,
+            "prepared_source_text": prepared_text,
             "target_text": None,
             "result_source": "post_policy",
             "cache_status": cache_status,
@@ -2341,6 +2450,7 @@ class Translator:
             "engine": engine.engine_name if engine else "",
             "model": engine.model_name if engine else "",
             "prompt_version": prompt_version,
+            "request_contract_id": request_contract_id,
         }
         if adjudication.reason:
             reason = adjudication.reason
@@ -2390,6 +2500,7 @@ class Translator:
             success_commit = None
         return TranslationOutcome(
             source_text=raw_text,
+            prepared_source_text=prepared_text,
             target_text=result,
             status="success",
             result_source="provisional_promotion" if promoted else "api",
@@ -2398,6 +2509,7 @@ class Translator:
             engine=engine.engine_name if engine else "",
             model=engine.model_name if engine else "",
             prompt_version=prompt_version,
+            request_contract_id=request_contract_id,
             canonical_obligation_evaluation=final_obligation_evaluation,
             unknown_name_approved_terms=request_protection.approved_hangul_terms,
             deferred_success=success_commit,
@@ -2630,11 +2742,94 @@ class Translator:
             "openrouter": build_effective_qwen_messages(
                 provider_source, system_prompt, incomplete, history
             ),
+            "groq": build_effective_groq_messages(
+                provider_source, system_prompt, incomplete, history
+            ),
         }
         if canonical_obligations is None:
             entity_context = _resolve_entity_request_context(source_text)
             canonical_obligations = _canonical_obligations_for_request(
                 source_text, entity_context
+            )
+        history_cohort = self._history_cohort()
+        request_contract_ids: dict[str, str] = {}
+        for candidate_engine in self._engines:
+            engine_name = str(candidate_engine.engine_name or "").lower()
+            route_id = translation_route_id(candidate_engine)
+            messages = frozen_messages_by_engine.get(engine_name)
+            effective_prompt = effective_system_prompt_for_engine(
+                candidate_engine, system_prompt
+            )
+            exact_messages_available = messages is not None
+            if messages is None:
+                messages = (
+                    ("system", effective_prompt),
+                    ("user", provider_source),
+                )
+            profile_snapshot = bound_profile_snapshot()
+            activity_snapshot = bound_activity_snapshot()
+            manifest_payload = {
+                "schema_version": REQUEST_CONTRACT_SCHEMA_VERSION,
+                "route_id": route_id,
+                "provider_source": provider_source,
+                "messages": list(message_manifest(messages)),
+                "history": list(history_manifest(history)),
+                "history_cohort": list(history_cohort),
+                "incomplete": incomplete,
+                "request_protection_identity": request_protection.identity,
+                "canonical_obligations": [
+                    obligation.as_dict() for obligation in canonical_obligations
+                ],
+                "profile_cache_identity": (
+                    profile_snapshot.cache_identity if profile_snapshot else ""
+                ),
+                "activity_cache_identity": (
+                    activity_snapshot.cache_identity if activity_snapshot else ""
+                ),
+                "artifact_hashes": _current_artifact_hashes(),
+            }
+            contract_id = stable_identity(manifest_payload)
+            request_contract_ids[route_id] = contract_id
+            runtime_events.emit_once(
+                "translation_request_contract",
+                contract_id,
+                request_contract_id=contract_id,
+                request_contract_schema_version=REQUEST_CONTRACT_SCHEMA_VERSION,
+                route_id=route_id,
+                engine=engine_name,
+                model=str(candidate_engine.model_name or ""),
+                original_source=source_text,
+                provider_source=provider_source,
+                provider_source_sha256=sha256_text(provider_source),
+                effective_system_prompt=effective_prompt,
+                effective_system_prompt_sha256=sha256_text(effective_prompt),
+                exact_messages_available=exact_messages_available,
+                contract_role="available_route_request",
+                messages=list(message_manifest(messages)),
+                messages_sha256=stable_identity({"messages": list(messages)}),
+                history=list(history_manifest(history)),
+                history_cohort_id=(
+                    f"{history_cohort[0]}:{history_cohort[1]}:{history_cohort[2]}"
+                ),
+                incomplete=incomplete,
+                request_protection={
+                    "identity": request_protection.identity,
+                    "spans": [span.identity_row() for span in request_protection.spans],
+                },
+                canonical_obligations=[
+                    obligation.as_dict() for obligation in canonical_obligations
+                ],
+                profile=(profile_snapshot.as_metadata() if profile_snapshot else {}),
+                activity=(
+                    activity_snapshot_metadata(activity_snapshot)
+                    if activity_snapshot else {}
+                ),
+                artifact_hashes=_current_artifact_hashes(),
+                policy_versions={
+                    "adjudication": ADJUDICATION_POLICY_VERSION,
+                    "canonical_publication": _CANONICAL_PUBLICATION_POLICY_VERSION,
+                    "request_protection": PROTECTION_POLICY_VERSION,
+                },
             )
         fallback_state = self._fallback_state()
         lock = getattr(self, "_state_lock", None)
@@ -2662,6 +2857,7 @@ class Translator:
             deadline_at=deadline_at,
             max_route_inflight=cfg.translation.live_route_max_inflight,
             frozen_messages_by_engine=frozen_messages_by_engine,
+            request_contract_ids=request_contract_ids,
             output_guard=lambda candidate_engine, candidate, _provider_source: (
                 _translation_output_guard(
                     candidate_engine,
@@ -2978,6 +3174,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
 
         def translate_provisional(request: ProvisionalRequest) -> None:
             started = time.monotonic()
+            request_contract_id = ""
             if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
                 return
             if (
@@ -3074,6 +3271,55 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             incomplete=request.incomplete,
                             protection_identity=request_protection.fingerprint_identity,
                         )
+                        provisional_contract_payload = {
+                            "schema_version": REQUEST_CONTRACT_SCHEMA_VERSION,
+                            "phase": "provisional",
+                            "provisional_id": request.provisional_id,
+                            "route_id": translation_route_id(engine),
+                            "provider_source": request_protection.provider_source,
+                            "messages": list(message_manifest(messages)),
+                            "history": list(history_manifest(history)),
+                            "history_cohort": list(history_cohort),
+                            "request_protection_identity": request_protection.identity,
+                            "profile_cache_identity": request_profile_snapshot.cache_identity,
+                            "activity_cache_identity": request.activity_snapshot.cache_identity,
+                            "incomplete": request.incomplete,
+                        }
+                        request_contract_id = stable_identity(provisional_contract_payload)
+                        runtime_events.emit_once(
+                            "translation_request_contract",
+                            request_contract_id,
+                            request_contract_id=request_contract_id,
+                            request_contract_schema_version=REQUEST_CONTRACT_SCHEMA_VERSION,
+                            contract_role="provisional_request",
+                            phase="provisional",
+                            provisional_id=request.provisional_id,
+                            route_id=translation_route_id(engine),
+                            engine=engine.engine_name,
+                            model=engine.model_name,
+                            original_source=prepared_source,
+                            provider_source=request_protection.provider_source,
+                            provider_source_sha256=sha256_text(request_protection.provider_source),
+                            effective_system_prompt=effective_system_prompt_for_engine(engine, system_prompt),
+                            messages=list(message_manifest(messages)),
+                            messages_sha256=stable_identity({"messages": list(messages)}),
+                            history=list(history_manifest(history)),
+                            history_cohort_id=f"{history_cohort[0]}:{history_cohort[1]}:{history_cohort[2]}",
+                            incomplete=request.incomplete,
+                            request_protection={
+                                "identity": request_protection.identity,
+                                "spans": [span.identity_row() for span in request_protection.spans],
+                            },
+                            canonical_obligations=[item.as_dict() for item in obligations],
+                            profile=request_profile_snapshot.as_metadata(),
+                            activity=activity_snapshot_metadata(request.activity_snapshot),
+                            artifact_hashes=_current_artifact_hashes(),
+                            policy_versions={
+                                "adjudication": ADJUDICATION_POLICY_VERSION,
+                                "canonical_publication": _CANONICAL_PUBLICATION_POLICY_VERSION,
+                                "request_protection": PROTECTION_POLICY_VERSION,
+                            },
+                        )
                         # Re-check at the actual call boundary so stale queued work
                         # cannot reach DeepSeek after the emergency route is disabled.
                         if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
@@ -3115,6 +3361,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 latency_ms=round((time.monotonic() - started) * 1000, 2),
                                 engine=engine.engine_name,
                                 model=engine.model_name,
+                                request_contract_id=request_contract_id,
                             )
                             return
                         guard = _translation_output_guard(
@@ -3133,6 +3380,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 latency_ms=round((time.monotonic() - started) * 1000, 2),
                                 engine=engine.engine_name,
                                 model=engine.model_name,
+                                request_contract_id=request_contract_id,
                             )
                             return
                         display_target = str(
@@ -3146,6 +3394,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             fingerprint=fingerprint,
                             engine=engine.engine_name,
                             model=engine.model_name,
+                            request_contract_id=request_contract_id,
                             requested_at_monotonic=request.requested_at_monotonic,
                             completed_at_monotonic=completed,
                             usage=usage,
@@ -3189,6 +3438,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             ),
                             engine=engine.engine_name,
                             model=engine.model_name,
+                            request_contract_id=request_contract_id,
                             input_tokens=usage.get("prompt"),
                             output_tokens=usage.get("output"),
                             cache_hit_tokens=usage.get("cache_read"),
@@ -3201,6 +3451,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     "provisional_translation",
                     action="failed",
                     provisional_id=request.provisional_id,
+                    request_contract_id=request_contract_id,
                     latency_ms=round((time.monotonic() - started) * 1000, 2),
                 )
 

@@ -326,9 +326,15 @@ Preserve it and do not stage/commit it unless the user asks.
 
 ### Runtime observability and storage
 
-- `logs/runtime_events_YYYYMMDD.jsonl` uses runtime schema v5. Event types
+- `logs/runtime_events_YYYYMMDD.jsonl` uses runtime schema v6. Event types
   currently include `audio_startup`, `audio`, `stt`, `sentence`,
   `translation`, `scene`, and `translation_fallback`.
+- `stt_request_contract` and `translation_request_contract` are immutable,
+  content-addressed causal records. Result/attempt rows reference them by ID.
+  They retain exact effective prompts/messages, selected history, glossary
+  provenance, request-local protection/canonical data, and policy/artifact
+  identities. Candidate guards retain raw/restored/corrected stages and all
+  simultaneously failed invariants with their owning layer.
 - Every event carries `run_id`, UTC `created_at`, `run_kind`, `git_sha`, and
   `git_dirty`. Use `(run_id, sequence_id)` rather than `sequence_id` alone.
 - `run_kind` is `live`, `test`, `replay`, or `benchmark`; analysis should
@@ -368,6 +374,8 @@ Preserve it and do not stage/commit it unless the user asks.
   so Tauri exports the exact launcher-assigned run ID after the child exits.
   Both paths are fail-soft; manual dashboard exports and optional WAV inclusion
   remain available separately.
+- Bundles include `request_contracts.json` as a sanitized index; JSONL remains
+  the authoritative chronological source.
 
 ### Optional desktop and OCR surfaces
 
