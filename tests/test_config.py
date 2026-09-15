@@ -94,7 +94,7 @@ class TestConfig(unittest.TestCase):
 
     def test_scene_vision_routes_are_explicit_groq_then_openrouter(self):
         self.assertEqual(cfg.scene.vision_provider, "groq")
-        self.assertEqual(cfg.scene.vision_model, "qwen/qwen3.6-27b")
+        self.assertEqual(cfg.scene.vision_model, "qwen/qwen3.8-27b")
         self.assertEqual(
             cfg.scene.vision_fallback_routes,
             (("openrouter", "qwen/qwen3-vl-32b-instruct"),),

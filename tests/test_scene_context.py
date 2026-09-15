@@ -1232,7 +1232,7 @@ def test_groq_provider_uses_single_attempt_qwen_and_bounded_diagnostics(
     assert result.diagnostics.outcome == "success"
     assert result.diagnostics.attempt_limit == 1
     assert result.diagnostics.provider == "groq"
-    assert result.diagnostics.model == "qwen/qwen3.6-27b"
+    assert result.diagnostics.model == "qwen/qwen3.8-27b"
     assert result.diagnostics.prompt_tokens == 837
     assert result.diagnostics.completion_tokens == 4
     assert result.diagnostics.total_tokens == 841
@@ -1249,7 +1249,7 @@ def test_groq_provider_uses_single_attempt_qwen_and_bounded_diagnostics(
     )
     create.assert_called_once()
     request = create.call_args.kwargs
-    assert request["model"] == "qwen/qwen3.6-27b"
+    assert request["model"] == "qwen/qwen3.8-27b"
     assert request["reasoning_effort"] == "none"
     assert request["max_tokens"] == 96
     assert request["response_format"] == {"type": "json_object"}
@@ -1422,7 +1422,7 @@ def test_groq_provider_malformed_headers_fail_soft(real_groq):
     assert fields["vision_outcome"] == "success"
     assert fields["vision_attempt_limit"] == 1
     assert fields["vision_provider"] == "groq"
-    assert fields["vision_model"] == "qwen/qwen3.6-27b"
+    assert fields["vision_model"] == "qwen/qwen3.8-27b"
     assert "vision_rate_limit_tpm" not in fields
     assert "vision_rate_limit_remaining_tokens" not in fields
     assert "vision_rate_limit_reset_tokens_sec" not in fields

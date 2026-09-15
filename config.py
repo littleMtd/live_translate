@@ -505,7 +505,7 @@ class _Scene:
     # OpenRouter route is used only after a retryable Groq transport/provider
     # failure, never after valid unknown/noncanonical output.
     vision_provider:      str   = "groq"
-    vision_model:         str   = "qwen/qwen3.6-27b"
+    vision_model:         str   = "qwen/qwen3.8-27b"
     vision_fallback_routes: tuple[tuple[str, str], ...] = (
         ("openrouter", "qwen/qwen3-vl-32b-instruct"),
     )
