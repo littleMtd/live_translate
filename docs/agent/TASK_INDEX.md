@@ -18,6 +18,7 @@ crosses boundaries may require several rows.
 | Python runtime or general backend | Relevant code and tests | Search `PROJECT_CONTEXT.md` for entry points, pipeline, ownership, or state; search `system.md` for the affected architecture contract |
 | Diagnosis or code review | Relevant code, logs, tests | Search `PROJECT_CONTEXT.md` for the claimed behavior; use `VALIDATION.md` only for specialized evidence |
 | Runtime logs, failure, latency, or health claims | Runtime event schema and producer code | Search `PROJECT_CONTEXT.md` for observability/storage and `VALIDATION.md` for runtime/failure harnesses |
+| Blind Phase 1 / ChatGPT Project forensics | `BLIND_PHASE1_WORKFLOW.md` and bundle integrity report | Use computer use for the Project UI; do not substitute external streams or non-blind labels |
 | STT, capture, audio, speaker, or routing | Owning modules and tests | Search `PROJECT_CONTEXT.md` and `system.md` for audio/STT policy; search `VALIDATION.md` for STT/audio harnesses; consult Phase 0 or T25 evidence only for the specific question |
 | Translation, prompt, provider, fallback, QA, or canonicalization | Owning translation modules, profile, and tests | Search `PROJECT_CONTEXT.md` for translation selection/state and `VALIDATION.md` for translator/correction harnesses; consult a current execution decision only when the task depends on it |
 | SQL, cache, or persistence | Owning code and tests | Search `sql.md` for the affected schema/contract; use `system.md` only for pipeline or concurrency interaction |
@@ -36,6 +37,8 @@ crosses boundaries may require several rows.
 - `docs/agent/PROJECT_CONTEXT.md`: detailed repository/runtime map.
 - `docs/agent/VALIDATION.md`: specialized validation and evaluation routing.
 - `docs/agent/TOOL_INVENTORY.md`: utility inventory and ownership.
+- `docs/agent/BLIND_PHASE1_WORKFLOW.md`: current natural-production evidence,
+  computer-use, and blind-review handoff contract.
 - `docs/agent/OPTIMIZATION_TODO.md`: large optimization backlog and card history.
 - `system.md`: backend/runtime architecture contract.
 - `sql.md`: database and cache contract.

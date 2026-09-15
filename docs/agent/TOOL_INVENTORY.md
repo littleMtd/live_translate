@@ -45,6 +45,12 @@ Core scripts worth checking first:
   machine report and `--report-output` writes compact Markdown; exit code 2
   means an integrity error was found.
 
+The next blind semantic pass is not another repository script. It uses the
+designated ChatGPT Project through computer use, following
+`docs/agent/BLIND_PHASE1_WORKFLOW.md`. Its input must be the exact bundle from a
+user-run natural `python main.py` session; do not collect an external stream as
+substitute media.
+
 Situational scripts:
 - `scripts/evaluate_translation_prompt_benchmark.py`: maintained offline scorer
   for the current 75-case production-derived semantic regression suite. Use

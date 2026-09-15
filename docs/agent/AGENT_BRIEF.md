@@ -84,6 +84,8 @@ Preserve these cross-cutting invariants unless the task explicitly changes them:
 - `PROJECT_CONTEXT.md`: detailed runtime map and ownership reference.
 - `VALIDATION.md`: specialized harness, replay, labeling, and evaluation details.
 - `TOOL_INVENTORY.md`: established utility inventory.
+- `BLIND_PHASE1_WORKFLOW.md`: natural-run bundle and ChatGPT Project blind
+  review boundary.
 - `OPTIMIZATION_TODO.md`: optimization backlog, evidence gates, and card history.
 - Root architecture/domain documents: detailed contracts and historical decisions.
 

@@ -74,6 +74,13 @@ Translation workers share policy, memory/history, and fallback state. The in-mem
 
 Runtime JSONL uses schema v6 at `logs/runtime_events_YYYYMMDD.jsonl`. `stt_request_contract` records the exact provider prompt/keyterms, their provenance, profile/activity identity, and hashed data inputs. `translation_request_contract` records exact messages, selected history, protected source spans, canonical obligations, profile/activity identity, and policy/data hashes. STT results and translation attempts reference those immutable contracts by ID. Candidate adjudication retains raw, protection-restored, and corrected text plus every failed invariant and its owning layer. These additive events let an exported runtime bundle reconstruct the causal request and publication path without guessing from the final subtitle.
 
+`scripts/export_chatgpt_bundle.py` creates the portable one-run evidence unit.
+`scripts/analyze_forensics_bundle.py` validates bundle/file/component hashes and
+builds evidence-only audio-to-publication chains. It reports missing, orphaned,
+ambiguous, or unverifiable lineage as findings rather than reconstructing it
+from current code. Blind Phase 1 is performed in the designated ChatGPT Project
+through computer use and follows `docs/agent/BLIND_PHASE1_WORKFLOW.md`.
+
 After normal pipeline teardown joins its workers, Python emits a terminal
 `runtime_lifecycle` event and automatically creates a default ChatGPT bundle
 without WAV copies under `scratch/chatgpt_bundles/`. Dashboard-launched runs use

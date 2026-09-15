@@ -192,6 +192,20 @@ logs are unavailable. Export tests must cover exact-run filtering, recursive
 secret/header redaction, raw-event preservation, part ordering, provenance,
 optional/missing WAVs, and screenshot exclusion.
 
+Before semantic review, run `scripts/analyze_forensics_bundle.py` against the
+bundle. Its JSON and Markdown outputs validate manifest artifacts, request
+contracts, component hashes, provider attempts, adjudication stages, and
+audio/STT/sentence/translation/provisional/cache/publication lineage. Integrity
+errors block downstream review. `warning` and `unresolved` findings remain
+evidence gaps; do not fill them from current repository code.
+
+Blind Phase 1 is a ChatGPT Project workflow and therefore requires computer
+use. Supply the exact natural production bundle without known labels, expected
+root causes, or proposed fixes. The user supplies natural evidence by running
+`python main.py` while watching their own SOOP/CHZZK stream. If no fresh run
+exists, stop; never substitute an externally selected stream. The complete
+handoff contract is `docs/agent/BLIND_PHASE1_WORKFLOW.md`.
+
 Normal runtime teardown must emit its terminal lifecycle event before invoking
 the default no-audio export. Export failure is fail-soft and must not replace a
 successful or failed pipeline exit status. The Tauri forced-stop path cannot
@@ -207,15 +221,11 @@ an unconstrained "latest" run.
   API-miss pairs for latency/cost/quality denominators. Similarity is a review
   prioritizer, not semantic ground truth; inspect the highest disagreements and
   every candidate-only QA/canonical/script regression before any cutover;
-- after the owner-authorized protected cutover, use
-  `api_diagnostics.deepseek_output_guard` for the production guard rate/reasons,
-  Flash provider failures, Qwen-after-guard continuity, bounded candidate/
-  selected samples, and the zero-tolerance
-  `guarded_attempt_selected_violations`. Keep all-attempt cost separate from
-  selected-route cost. For the first controlled and next two representative
-  natural runs, review every guarded pair and at least 30 QA-prioritized Flash
-  successes; exercise `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` once and verify zero
-  DeepSeek attempts plus the exact Qwen -> DeepL -> Groq route;
+- for current production, inspect the schema-v6 request contracts and attempt
+  ledger for DeepSeek guard reasons, Groq fallback continuity, selected route,
+  all-attempt cost, and zero guarded-attempt selection violations. Exercise
+  `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` only when that operational rollback is
+  specifically under test; its expected translation route is Groq-only;
 - recent STT-context provenance is summarized under
   `stt_summary.context_provenance`. New rows distinguish telemetry coverage
   from legacy rows, require Groq context sources to join an earlier successful

@@ -241,7 +241,11 @@ Context, display, and persistence:
 - `modules/db.py`: SQLite schema v2 translation cache, WAL, `RLock`, migration,
   prompt-versioned unique key, hit accounting, and LRU eviction.
 - `utils/runtime_events.py`: thread-safe daily JSONL writer and reference-free
-  translation quality fields.
+  translation quality fields plus schema-v6 request-contract provenance.
+- `utils/chatgpt_bundle.py`: sanitized exact-run bundle export and integrity
+  manifest.
+- `utils/forensics_analysis.py`: evidence-only bundle integrity validation and
+  audio-to-publication causal-chain construction.
 - `utils/metrics.py`: in-process counters/latencies and periodic log summary.
 - `utils/config_export.py`: secret-free Python config export for Tauri.
 - `utils/pipeline.py` / `utils/queue_utils.py`: thread, pause, polling, and
@@ -252,9 +256,9 @@ Context, display, and persistence:
 `cfg.live_engine` / `cfg.clip_engine` selects the backend:
 
 - `nvidia`: NVIDIA primary followed by each configured/available engine in
-  `cfg.translation.engine_chain` (currently OpenRouter, DeepL, Groq).
+  `cfg.translation.engine_chain` (currently Groq).
 - `anthropic`: historical backend name. Ordinary live use follows the fixed
-  protected DeepSeek/Qwen route described below; other applicable/clip paths
+  protected DeepSeek-to-Groq route described below; other applicable/clip paths
   may use `engine_chain`. It does not mean “Claude only”.
 - `ollama`: local Ollama only.
 
@@ -343,15 +347,14 @@ Preserve it and do not stage/commit it unless the user asks.
   API latency, source evidence, profile/activity, correction trace, quality
   flags/classifications, additive profile QA evidence, and subtitle
   emission/suppression.
-- Ordinary live-chain mode derives `deepseek-v4-flash -> OpenRouter Qwen ->
-  DeepL -> Groq` when `deepseek_route=primary`; `off` restores the exact prior
-  Qwen chain. Flash uses its dedicated compact production contract while Qwen
-  retains its compact Qwen capsule; both use the same immutable profile,
-  activity, history, and current-input message structure. A Flash
-  script/meta guard is a sentence-local content rejection, so rejected output
-  cannot enter subtitle/cache/history or provider-health state. Attempt rows
-  retain the guard reason, corrected candidate preview, candidate-only
-  correction trace, and QA classifications; the selected route remains Qwen.
+- Ordinary live-chain mode derives `deepseek-v4-flash -> Groq` when
+  `deepseek_route=primary`; `off` is the Groq-only operational rollback.
+  DeepSeek and fallback consume the same immutable profile, activity, history,
+  protected-source, and canonical request ownership. A script/meta guard is a
+  sentence-local content rejection, so rejected output cannot enter subtitle,
+  cache, history, or provider-health state. Attempt rows retain their request
+  contract ID, candidate stages, complete invariant failures, corrections, and
+  QA classifications.
 - The runtime analyzer retains read-only support for historical
   `translation_shadow` events, but current production no longer emits them.
 - `activity_shadow` events contain only accepted bounded activity IDs/kinds,
@@ -376,6 +379,11 @@ Preserve it and do not stage/commit it unless the user asks.
   remain available separately.
 - Bundles include `request_contracts.json` as a sanitized index; JSONL remains
   the authoritative chronological source.
+- `scripts/analyze_forensics_bundle.py` verifies bundle integrity and renders
+  machine-readable JSON plus compact Markdown causal chains. Missing evidence
+  remains unresolved. Blind Phase 1 uses the exact natural-run bundle in the
+  designated ChatGPT Project through computer use; see
+  `BLIND_PHASE1_WORKFLOW.md`.
 
 ### Optional desktop and OCR surfaces
 
