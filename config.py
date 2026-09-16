@@ -501,14 +501,10 @@ class _Scene:
     browser_process_names: tuple = ("chrome.exe", "brave.exe")
     chrome_title_marker:  str   = "google chrome"
     window_fallback_fullscreen: bool = False
-    # Explicit provider/model routes. Groq remains primary; the owner-approved
-    # OpenRouter route is used only after a retryable Groq transport/provider
-    # failure, never after valid unknown/noncanonical output.
+    # Explicit provider/model route. Groq owns scene and identity vision.
     vision_provider:      str   = "groq"
     vision_model:         str   = "qwen/qwen3.8-27b"
-    vision_fallback_routes: tuple[tuple[str, str], ...] = (
-        ("openrouter", "qwen/qwen3-vl-32b-instruct"),
-    )
+    vision_fallback_routes: tuple[tuple[str, str], ...] = ()
     vision_timeout:       float = 20.0
     vision_max_retries:   int   = 0
     max_activity_chars:   int   = 40

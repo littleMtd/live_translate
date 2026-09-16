@@ -414,6 +414,37 @@ def test_changed_identity_roi_cannot_bypass_profile_attempt_budget():
     assert profile_events[-1]["identity_read_attempted"] is False
 
 
+def test_identity_roi_provider_failure_records_bounded_vision_diagnostics():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    failure = VisionProviderFailure(
+        VisionDiagnostics(
+            outcome="error",
+            attempt_limit=1,
+            error_type="timeout",
+            provider="groq",
+            model="qwen/qwen3.8-27b",
+            retryable=True,
+        )
+    )
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame(40)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=QuerySequence([failure]),
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+
+    event = [item for item in events if item["event_type"] == "profile_resolution"][-1]
+    assert event["status"] == "provider_error"
+    assert event["vision_outcome"] == "error"
+    assert event["vision_error_type"] == "timeout"
+    assert event["vision_provider"] == "groq"
+    assert event["vision_model"] == "qwen/qwen3.8-27b"
+    assert "response" not in repr(event).casefold()
+
+
 def test_small_roi_capture_noise_does_not_spend_an_identity_read():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     identity_reader = QuerySequence(['{"identity":"Ranko"}', '{"identity":"Ranko"}'])

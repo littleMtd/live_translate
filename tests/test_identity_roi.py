@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from types import SimpleNamespace
 
 from PIL import Image
+import pytest
 
 from modules.identity_roi import (
     IdentityRoiStore,
@@ -55,7 +56,7 @@ def test_crop_uses_normalized_player_coordinates():
     assert observation is not None
     assert len(observation.thumb) == 64 * 16
     cropped = Image.open(io.BytesIO(observation.jpeg))
-    assert cropped.size == (100, 50)
+    assert cropped.size == (512, 256)
 
 
 def test_identity_parser_and_lookup_are_exact_and_conservative():
@@ -144,3 +145,58 @@ def test_native_calibration_move_resize_stays_normalized_and_save_uses_shared_st
     window._save()
     assert store.get("chzzk") == window.roi
     assert window.saved is True
+
+
+def test_native_calibration_resizes_each_edge_and_corner_within_bounds(tmp_path):
+    window = IdentityRoiCalibrationWindow(
+        "soop",
+        Image.new("RGB", (200, 100)),
+        store=IdentityRoiStore(tmp_path / "identity_rois.json"),
+        show_only=False,
+    )
+    window._display_width = 200
+    window._display_height = 100
+    window._canvas = MagicMock()
+    window._rectangle = 1
+    original = NormalizedRoi(0.25, 0.25, 0.5, 0.5)
+
+    expected = {
+        "w": (0.15, 0.25, 0.6, 0.5),
+        "e": (0.25, 0.25, 0.6, 0.5),
+        "n": (0.25, 0.15, 0.5, 0.6),
+        "s": (0.25, 0.25, 0.5, 0.6),
+        "nw": (0.15, 0.15, 0.6, 0.6),
+        "se": (0.25, 0.25, 0.6, 0.6),
+    }
+    for direction, values in expected.items():
+        window.roi = original
+        window._drag = (direction, 0, 0, original)
+        x = -20 if "w" in direction else 20 if "e" in direction else 0
+        y = -10 if "n" in direction else 10 if "s" in direction else 0
+        window._move(SimpleNamespace(x=x, y=y))
+        assert window.roi == NormalizedRoi(*values)
+
+    window.roi = original
+    window._drag = ("nw", 0, 0, original)
+    window._move(SimpleNamespace(x=1000, y=1000))
+    assert window.roi.width == pytest.approx(
+        window._HANDLE_SIZE / window._display_width
+    )
+    assert window.roi.height == pytest.approx(
+        window._HANDLE_SIZE / window._display_height
+    )
+
+    boundary_cases = (
+        ("e", NormalizedRoi(0.98, 0.2, 0.01, 0.3), 1000, 0),
+        ("w", NormalizedRoi(0.01, 0.2, 0.01, 0.3), -1000, 0),
+        ("s", NormalizedRoi(0.2, 0.98, 0.3, 0.01), 0, 1000),
+        ("n", NormalizedRoi(0.2, 0.01, 0.3, 0.01), 0, -1000),
+    )
+    for direction, initial, x, y in boundary_cases:
+        window.roi = initial
+        window._drag = (direction, 0, 0, initial)
+        window._move(SimpleNamespace(x=x, y=y))
+        assert 0 <= window.roi.x <= 1 - window.roi.width
+        assert 0 <= window.roi.y <= 1 - window.roi.height
+        assert window.roi.width + 1e-12 >= 0.08
+        assert window.roi.height + 1e-12 >= 0.16

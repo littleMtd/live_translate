@@ -18,6 +18,8 @@ from pathlib import Path
 ROI_STATE_PATH = Path(__file__).resolve().parent.parent / "logs" / "identity_rois.json"
 _KEY_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 _SPACE_RE = re.compile(r"\s+")
+_PROVIDER_MIN_SHORT_SIDE = 256
+_PROVIDER_MAX_LONG_SIDE = 1280
 
 
 def calibration_key(platform: object) -> str:
@@ -180,8 +182,24 @@ def crop_identity_roi(player_jpeg: bytes, roi: NormalizedRoi) -> RoiObservation 
     if right <= left or bottom <= top:
         return None
     crop = image.crop((left, top, right, bottom))
+    # Channel-name blocks are intentionally small.  Preserve the calibrated
+    # pixels, but upscale the provider copy so multimodal preprocessors do not
+    # receive a tiny 100-200 px OCR target.  The thumbnail below remains based
+    # on the original crop, so change detection semantics are unchanged.
+    short_side = min(crop.size)
+    long_side = max(crop.size)
+    scale = min(
+        max(1.0, _PROVIDER_MIN_SHORT_SIDE / short_side),
+        _PROVIDER_MAX_LONG_SIDE / long_side,
+    )
+    provider_crop = crop
+    if scale > 1.0:
+        provider_crop = crop.resize(
+            (round(crop.width * scale), round(crop.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
     buffer = io.BytesIO()
-    crop.save(buffer, "JPEG", quality=85)
+    provider_crop.save(buffer, "JPEG", quality=90)
     jpeg = buffer.getvalue()
     thumb = crop.convert("L").resize((64, 16)).tobytes()
     return RoiObservation(
@@ -290,6 +308,7 @@ class IdentityRoiCalibrationWindow:
         self._canvas = None
         self._rectangle = None
         self._handle = None
+        self._handles: dict[str, object] = {}
 
     def run(self) -> bool:
         import tkinter as tk
@@ -322,10 +341,16 @@ class IdentityRoiCalibrationWindow:
         self._rectangle = canvas.create_rectangle(
             *self._pixel_box(), outline="#00f0ff", width=3, fill="", tags=("roi",)
         )
-        self._handle = canvas.create_rectangle(
-            *self._handle_box(), outline="#001014", fill="#00f0ff", width=2,
-            tags=("handle",),
-        )
+        for direction in ("nw", "n", "ne", "e", "se", "s", "sw", "w"):
+            handle = canvas.create_rectangle(
+                *self._handle_box(direction),
+                outline="#001014",
+                fill="#00f0ff",
+                width=2,
+                tags=("handle", direction),
+            )
+            self._handles[direction] = handle
+        self._handle = self._handles["se"]
         canvas.create_text(
             self._pixel_box()[0] + 5,
             max(10, self._pixel_box()[1] - 10),
@@ -342,7 +367,7 @@ class IdentityRoiCalibrationWindow:
         instruction = (
             "Diagnostic only — Esc closes"
             if self.show_only
-            else "Drag rectangle to move · cyan corner to resize · Enter saves · Esc cancels"
+            else "Drag inside to move · drag any cyan edge/corner to resize · Enter saves · Esc cancels"
         )
         tk.Label(controls, text=instruction, bg="#10151d", fg="#d5dbea").pack(side="left")
         if not self.show_only:
@@ -363,10 +388,21 @@ class IdentityRoiCalibrationWindow:
             (self.roi.y + self.roi.height) * self._display_height,
         )
 
-    def _handle_box(self) -> tuple[float, float, float, float]:
-        right, bottom = self._pixel_box()[2:]
+    def _handle_box(self, direction: str = "se") -> tuple[float, float, float, float]:
+        left, top, right, bottom = self._pixel_box()
+        points = {
+            "nw": (left, top),
+            "n": ((left + right) / 2, top),
+            "ne": (right, top),
+            "e": (right, (top + bottom) / 2),
+            "se": (right, bottom),
+            "s": ((left + right) / 2, bottom),
+            "sw": (left, bottom),
+            "w": (left, (top + bottom) / 2),
+        }
+        x, y = points[direction]
         half = self._HANDLE_SIZE / 2
-        return right - half, bottom - half, right + half, bottom + half
+        return x - half, y - half, x + half, y + half
 
     def _begin(self, event, mode: str) -> None:
         self._drag = (mode, float(event.x), float(event.y), self.roi)
@@ -375,11 +411,13 @@ class IdentityRoiCalibrationWindow:
 
     def _on_press(self, event) -> None:
         x, y = float(event.x), float(event.y)
-        handle = self._handle_box()
         rectangle = self._pixel_box()
-        if handle[0] <= x <= handle[2] and handle[1] <= y <= handle[3]:
-            self._begin(event, "resize")
-        elif rectangle[0] <= x <= rectangle[2] and rectangle[1] <= y <= rectangle[3]:
+        for direction in ("nw", "n", "ne", "e", "se", "s", "sw", "w"):
+            handle = self._handle_box(direction)
+            if handle[0] <= x <= handle[2] and handle[1] <= y <= handle[3]:
+                self._begin(event, direction)
+                return
+        if rectangle[0] <= x <= rectangle[2] and rectangle[1] <= y <= rectangle[3]:
             self._begin(event, "move")
 
     def _end(self, _event=None) -> None:
@@ -401,17 +439,41 @@ class IdentityRoiCalibrationWindow:
                 initial.height,
             )
         else:
-            self.roi = NormalizedRoi(
-                initial.x,
-                initial.y,
-                max(0.01, min(1.0 - initial.x, initial.width + dx)),
-                max(0.01, min(1.0 - initial.y, initial.height + dy)),
-            )
+            left, top = initial.x, initial.y
+            right, bottom = left + initial.width, top + initial.height
+            min_width = max(0.01, self._HANDLE_SIZE / self._display_width)
+            min_height = max(0.01, self._HANDLE_SIZE / self._display_height)
+            if "w" in mode:
+                left = max(0.0, min(right - min_width, left + dx))
+            if "e" in mode:
+                right = min(1.0, max(left + min_width, right + dx))
+            if "n" in mode:
+                top = max(0.0, min(bottom - min_height, top + dy))
+            if "s" in mode:
+                bottom = min(1.0, max(top + min_height, bottom + dy))
+            if right - left < min_width:
+                if "w" in mode:
+                    left = max(0.0, right - min_width)
+                    right = min(1.0, left + min_width)
+                else:
+                    right = min(1.0, left + min_width)
+                    left = max(0.0, right - min_width)
+            if bottom - top < min_height:
+                if "n" in mode:
+                    top = max(0.0, bottom - min_height)
+                    bottom = min(1.0, top + min_height)
+                else:
+                    bottom = min(1.0, top + min_height)
+                    top = max(0.0, bottom - min_height)
+            self.roi = NormalizedRoi(left, top, right - left, bottom - top)
         self._redraw()
 
     def _redraw(self) -> None:
         self._canvas.coords(self._rectangle, *self._pixel_box())
-        self._canvas.coords(self._handle, *self._handle_box())
+        for direction, handle in self._handles.items():
+            self._canvas.coords(handle, *self._handle_box(direction))
+        if not self._handles and self._handle is not None:
+            self._canvas.coords(self._handle, *self._handle_box())
         left, top = self._pixel_box()[:2]
         self._canvas.coords("label", left + 5, max(10, top - 10))
 

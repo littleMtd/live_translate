@@ -2104,6 +2104,14 @@ class SceneContextUpdater:
         except Exception as exc:
             self._reset_unsupported_identity_evidence()
             diagnostics = exc.diagnostics if isinstance(exc, VisionProviderFailure) else None
+            diagnostic_fields = (
+                diagnostics.event_fields()
+                if diagnostics is not None
+                else {
+                    "vision_outcome": "error",
+                    "vision_error_type": "provider_error",
+                }
+            )
             used_attempts = max(1, len(diagnostics.attempt_chain)) if diagnostics is not None else 1
             self._release_unused_profile_attempts(route_capacity, used_attempts)
             self._schedule_profile_resolution(now, "identity_roi_provider_error", stable=False)
@@ -2120,6 +2128,7 @@ class SceneContextUpdater:
                 reviewed_member_match="",
                 latency_ms=round((self._clock() - started) * 1000, 2),
                 window_generation=window_generation,
+                **diagnostic_fields,
                 **profile_state.current().as_metadata(),
             )
             return

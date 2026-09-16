@@ -92,13 +92,10 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be unique"):
             _Translation(engine_chain=("groq", "groq"))
 
-    def test_scene_vision_routes_are_explicit_groq_then_openrouter(self):
+    def test_scene_vision_route_is_explicit_groq_only(self):
         self.assertEqual(cfg.scene.vision_provider, "groq")
         self.assertEqual(cfg.scene.vision_model, "qwen/qwen3.8-27b")
-        self.assertEqual(
-            cfg.scene.vision_fallback_routes,
-            (("openrouter", "qwen/qwen3-vl-32b-instruct"),),
-        )
+        self.assertEqual(cfg.scene.vision_fallback_routes, ())
         self.assertEqual(cfg.scene.vision_max_retries, 0)
 
     def test_scene_vision_rejects_unknown_malformed_and_duplicate_routes(self):
