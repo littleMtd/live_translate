@@ -31,12 +31,17 @@ def _entity(entity_id="one", alias="Name", target="Canonical", **extra):
 
 
 def test_production_registry_loads_and_profiles_reference_real_entities():
-    assert len(ENTITY_REGISTRY.entities) == 22
+    assert len(ENTITY_REGISTRY.entities) == 24
     snapshot = load_registry_snapshot(
         __import__("pathlib").Path("data/streamer_profiles.json"), version=7
     )
     assert snapshot.entity_registry is ENTITY_REGISTRY
     assert snapshot.entity_registry.entity("url_sommyang").canonical_target == "솜먕"
+    assert snapshot.entity_registry.entity("irise_kiiri").canonical_target == "KIIRI"
+    assert (
+        snapshot.entity_registry.entity("irise_heart_crush").canonical_target
+        == "Heart Crush"
+    )
 
 
 def test_alias_scopes_are_isolated_and_lookup_is_exact():

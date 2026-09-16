@@ -482,6 +482,30 @@ def test_review_context_uses_only_prior_published_same_cohort_and_never_future()
     assert case.history_reconstruction == "approximate_prior_published_same_cohort"
 
 
+def test_review_context_prefers_session_history_identity():
+    events = [
+        _event(
+            "앞 문장", "前一句", index=1,
+            history_cohort_id="", history_session_id="session-a",
+            history_profile_id="old-profile-a",
+        ),
+        _event(
+            "현재 문장",
+            "目前句子",
+            index=2,
+            history_cohort_id="",
+            history_session_id="session-a",
+            history_profile_id="old-profile-b",
+        ),
+    ]
+
+    case = reviewer.select_review_cases(
+        events, mode="broad", max_cases=2, context_window=2
+    )[1]
+
+    assert [row["source"] for row in case.context_before] == ["앞 문장"]
+
+
 def test_review_case_preserves_profile_attempt_and_publication_provenance():
     event = _event(
         "원문", "譯文", index=1,

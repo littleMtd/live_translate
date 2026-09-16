@@ -438,17 +438,6 @@ class STTEngine:
 
     def transcribe_event(self, audio: np.ndarray | AudioChunk) -> TranscriptionEvent | None:
         request_profile = profile_state.current()
-        configured_profile = str(getattr(cfg, "active_streamer_profile", "") or "")
-        if (
-            request_profile.evidence_source == "source_default"
-            and not request_profile.source_profile_id
-            and configured_profile
-        ):
-            request_profile = profile_state.legacy_snapshot(
-                configured_profile,
-                translation_profile_applied=bool(cfg.translation.use_profile),
-                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-            )
         previous_profile = getattr(self, "_current_profile_snapshot", None)
         if (
             previous_profile is not None
@@ -572,11 +561,7 @@ class STTEngine:
     def _elevenlabs_keyterms(self) -> list[str]:
         snapshot = getattr(self, "_current_profile_snapshot", None)
         if snapshot is None:
-            snapshot = profile_state.legacy_snapshot(
-                str(getattr(cfg, "active_streamer_profile", "") or ""),
-                translation_profile_applied=bool(cfg.translation.use_profile),
-                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-            )
+            snapshot = profile_state.current()
         if not snapshot.stt_glossary_applied or not _cfg_stt_bool("use_profile_glossary", True):
             self._last_elevenlabs_keyterm_manifest = ()
             return []
@@ -1246,11 +1231,7 @@ class STTEngine:
     def _build_groq_prompt(self) -> str | None:
         snapshot = getattr(self, "_current_profile_snapshot", None)
         if snapshot is None:
-            snapshot = profile_state.legacy_snapshot(
-                str(getattr(cfg, "active_streamer_profile", "") or ""),
-                translation_profile_applied=bool(cfg.translation.use_profile),
-                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-            )
+            snapshot = profile_state.current()
         context_transcript = self._context_transcript_for_prompt()
         # Manual activity-keyed hot vocabulary. The automatic scene resolver
         # is record-only and never activates STT terms.

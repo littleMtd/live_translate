@@ -1,10 +1,12 @@
 from contextlib import contextmanager
 
+import pytest
+
 from config import cfg
 from modules.translation_corrections import (
+    _name_rendering_rules,
     evaluate_canonical_obligations,
     load_translation_corrections,
-    resolve_canonical_obligations,
 )
 from modules.translator import (
     _BOUNDARY_SOURCE_NORM_BY_PROFILE,
@@ -111,6 +113,11 @@ def test_required_canonical_rules_are_explicit_and_narrow():
         for rule in tables.name_rendering_rules
         if rule.publication_policy == "required"
     )
+    assert all(
+        rule.entity_id
+        for rule in tables.name_rendering_rules
+        if rule.publication_policy == "required"
+    )
     activation_by_canonical = {
         rule.canonical: rule.activation_policy
         for rule in tables.name_rendering_rules
@@ -122,6 +129,20 @@ def test_required_canonical_rules_are_explicit_and_narrow():
         for canonical, policy in activation_by_canonical.items()
         if canonical != "마냥"
     )
+
+
+def test_raw_correction_rule_cannot_claim_required_publication_ownership():
+    with pytest.raises(ValueError, match="reviewed registry entity"):
+        _name_rendering_rules(
+            [{
+                "scope": "url",
+                "source_aliases": ["가칭"],
+                "wrong_forms": ["假稱"],
+                "canonical": "Reviewed Name",
+                "publication_policy": "required",
+            }],
+            "name_rendering_rules",
+        )
 
 
 def test_live23_entity_rescue_rules_are_exact_source_and_profile_gated():
@@ -148,29 +169,16 @@ def test_repeated_moka_particle_rescue_does_not_change_obligation_activation():
             _apply_source_aware_corrections(source, "모카랑是邊唱歌邊跑。")
             == "모카是邊唱歌邊跑。"
         )
-        obligations = resolve_canonical_obligations(
-            source,
-            profile_id="url",
-            profile_applied=True,
-            rules=_NAME_RENDERING_RULES,
-            korean_name_suffixes=load_translation_corrections().korean_name_suffixes,
-        )
-    assert obligations == ()
+        obligations = _resolve_entity_request_context(source).obligations
+    assert tuple(item.canonical_target for item in obligations) == ("모카",)
+    assert len(obligations[0].source_spans) == 2
 
 
 def test_name_context_required_avoids_ordinary_word_collision():
-    tables = load_translation_corrections()
-
     def targets(source: str) -> tuple[str, ...]:
         return tuple(
             obligation.canonical_target
-            for obligation in resolve_canonical_obligations(
-                source,
-                profile_id="url",
-                profile_applied=True,
-                rules=tables.name_rendering_rules,
-                korean_name_suffixes=tables.korean_name_suffixes,
-            )
+            for obligation in _resolve_entity_request_context(source).obligations
         )
 
     assert targets("그러니까 마냥 그냥 렛츠고 이런 느낌으로 해요.") == ()
@@ -216,68 +224,35 @@ def test_streaming_hiatus_repairs_sleep_mistranslation_from_source_evidence():
 
 
 def test_collision_aware_activation_preserves_other_required_rules():
-    tables = load_translation_corrections()
-    obligations = resolve_canonical_obligations(
-        "마냥 언니는 돌고래, 모카 언니는 니모, 솜먕 언니는 해파리",
-        profile_id="url",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    )
+    obligations = _resolve_entity_request_context(
+        "마냥 언니는 돌고래, 모카 언니는 니모, 솜먕 언니는 해파리"
+    ).obligations
     assert tuple(item.canonical_target for item in obligations) == (
-        "모카",
         "마냥",
+        "모카",
         "솜먕",
     )
 
 
-def test_canonical_obligation_resolution_uses_profile_boundary_and_one_occurrence():
-    tables = load_translation_corrections()
-
-    obligations = resolve_canonical_obligations(
-        "솜먕이 왔어",
-        profile_id="url",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    )
+def test_canonical_obligation_resolution_uses_registry_boundary_and_all_occurrences():
+    obligations = _resolve_entity_request_context("솜먕이 왔어").obligations
     assert len(obligations) == 1
     assert obligations[0].matched_alias == "솜먕이"
     assert obligations[0].source_spans == ((0, 3),)
     assert obligations[0].canonical_target == "솜먕"
 
-    assert resolve_canonical_obligations(
-        "모카가 왔어",
-        profile_id="irise",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    ) == ()
-    assert resolve_canonical_obligations(
-        "마냥히 웃었어",
-        profile_id="url",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    ) == ()
-    assert resolve_canonical_obligations(
-        "모카랑 모카가 왔어",
-        profile_id="url",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    ) == ()
+    assert tuple(
+        item.canonical_target
+        for item in _resolve_entity_request_context("모카가 왔어").obligations
+    ) == ("모카",)
+    assert _resolve_entity_request_context("마냥히 웃었어").obligations == ()
+    repeated = _resolve_entity_request_context("모카랑 모카가 왔어").obligations
+    assert tuple(item.canonical_target for item in repeated) == ("모카",)
+    assert len(repeated[0].source_spans) == 2
 
 
 def test_canonical_obligation_evaluation_never_inserts_missing_target():
-    tables = load_translation_corrections()
-    obligations = resolve_canonical_obligations(
-        "주르르가 왔어",
-        profile_id="isegye_lilpa",
-        profile_applied=True,
-        rules=tables.name_rendering_rules,
-        korean_name_suffixes=tables.korean_name_suffixes,
-    )
+    obligations = _resolve_entity_request_context("주르르가 왔어").obligations
     passed = evaluate_canonical_obligations("Jururu來了。", obligations)
     failed = evaluate_canonical_obligations("朱嚕嚕來了。", obligations)
     embedded = evaluate_canonical_obligations("JururuExtra來了。", obligations)
@@ -718,10 +693,12 @@ def test_irise_canonical_rendering_rejects_unsafe_source_activation():
         for source, target, expected in cases:
             assert _apply_source_aware_corrections(source, target) == expected
 
+    # Reviewed translation-source aliases are registry-owned and therefore
+    # activate independently of the optional profile hint.
     with _active_translation_profile("url"):
-        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "基里"
+        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "KIIRI"
     with _active_translation_profile("irise", use_profile=False):
-        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "基里"
+        assert _apply_source_aware_corrections("키리가 왔어요", "基里") == "KIIRI"
 
 
 def test_irise_canonical_rendering_preserves_embedded_target_words():

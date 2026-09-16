@@ -4,7 +4,6 @@ import re
 import threading
 import time
 import unicodedata
-import uuid
 from collections.abc import Callable
 from contextlib import nullcontext
 from concurrent.futures import Future
@@ -28,6 +27,7 @@ from modules.activity_context import (
     effective_profile_id,
     normalize_activity,
 )
+from modules.conversation_history import ConversationHistory
 from modules.profile_context import (
     ProfileSnapshot,
     bind_profile_snapshot,
@@ -35,6 +35,7 @@ from modules.profile_context import (
     effective_profile_applied,
     profile_state,
 )
+from modules.session_context import HistoryCohort, LiveSessionSnapshot
 from utils.logger import get_logger
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
@@ -101,7 +102,7 @@ from modules.translation_runtime import (
     call_with_fallback,
     probe_primary_recovery,
 )
-from modules.translation_memory import HistoryCohort, MemoryLookup, TranslationMemory
+from modules.translation_memory import MemoryLookup, TranslationMemory
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 from modules.request_protection import (
     PROTECTION_POLICY_VERSION,
@@ -116,7 +117,6 @@ from modules.translation_corrections import (
     NameRenderingRule as _NameRenderingRule,
     evaluate_canonical_obligations,
     load_translation_corrections,
-    resolve_canonical_obligations,
     source_alias_matches,
     source_alias_matches_at,
 )
@@ -494,26 +494,6 @@ def _name_rendering_rule_enabled(rule: _NameRenderingRule) -> bool:
     ) == rule.scope
 
 
-def _resolve_legacy_canonical_obligations(
-    source: str,
-) -> tuple[CanonicalObligation, ...]:
-    profile_applied = effective_profile_applied(
-        bool(getattr(cfg.translation, "use_profile", False))
-    )
-    profile_id = (
-        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if profile_applied
-        else ""
-    )
-    return resolve_canonical_obligations(
-        source,
-        profile_id=profile_id,
-        profile_applied=profile_applied,
-        rules=tuple(rule for rule in _NAME_RENDERING_RULES if not rule.entity_id),
-        korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
-    )
-
-
 @dataclass(frozen=True)
 class _EntityRequestContext:
     activations: tuple[EntityActivation, ...] = ()
@@ -574,22 +554,9 @@ def _resolve_entity_request_context(source: str) -> _EntityRequestContext:
 
 
 def _canonical_obligations_for_request(
-    source: str,
     entity_context: _EntityRequestContext,
 ) -> tuple[CanonicalObligation, ...]:
-    combined = (*entity_context.obligations, *_resolve_legacy_canonical_obligations(source))
-    result: list[CanonicalObligation] = []
-    seen: set[tuple[str, tuple[tuple[int, int], ...], str]] = set()
-    for obligation in combined:
-        key = (
-            obligation.canonical_target,
-            obligation.source_spans,
-            obligation.condition_id,
-        )
-        if key not in seen:
-            seen.add(key)
-            result.append(obligation)
-    return tuple(result)
+    return entity_context.obligations
 
 
 def _request_protection_for(
@@ -638,7 +605,7 @@ def _resolve_active_canonical_obligations(
     source: str,
 ) -> tuple[CanonicalObligation, ...]:
     entity_context = _resolve_entity_request_context(source)
-    return _canonical_obligations_for_request(source, entity_context)
+    return _canonical_obligations_for_request(entity_context)
 
 
 def _source_activated_name_canonicals(
@@ -1073,7 +1040,7 @@ def _adjudicate_translation_candidate(
     """
     if obligations is None:
         entity_context = _resolve_entity_request_context(source)
-        obligations = _canonical_obligations_for_request(source, entity_context)
+        obligations = _canonical_obligations_for_request(entity_context)
     if request_protection is None:
         entity_context = _resolve_entity_request_context(source)
         request_protection = _request_protection_for(
@@ -1614,14 +1581,7 @@ class TranslationOutcome:
         obligation_evaluation = self.canonical_obligation_evaluation
         if obligation_evaluation is None:
             entity_context = _resolve_entity_request_context(self.source_text)
-            legacy_obligations = resolve_canonical_obligations(
-                self.source_text,
-                profile_id=profile_id,
-                profile_applied=profile_applied,
-                rules=tuple(rule for rule in _NAME_RENDERING_RULES if not rule.entity_id),
-                korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
-            )
-            obligations = tuple((*entity_context.obligations, *legacy_obligations))
+            obligations = _canonical_obligations_for_request(entity_context)
             obligation_evaluation = evaluate_canonical_obligations(
                 self.target_text, obligations
             )
@@ -1700,23 +1660,36 @@ class TranslationOutcome:
 @dataclass
 class _TranslatorSharedState:
     memory: TranslationMemory
+    history: ConversationHistory
     policy: TranslationPolicy
     fallback: FallbackState
     lock: object
     fallback_event_sink: FallbackEventSink | None = None
     inflight_sources: dict[str, int] = field(default_factory=dict)
-    history_session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    session: LiveSessionSnapshot = field(default_factory=LiveSessionSnapshot.create)
+
+    @property
+    def history_session_id(self) -> str:
+        """Compatibility name for request contracts created before session ownership."""
+        return self.session.session_id
 
 
-def _new_translation_memory() -> TranslationMemory:
+def _conversation_window() -> int:
     try:
         recent_window = int(getattr(cfg.translation, "context_window", 0) or 0)
     except (TypeError, ValueError):
         recent_window = 0
-    recent_window = max(recent_window, 0)
+    return max(recent_window, 0)
+
+
+def _new_translation_memory(
+    history: ConversationHistory | None = None,
+) -> TranslationMemory:
+    recent_window = _conversation_window()
     return TranslationMemory(
         recent_window=recent_window,
         max_cache_size=_CACHE_MAX_SIZE,
+        conversation_history=history,
         db_factory=_get_db,
         history_writer=_write_history,
     )
@@ -1735,23 +1708,17 @@ def _new_translation_policy() -> TranslationPolicy:
     )
 
 
-def _history_cohort_for(
-    snapshot: ActivitySnapshot | None,
-    profile_id: object,
-) -> HistoryCohort:
-    return (
-        str(profile_id or "").strip() or "default",
-        (snapshot.activity_id if snapshot is not None else "") or "unknown",
-        max(0, int(snapshot.cohort_epoch or 0)) if snapshot is not None else 0,
-    )
-
-
 def _new_translator_shared_state(
     *,
     fallback_event_sink: FallbackEventSink | None = None,
 ) -> _TranslatorSharedState:
+    history = ConversationHistory(
+        recent_window=_conversation_window(),
+        max_cohorts=8,
+    )
     return _TranslatorSharedState(
-        memory=_new_translation_memory(),
+        memory=_new_translation_memory(history),
+        history=history,
         policy=_new_translation_policy(),
         fallback=FallbackState(),
         lock=threading.RLock(),
@@ -1991,7 +1958,7 @@ class Translator:
         self._policy = self._shared_state.policy
         self._last_input: str = ""
         self._defer_success_record = defer_success_record
-        self._history_session_id = self._shared_state.history_session_id
+        self._session = self._shared_state.session
         self._last_provisional_trace: dict = {}
 
     def _state_guard(self):
@@ -2119,7 +2086,7 @@ class Translator:
 
         text = _normalize_source_before_matching(text)
         entity_context = _resolve_entity_request_context(text)
-        canonical_obligations = _canonical_obligations_for_request(text, entity_context)
+        canonical_obligations = _canonical_obligations_for_request(entity_context)
         request_protection = _request_protection_for(
             text,
             entity_context,
@@ -2245,14 +2212,15 @@ class Translator:
                     model=engine.model_name if engine else "",
                     prompt_version=prompt_ver,
                 )
-            success_commit = None
-            if getattr(self, "_defer_success_record", False):
-                success_commit = lambda: self._record_lookup_context(
-                    text,
-                    target_text,
-                    incomplete,
-                    history_cohort,
-                )
+            success_commit = lambda: self._record_lookup_context(
+                text,
+                target_text,
+                incomplete,
+                history_cohort,
+            )
+            if not getattr(self, "_defer_success_record", False):
+                success_commit()
+                success_commit = None
             return TranslationOutcome(
                 source_text=raw_text,
                 prepared_source_text=text,
@@ -2269,7 +2237,7 @@ class Translator:
             )
 
         with self._state_guard():
-            history = self._memory_state().context(history_cohort)
+            history = self._history_state().context(history_cohort)
         frozen_messages_by_engine = {
             "deepseek": build_effective_deepseek_messages(
                 provider_text, system_prompt, incomplete, history
@@ -2286,19 +2254,15 @@ class Translator:
         if provisional_candidate is not None:
             snapshot = bound_activity_snapshot()
             profile_snapshot = bound_profile_snapshot()
+            if profile_snapshot is None:
+                profile_snapshot = profile_state.current()
             assert snapshot is not None
             fingerprint = provisional_fingerprint(
                 prepared_source=text,
                 source_utterance_ids=source_utterance_ids,
                 evidence_source_utterance_ids=evidence_source_utterance_ids,
-                profile_id=(
-                    profile_snapshot.effective_profile_id
-                    if profile_snapshot is not None else history_cohort[0]
-                ),
-                profile_cache_identity=(
-                    profile_snapshot.cache_identity
-                    if profile_snapshot is not None else ""
-                ),
+                profile_id=profile_snapshot.effective_profile_id,
+                profile_cache_identity=profile_snapshot.cache_identity,
                 activity_cache_identity=snapshot.cache_identity,
                 history_cohort=history_cohort,
                 messages=effective_deepseek_messages,
@@ -2521,24 +2485,26 @@ class Translator:
     def _memory_state(self) -> TranslationMemory:
         return self._memory
 
+    def _history_state(self) -> ConversationHistory:
+        shared = getattr(self, "_shared_state", None)
+        history = getattr(shared, "history", None)
+        return history if history is not None else self._memory_state().history
+
     def _history_cohort(self) -> HistoryCohort:
-        snapshot = bound_activity_snapshot()
-        profile_snapshot = bound_profile_snapshot()
-        return _history_cohort_for(
-            snapshot,
-            (
-                profile_snapshot.cache_identity
-                if profile_snapshot is not None
-                else effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-            ),
-        )
+        return self._session_snapshot().history_cohort(bound_activity_snapshot())
 
     def _history_session(self) -> str:
-        value = getattr(self, "_history_session_id", "")
-        if not value:
-            value = uuid.uuid4().hex[:12]
-            self._history_session_id = value
-        return value
+        return self._session_snapshot().session_id
+
+    def _session_snapshot(self) -> LiveSessionSnapshot:
+        session = getattr(self, "_session", None)
+        if session is None:
+            shared = getattr(self, "_shared_state", None)
+            session = getattr(shared, "session", None)
+        if session is None:
+            session = LiveSessionSnapshot.create()
+        self._session = session
+        return session
 
     def _translate_slang(self, text: str, incomplete: bool) -> str | None:
         slang_result = self._policy_state().slang_result(text)
@@ -2551,18 +2517,14 @@ class Translator:
     def _record_direct_success(self, text: str, result: str, incomplete: bool,
                                cohort: HistoryCohort) -> None:
         with self._state_guard():
-            self._memory_state().record_direct_memory(
-                text, result, incomplete, cohort
-            )
+            self._history_state().remember(text, result, incomplete, cohort)
         # File I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
 
     def _record_lookup_context(self, text: str, result: str, incomplete: bool,
                                cohort: HistoryCohort) -> None:
         with self._state_guard():
-            self._memory_state().record_recent_context(
-                text, result, incomplete, cohort
-            )
+            self._history_state().remember(text, result, incomplete, cohort)
 
     def _lookup_existing_translation_event(
         self,
@@ -2582,7 +2544,7 @@ class Translator:
                 incomplete,
                 prompt_ver,
                 engine,
-                remember_recent=not getattr(self, "_defer_success_record", False),
+                remember_recent=False,
                 cohort=cohort,
             )
         if lookup.result:
@@ -2600,7 +2562,7 @@ class Translator:
                     prompt_ver,
                     db_result,
                     engine,
-                    remember_recent=not getattr(self, "_defer_success_record", False),
+                    remember_recent=False,
                     cohort=cohort,
                 )
             log.debug("Cache hit: %s", text[:20])
@@ -2615,9 +2577,10 @@ class Translator:
         with self._state_guard():
             if engine is None:
                 engine = self._active_engine()
-            self._memory_state().record_success_memory(
-                text, result, incomplete, prompt_ver, engine, cohort
+            self._memory_state().cache_store(
+                text, incomplete, result, prompt_ver, engine
             )
+            self._history_state().remember(text, result, incomplete, cohort)
         # File/DB I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
         if not incomplete and engine is not None and _db_cache_enabled():
@@ -2641,6 +2604,7 @@ class Translator:
                 result,
                 cohort,
             )
+            self._history_state().forget(text, result, cohort)
         # DB delete outside the shared lock (M1). The delete is NOT gated on
         # _db_cache_enabled(): stale rows must be purged even if the cache layer
         # was enabled earlier in the session and disabled since.
@@ -2748,9 +2712,7 @@ class Translator:
         }
         if canonical_obligations is None:
             entity_context = _resolve_entity_request_context(source_text)
-            canonical_obligations = _canonical_obligations_for_request(
-                source_text, entity_context
-            )
+            canonical_obligations = _canonical_obligations_for_request(entity_context)
         history_cohort = self._history_cohort()
         request_contract_ids: dict[str, str] = {}
         for candidate_engine in self._engines:
@@ -3179,8 +3141,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 return
             if (
                 request.profile_snapshot is not None
-                and request.profile_snapshot.cache_identity
-                != profile_state.current().cache_identity
+                and request.profile_snapshot.generation
+                != profile_state.current().generation
             ):
                 provisional_store.close(request.provisional_id)
                 runtime_events.emit(
@@ -3232,9 +3194,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             prepared_source
                         )
                         entity_context = _resolve_entity_request_context(prepared_source)
-                        obligations = _canonical_obligations_for_request(
-                            prepared_source, entity_context
-                        )
+                        obligations = _canonical_obligations_for_request(entity_context)
                         request_protection = _request_protection_for(
                             prepared_source,
                             entity_context,
@@ -3243,12 +3203,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         system_prompt = preview_translator._build_system_prompt(
                             entity_context.capsule
                         )
-                        history_cohort = _history_cohort_for(
-                            request.activity_snapshot,
-                            request_profile_snapshot.cache_identity,
+                        history_cohort = shared_state.session.history_cohort(
+                            request.activity_snapshot
                         )
                         with shared_state.lock:
-                            history = shared_state.memory.context(history_cohort)
+                            history = shared_state.history.context(history_cohort)
                         messages = build_effective_deepseek_messages(
                             request_protection.provider_source,
                             system_prompt,
@@ -3326,8 +3285,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             return
                         if (
                             request.profile_snapshot is not None
-                            and request.profile_snapshot.cache_identity
-                            != profile_state.current().cache_identity
+                            and request.profile_snapshot.generation
+                            != profile_state.current().generation
                         ):
                             provisional_store.close(request.provisional_id)
                             runtime_events.emit(
@@ -3340,8 +3299,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         raw_target = engine.translate_messages(messages)
                         if (
                             request.profile_snapshot is not None
-                            and request.profile_snapshot.cache_identity
-                            != profile_state.current().cache_identity
+                            and request.profile_snapshot.generation
+                            != profile_state.current().generation
                         ):
                             provisional_store.close(request.provisional_id)
                             runtime_events.emit(
@@ -3507,11 +3466,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 profile_snapshot = (
                     event_profile_snapshot
                     if isinstance(event_profile_snapshot, ProfileSnapshot)
-                    else profile_state.legacy_snapshot(
-                        str(metadata.get("profile_id") or getattr(cfg, "active_streamer_profile", "") or ""),
-                        translation_profile_applied=bool(cfg.translation.use_profile),
-                        stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-                    )
+                    else profile_state.current()
                 )
                 profile_id = profile_snapshot.effective_profile_id
                 marker = _dependency_marker(text)
@@ -3603,16 +3558,17 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     with bind_profile_snapshot(profile_snapshot):
                       with bind_profile_id(profile_id):
                         with bind_activity_snapshot(activity_snapshot):
-                            history_cohort = _history_cohort_for(
-                                activity_snapshot, profile_snapshot.cache_identity
+                            history_cohort = shared_state.session.history_cohort(
+                                activity_snapshot
                             )
                             with shared_state.lock:
                                 history_items, cross_cohort_items = (
-                                    shared_state.memory.cohort_stats(history_cohort)
+                                    shared_state.history.cohort_stats(history_cohort)
                                 )
                             metadata.update(
                                 {
-                                    "history_profile_id": history_cohort[0],
+                                    "history_profile_id": "",
+                                    "history_session_id": history_cohort[0],
                                     "history_activity_id": history_cohort[1],
                                     "history_cohort_epoch": history_cohort[2],
                                     "history_cohort_id": (

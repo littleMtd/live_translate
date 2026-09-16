@@ -192,6 +192,11 @@ def _name_rendering_rules(value: Any, field_name: str) -> tuple[NameRenderingRul
             raise ValueError(
                 f'{rule_name}.publication_policy must be "repair_only" or "required"'
             )
+        if publication_policy == "required":
+            raise ValueError(
+                f"{rule_name} must reference a reviewed registry entity to declare "
+                'publication_policy="required"'
+            )
         condition_id = raw_rule.get("condition_id", "always")
         if not isinstance(condition_id, str):
             raise ValueError(f"{rule_name}.condition_id must be a string")
@@ -373,78 +378,6 @@ def source_alias_matches_at(
     if activation_policy == "name_context_required":
         return _source_alias_has_name_context(source, alias, start, korean_name_suffixes)
     return _source_alias_matches_at(source, alias, start, korean_name_suffixes)
-
-
-def resolve_canonical_obligations(
-    source_text: str,
-    *,
-    profile_id: str,
-    profile_applied: bool,
-    rules: tuple[NameRenderingRule, ...],
-    korean_name_suffixes: frozenset[str],
-) -> tuple[CanonicalObligation, ...]:
-    """Resolve v1 hard obligations from one normalized production source.
-
-    V1 is deliberately narrow: exact active-profile rules, explicit opt-in,
-    ``condition_id=always``, and exactly one non-overlapping source occurrence.
-    """
-    if not source_text or not profile_applied or not profile_id:
-        return ()
-
-    obligations: list[CanonicalObligation] = []
-    for rule in rules:
-        if (
-            rule.scope != profile_id
-            or rule.publication_policy != "required"
-            or rule.condition_id != "always"
-        ):
-            continue
-
-        matches_by_start: dict[int, tuple[int, str]] = {}
-        for alias in sorted(set(rule.source_aliases), key=len, reverse=True):
-            if not alias:
-                continue
-            start = source_text.find(alias)
-            while start >= 0:
-                if rule.activation_policy == "name_context_required":
-                    source_match = _source_alias_has_name_context(
-                        source_text, alias, start, korean_name_suffixes
-                    )
-                else:
-                    source_match = _source_alias_matches_at(
-                        source_text, alias, start, korean_name_suffixes
-                    )
-                if source_match:
-                    end = start + len(alias)
-                    current = matches_by_start.get(start)
-                    if current is None or end > current[0]:
-                        matches_by_start[start] = (end, alias)
-                start = source_text.find(alias, start + 1)
-
-        matches = sorted(
-            (start, end, alias)
-            for start, (end, alias) in matches_by_start.items()
-        )
-        non_overlapping: list[tuple[int, int, str]] = []
-        for match in matches:
-            if non_overlapping and match[0] < non_overlapping[-1][1]:
-                continue
-            non_overlapping.append(match)
-        if len(non_overlapping) != 1:
-            continue
-
-        start, end, alias = non_overlapping[0]
-        obligations.append(
-            CanonicalObligation(
-                rule_id=f"name:{rule.scope}:{rule.canonical}",
-                profile_id=profile_id,
-                matched_alias=alias,
-                source_spans=((start, end),),
-                canonical_target=rule.canonical,
-                condition_id=rule.condition_id,
-            )
-        )
-    return tuple(obligations)
 
 
 def evaluate_canonical_obligations(

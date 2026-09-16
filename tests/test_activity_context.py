@@ -17,9 +17,11 @@ from modules.activity_context import (
     capture_activity_snapshot,
     capture_effective_activity_snapshot,
     effective_activity_value,
+    effective_profile_id,
     infer_source_local_activity,
     normalize_activity,
 )
+from modules.profile_context import ProfileSnapshot, bind_profile_snapshot
 from modules.translation_engines import (
     _deepl_context,
     effective_system_prompt_for_engine,
@@ -508,7 +510,7 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
                 seen["effective_prompt"]
                 + "\n[canonical-publication-policy] canonical-obligations-v1"
                 + "\n[request-cache-cohort] "
-            + f"{cfg.active_streamer_profile or 'default'}:starcraft:0"
+                + f"{translator._shared_state.history_session_id}:starcraft:0"
             + (
                 f"\n[history-session] {translator._shared_state.history_session_id}"
                 if cfg.translation.context_window > 0
@@ -568,3 +570,12 @@ def test_expired_automatic_is_unknown_at_capture_time():
 
     assert snapshot.activity_id == ""
     assert snapshot.source == "none"
+def test_bound_neutral_profile_snapshot_overrides_configured_fallback():
+    snapshot = ProfileSnapshot(
+        source_profile_id="isegye_lilpa",
+        effective_profile_id="",
+        confirmation_state="unconfirmed_neutral",
+    )
+
+    with bind_profile_snapshot(snapshot):
+        assert effective_profile_id("isegye_lilpa") == ""

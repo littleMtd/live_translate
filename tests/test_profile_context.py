@@ -33,16 +33,19 @@ def _registry(tmp_path, profiles=None):
     return path
 
 
-def test_confirmed_content_overrides_source_and_unknown_falls_back(tmp_path):
+def test_auto_profile_is_neutral_until_confirmed_and_returns_to_neutral(tmp_path):
     registry = load_registry_snapshot(_registry(tmp_path), version=1)
     state = ProfileState(registry, source_profile_id="url")
     initial = state.current()
     confirmed = state.confirm_content("isegye_lilpa", confidence=0.9)
     fallback = state.clear_content("expired")
-    assert initial.effective_profile_id == "url"
+    assert initial.effective_profile_id == ""
+    assert initial.source_profile_id == "url"
+    assert initial.confirmation_state == "unconfirmed_neutral"
     assert confirmed.effective_profile_id == "isegye_lilpa"
     assert confirmed.generation == initial.generation + 1
-    assert fallback.effective_profile_id == "url"
+    assert fallback.effective_profile_id == ""
+    assert fallback.confirmation_state == "unconfirmed_neutral"
     assert fallback.generation == confirmed.generation + 1
 
 
@@ -89,12 +92,12 @@ def test_profile_state_logs_current_effective_profile_on_published_changes(tmp_p
 
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 3
-    assert "effective=isegye_lilpa" in messages[0]
+    assert "effective=general" in messages[0]
     assert "action=source_configured" in messages[0]
     assert "effective=url" in messages[1]
     assert "generation=2" in messages[1]
     assert "evidence=authoritative_identity_roi" in messages[1]
-    assert "effective=isegye_lilpa" in messages[2]
+    assert "effective=general" in messages[2]
     assert "action=content_cleared" in messages[2]
 
 
@@ -106,6 +109,24 @@ def test_manual_mode_is_a_hard_effective_profile_lock(tmp_path):
     )
     assert state.confirm_content("isegye_lilpa").effective_profile_id == "url"
     assert state.current().confirmation_state == "manual_locked"
+
+
+def test_hint_cache_identity_tracks_request_shape_not_observation_generation(tmp_path):
+    state = ProfileState(
+        load_registry_snapshot(_registry(tmp_path), version=1),
+        source_profile_id="url",
+    )
+    initial = state.current()
+    reconfigured = state.configure_source("isegye_lilpa", mode="auto")
+
+    assert reconfigured.generation == initial.generation + 1
+    assert reconfigured.effective_profile_id == ""
+    assert reconfigured.cache_identity == initial.cache_identity
+
+    confirmed = state.confirm_content("url")
+    refreshed = state.confirm_content("url")
+    assert confirmed.cache_identity == refreshed.cache_identity
+    assert confirmed.generation == refreshed.generation
 
 
 def test_registry_reload_is_atomic_and_invalid_reload_rolls_back(tmp_path):

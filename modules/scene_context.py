@@ -1773,7 +1773,7 @@ class SceneContextUpdater:
             if (
                 retry_discard
                 or profile_state.registry.identity != registry.identity
-                or current_snapshot.cache_identity != starting_snapshot.cache_identity
+                or current_snapshot.generation != starting_snapshot.generation
             ):
                 parsed = ParsedProfileIdentity(
                     "rejected",
@@ -1833,7 +1833,7 @@ class SceneContextUpdater:
         current_snapshot = profile_state.current()
         if (
             profile_state.registry.identity != registry.identity
-            or current_snapshot.cache_identity != starting_snapshot.cache_identity
+            or current_snapshot.generation != starting_snapshot.generation
         ):
             self._profile_consensus.reset(window_generation)
             self._schedule_profile_resolution(now, "discarded", stable=False)
@@ -2145,7 +2145,7 @@ class SceneContextUpdater:
         )
         if (
             not discard
-            and profile_state.current().cache_identity != starting_snapshot.cache_identity
+            and profile_state.current().generation != starting_snapshot.generation
         ):
             discard = "profile_generation_changed"
         observed = parse_observed_identity(raw)

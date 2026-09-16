@@ -1665,6 +1665,108 @@
         ],
         "publication_policy": "required"
       }
+    },
+    {
+      "entity_id": "irise_kiiri",
+      "entity_type": "person",
+      "canonical_source": "키리",
+      "canonical_target": "KIIRI",
+      "profile_ids": [
+        "irise"
+      ],
+      "aliases": [
+        {
+          "value": "키리",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "키리씨",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "KIIRI",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "irise",
+        "wrong_forms": [
+          "키리",
+          "キリ",
+          "基里",
+          "Kiri",
+          "Kiiri",
+          "Kkiri"
+        ],
+        "publication_policy": "required"
+      }
+    },
+    {
+      "entity_id": "irise_heart_crush",
+      "entity_type": "work",
+      "canonical_source": "하트 크러쉬",
+      "canonical_target": "Heart Crush",
+      "profile_ids": [
+        "irise"
+      ],
+      "aliases": [
+        {
+          "value": "하트 크러쉬",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "하트크러쉬",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        },
+        {
+          "value": "Heart Crush",
+          "scopes": [
+            "display"
+          ],
+          "order": {
+            "display": 0
+          }
+        }
+      ],
+      "provenance": "migrated_reviewed_production_data",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "irise",
+        "wrong_forms": [
+          "하트 크러쉬",
+          "하트크러쉬",
+          "哈特克魯什",
+          "哈特克拉什"
+        ],
+        "publication_policy": "required"
+      }
     }
   ]
 }

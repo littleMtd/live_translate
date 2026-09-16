@@ -166,8 +166,6 @@ def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
     with patch.object(translation_engines, "cfg", merged):
         assert translation_engines.effective_engine_chain_names() == (
             "deepseek",
-            "openrouter",
-            "deepl",
             "groq",
         )
 

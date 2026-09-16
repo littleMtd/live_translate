@@ -35,6 +35,11 @@ _DEFAULT_MAX_MERGE_SOURCE_COUNT = 2
 _DEFAULT_MAX_MERGE_TEXT_CHARS = 120
 
 
+def _activity_cohort_identity(snapshot) -> tuple[str]:
+    """Return the sentence episode identity owned only by activity state."""
+    return (snapshot.activity_id or "unknown",)
+
+
 def _is_complete(text: str) -> bool:
     return is_complete(text)
 
@@ -298,11 +303,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             profile_snapshot = (
                 source.profile_snapshot
                 if source is not None and source.profile_snapshot is not None
-                else profile_state.legacy_snapshot(
-                    source.profile_id if source is not None else getattr(cfg, "active_streamer_profile", ""),
-                    translation_profile_applied=bool(cfg.translation.use_profile),
-                    stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-                )
+                else profile_state.current()
             )
             profile_id = profile_snapshot.effective_profile_id
             activity_snapshot = capture_effective_activity_snapshot(
@@ -312,10 +313,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 ),
                 source_text=cut.text,
             )
-            cohort_identity = (
-                profile_snapshot.cache_identity,
-                activity_snapshot.activity_id or "unknown",
-            )
+            cohort_identity = _activity_cohort_identity(activity_snapshot)
             if cohort_identity != last_activity_cohort_identity:
                 activity_cohort_epoch += 1
                 last_activity_cohort_identity = cohort_identity
@@ -354,6 +352,11 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                     }
                     else ""
                 ),
+            )
+            event = replace(
+                event,
+                profile_id=profile_snapshot.effective_profile_id,
+                profile_snapshot=profile_snapshot,
             )
             runtime_events.emit(
                 "sentence",
@@ -563,10 +566,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                         ),
                         source_text=provisional.text,
                     )
-                    prospective_identity = (
-                        source.profile_id,
-                        activity_snapshot.activity_id or "unknown",
-                    )
+                    prospective_identity = _activity_cohort_identity(activity_snapshot)
                     prospective_epoch = activity_cohort_epoch + int(
                         prospective_identity != last_activity_cohort_identity
                     )
@@ -576,19 +576,15 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                     )
                     active_provisional_source_id = source.utterance_id
                     active_provisional_id = f"provisional:{source.utterance_id}"
+                    request_profile_snapshot = (
+                        source.profile_snapshot or profile_state.current()
+                    )
                     request = ProvisionalRequest(
                         provisional_id=active_provisional_id,
                         text=provisional.text,
                         incomplete=provisional.incomplete,
-                        profile_id=source.profile_id,
-                        profile_snapshot=(
-                            source.profile_snapshot
-                            or profile_state.legacy_snapshot(
-                                source.profile_id,
-                                translation_profile_applied=bool(cfg.translation.use_profile),
-                                stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-                            )
-                        ),
+                        profile_id=request_profile_snapshot.effective_profile_id,
+                        profile_snapshot=request_profile_snapshot,
                         source_utterance_ids=provisional.source_utterance_ids,
                         evidence_source_utterance_ids=(
                             provisional.evidence_source_utterance_ids

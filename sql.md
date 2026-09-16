@@ -171,6 +171,10 @@ The DB key includes `engine`, `model`, and `prompt_version` so that cache entrie
 5. On API success, store the result to in-memory cache always (both complete and incomplete).
 6. On API success, store the result to DB **only if `incomplete=False`**.
 
+Cache lookup and conversation history are separate. A memory or DB hit is
+re-adjudicated by the translator and enters the shared `ConversationHistory`
+only through the same successful publication commit used by provider results.
+
 The exact source label (`memory_hit` / `db_hit` / `skipped` / `miss`) is carried out of `lookup_existing_event` as a `MemoryLookup` dataclass and surfaces in `runtime_events.jsonl` as the `cache_status` field.
 
 **DB eviction:** apply LRU-style eviction based on `last_used_at` when row count exceeds a configurable limit (default: 50,000 rows). Configured in `config.py` as `cfg.database.db_cache_max_rows` (in `_Database` dataclass).

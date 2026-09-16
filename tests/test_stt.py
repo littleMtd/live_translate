@@ -31,6 +31,7 @@ from modules.stt import (
     STTEngine,
 )
 from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
+from modules.profile_context import ProfileSnapshot, profile_state
 
 
 # ---------------------------------------------------------------------------
@@ -663,10 +664,17 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertEqual(result, "Groq result")
         self.assertTrue(eng._use_groq)
 
-    def test_transcribe_event_includes_engine_and_profile(self):
+    def test_transcribe_event_includes_engine_and_neutral_unconfirmed_profile(self):
         eng = _make_engine_groq("Groq result")
 
-        with patch("modules.stt.cfg") as mock_cfg:
+        neutral = ProfileSnapshot(
+            source_profile_id="",
+            effective_profile_id="",
+            confirmation_state="unconfirmed_neutral",
+        )
+        with patch("modules.stt.cfg") as mock_cfg, patch(
+            "modules.stt.profile_state.current", return_value=neutral
+        ):
             mock_cfg.audio.volume_threshold = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "isegye_lilpa"
@@ -682,7 +690,7 @@ class TestTranscribeFallback(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event.text, "Groq result")
         self.assertEqual(event.engine, "groq")
-        self.assertEqual(event.profile_id, "isegye_lilpa")
+        self.assertEqual(event.profile_id, "")
 
     def test_transcribe_event_mints_incrementing_utterance_id(self):
         eng = _make_engine_groq("Groq result")
@@ -1286,6 +1294,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
 
     def test_build_groq_prompt_includes_seed_glossary_and_recent_context(self):
         eng = _make_engine_groq("ignored")
+        eng._current_profile_snapshot = profile_state.legacy_snapshot("isegye_lilpa")
         eng._last_transcript = "  previous   line with   extra spaces  "
         eng._last_context_transcript = "  previous   line with   extra spaces  "
         eng._last_context_updated_at = time.monotonic()
@@ -1364,6 +1373,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
     @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
     def test_transcribe_groq_passes_structured_prompt(self):
         eng = _make_engine_groq("transcribed")
+        eng._current_profile_snapshot = profile_state.legacy_snapshot("isegye_lilpa")
         eng._last_transcript = "recent context"
         eng._last_context_transcript = "recent context"
         eng._last_context_updated_at = time.monotonic()

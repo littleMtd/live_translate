@@ -73,7 +73,7 @@ def test_no_match_has_no_capsule_or_prompt_bloat():
 
 def test_cross_profile_required_entity_uses_existing_canonical_guard_contract():
     context = _resolve_entity_request_context("멤논이 왔어")
-    obligations = _canonical_obligations_for_request("멤논이 왔어", context)
+    obligations = _canonical_obligations_for_request(context)
     assert tuple(item.canonical_target for item in obligations) == ("Memnon",)
     assert obligations[0].rule_id == "entity:hades_memnon"
 

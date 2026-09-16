@@ -57,8 +57,15 @@ def _active_profile(profile_id: str, use_profile: bool = True):
     original_use_profile = cfg.translation.use_profile
     object.__setattr__(cfg.translation, "streamer_profile", profile_id)
     object.__setattr__(cfg.translation, "use_profile", use_profile)
+    snapshot = translator.profile_state.legacy_snapshot(
+        profile_id,
+        translation_profile_applied=use_profile,
+    )
     try:
-        yield
+        with patch(
+            "modules.translator.profile_state.current", return_value=snapshot
+        ):
+            yield
     finally:
         object.__setattr__(cfg.translation, "streamer_profile", original_profile)
         object.__setattr__(cfg.translation, "use_profile", original_use_profile)

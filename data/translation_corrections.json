@@ -1417,21 +1417,7 @@
       "canonical": "리제"
     },
     {
-      "scope": "irise",
-      "source_aliases": [
-        "키리",
-        "키리씨"
-      ],
-      "wrong_forms": [
-        "키리",
-        "キリ",
-        "基里",
-        "Kiri",
-        "Kiiri",
-        "Kkiri"
-      ],
-      "canonical": "KIIRI",
-      "publication_policy": "required"
+      "entity_id": "irise_kiiri"
     },
     {
       "scope": "irise",
@@ -1450,19 +1436,7 @@
       "canonical": "TIZ"
     },
     {
-      "scope": "irise",
-      "source_aliases": [
-        "하트 크러쉬",
-        "하트크러쉬"
-      ],
-      "wrong_forms": [
-        "하트 크러쉬",
-        "하트크러쉬",
-        "哈特克魯什",
-        "哈特克拉什"
-      ],
-      "canonical": "Heart Crush",
-      "publication_policy": "required"
+      "entity_id": "irise_heart_crush"
     },
     {
       "scope": "irise",

@@ -5,16 +5,16 @@ from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 
 from config import cfg
+from modules.conversation_history import ConversationHistory
+from modules.session_context import DEFAULT_HISTORY_COHORT, HistoryCohort
 from modules.translation_engines import TranslationEngine
 from modules.translation_runtime import CacheKey, cache_key, cache_lookup, cache_store
 from utils.metrics import metrics
-from utils.runtime_events import translation_quality
 
 
 DBFactory = Callable[[], object]
 HistoryWriter = Callable[[str, str], None]
-HistoryCohort = tuple[str, str, int]
-_DEFAULT_COHORT: HistoryCohort = ("default", "unknown", 0)
+_DEFAULT_COHORT = DEFAULT_HISTORY_COHORT
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ class TranslationMemory:
         recent_window: int = 30,
         max_cache_size: int = 500,
         max_recent_cohorts: int = 8,
+        conversation_history: ConversationHistory | None = None,
         db_factory: DBFactory,
         history_writer: HistoryWriter,
     ):
@@ -39,43 +40,33 @@ class TranslationMemory:
         initial_recent: deque[tuple[str, str]] = (
             recent if recent is not None else deque(maxlen=max(recent_window, 0))
         )
-        self._recent_window = max(recent_window, 0)
-        self._max_recent_cohorts = max(max_recent_cohorts, 1)
-        self._recent_by_cohort: OrderedDict[
-            HistoryCohort, deque[tuple[str, str]]
-        ] = OrderedDict()
-        if initial_recent:
-            self._recent_by_cohort[_DEFAULT_COHORT] = initial_recent
+        self.history = conversation_history or ConversationHistory(
+            recent_window=recent_window,
+            max_cohorts=max_recent_cohorts,
+            initial_recent=initial_recent,
+        )
         self._max_cache_size = max_cache_size
         self._db_factory = db_factory
         self._history_writer = history_writer
 
     @property
     def recent(self) -> deque[tuple[str, str]]:
-        return self._cohort_recent(_DEFAULT_COHORT, create=True)
+        return self.history.recent
 
     @recent.setter
     def recent(self, value: deque[tuple[str, str]]) -> None:
-        self._recent_by_cohort[_DEFAULT_COHORT] = value
+        self.history.recent = value
+
+    @property
+    def _recent_by_cohort(self):
+        """Compatibility view while callers migrate to ConversationHistory."""
+        return self.history._by_cohort
 
     def context(self, cohort: HistoryCohort | None = None) -> list[tuple[str, str]]:
-        if cohort is None and _DEFAULT_COHORT not in self._recent_by_cohort:
-            if len(self._recent_by_cohort) == 1:
-                key = next(iter(self._recent_by_cohort))
-            else:
-                key = _DEFAULT_COHORT
-        else:
-            key = cohort or _DEFAULT_COHORT
-        recent = self._recent_by_cohort.get(key)
-        if recent is None:
-            return []
-        self._recent_by_cohort.move_to_end(key)
-        return list(recent)
+        return self.history.context(cohort)
 
     def cohort_stats(self, cohort: HistoryCohort) -> tuple[int, int]:
-        selected = len(self._recent_by_cohort.get(cohort, ()))
-        total = sum(len(items) for items in self._recent_by_cohort.values())
-        return selected, max(0, total - selected)
+        return self.history.cohort_stats(cohort)
 
     def lookup_existing(
         self,
@@ -96,7 +87,6 @@ class TranslationMemory:
         cached = self.cache_lookup(text, incomplete, prompt_ver, active_engine)
         if cached:
             metrics.increment("translation.cache.memory_hit")
-            self._remember_recent(text, cached, incomplete)
             return MemoryLookup(cached, "memory_hit")
 
         if incomplete or active_engine is None:
@@ -107,7 +97,6 @@ class TranslationMemory:
         if db_result:
             metrics.increment("translation.cache.db_hit")
             self.cache_store(text, incomplete, db_result, prompt_ver, active_engine)
-            self._remember_recent(text, db_result, incomplete)
             return MemoryLookup(db_result, "db_hit")
 
         metrics.increment("translation.cache.miss")
@@ -141,10 +130,8 @@ class TranslationMemory:
         active_engine: TranslationEngine | None = None,
         cohort: HistoryCohort | None = None,
     ) -> None:
-        """In-memory part of record_success; caller does history/DB I/O outside."""
+        """Cache part of record_success; conversation history has its own owner."""
         self.cache_store(text, incomplete, result, prompt_ver, active_engine)
-        if not incomplete:
-            self._remember_recent(text, result, incomplete, cohort)
 
     def write_history(self, text: str, result: str) -> None:
         self._history_writer(text, result)
@@ -156,7 +143,7 @@ class TranslationMemory:
         prompt_ver: str,
         active_engine: TranslationEngine | None = None,
         *,
-        remember_recent: bool = True,
+        remember_recent: bool = False,
         cohort: HistoryCohort | None = None,
     ) -> MemoryLookup:
         """Cache-only lookup (no DB). Source is "" when undecided — the caller
@@ -177,7 +164,7 @@ class TranslationMemory:
         db_result: str,
         active_engine: TranslationEngine | None = None,
         *,
-        remember_recent: bool = True,
+        remember_recent: bool = False,
         cohort: HistoryCohort | None = None,
     ) -> MemoryLookup:
         metrics.increment("translation.cache.db_hit")
@@ -321,44 +308,13 @@ class TranslationMemory:
 
     def _remember_recent(self, text: str, result: str, incomplete: bool,
                          cohort: HistoryCohort | None = None) -> None:
-        if incomplete:
-            return
-        severity = translation_quality(text, result).get("quality_severity")
-        if severity in ("warn", "bad"):
-            metrics.increment("translation.context_gated")
-            metrics.increment(f"translation.context_gated.{severity}")
-            return
-        key = cohort or _DEFAULT_COHORT
-        self._forget_recent(text, cohort=key)
-        self._cohort_recent(key, create=True).append((text, result))
+        self.history.remember(text, result, incomplete, cohort)
 
     def _forget_recent(self, text: str, result: str | None = None,
                        cohort: HistoryCohort | None = None) -> None:
-        key = cohort or _DEFAULT_COHORT
-        current = self._recent_by_cohort.get(key)
-        if current is None:
-            return
-        self._recent_by_cohort[key] = deque(
-            (
-                (source, target)
-                for source, target in current
-                if not (source == text and (result is None or target == result))
-            ),
-            maxlen=current.maxlen,
-        )
-        self._recent_by_cohort.move_to_end(key)
+        self.history.forget(text, result, cohort)
 
     def _cohort_recent(
         self, cohort: HistoryCohort, *, create: bool
     ) -> deque[tuple[str, str]]:
-        recent = self._recent_by_cohort.get(cohort)
-        if recent is None:
-            if not create:
-                return deque(maxlen=self._recent_window)
-            recent = deque(maxlen=self._recent_window)
-            self._recent_by_cohort[cohort] = recent
-            while len(self._recent_by_cohort) > self._max_recent_cohorts:
-                self._recent_by_cohort.popitem(last=False)
-        else:
-            self._recent_by_cohort.move_to_end(cohort)
-        return recent
+        return self.history._cohort_recent(cohort, create=create)

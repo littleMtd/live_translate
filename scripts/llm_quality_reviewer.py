@@ -641,7 +641,8 @@ def _production_history_context(
         return [], "telemetry_reports_no_history"
     cohort = str(current.get("history_cohort_id") or "")
     profile_identity = str(
-        current.get("history_profile_id")
+        current.get("history_session_id")
+        or current.get("history_profile_id")
         or current.get("profile_cache_identity")
         or current.get("profile_id")
         or ""
@@ -654,7 +655,8 @@ def _production_history_context(
             continue
         prior_cohort = str(prior.get("history_cohort_id") or "")
         prior_profile = str(
-            prior.get("history_profile_id")
+            prior.get("history_session_id")
+            or prior.get("history_profile_id")
             or prior.get("profile_cache_identity")
             or prior.get("profile_id")
             or ""

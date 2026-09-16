@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from modules.sentence_splitter import (
+    _activity_cohort_identity,
     _can_merge_cuts,
     _is_complete,
     _merge_cuts,
@@ -15,6 +16,7 @@ from modules.pipeline_events import TranscriptionEvent
 from modules.activity_context import capture_activity_snapshot
 from modules.sentence_buffer import SentenceCut
 from modules.provisional_subtitles import ProvisionalRequest
+from modules.profile_context import ProfileSnapshot, profile_state
 
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
@@ -122,6 +124,34 @@ class TestSemanticEarlyCutMode(unittest.TestCase):
 
 class TestSentenceSplitterThread(unittest.TestCase):
 
+    def test_legacy_event_profile_id_cannot_retake_snapshot_ownership(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg()
+        neutral = ProfileSnapshot(
+            source_profile_id="isegye_lilpa",
+            effective_profile_id="",
+            confirmation_state="unconfirmed_neutral",
+        )
+
+        with patch("modules.sentence_splitter.cfg", cfg), patch(
+            "modules.sentence_splitter.profile_state.current", return_value=neutral
+        ):
+            thread = start(tq, sq, stop)
+            tq.put(TranscriptionEvent(
+                text="안녕하세요.",
+                engine="elevenlabs",
+                profile_id="isegye_lilpa",
+                utterance_id="utt-legacy-profile",
+            ))
+            event = sq.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertEqual(event.profile_id, "")
+        self.assertIs(event.profile_snapshot, neutral)
+
     def test_live_derived_embedded_question_merges_with_continuation_in_order(self):
         tq: queue.Queue = queue.Queue()
         sq: queue.Queue = queue.Queue()
@@ -188,6 +218,7 @@ class TestSentenceSplitterThread(unittest.TestCase):
                     text="아직 말하는 중",
                     engine="elevenlabs",
                     profile_id="url",
+                    profile_snapshot=profile_state.legacy_snapshot("url"),
                     utterance_id="utt-provisional-1",
                     avg_logprob=-0.2,
                     no_speech_prob=0.1,
@@ -206,6 +237,37 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(request.min_avg_logprob, -0.2)
         self.assertEqual(request.max_no_speech_prob, 0.1)
         self.assertEqual(final.provisional_id, request.provisional_id)
+
+    def test_legacy_profile_id_cannot_retake_provisional_ownership(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        pq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.6, force_cut=0.8, pending_timeout=0.4)
+        cfg.splitter.provisional_enabled = True
+        neutral = ProfileSnapshot(
+            source_profile_id="isegye_lilpa",
+            effective_profile_id="",
+            confirmation_state="unconfirmed_neutral",
+        )
+
+        with patch("modules.sentence_splitter.cfg", cfg), patch(
+            "modules.sentence_splitter.profile_state.current", return_value=neutral
+        ):
+            thread = start(tq, sq, stop, provisional_queue=pq)
+            tq.put(TranscriptionEvent(
+                text="아직 말하는 중",
+                engine="elevenlabs",
+                profile_id="isegye_lilpa",
+                utterance_id="utt-legacy-provisional",
+            ))
+            request = pq.get(timeout=2)
+            stop.set()
+            sq.get(timeout=2)
+            thread.join(timeout=2)
+
+        self.assertEqual(request.profile_id, "")
+        self.assertIs(request.profile_snapshot, neutral)
 
     def test_deepseek_route_off_does_not_produce_provisional_request(self):
         tq: queue.Queue = queue.Queue()
@@ -375,6 +437,7 @@ class TestSentenceSplitterThread(unittest.TestCase):
             text="안녕하세요",
             engine="groq",
             profile_id="isegye_lilpa",
+            profile_snapshot=profile_state.legacy_snapshot("isegye_lilpa"),
             avg_logprob=-0.2,
             no_speech_prob=0.1,
         )
@@ -812,6 +875,11 @@ class TestSentenceSplitterPause(unittest.TestCase):
 
 
 class TestSentenceActivitySnapshot(unittest.TestCase):
+    def test_activity_cohort_identity_has_no_profile_owner(self):
+        snapshot = capture_activity_snapshot("StarCraft", source="manual")
+
+        self.assertEqual(_activity_cohort_identity(snapshot), ("starcraft",))
+
     def test_emit_freezes_snapshot_and_assigns_episode_boundary(self):
         tq: queue.Queue = queue.Queue()
         sq: queue.Queue = queue.Queue()

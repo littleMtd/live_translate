@@ -408,6 +408,13 @@ def effective_profile_id(fallback: object = "") -> str:
     bound = _BOUND_PROFILE_ID.get()
     if bound is not None:
         return bound
+    # ProfileSnapshot is the typed request owner. Import lazily to avoid making
+    # the generic activity module part of profile registry initialization.
+    from modules.profile_context import bound_profile_snapshot
+
+    snapshot = bound_profile_snapshot()
+    if snapshot is not None:
+        return snapshot.effective_profile_id
     return str(fallback or "").strip()
 
 

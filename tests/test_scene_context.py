@@ -526,7 +526,7 @@ def test_destroyed_window_retains_confirmed_profile_until_new_identity_is_confir
         )
         updater._profile_fast_gap = 0
         updater.tick()
-        assert state.current().effective_profile_id == "url"
+        assert state.current().effective_profile_id == ""
         clock.advance(1)
         updater.tick()
         assert state.current().content_profile_id == "isegye_lilpa"
@@ -585,7 +585,7 @@ def test_cross_profile_member_marker_requires_profile_corroboration():
             profile_resolution_enabled=True,
         )
         updater.tick()
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["status"] == "candidate"
     assert event["candidate_streak"] == 1
@@ -611,7 +611,7 @@ def test_multi_member_roster_is_not_cross_profile_owner_evidence():
         updater.tick()
         clock.advance(1)
         updater.tick()
-    assert state.current().effective_profile_id == "url"
+    assert state.current().effective_profile_id == ""
 
 
 def test_cross_profile_member_and_brand_require_two_distinct_frames():
@@ -625,7 +625,7 @@ def test_cross_profile_member_and_brand_require_two_distinct_frames():
         )
         updater._profile_fast_gap = 0
         updater.tick()
-        assert state.current().effective_profile_id == "isegye_lilpa"
+        assert state.current().effective_profile_id == ""
         clock.advance(1)
         updater.tick()
     assert state.current().effective_profile_id == "url"
@@ -634,7 +634,7 @@ def test_cross_profile_member_and_brand_require_two_distinct_frames():
     assert all(event["profile_corroborated"] for event in profile_events)
 
 
-def test_current_profile_strong_marker_can_refresh_without_transition():
+def test_unconfirmed_source_profile_does_not_make_member_marker_current():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     answer = _profile_result("isegye_lilpa", "isegye_member_viichan")
     with patch.object(scene_context, "profile_state", state):
@@ -643,11 +643,11 @@ def test_current_profile_strong_marker_can_refresh_without_transition():
             profile_resolution_enabled=True,
         )
         updater.tick()
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
-    assert event["status"] == "confirmed"
-    assert event["activation_decision"] == "immediate_strong_marker"
-    assert event["immediate_activation_eligible"] is True
+    assert event["status"] == "candidate"
+    assert event["activation_decision"] == "awaiting_cross_profile_consensus"
+    assert event["immediate_activation_eligible"] is False
 
 
 def test_run_20260904_url_marker_provenance_does_not_activate_without_owner_corroboration():
@@ -680,7 +680,7 @@ def test_run_20260904_url_marker_provenance_does_not_activate_without_owner_corr
         updater._profile_fast_gap = 0
         for _answer in answers:
             updater.tick()
-            assert state.current().effective_profile_id == "isegye_lilpa"
+            assert state.current().effective_profile_id == ""
             clock.advance(1)
     assert not any(
         event.get("status") == "confirmed"
@@ -701,7 +701,7 @@ def test_medium_brand_marker_keeps_two_frame_consensus():
         )
         updater._profile_fast_gap = 0
         updater.tick()
-        assert state.current().effective_profile_id == "isegye_lilpa"
+        assert state.current().effective_profile_id == ""
         clock.advance(1)
         updater.tick()
     assert state.current().effective_profile_id == "url"
@@ -720,7 +720,7 @@ def test_schema_failure_retries_once_but_semantic_rejection_does_not():
         )
         updater.tick()
     assert len(provider.calls) == 2
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["schema_retry_count"] == 1
     assert event["status"] == "candidate"
@@ -737,7 +737,7 @@ def test_schema_failure_retries_once_but_semantic_rejection_does_not():
         )
         updater.tick()
     assert len(unsupported.calls) == 1
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
 
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     duplicate = QuerySequence([
@@ -751,7 +751,7 @@ def test_schema_failure_retries_once_but_semantic_rejection_does_not():
         )
         updater.tick()
     assert len(duplicate.calls) == 1
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
 
 
 def test_profile_sampling_uses_fast_seeking_and_stable_backoff():
@@ -906,7 +906,7 @@ def test_cross_family_member_markers_are_conflict_and_do_not_switch():
             profile_resolution_enabled=True,
         )
         updater.tick()
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["status"] == "rejected"
     assert event["reason"] == "conflicting_identity_markers"
@@ -940,7 +940,7 @@ def test_strong_marker_resolution_ignores_non_safe_crop():
         )
         updater.tick()
     assert provider.calls == []
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
 
 
 def test_strong_marker_result_is_discarded_after_window_identity_changes():
@@ -957,7 +957,7 @@ def test_strong_marker_result_is_discarded_after_window_identity_changes():
 
         updater._profile_vision = QuerySequence([change_window])
         updater.tick()
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["status"] == "discarded"
 
@@ -1001,7 +1001,7 @@ def test_strong_marker_result_is_discarded_after_registry_reload(tmp_path):
 
         updater._profile_vision = QuerySequence([reload_registry])
         updater.tick()
-    assert state.current().effective_profile_id == "isegye_lilpa"
+    assert state.current().effective_profile_id == ""
     event = next(event for event in events if event["event_type"] == "profile_resolution")
     assert event["status"] == "discarded"
     assert event["reason"] == "profile_generation_changed"

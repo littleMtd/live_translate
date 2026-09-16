@@ -32,12 +32,12 @@ def _engine(name: str = "engine", model: str = "model") -> MagicMock:
 
 
 class TestTranslationMemory(unittest.TestCase):
-    def test_recent_history_is_isolated_by_profile_activity_and_episode(self):
+    def test_recent_history_is_isolated_by_session_activity_and_episode(self):
         memory, _, _ = self._memory()
-        chat_a = ("profile-a", "chatting", 1)
-        lol_a = ("profile-a", "league_of_legends", 2)
-        chat_b = ("profile-b", "chatting", 1)
-        chat_return = ("profile-a", "chatting", 3)
+        chat_a = ("session-a", "chatting", 1)
+        lol_a = ("session-a", "league_of_legends", 2)
+        chat_b = ("session-b", "chatting", 1)
+        chat_return = ("session-a", "chatting", 3)
 
         memory.record_recent_context("chat", "聊天", False, chat_a)
         memory.record_recent_context("lol", "遊戲", False, lol_a)
@@ -47,7 +47,7 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(memory.context(lol_a), [("lol", "遊戲")])
         self.assertEqual(memory.context(chat_b), [("other", "另一人")])
         self.assertEqual(memory.context(chat_return), [])
-        self.assertEqual(memory.context(("profile-a", "unknown", 4)), [])
+        self.assertEqual(memory.context(("session-a", "unknown", 4)), [])
 
     def test_recent_cohort_map_is_lru_bounded(self):
         fake_db = _FakeDB()
@@ -91,7 +91,7 @@ class TestTranslationMemory(unittest.TestCase):
 
         self.assertEqual(result, "cached")
         self.assertEqual(fake_db.lookup_calls, [])
-        self.assertEqual(list(memory.recent), [("source", "cached")])
+        self.assertEqual(list(memory.recent), [])
         self.assertEqual(metrics.snapshot().counters["translation.cache.memory_hit"], 1)
 
     def test_lookup_existing_event_reports_source(self):
@@ -140,7 +140,7 @@ class TestTranslationMemory(unittest.TestCase):
 
         self.assertEqual(result, "done")
         self.assertEqual(memory.cache_lookup("source", False, "v1", engine), "done")
-        self.assertEqual(list(memory.recent), [("source", "done")])
+        self.assertEqual(list(memory.recent), [])
         self.assertEqual(metrics.snapshot().counters["translation.cache.db_hit"], 1)
 
     def test_record_success_writes_complete_translation_to_db(self):
@@ -194,7 +194,7 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(list(memory.recent), [])
         counters = metrics.snapshot().counters
         self.assertEqual(counters["translation.cache.memory_hit"], 1)
-        self.assertEqual(counters["translation.context_gated"], 1)
+        self.assertNotIn("translation.context_gated", counters)
 
     def test_db_hit_bad_quality_is_cached_but_not_remembered_recent(self):
         metrics.reset()
@@ -212,7 +212,7 @@ class TestTranslationMemory(unittest.TestCase):
         self.assertEqual(list(memory.recent), [])
         counters = metrics.snapshot().counters
         self.assertEqual(counters["translation.cache.db_hit"], 1)
-        self.assertEqual(counters["translation.context_gated"], 1)
+        self.assertNotIn("translation.context_gated", counters)
 
     def test_recent_replaces_existing_source_instead_of_appending_duplicate(self):
         memory, _, _ = self._memory()

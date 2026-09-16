@@ -176,10 +176,20 @@ Translation:
 - `modules/translation_policy.py`: pre-translation rejection/sanitization,
   template/garbage/song/low-value rules, duplicate state, slang lookup, and
   evidence-gated repetition exemption.
-- `modules/translation_memory.py`: in-memory LRU, recent translation context,
-  optional SQLite read/write-through, and invalidation.
+- `modules/session_context.py`: immutable live-session identity and the
+  session/activity-epoch history cohort contract.
+- `modules/conversation_history.py`: bounded, quality-gated conversational
+  context. It is independent of cache lookup and accepts entries only through
+  the successful publication commit path.
+- `modules/translation_memory.py`: in-memory translation LRU, optional SQLite
+  read/write-through, and invalidation. Compatibility methods delegate recent
+  context to the shared `ConversationHistory` owner.
 - `modules/translation_prompts.py`: standard/Qwen prompt construction and
   JSON profile loading.
+- `modules/entity_registry.py`: pre-indexed exact reviewed entity retrieval.
+  One request-local activation result owns the entity capsule, resolved source
+  spans, canonical publication obligations, and source-gated target repair;
+  profile identity is not part of translation-source activation.
 - `modules/unknown_name_escrow.py`: exact reviewed source-grounded unknown-name
   placeholder mapping, restoration, and cardinality validation. Known
   canonical source spans are excluded before detection.
@@ -204,7 +214,7 @@ Context, display, and persistence:
   until the window generation changes. A separate default-off switch gates
   open-set publication; the resolver never writes
   `cfg.translation.current_activity` and never activates STT hot terms.
-- `modules/profile_context.py`: immutable source/content/effective profile and
+- `modules/profile_context.py`: immutable configured-source/confirmed-hint/effective profile and
   registry snapshots. Exact reviewed member-name markers are strong candidate
   evidence, but cannot independently authorize a cross-profile switch. A switch
   requires two distinct validated player frames plus profile-level corroboration
@@ -217,8 +227,14 @@ Context, display, and persistence:
   and pausing profile expiry without generation churn. Provider diagnostics and
   the latest privacy-safe resolver
   observation feed runtime telemetry and dashboard status. Manual is a complete
-  effective-profile hard lock. Profile generation is part of STT, sentence,
-  provisional, history, request, and cache isolation.
+  effective-profile hard lock. Auto mode starts neutral: the configured source
+  is metadata until reviewed scene evidence confirms a request-shaping hint.
+  Profile generation retires stale STT/provisional work; request cache identity
+  includes only request-shaping hint state. Conversation history belongs to the
+  live translator session and activity epoch rather than the profile observer.
+  Old events without a typed snapshot inherit the current state snapshot; their
+  legacy `profile_id` and the configured source cannot synthesize request
+  ownership downstream.
 - `modules/identity_roi.py`: owns normalized SOOP/CHZZK channel-identity ROI
   state in `logs/identity_rois.json`, exact reviewed member-name matching, and
   calibration snapshots from the same PrintWindow/player crop used by
@@ -262,9 +278,11 @@ Context, display, and persistence:
   may use `engine_chain`. It does not mean “Claude only”.
 - `ollama`: local Ollama only.
 
-All translation workers share `TranslationPolicy`, `TranslationMemory`,
-recent history, and `FallbackState`; engine diagnostics remain thread-local per
-call. In live NVIDIA mode, primary failure opens a circuit and sends user
+All translation workers share one `LiveSessionSnapshot`, `ConversationHistory`,
+`TranslationPolicy`, `TranslationMemory`, and `FallbackState`; engine diagnostics
+remain thread-local per call. Cache lookup cannot write conversation context;
+only a successfully adjudicated result enters history. In live NVIDIA mode,
+primary failure opens a circuit and sends user
 traffic to fallback engines. A background probe waits for cooldown and requires
 consecutive valid responses before restoring NVIDIA. Probe calls copy recent
 production history. Circuit/probe actions are emitted as
@@ -292,14 +310,16 @@ canonical outputs and narrowly source-proven acronyms may improve approved vs.
 unexpected telemetry classification without changing the legacy flag, score,
 retry, route, or shipped subtitle.
 
-For the `irise` profile, exact Korean source aliases for KIIRI, TIZ,
-Heart Crush, and IRISÉ also gate deterministic target canonicalization. A
-successful completed translation records the expected and any missing
-canonical terms, plus a narrowly cued `파트` rendered as `部門` semantic
-candidate. `translation_qa_disposition` separates clean, deterministically
-normalized, and suspicious outcomes. These additive QA fields do not enter
-legacy quality flags, score, severity, retry, provider selection, or routing;
-the existing correction trace remains the attribution for actual repairs.
+Exact reviewed Korean source aliases for KIIRI and Heart Crush are global
+registry entities, so they activate the same request-local canonical contract
+outside the optional `irise` profile hint. TIZ and IRISÉ retain their existing
+profile-scoped repair-only behavior. A successful completed translation records
+the expected and any missing canonical terms, plus a narrowly cued `파트`
+rendered as `部門` semantic candidate. `translation_qa_disposition` separates
+clean, deterministically normalized, and suspicious outcomes. These additive QA
+fields do not enter legacy quality flags, score, severity, retry, provider
+selection, or routing; the existing correction trace remains the attribution
+for actual repairs.
 
 ### Configuration and data ownership
 
@@ -313,9 +333,11 @@ the existing correction trace remains the attribution for actual repairs.
   intentionally separate from canonical names and unknown-name escrow.
 - `data/streamer_profiles.json`: profile IDs/aliases and STT glossary terms.
 - `data/translation_profiles.json`: standard and Qwen prompt-profile text.
+- `data/entity_registry.json`: reviewed exact entity aliases, canonical targets,
+  and the only production source for required entity publication obligations.
 - `data/translation_corrections.json`: deterministic source/target corrections,
-  profile-scoped boundary-aware source aliases, and name-rendering rules,
-  including exact IRISÉ canonical output rules.
+  profile-scoped boundary-aware source aliases, entity references, and legacy
+  repair-only name-rendering rules.
 - `data/scene_stt_terms.json`: activity-specific STT vocabulary.
 - `data/fan_terms.json`: reviewed terminology/reference inventory.
 - `data/eval_cases.json`: small offline output-quality fixtures.

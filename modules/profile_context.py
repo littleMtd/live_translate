@@ -293,7 +293,7 @@ class ProfileSnapshot:
     registry_version: int = 0
     evidence_source: str = "source_default"
     confidence: float | None = None
-    confirmation_state: str = "source_fallback"
+    confirmation_state: str = "unconfirmed_neutral"
     mode: str = "auto"
     translation_profile_applied: bool = True
     stt_glossary_applied: bool = True
@@ -301,8 +301,9 @@ class ProfileSnapshot:
 
     @property
     def cache_identity(self) -> str:
+        """Identity of the request-shaping hint, independent of observation churn."""
         return (
-            f"{self.registry_identity}:{self.generation}:"
+            f"{self.registry_identity}:"
             f"{int(self.translation_profile_applied)}:"
             f"{int(self.stt_glossary_applied)}:{self.effective_profile_id}"
         )
@@ -323,6 +324,8 @@ class ProfileSnapshot:
             "profile_applied": self.translation_profile_applied,
             "profile_glossary_applied": self.stt_glossary_applied,
             "profile_cache_identity": self.cache_identity,
+            "hint_profile_id": self.effective_profile_id,
+            "hint_state": self.confirmation_state,
         }
 
 
@@ -348,9 +351,9 @@ class ProfileState:
             source_profile_id=source_profile_id,
             content_profile_id="",
             mode=mode,
-            evidence_source="manual_hard_lock" if mode == "manual" else "source_default",
+            evidence_source="manual_hard_lock" if mode == "manual" else "unconfirmed",
             confidence=1.0 if mode == "manual" else None,
-            confirmation_state="manual_locked" if mode == "manual" else "source_fallback",
+            confirmation_state="manual_locked" if mode == "manual" else "unconfirmed_neutral",
             translation_profile_applied=translation_profile_applied,
             stt_glossary_applied=stt_glossary_applied,
         )
@@ -368,18 +371,13 @@ class ProfileState:
         mode = values.get("mode", "auto")
         if mode not in {"auto", "manual"}:
             raise ValueError("profile mode must be auto or manual")
-        confirmation_state = values.get("confirmation_state", "source_fallback")
-        confirmed_no_profile = (
-            mode == "auto" and confirmation_state == "confirmed_no_profile"
-        )
+        confirmation_state = values.get("confirmation_state", "unconfirmed_neutral")
         effective = (
             source
             if mode == "manual"
             else content
             if content
             else ""
-            if confirmed_no_profile
-            else source
         )
         return ProfileSnapshot(
             source_profile_id=source,
@@ -473,7 +471,7 @@ class ProfileState:
                     if next_mode == "manual"
                     else old.evidence_source
                     if preserve_observed_state
-                    else "source_default"
+                    else "unconfirmed"
                 ),
                 confidence=1.0 if next_mode == "manual" else old.confidence,
                 confirmation_state=(
@@ -481,7 +479,7 @@ class ProfileState:
                     if next_mode == "manual"
                     else old.confirmation_state
                     if preserve_observed_state
-                    else "source_fallback"
+                    else "unconfirmed_neutral"
                 ),
                 translation_profile_applied=(
                     old.translation_profile_applied
@@ -554,7 +552,7 @@ class ProfileState:
     def clear_content(self, reason: str = "unknown") -> ProfileSnapshot:
         with self._lock:
             old = self._snapshot
-            if old.mode == "manual" or old.confirmation_state == "source_fallback":
+            if old.mode == "manual" or old.confirmation_state == "unconfirmed_neutral":
                 return old
             self._generation += 1
             self._confirmed_at = None
@@ -564,7 +562,7 @@ class ProfileState:
                 mode=old.mode,
                 evidence_source=reason,
                 confidence=None,
-                confirmation_state="source_fallback",
+                confirmation_state="unconfirmed_neutral",
                 translation_profile_applied=old.translation_profile_applied,
                 stt_glossary_applied=old.stt_glossary_applied,
             )

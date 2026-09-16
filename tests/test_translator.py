@@ -54,6 +54,7 @@ from modules.translator import (
     Translator,
 )
 import modules.db as _db_module
+from modules.profile_context import bind_profile_snapshot, profile_state
 from modules.activity_context import (
     bind_activity_snapshot,
     bind_profile_id,
@@ -408,7 +409,9 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         engine.engine_name = "deepseek"
 
         self.assertEqual(
-            _translation_output_guard(engine, "這是キリ", "키리")["reason"],
+            _translation_output_guard(
+                engine, "這是KIIRI與テスト", "키리"
+            )["reason"],
             "unexpected_japanese",
         )
         self.assertEqual(
@@ -930,8 +933,13 @@ def _active_translation_profile(profile_id: str, use_profile: bool = True):
     original_use_profile = cfg.translation.use_profile
     object.__setattr__(cfg.translation, "streamer_profile", profile_id)
     object.__setattr__(cfg.translation, "use_profile", use_profile)
+    snapshot = profile_state.legacy_snapshot(
+        profile_id,
+        translation_profile_applied=use_profile,
+    )
     try:
-        yield
+        with bind_profile_snapshot(snapshot):
+            yield
     finally:
         object.__setattr__(cfg.translation, "streamer_profile", original_profile)
         object.__setattr__(cfg.translation, "use_profile", original_use_profile)
@@ -2291,6 +2299,28 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                     (canonical,),
                 )
 
+    def test_migrated_irise_obligations_are_registry_owned_cross_profile(self):
+        for source, canonical, entity_id in (
+            ("키리씨가 왔어", "KIIRI", "irise_kiiri"),
+            ("하트크러쉬 좋아", "Heart Crush", "irise_heart_crush"),
+        ):
+            with self.subTest(entity_id=entity_id):
+                context = translator_module._resolve_entity_request_context(source)
+                obligations = translator_module._canonical_obligations_for_request(
+                    context
+                )
+                self.assertEqual(len(obligations), 1)
+                self.assertEqual(obligations[0].rule_id, f"entity:{entity_id}")
+                self.assertEqual(obligations[0].canonical_target, canonical)
+                with _active_translation_profile("url"):
+                    cross_profile = translator_module._resolve_entity_request_context(
+                        source
+                    )
+                self.assertEqual(
+                    tuple(row.entity.entity_id for row in cross_profile.activations),
+                    (entity_id,),
+                )
+
     def test_active_profile_does_not_globally_allow_unrelated_hangul_name(self):
         engine = _route_engine("deepseek", "今天是모카的直播")
         with _active_translation_profile("url"):
@@ -3032,6 +3062,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         event = SentenceEvent(
             text="현재 문장",
             profile_id="url",
+            profile_snapshot=profile_state.legacy_snapshot("url"),
             sentence_id="sentence-000001",
             enqueued_at_monotonic=time.monotonic(),
             activity_snapshot=snapshot,
@@ -4013,6 +4044,23 @@ class TestPreserveAsIsAcceptance(unittest.TestCase):
 
 
 class TestFallbackProbe(unittest.TestCase):
+    def test_shared_state_exposes_one_first_class_conversation_history(self):
+        shared = translator_module._new_translator_shared_state()
+
+        self.assertIs(shared.history, shared.memory.history)
+
+    def test_profile_hint_change_does_not_change_session_history_owner(self):
+        t = _make_translator()
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with bind_profile_id("url"), bind_activity_snapshot(snapshot):
+            url_cohort = t._history_cohort()
+        with bind_profile_id("isegye_lilpa"), bind_activity_snapshot(snapshot):
+            lilpa_cohort = t._history_cohort()
+
+        self.assertEqual(url_cohort, lilpa_cohort)
+        self.assertEqual(url_cohort[0], t._history_session())
+
     def test_primary_and_fallback_receive_same_selected_history_cohort(self):
         from dataclasses import replace
 
@@ -4024,10 +4072,10 @@ class TestFallbackProbe(unittest.TestCase):
             capture_activity_snapshot("League of Legends", source="manual"),
             cohort_epoch=7,
         )
-        cohort = ("hades_chxxnnx", "league_of_legends", 7)
+        cohort = (t._history_session(), "league_of_legends", 7)
         t._memory.record_recent_context("前句", "先前", False, cohort)
         t._memory.record_recent_context(
-            "聊天", "聊天內容", False, ("hades_chxxnnx", "chatting", 6)
+            "聊天", "聊天內容", False, (t._history_session(), "chatting", 6)
         )
 
         with bind_profile_id("hades_chxxnnx"), bind_activity_snapshot(snapshot):
@@ -5834,10 +5882,12 @@ class TestProvisionalPromotion(unittest.TestCase):
         self.assertIsNotNone(snapshot)
         cohort = translator._history_cohort()
         history = translator._memory_state().context(cohort)
+        profile_snapshot = translator_module.bound_profile_snapshot()
+        self.assertIsNotNone(profile_snapshot)
         entity_context = translator_module._resolve_entity_request_context(source)
         system_prompt = translator._build_system_prompt(entity_context.capsule)
         obligations = translator_module._canonical_obligations_for_request(
-            source, entity_context
+            entity_context
         )
         request_protection = translator_module._request_protection_for(
             source, entity_context, obligations
@@ -5853,7 +5903,8 @@ class TestProvisionalPromotion(unittest.TestCase):
                 prepared_source=source,
                 source_utterance_ids=source_ids,
                 evidence_source_utterance_ids=evidence_ids,
-                profile_id=cohort[0],
+                profile_id=profile_snapshot.effective_profile_id,
+                profile_cache_identity=profile_snapshot.cache_identity,
                 activity_cache_identity=snapshot.cache_identity,
                 history_cohort=cohort,
                 messages=messages,
