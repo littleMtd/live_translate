@@ -105,5 +105,3 @@ class ConversationHistory:
         else:
             self._by_cohort.move_to_end(cohort)
         return recent
-
-\n

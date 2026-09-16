@@ -30,5 +30,3 @@ class LiveSessionSnapshot:
             (activity.activity_id if activity is not None else "") or "unknown",
             max(0, int(activity.cohort_epoch or 0)) if activity is not None else 0,
         )
-
-\n

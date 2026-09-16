@@ -25,5 +25,3 @@ def test_live_sessions_do_not_share_history_namespace():
         LiveSessionSnapshot("session-a").history_cohort(activity)
         != LiveSessionSnapshot("session-b").history_cohort(activity)
     )
-
-\n
