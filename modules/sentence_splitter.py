@@ -21,7 +21,10 @@ from modules.pipeline_events import (
     transcription_text,
     transcription_to_sentence,
 )
-from modules.provisional_subtitles import ProvisionalRequest
+from modules.provisional_subtitles import (
+    ProvisionalRequest,
+    deepseek_provisional_eligible,
+)
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
 from modules.sentence_hold_shadow import (
     UnfinishedTail,
@@ -549,7 +552,7 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 cut is None
                 and provisional_queue is not None
                 and bool(getattr(cfg.splitter, "provisional_enabled", False))
-                and str(getattr(cfg.translation, "deepseek_route", "off")) == "primary"
+                and deepseek_provisional_eligible(cfg)
                 and not active_provisional_id
             ):
                 provisional = buffer.provisional_snapshot(now)

@@ -15,7 +15,6 @@ from modules.translation_engines import (
     reset_last_engine_diagnostics,
     reset_last_token_usage,
     build_effective_deepseek_messages,
-    build_effective_qwen_messages,
     DeepSeekTranslationEngine,
 )
 
@@ -130,21 +129,21 @@ class TestCompactProfileDigest(unittest.TestCase):
     def _compact_prompt(engine: str, profile: str, use_profile: bool) -> str:
         from config import cfg
 
-        compact_field = (
-            "groq_translation_compact_prompt" if engine == "groq" else "openrouter_compact_prompt"
-        )
+        compact_field = "groq_translation_compact_prompt" if engine == "groq" else None
         original = {
-            "compact": getattr(cfg.translation, compact_field),
+            "compact": getattr(cfg.translation, compact_field) if compact_field else None,
             "profile": cfg.translation.streamer_profile,
             "use_profile": cfg.translation.use_profile,
         }
-        object.__setattr__(cfg.translation, compact_field, True)
+        if compact_field:
+            object.__setattr__(cfg.translation, compact_field, True)
         object.__setattr__(cfg.translation, "streamer_profile", profile)
         object.__setattr__(cfg.translation, "use_profile", use_profile)
         try:
             return effective_system_prompt_for_engine(engine, "FULL PRIMARY PROMPT")
         finally:
-            object.__setattr__(cfg.translation, compact_field, original["compact"])
+            if compact_field:
+                object.__setattr__(cfg.translation, compact_field, original["compact"])
             object.__setattr__(cfg.translation, "streamer_profile", original["profile"])
             object.__setattr__(cfg.translation, "use_profile", original["use_profile"])
 
@@ -157,31 +156,9 @@ class TestCompactProfileDigest(unittest.TestCase):
         self.assertIn("유아렐/유아엘=UR:L", prompt)
         self.assertIn("Wish Me Love", prompt)
 
-    def test_openrouter_uses_benchmarked_domain_capsule(self):
-        import hashlib
-
-        prompt = self._compact_prompt("openrouter", "url", use_profile=True)
-
-        self.assertIn("You translate noisy live-stream subtitles", prompt)
-        self.assertIn("never invent or complete missing meaning", prompt)
-        self.assertIn("Never copy or import", prompt)
-        self.assertIn("never reverse who does/wants what", prompt)
-        self.assertIn("name, number, or fact that appears only in history", prompt)
-        self.assertIn("Preserve coherent English normally", prompt)
-        self.assertIn("[Active profile facts]", prompt)
-        self.assertIn("유아렐/유아엘=UR:L", prompt)
-        self.assertIn("Wish Me Love", prompt)
-        self.assertNotIn("Fixed name renderings", prompt)
-        self.assertEqual(
-            hashlib.sha256(prompt.encode()).hexdigest(),
-            "c98084f74f833f8a3bf24afc185e33b93ef7b2cc760b1cb297c05e8a4f0d07ff",
-        )
-
     def test_deepseek_uses_dedicated_production_contract(self):
         deepseek = self._compact_prompt("deepseek", "irise", use_profile=True)
-        qwen = self._compact_prompt("openrouter", "irise", use_profile=True)
 
-        self.assertNotEqual(deepseek, qwen)
         self.assertIn("You translate spoken Korean", deepseek)
         self.assertIn(
             "Do not mechanically translate an obviously malformed STT token",
@@ -216,7 +193,7 @@ class TestCompactProfileDigest(unittest.TestCase):
         self.assertIn("Chaenna", prompt)
 
     def test_no_digest_without_use_profile(self):
-        for engine in ("groq", "openrouter"):
+        for engine in ("groq", "deepseek"):
             prompt = self._compact_prompt(engine, "url", use_profile=False)
             self.assertNotIn("Fixed name renderings", prompt)
             self.assertNotIn("솜먕", prompt)
@@ -239,7 +216,7 @@ class TestCompactProfileDigest(unittest.TestCase):
             "  StarCraft   ladder  " + ("x" * 100),
         )
         try:
-            for engine in ("groq", "openrouter"):
+            for engine in ("groq", "deepseek"):
                 prompt = self._compact_prompt(engine, "url", use_profile=True)
                 self.assertEqual(
                     prompt.count("[Background] Current stream activity:"),
@@ -256,11 +233,11 @@ class TestCompactProfileDigest(unittest.TestCase):
                     len(line.removeprefix("[Background] Current stream activity: ")),
                     80,
                 )
-                self.assertLess(
-                    prompt.index("[Background]"),
-                    prompt.index("Final check before answering:"),
-                    engine,
-                )
+                if engine == "groq":
+                    self.assertLess(
+                        prompt.index("[Background]"),
+                        prompt.index("Final check before answering:"),
+                    )
         finally:
             object.__setattr__(cfg.translation, "current_activity", original)
 
@@ -317,96 +294,6 @@ class TestGroqRetryExceptionContract(unittest.TestCase):
         self.assertEqual(diagnostics["retry_reason"], "token_limit_without_history")
 
 
-class TestDeepLCacheSignature(unittest.TestCase):
-    """DeepL ignores the system prompt, so its cache identity (review P1) must
-    come from the settings that actually shape a DeepL response — and must NOT
-    follow the LLM prompt text."""
-
-    @staticmethod
-    def _signature(**overrides) -> str:
-        from config import cfg
-
-        fields = (
-            "deepl_target_lang", "deepl_context_window",
-            "deepl_history_source_chars", "deepl_history_target_chars",
-            "current_activity", "streamer_profile", "use_profile",
-        )
-        original = {name: getattr(cfg.translation, name) for name in fields}
-        try:
-            for name, value in overrides.items():
-                object.__setattr__(cfg.translation, name, value)
-            return effective_system_prompt_for_engine("deepl", "FULL PRIMARY PROMPT")
-        finally:
-            for name, value in original.items():
-                object.__setattr__(cfg.translation, name, value)
-
-    def test_signature_is_not_the_system_prompt(self):
-        self.assertNotIn(
-            "FULL PRIMARY PROMPT",
-            self._signature(),
-            "DeepL never sees the LLM prompt; hashing it over-rotates the cache",
-        )
-
-    def test_llm_prompt_text_does_not_change_signature(self):
-        self.assertEqual(
-            effective_system_prompt_for_engine("deepl", "PROMPT A"),
-            effective_system_prompt_for_engine("deepl", "PROMPT B"),
-        )
-
-    def test_target_lang_changes_signature(self):
-        self.assertNotEqual(
-            self._signature(deepl_target_lang="ZH-HANT"),
-            self._signature(deepl_target_lang="EN"),
-        )
-
-    def test_context_budget_changes_signature(self):
-        self.assertNotEqual(
-            self._signature(deepl_context_window=2),
-            self._signature(deepl_context_window=0),
-        )
-
-    def test_current_activity_changes_signature(self):
-        self.assertNotEqual(
-            self._signature(current_activity="StarCraft"),
-            self._signature(current_activity="Hades"),
-        )
-
-    def test_current_activity_signature_uses_normalized_single_line(self):
-        self.assertEqual(
-            self._signature(current_activity="  StarCraft   ladder  "),
-            self._signature(current_activity="StarCraft ladder"),
-        )
-
-    def test_profile_facts_change_signature(self):
-        self.assertNotEqual(
-            self._signature(streamer_profile="url", use_profile=True),
-            self._signature(streamer_profile="isegye_lilpa", use_profile=True),
-        )
-
-    def test_deepl_context_contains_url_core_facts_and_two_history_items(self):
-        from config import cfg
-        from modules.translation_engines import _deepl_context
-
-        original_profile = cfg.translation.streamer_profile
-        original_use = cfg.translation.use_profile
-        object.__setattr__(cfg.translation, "streamer_profile", "url")
-        object.__setattr__(cfg.translation, "use_profile", True)
-        try:
-            context, count = _deepl_context([
-                ("old", "舊"),
-                ("유아렐 신곡", "UR:L新歌"),
-                ("URL 링크", "URL網址"),
-            ])
-        finally:
-            object.__setattr__(cfg.translation, "streamer_profile", original_profile)
-            object.__setattr__(cfg.translation, "use_profile", original_use)
-
-        self.assertEqual(count, 2)
-        self.assertIn("유아렐/유아엘=UR:L", context)
-        self.assertIn("Wish Me Love", context)
-        self.assertNotIn("Recent subtitle: old", context)
-
-
 class TestAdaptivePrimaryHistory(unittest.TestCase):
     def test_base_and_dependency_windows(self):
         from config import cfg
@@ -451,9 +338,6 @@ class TestEngineRegistry(unittest.TestCase):
         original_keys = cfg.keys
         empty_keys = replace(
             original_keys,
-            anthropic="",
-            google_translate="",
-            deepl="",
             nvidia="",
             openrouter="",
             groq_fallback="",
@@ -525,32 +409,6 @@ class TestDeepSeekTranslationAdapter(unittest.TestCase):
         self.assertEqual(get_last_token_usage()["cache_read"], 80)
         self.assertEqual(get_last_token_usage()["cache_write"], 20)
 
-    def test_qwen_message_builder_is_immutable(self):
-        messages = build_effective_qwen_messages(
-            "현재 문장",
-            "unused full prompt",
-            False,
-            [("문맥1", "脈絡1"), ("문맥2", "脈絡2")],
-        )
-        self.assertIsInstance(messages, tuple)
-        self.assertTrue(all(isinstance(message, tuple) for message in messages))
-        self.assertEqual(messages[-1][0], "user")
-        self.assertIn("현재 문장", messages[-1][1])
-
-    def test_deepseek_and_qwen_share_structure_but_not_system_prompt(self):
-        history = [("문맥1", "脈絡1"), ("문맥2", "脈絡2")]
-        deepseek = build_effective_deepseek_messages(
-            "현재 문장", "unused full prompt", False, history
-        )
-        qwen = build_effective_qwen_messages(
-            "현재 문장", "unused full prompt", False, history
-        )
-
-        self.assertNotEqual(deepseek[0], qwen[0])
-        self.assertEqual(deepseek[1:], qwen[1:])
-        self.assertIn("overwhelmingly more likely", deepseek[0][1])
-        self.assertIn("You translate noisy live-stream subtitles", qwen[0][1])
-
     def test_deepseek_cost_is_unknown_when_usage_is_missing_or_incomplete(self):
         engine = DeepSeekTranslationEngine()
         self.assertIsNone(engine._cost_usd({}))
@@ -567,11 +425,9 @@ class TestDeepSeekTranslationAdapter(unittest.TestCase):
         from config import cfg
 
         original_route = cfg.translation.deepseek_route
-        original_chain = cfg.translation.engine_chain
         original_mode = cfg.translation.translation_mode
         try:
             object.__setattr__(cfg.translation, "translation_mode", "live")
-            object.__setattr__(cfg.translation, "engine_chain", ("groq",))
             object.__setattr__(cfg.translation, "deepseek_route", "primary")
             self.assertEqual(
                 effective_engine_chain_names(),
@@ -584,5 +440,4 @@ class TestDeepSeekTranslationAdapter(unittest.TestCase):
             )
         finally:
             object.__setattr__(cfg.translation, "deepseek_route", original_route)
-            object.__setattr__(cfg.translation, "engine_chain", original_chain)
             object.__setattr__(cfg.translation, "translation_mode", original_mode)

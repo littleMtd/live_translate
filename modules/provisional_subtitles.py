@@ -8,6 +8,7 @@ import json
 import threading
 from typing import Any, Callable
 
+from config import cfg
 from modules.activity_context import ActivitySnapshot
 from modules.profile_context import ProfileSnapshot
 
@@ -131,3 +132,14 @@ class ProvisionalStore:
     def is_closed(self, provisional_id: str) -> bool:
         with self._lock:
             return provisional_id in self._closed
+
+
+def deepseek_provisional_eligible(config=None) -> bool:
+    """Return whether the selected backend owns DeepSeek provisional work."""
+    config = config or cfg
+    mode = str(getattr(config.translation, "translation_mode", "live") or "live")
+    backend = config.clip_engine if mode == "clip" else config.live_engine
+    return (
+        backend == "deepseek"
+        and str(getattr(config.translation, "deepseek_route", "off")) == "primary"
+    )

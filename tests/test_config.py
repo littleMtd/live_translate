@@ -28,13 +28,11 @@ class TestConfig(unittest.TestCase):
         self.assertGreater(cfg.splitter.force_cut_seconds,
                            cfg.splitter.min_wait_seconds)
 
-    def test_translation_engine_chain_valid(self):
-        from config import _VALID_ENGINE_NAMES
+    def test_translation_backends_are_fixed_routes(self):
+        from config import _VALID_BACKEND_MODES
 
-        self.assertIsInstance(cfg.translation.engine_chain, tuple)
-        for name in cfg.translation.engine_chain:
-            self.assertIn(name, _VALID_ENGINE_NAMES)
-        self.assertNotIn("deepseek", _VALID_ENGINE_NAMES)
+        self.assertEqual(_VALID_BACKEND_MODES, {"deepseek", "ollama", "nvidia"})
+        self.assertFalse(hasattr(cfg.translation, "engine_chain"))
 
     def test_deepseek_primary_and_emergency_off_are_explicit(self):
         from config import _Translation
@@ -43,31 +41,17 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.translation.deepseek_model, "deepseek-v4-flash")
         with self.assertRaisesRegex(ValueError, "deepseek_route invalid"):
             _Translation(deepseek_route="automatic")
-        self.assertEqual(
-            _Translation(deepseek_route="off").engine_chain,
-            ("groq",),
-        )
+        self.assertEqual(_Translation(deepseek_route="off").deepseek_route, "off")
         with self.assertRaisesRegex(ValueError, "positive integer"):
             _Translation(deepseek_max_tokens=0)
 
     def test_live_fallback_chain_keeps_protected_base_order(self):
-        self.assertEqual(cfg.live_engine, "anthropic")
-        self.assertEqual(cfg.clip_engine, "anthropic")
-        self.assertEqual(
-            cfg.translation.engine_chain,
-            ("groq",),
-        )
-        self.assertEqual(
-            cfg.translation.openrouter_model,
-            "qwen/qwen3-next-80b-a3b-instruct",
-        )
-        self.assertEqual(cfg.translation.openrouter_max_tokens, 160)
+        self.assertEqual(cfg.live_engine, "deepseek")
+        self.assertEqual(cfg.clip_engine, "deepseek")
         self.assertTrue(cfg.translation.circuit_breaker_enabled)
         self.assertEqual(cfg.translation.circuit_recovery_success_threshold, 2)
         self.assertGreater(cfg.translation.live_total_deadline_sec, 0)
         self.assertEqual(cfg.translation.live_route_max_inflight, 2)
-        self.assertEqual(cfg.translation.claude_timeout, 5.0)
-        self.assertEqual(cfg.translation.google_translate_timeout, 5.0)
 
     def test_translation_reliability_limits_are_validated(self):
         from config import _Translation
@@ -89,8 +73,6 @@ class TestConfig(unittest.TestCase):
             with self.subTest(live_route_max_inflight=value):
                 with self.assertRaisesRegex(ValueError, "between 1 and 8"):
                     _Translation(live_route_max_inflight=value)
-        with self.assertRaisesRegex(ValueError, "must be unique"):
-            _Translation(engine_chain=("groq", "groq"))
 
     def test_scene_vision_route_is_explicit_groq_only(self):
         self.assertEqual(cfg.scene.vision_provider, "groq")

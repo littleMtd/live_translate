@@ -29,7 +29,7 @@ def test_ui_rendered_fields_present():
     # CacheStats). If config.py renames or drops one, the panel breaks.
     d = _export()
     assert d["stt"]["primary_engine"] in ("sensevoice", "groq", "elevenlabs")
-    assert isinstance(d["translation"]["engine_chain"], list)
+    assert d["live_engine"] == "deepseek"
     for field in ("max_tokens", "temperature", "target_lang"):
         assert field in d["translation"], f"translation.{field} missing from export"
     for field in ("font_family", "font_size", "font_style", "alpha", "idle_hide_ms"):
@@ -54,5 +54,8 @@ def test_dropped_translation_fields_absent():
     # Regression: these were removed from config.py; the Rust DTO no longer requires
     # them. Their reappearance would signal an accidental revert.
     d = _export()
-    for stale in ("gemini_model", "evolve_enabled", "evolve_every"):
+    for stale in (
+        "gemini_model", "evolve_enabled", "evolve_every", "engine_chain",
+        "model", "google_translate_lang", "openrouter_model", "deepl_target_lang",
+    ):
         assert stale not in d["translation"], f"unexpected stale field: {stale}"

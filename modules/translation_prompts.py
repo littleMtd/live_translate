@@ -44,8 +44,8 @@ def get_translation_profile_facts(profile_id: str) -> str:
     """Return the compact glossary block shared with fallback contexts.
 
     Profile files put exact mappings before the first blank line and examples
-    afterwards. Reusing that block keeps DeepL/Groq/OpenRouter aligned with the
-    live Qwen profile without introducing another hand-maintained fact table.
+    afterwards. Reusing that block keeps the active provider contracts aligned
+    without introducing another hand-maintained fact table.
     """
     profile = get_translation_profile(profile_id, qwen=True).strip()
     return profile.split("\n\n", 1)[0].strip() if profile else ""
@@ -149,51 +149,21 @@ def _is_qwen_model() -> bool:
     """Return whether the route that owns the shared prompt is a Qwen model."""
     mode = str(getattr(cfg.translation, "translation_mode", "live") or "live")
     backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
-    if (
-        mode == "live"
-        and backend == "anthropic"
-        and str(getattr(cfg.translation, "deepseek_route", "off")) == "primary"
-    ):
-        return True
-    elif backend == "nvidia":
+    if backend == "nvidia":
         model = cfg.nvidia.model
     elif backend == "ollama":
         model = cfg.ollama.model
     else:
-        configured = {
-            "claude": bool(cfg.keys.anthropic),
-            "google_translate": bool(cfg.keys.google_translate),
-            "deepl": bool(cfg.keys.deepl),
-            "openrouter": bool(cfg.keys.openrouter),
-            "deepseek": bool(cfg.keys.deepseek),
-            "groq": bool(cfg.keys.groq_fallback),
-        }
-        models = {
-            "claude": cfg.translation.model,
-            "google_translate": "google-translate-v2",
-            "deepl": "deepl-api-v2",
-            "openrouter": cfg.translation.openrouter_model,
-            "deepseek": cfg.translation.deepseek_model,
-            "groq": cfg.translation.groq_translation_model,
-        }
-        model = next(
-            (
-                models.get(name, "")
-                for name in cfg.translation.engine_chain
-                if configured.get(name, False)
-            ),
-            "",
-        )
+        model = cfg.translation.deepseek_model
     return "qwen" in str(model or "").lower()
 
 
 def _build_base_prompt() -> str:
-    """生成通用 system prompt——目前僅供 benchmark 非 qwen 模型時使用。
+    """Build the shared prompt for the selected translation model family.
 
-    Live 路徑三個引擎全是 qwen(nvidia 走 _QWEN_PROMPT、groq/openrouter 走
-    compact prompt),因此 2026-07 起的 prompt 修正(數字與金額、人名規則收緊、
-    防複誦)只維護在 _QWEN_PROMPT。若要把 live 引擎換成非 qwen 模型,先把那些
-    修正移植過來——tests/test_translation_prompts.py 的守門測試會擋住你。"""
+    NVIDIA and Ollama may still select the Qwen profile when their configured
+    model is Qwen. DeepSeek owns its request contract in translation_engines.
+    """
     slang_lines = "\n".join(f"  {k} → {v}" for k, v in cfg.translation.slang.items())
     slang_part = (
         f"\n【常用詞彙對照】（以下詞彙出現於句子中時，請依此翻譯）\n{slang_lines}"

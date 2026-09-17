@@ -1,11 +1,5 @@
-import sys
-
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
-for _mod in ("anthropic", "google", "google.genai"):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
-
 import queue
 import tempfile
 import threading
@@ -15,11 +9,10 @@ import unittest.mock
 import modules.translation_engines as translation_engines_module
 import modules.translator as translator_module
 from modules.translation_engines import (
-    _build_engine_chain, _build_user_message, TranslationEngine, ClaudeEngine, GoogleTranslateEngine,
-    DeepLEngine, GroqTranslationEngine, NvidiaEngine, OpenRouterTranslationEngine, _deepl_base_url,
+    _build_engine_chain, _build_user_message, TranslationEngine,
+    GroqTranslationEngine, NvidiaEngine,
     get_last_engine_api_diagnostics, get_last_engine_diagnostics, get_last_token_usage,
     build_effective_deepseek_messages,
-    build_effective_qwen_messages,
 )
 from modules.provisional_subtitles import (
     ProvisionalCandidate,
@@ -594,7 +587,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
     def test_unactivated_entity_target_uses_fallback_without_switching_route(self):
         translator = _make_translator()
         primary = _route_engine("deepseek", "Chaenna說要驗收。")
-        fallback = _route_engine("openrouter", "有人說要驗收。")
+        fallback = _route_engine("groq", "有人說要驗收。")
         translator._engines = [primary, fallback]
 
         with _active_translation_profile("hades_chxxnnx"):
@@ -602,20 +595,20 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.target_text, "有人說要驗收。")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertEqual(translator._active_idx, 0)
 
     def test_final_provider_output_uses_same_traditional_guard_and_fallback(self):
         translator = _make_translator()
         primary = _route_engine("deepseek", "后台的样子很夸张。")
-        fallback = _route_engine("openrouter", "後臺的樣子很誇張。")
+        fallback = _route_engine("groq", "後臺的樣子很誇張。")
         translator._engines = [primary, fallback]
 
         outcome = translator.translate_event("백스테이지 모습이 너무 과장됐어.")
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.target_text, "後臺的樣子很誇張。")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
 
     def test_uncertain_honorific_source_is_not_claimed_by_translation_guard(self):
         engine = MagicMock()
@@ -1116,267 +1109,6 @@ class TestBuildUserMessage(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# ClaudeEngine unit tests
-# ---------------------------------------------------------------------------
-
-class TestClaudeEngine(unittest.TestCase):
-
-    def _make_engine(self, resp_text: str = "你好", side_effect=None) -> ClaudeEngine:
-        e = ClaudeEngine.__new__(ClaudeEngine)
-        e._client = MagicMock()
-        e._timeout = 5.0
-        if side_effect:
-            e._client.messages.create.side_effect = side_effect
-        else:
-            e._client.messages.create.return_value = _claude_resp(resp_text)
-        return e
-
-    def test_returns_translated_text(self):
-        e = self._make_engine("你好")
-        self.assertEqual(e.translate("안녕하세요", _sys_prompt(_make_translator()), False), "你好")
-
-    def test_strips_whitespace(self):
-        e = self._make_engine("  你好  ")
-        self.assertEqual(e.translate("안녕하세요", _sys_prompt(_make_translator()), False), "你好")
-
-    def test_returns_none_on_exception(self):
-        e = self._make_engine(side_effect=Exception("API down"))
-        self.assertIsNone(e.translate("안녕하세요", _sys_prompt(_make_translator()), False))
-
-    def test_timeout_exposes_route_cap_and_provider_diagnostics(self):
-        e = self._make_engine(side_effect=TimeoutError("timed out"))
-
-        self.assertIsNone(
-            e.translate("안녕하세요", _sys_prompt(_make_translator()), False)
-        )
-
-        diagnostics = get_last_engine_api_diagnostics()
-        self.assertEqual(e.request_timeout_seconds, 5.0)
-        self.assertEqual(diagnostics["api_attempt_count"], 1)
-        self.assertEqual(diagnostics["api_timeout_count"], 1)
-        self.assertEqual(diagnostics["api_error_type"], "timeout")
-        self.assertEqual(
-            diagnostics["api_error_message_class"],
-            "read_timeout",
-        )
-
-    def test_http_status_diagnostics_distinguish_provider_and_auth(self):
-        class StatusError(Exception):
-            def __init__(self, status_code):
-                super().__init__(f"HTTP {status_code}")
-                self.status_code = status_code
-
-        for status_code, expected_class in ((503, "http_5xx"), (401, "http_4xx")):
-            with self.subTest(status_code=status_code):
-                e = self._make_engine(side_effect=StatusError(status_code))
-                self.assertIsNone(e.translate("안녕하세요", "system", False))
-                self.assertEqual(
-                    get_last_engine_api_diagnostics()[
-                        "api_error_message_class"
-                    ],
-                    expected_class,
-                )
-
-    def test_returns_none_when_client_is_none(self):
-        e = ClaudeEngine.__new__(ClaudeEngine)
-        e._client = None
-        self.assertIsNone(e.translate("안녕하세요", "system", False))
-
-
-
-
-# ---------------------------------------------------------------------------
-# GoogleTranslateEngine unit tests
-# ---------------------------------------------------------------------------
-
-class TestGoogleTranslateEngine(unittest.TestCase):
-
-    def _call(self, resp_text: str = "你好", side_effect=None, text: str = "안녕하세요") -> "str | None":
-        import json
-        e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
-        e._api_key = "fake-key"
-        e._target_lang = "zh-TW"
-        e._timeout = 5.0
-        if side_effect:
-            with patch("urllib.request.urlopen", side_effect=side_effect):
-                return e.translate(text, "system", False)
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = json.dumps(
-            {"data": {"translations": [{"translatedText": resp_text}]}}
-        ).encode()
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            return e.translate(text, "system", False)
-
-    def test_returns_translated_text(self):
-        self.assertEqual(self._call("你好"), "你好")
-
-    def test_strips_whitespace(self):
-        self.assertEqual(self._call("  你好  "), "你好")
-
-    def test_returns_none_on_exception(self):
-        self.assertIsNone(self._call(side_effect=Exception("network down")))
-
-    def test_timeout_exposes_route_cap_and_provider_diagnostics(self):
-        import socket
-        import urllib.error
-
-        e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
-        e._api_key = "fake-key"
-        e._target_lang = "zh-TW"
-        e._timeout = 5.0
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError(socket.timeout("timed out")),
-        ):
-            self.assertIsNone(e.translate("안녕하세요", "system", False))
-
-        diagnostics = get_last_engine_api_diagnostics()
-        self.assertEqual(e.request_timeout_seconds, 5.0)
-        self.assertEqual(diagnostics["api_attempt_count"], 1)
-        self.assertEqual(diagnostics["api_timeout_count"], 1)
-        self.assertEqual(diagnostics["api_error_type"], "timeout")
-        self.assertEqual(
-            diagnostics["api_error_message_class"],
-            "read_timeout",
-        )
-
-    def test_http_status_diagnostics_distinguish_provider_and_auth(self):
-        import urllib.error
-
-        for status_code, expected_class in ((503, "http_5xx"), (401, "http_4xx")):
-            with self.subTest(status_code=status_code):
-                error = urllib.error.HTTPError(
-                    "https://translation.googleapis.com",
-                    status_code,
-                    "failure",
-                    {},
-                    None,
-                )
-                self.assertIsNone(self._call(side_effect=error))
-                self.assertEqual(
-                    get_last_engine_api_diagnostics()[
-                        "api_error_message_class"
-                    ],
-                    expected_class,
-                )
-
-    def test_returns_none_when_api_key_empty(self):
-        e = GoogleTranslateEngine.__new__(GoogleTranslateEngine)
-        e._api_key = ""
-        e._target_lang = "zh-TW"
-        self.assertIsNone(e.translate("안녕하세요", "system", False))
-
-    def test_ignores_system_prompt_and_incomplete(self):
-        # Direct-translation engine — system_prompt / incomplete do not affect output
-        self.assertEqual(self._call("你好", text="안녕하세요"), "你好")
-        self.assertEqual(self._call("你好", text="안녕하세요"), "你好")
-
-
-# ---------------------------------------------------------------------------
-# DeepLEngine unit tests
-# ---------------------------------------------------------------------------
-
-class TestDeepLEngine(unittest.TestCase):
-
-    def _engine(self, api_key: str = "fake-key:fx") -> DeepLEngine:
-        e = DeepLEngine.__new__(DeepLEngine)
-        e._api_key = api_key
-        e._target_lang = "ZH-HANT"
-        e._timeout = 4.0
-        e._base_url = _deepl_base_url(api_key)
-        return e
-
-    @staticmethod
-    def _response(text: str):
-        import json
-
-        response = MagicMock()
-        response.__enter__ = MagicMock(return_value=response)
-        response.__exit__ = MagicMock(return_value=False)
-        response.read.return_value = json.dumps({
-            "translations": [{"text": text, "billed_characters": 8}],
-        }).encode()
-        return response
-
-    def test_free_key_uses_free_endpoint_and_short_context(self):
-        import json
-
-        engine = self._engine()
-        with patch("urllib.request.urlopen", return_value=self._response("大家好")) as urlopen:
-            result = engine.translate("안녕하세요", "ignored system prompt", False,
-                                      [("방송 시작", "直播開始")])
-
-        self.assertEqual(result, "大家好")
-        request = urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "https://api-free.deepl.com/v2/translate")
-        headers = {key.lower(): value for key, value in request.header_items()}
-        self.assertEqual(headers["authorization"], "DeepL-Auth-Key fake-key:fx")
-        self.assertEqual(headers["accept"], "application/json")
-        payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(payload["source_lang"], "KO")
-        self.assertEqual(payload["target_lang"], "ZH-HANT")
-        self.assertIn("Recent subtitle: 방송 시작 -> 直播開始.", payload["context"])
-        self.assertNotIn("custom_instructions", payload)
-
-    def test_uses_certifi_ssl_context(self):
-        engine = self._engine()
-        ssl_context = object()
-        with patch.object(
-            translation_engines_module,
-            "_deepl_ssl_context",
-            return_value=ssl_context,
-        ), patch(
-            "urllib.request.urlopen",
-            return_value=self._response("ok"),
-        ) as urlopen:
-            self.assertEqual(engine.translate("hello", "system", False), "ok")
-
-        self.assertIs(urlopen.call_args.kwargs["context"], ssl_context)
-        self.assertEqual(urlopen.call_args.kwargs["timeout"], 4.0)
-
-    def test_certifi_ssl_context_keeps_verification_enabled(self):
-        import ssl
-
-        translation_engines_module._deepl_ssl_context.cache_clear()
-        try:
-            context = translation_engines_module._deepl_ssl_context()
-            self.assertTrue(context.check_hostname)
-            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
-            self.assertGreater(context.cert_store_stats()["x509_ca"], 0)
-        finally:
-            translation_engines_module._deepl_ssl_context.cache_clear()
-
-    def test_pro_key_uses_pro_endpoint(self):
-        self.assertEqual(_deepl_base_url("fake-key"), "https://api.deepl.com/v2")
-
-    def test_selects_direct_api_source_language_from_text(self):
-        import json
-
-        engine = self._engine()
-        cases = (
-            ("오늘은 즐거웠어요", "KO"),
-            ("Today was really fun", "EN"),
-            ("今日はとても楽しかったです", "JA"),
-            ("URL 멤버", "KO"),
-        )
-        for source, expected in cases:
-            with self.subTest(source=source), patch(
-                "urllib.request.urlopen", return_value=self._response("翻譯")
-            ) as urlopen:
-                self.assertEqual(engine.translate(source, "system", False), "翻譯")
-                payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
-                self.assertEqual(payload["source_lang"], expected)
-
-    def test_returns_none_without_key(self):
-        engine = self._engine("")
-        with patch("urllib.request.urlopen") as urlopen:
-            self.assertIsNone(engine.translate("안녕하세요", "system", False))
-        urlopen.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
 # GroqTranslationEngine unit tests
 # ---------------------------------------------------------------------------
 
@@ -1546,222 +1278,11 @@ class TestGroqTranslationEngine(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# OpenRouterTranslationEngine unit tests
-# ---------------------------------------------------------------------------
-
-class TestOpenRouterTranslationEngine(unittest.TestCase):
-
-    def _engine(self) -> OpenRouterTranslationEngine:
-        e = OpenRouterTranslationEngine.__new__(OpenRouterTranslationEngine)
-        e._api_key = "fake-openrouter-key"
-        e._model = "qwen/qwen3-next-80b-a3b-instruct"
-        e._timeout = 8
-        e._max_tokens = 200
-        e._strip_think = True
-        return e
-
-    def _response(self, content):
-        import json
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = json.dumps({
-            "choices": [{"message": {"content": content}}],
-            "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 7,
-                "total_tokens": 18,
-                "cost": 0.00012345,
-            },
-        }).encode()
-        return mock_resp
-
-    def test_request_uses_openrouter_endpoint_headers_and_selected_model(self):
-        import json
-
-        e = self._engine()
-        long_prompt = "full quality prompt " * 500
-
-        with _active_translation_profile("url"), \
-                patch("urllib.request.urlopen", return_value=self._response("translated")) as urlopen:
-            result = e.translate("source", long_prompt, False)
-
-        self.assertEqual(result, "translated")
-        req = urlopen.call_args.args[0]
-        headers = {k.lower(): v for k, v in req.header_items()}
-        payload = json.loads(req.data.decode())
-
-        self.assertEqual(req.full_url, "https://openrouter.ai/api/v1/chat/completions")
-        self.assertEqual(headers["accept"], "application/json")
-        self.assertEqual(headers["authorization"], "Bearer fake-openrouter-key")
-        self.assertEqual(headers["user-agent"], "live_translate/1.0")
-        self.assertEqual(headers["http-referer"], "http://localhost/live_translate")
-        self.assertEqual(headers["x-title"], "live_translate")
-        self.assertEqual(payload["model"], "qwen/qwen3-next-80b-a3b-instruct")
-        self.assertEqual(payload["reasoning"], {"effort": "none", "exclude": True})
-        self.assertEqual(payload["max_tokens"], 200)
-        system_message = payload["messages"][0]["content"]
-        self.assertIn("noisy live-stream subtitles", system_message)
-        self.assertIn("Korean, English, or Japanese", system_message)
-        self.assertIn("[Active profile facts]", system_message)
-        self.assertIn("유아렐/유아엘=UR:L", system_message)
-        self.assertNotIn("full quality prompt", system_message)
-        self.assertEqual(
-            get_last_token_usage(),
-            {
-                "prompt": 11,
-                "output": 7,
-                "total": 18,
-                "cache_read": None,
-                "cache_write": None,
-            },
-        )
-        diagnostics = get_last_engine_api_diagnostics()
-        self.assertEqual(diagnostics["engine"], "openrouter")
-        self.assertEqual(diagnostics["api_attempt_count"], 1)
-        self.assertEqual(diagnostics["timeout_config_ms"], 8000)
-        self.assertEqual(diagnostics["api_cost_usd"], 0.00012345)
-
-    def test_limits_history_for_live_fallback(self):
-        import json
-        from config import cfg
-
-        e = self._engine()
-        history = [
-            (f"source-{i}-" + "x" * 240, f"target-{i}-" + "y" * 300)
-            for i in range(4)
-        ]
-        original_window = cfg.translation.openrouter_context_window
-
-        try:
-            object.__setattr__(cfg.translation, "openrouter_context_window", 2)
-            with patch("urllib.request.urlopen", return_value=self._response("ok")) as urlopen:
-                result = e.translate("hello", "system", False, history)
-        finally:
-            object.__setattr__(cfg.translation, "openrouter_context_window", original_window)
-
-        self.assertEqual(result, "ok")
-        req = urlopen.call_args.args[0]
-        payload = json.loads(req.data.decode())
-        messages = payload["messages"]
-
-        self.assertEqual(len(messages), 6)
-        self.assertNotIn("source-1-", str(messages))
-        self.assertIn("source-2-", messages[1]["content"])
-        self.assertIn("source-3-", messages[3]["content"])
-        self.assertIn("[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]", messages[1]["content"])
-        self.assertNotIn("[CONTEXT", messages[2]["content"])
-        self.assertTrue(messages[2]["content"].startswith("target-2-"))
-        self.assertIn("[CURRENT INPUT — TRANSLATE ONLY THIS]", messages[-1]["content"])
-        self.assertLessEqual(
-            len(messages[1]["content"]),
-            len("[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]\nsource: ") + 163,
-        )
-        self.assertLessEqual(len(messages[2]["content"]), 223)
-
-    def test_incomplete_current_input_forbids_clause_completion(self):
-        import json
-
-        e = self._engine()
-        with patch("urllib.request.urlopen", return_value=self._response("片段")) as urlopen:
-            result = e.translate("제가 저거 예전에...", "system", True)
-
-        self.assertEqual(result, "片段")
-        req = urlopen.call_args.args[0]
-        current = json.loads(req.data.decode())["messages"][-1]["content"]
-        self.assertIn("[CURRENT INPUT — TRANSLATE ONLY THIS]", current)
-        self.assertIn("translate only the meaning that is present", current)
-        self.assertIn("do not complete the missing clause", current)
-        self.assertNotIn("translate as best as possible", current)
-
-    def test_published_activity_reaches_production_openrouter_capsule(self):
-        import json
-        import time
-        from config import cfg
-        from modules.activity_context import (
-            AutomaticActivityPublication,
-            activity_publication_store,
-        )
-        from modules.translation_engines import engine_chain_config_key
-
-        e = self._engine()
-        translator = Translator()
-        translator._engines = [e]
-        translator._engines_key = engine_chain_config_key()
-        original_manual = cfg.translation.current_activity
-        original_enabled = cfg.scene.publish_translation_activity
-        activity_publication_store.replace(
-            AutomaticActivityPublication(
-                activity_id="league_of_legends",
-                display_label="League of Legends",
-                confirmed_at_utc="2026-08-12T00:00:00+00:00",
-                fresh_until_monotonic=time.monotonic() + 60,
-                confidence=1.0,
-                evidence_count=2,
-                activity_kind="game",
-            )
-        )
-        object.__setattr__(cfg.translation, "current_activity", "")
-        object.__setattr__(cfg.scene, "publish_translation_activity", True)
-        try:
-            with patch(
-                "urllib.request.urlopen",
-                return_value=self._response("現在回城吧"),
-            ) as urlopen:
-                outcome = translator.translate_event("집 가자, 지금은 귀환이야")
-        finally:
-            object.__setattr__(
-                cfg.scene,
-                "publish_translation_activity",
-                original_enabled,
-            )
-            object.__setattr__(cfg.translation, "current_activity", original_manual)
-            activity_publication_store.replace(None)
-
-        self.assertEqual(outcome.status, "success")
-        payload = json.loads(urlopen.call_args.args[0].data.decode())
-        system = payload["messages"][0]["content"]
-        current = payload["messages"][-1]["content"]
-        self.assertEqual(system.count("Current stream activity: League of Legends"), 1)
-        self.assertIn("집=recall/base", system)
-        self.assertIn("Never translate, mention, or copy it", system)
-        self.assertNotIn("League of Legends", current)
-        self.assertIn("집 가자, 지금은 귀환이야", current)
-
-    def test_returns_none_for_reasoning_only_or_empty_content(self):
-        e = self._engine()
-
-        with patch("urllib.request.urlopen", return_value=self._response(None)):
-            self.assertIsNone(e.translate("hello", "system", False))
-
-        with patch("urllib.request.urlopen", return_value=self._response("<think>notes only")):
-            self.assertIsNone(e.translate("hello", "system", False))
-
-    def test_timeout_records_structured_diagnostics(self):
-        import socket
-        import urllib.error
-
-        e = self._engine()
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError(socket.timeout("timed out")),
-        ):
-            self.assertIsNone(e.translate("hello", "system", False))
-
-        diagnostics = get_last_engine_api_diagnostics()
-        self.assertEqual(diagnostics["engine"], "openrouter")
-        self.assertEqual(diagnostics["api_attempt_count"], 1)
-        self.assertEqual(diagnostics["api_timeout_count"], 1)
-        self.assertEqual(diagnostics["timeout_config_ms"], 8000)
-        self.assertEqual(diagnostics["api_error_type"], "timeout")
-        self.assertEqual(diagnostics["api_error_message_class"], "read_timeout")
-
-
-class TestOpenRouterFallbackChain(unittest.TestCase):
+class TestTranslationFallbackChain(unittest.TestCase):
     def test_unknown_name_escrow_rejects_invention_and_reuses_mapping_on_fallback(self):
         primary = _route_engine("deepseek", "這件事跟師玉老師談的話。")
         fallback = _route_engine(
-            "openrouter",
+            "groq",
             "這件事跟__LT_UNK_1__談的話，他會說你還不行。",
         )
         translator = _make_translator()
@@ -1774,7 +1295,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         )
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertIn("\uc0ac\uc625\uc324", outcome.target_text)
         self.assertNotIn("師玉", outcome.target_text)
         attempts = translation_engines_module.get_translation_attempts()
@@ -1792,7 +1313,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
     def test_member_referent_protection_survives_primary_rejection_and_fallback(self):
         primary = _route_engine("deepseek", "有位叫키야的成員加入了。")
         fallback = _route_engine(
-            "openrouter", "有位叫__LT_UNK_1__的成員加入了。"
+            "groq", "有位叫__LT_UNK_1__的成員加入了。"
         )
         translator = _make_translator()
         translator._engines = [primary, fallback]
@@ -1806,7 +1327,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             history_after = translator._history_cohort()
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
         self.assertEqual(history_before, history_after)
         for engine in (primary, fallback):
@@ -1934,7 +1455,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "得去找莫奇。"),
-            _route_engine("openrouter", "得去找Mochi。"),
+            _route_engine("groq", "得去找Mochi。"),
             _route_engine("deepl", "得去找__LT_UNKNOWN_1__。"),
             _route_engine("groq", "得去找__LT_UNK_1____LT_UNK_1__。"),
         ]
@@ -2024,7 +1545,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "去找__LT_UNK_1__，也叫Mochi。"),
-            _route_engine("openrouter", "去找__LT_UNK_1__，也叫莫奇。"),
+            _route_engine("groq", "去找__LT_UNK_1__，也叫莫奇。"),
         ]
         translation_engines_module.reset_translation_call_trace()
 
@@ -2040,7 +1561,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
     def test_canonical_obligation_rejects_primary_and_accepts_fallback_without_health_change(self):
         primary = _route_engine("deepseek", "她來了。")
-        fallback = _route_engine("openrouter", "모카來了。")
+        fallback = _route_engine("groq", "모카來了。")
         translator = _make_translator()
         translator._engines = [primary, fallback]
         translator._active_idx = 0
@@ -2050,7 +1571,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             outcome = translator.translate_event("모카가 왔어", False)
 
         self.assertEqual(outcome.target_text, "모카來了。")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertEqual(translator._active_idx, 0)
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(attempts[0]["status"], "rejected_output")
@@ -2067,7 +1588,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
     def test_repeated_reviewed_entity_keeps_canonical_publication_ownership(self):
         primary = _route_engine("deepseek", "她來了又走了。")
-        fallback = _route_engine("openrouter", "랑코來了又走了。")
+        fallback = _route_engine("groq", "랑코來了又走了。")
         translator = _make_translator()
         translator._engines = [primary, fallback]
         translation_engines_module.reset_translation_call_trace()
@@ -2078,7 +1599,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             )
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         attempts = translation_engines_module.get_translation_attempts()
         evidence = attempts[0]["output_guard"]["canonical_obligations"]
         self.assertEqual(attempts[0]["output_guard"]["reason"], "canonical_obligation_missing")
@@ -2091,7 +1612,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "Moqaa來了。"),
-            _route_engine("openrouter", "她來了。"),
+            _route_engine("groq", "她來了。"),
         ]
         translation_engines_module.reset_translation_call_trace()
 
@@ -2109,7 +1630,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "摩卡來了。"),
-            _route_engine("openrouter", "不應被呼叫"),
+            _route_engine("groq", "不應被呼叫"),
         ]
         translation_engines_module.reset_translation_call_trace()
 
@@ -2349,9 +1870,9 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
     def test_flash_name_render_rescue_is_selected_and_keeps_raw_telemetry(self):
         flash = _route_engine("deepseek", "릴파")
-        qwen = _route_engine("openrouter", "不應被呼叫")
+        groq = _route_engine("groq", "不應被呼叫")
         translator = _make_translator()
-        translator._engines = [flash, qwen]
+        translator._engines = [flash, groq]
         translator._active_idx = 0
         translation_engines_module.reset_translation_call_trace()
 
@@ -2361,7 +1882,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.target_text, "Lilpa")
         self.assertEqual(outcome.engine, "deepseek")
-        qwen.translate_messages.assert_not_called()
+        groq.translate_messages.assert_not_called()
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(len(attempts), 1)
         self.assertTrue(attempts[0]["selected_for_output"])
@@ -2402,7 +1923,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 return True
 
             def translate(self, text, system_prompt, incomplete, history=None):
-                raise AssertionError("Qwen capsule route must use frozen messages")
+                raise AssertionError("compact routes must use frozen messages")
 
             def translate_messages(self, messages):
                 self.messages.append(messages)
@@ -2413,13 +1934,13 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             "deepseek-v4-flash",
             "這是乾淨的繁體中文結果",
         )
-        qwen = CapsuleEngine(
-            "openrouter",
-            "qwen/qwen3-next-80b-a3b-instruct",
+        groq = CapsuleEngine(
+            "groq",
+            "openai/gpt-oss-120b",
             "不應被呼叫",
         )
         translator = _make_translator()
-        translator._engines = [flash, qwen]
+        translator._engines = [flash, groq]
         translator._active_idx = 0
         translation_engines_module.reset_translation_call_trace()
 
@@ -2428,7 +1949,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertEqual(outcome.target_text, "這是乾淨的繁體中文結果")
         self.assertEqual(outcome.engine, "deepseek")
         self.assertEqual(len(flash.messages), 1)
-        self.assertEqual(qwen.messages, [])
+        self.assertEqual(groq.messages, [])
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(len(attempts), 1)
         self.assertTrue(attempts[0]["selected_for_output"])
@@ -2442,9 +1963,9 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
 
         self.assertEqual(cached, "這是乾淨的繁體中文結果")
         self.assertEqual(len(flash.messages), 1)
-        self.assertEqual(qwen.messages, [])
+        self.assertEqual(groq.messages, [])
 
-    def test_flash_script_guard_selects_qwen_without_candidate_state_leak(self):
+    def test_flash_script_guard_selects_groq_without_candidate_state_leak(self):
         class CapsuleEngine(TranslationEngine):
             def __init__(self, name: str, model: str, result: str):
                 self._name = name
@@ -2465,20 +1986,20 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 return True
 
             def translate(self, text, system_prompt, incomplete, history=None):
-                raise AssertionError("Qwen capsule route must use frozen messages")
+                raise AssertionError("compact routes must use frozen messages")
 
             def translate_messages(self, messages):
                 self.messages.append(messages)
                 return self._result
 
         flash = CapsuleEngine("deepseek", "deepseek-v4-flash", "這是느졋")
-        qwen = CapsuleEngine(
-            "openrouter",
-            "qwen/qwen3-next-80b-a3b-instruct",
+        groq = CapsuleEngine(
+            "groq",
+            "openai/gpt-oss-120b",
             "這是正式的繁體中文結果",
         )
         translator = _make_translator()
-        translator._engines = [flash, qwen]
+        translator._engines = [flash, groq]
         translator._active_idx = 0
         translation_engines_module.reset_translation_call_trace()
         reset_corrections()
@@ -2486,13 +2007,13 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         outcome = translator.translate_event("이것은 테스트 문장입니다", False)
 
         self.assertEqual(outcome.target_text, "這是正式的繁體中文結果")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertEqual(len(flash.messages), 1)
-        self.assertNotEqual(flash.messages, qwen.messages)
+        self.assertNotEqual(flash.messages, groq.messages)
         self.assertIn("overwhelmingly more likely", flash.messages[0][0][1])
         self.assertIn(
-            "You translate noisy live-stream subtitles",
-            qwen.messages[0][0][1],
+            "Traditional Chinese live subtitle translator",
+            groq.messages[0][0][1],
         )
         attempts = translation_engines_module.get_translation_attempts()
         self.assertEqual(attempts[0]["status"], "rejected_output")
@@ -2504,12 +2025,11 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
         self.assertTrue(attempts[1]["selected_for_output"])
         self.assertEqual(get_corrections(), [])
 
-    def test_invalid_qwen_and_deepl_script_residue_continue_to_valid_groq(self):
+    def test_rejected_primary_and_first_fallback_continue_to_valid_groq(self):
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "Flash느졋"),
-            _route_engine("openrouter", "Qwen느졋"),
-            _route_engine("deepl", "DeepLテスト"),
+            _route_engine("groq", "Fallback느졋"),
             _route_engine("groq", "Groq提供的有效繁體中文"),
         ]
         translator._active_idx = 0
@@ -2526,14 +2046,13 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             [(row["engine"], row["status"]) for row in attempts],
             [
                 ("deepseek", "rejected_output"),
-                ("openrouter", "rejected_output"),
-                ("deepl", "rejected_output"),
+                ("groq", "rejected_output"),
                 ("groq", "success"),
             ],
         )
         self.assertEqual(
-            [row["output_guard"]["reason"] for row in attempts[:3]],
-            ["unexpected_hangul", "unexpected_hangul", "unexpected_japanese"],
+            [row["output_guard"]["reason"] for row in attempts[:2]],
+            ["unexpected_hangul", "unexpected_hangul"],
         )
         self.assertTrue(attempts[-1]["selected_for_output"])
 
@@ -2599,7 +2118,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 original_mode,
             )
 
-        self.assertEqual(translator_module.cfg.live_engine, "anthropic")
+        self.assertEqual(translator_module.cfg.live_engine, "deepseek")
         self.assertEqual(
             [engine.engine_name for engine in engines],
             ["deepseek", "groq"],
@@ -2626,7 +2145,7 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
             ["groq"],
         )
 
-    def test_nvidia_backend_uses_openrouter_before_deepl_and_groq(self):
+    def test_nvidia_backend_uses_fixed_groq_fallback(self):
         from config import cfg
 
         class FakeEngine:
@@ -2649,15 +2168,9 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 return "ok"
 
         original_mode = cfg.translation.translation_mode
-        original_chain = cfg.translation.engine_chain
         original_live_engine = cfg.live_engine
         try:
             object.__setattr__(cfg.translation, "translation_mode", "live")
-            object.__setattr__(
-                cfg.translation,
-                "engine_chain",
-                ("openrouter", "deepl", "groq"),
-            )
             object.__setattr__(cfg, "live_engine", "nvidia")
             # Patch the registry boundary actually used by _build_engine_chain.
             # Patching class names is ineffective because EngineSpec factories
@@ -2671,38 +2184,12 @@ class TestOpenRouterFallbackChain(unittest.TestCase):
                 engines = _build_engine_chain()
         finally:
             object.__setattr__(cfg.translation, "translation_mode", original_mode)
-            object.__setattr__(cfg.translation, "engine_chain", original_chain)
             object.__setattr__(cfg, "live_engine", original_live_engine)
 
         self.assertEqual(
             [engine.engine_name for engine in engines],
-            ["nvidia", "openrouter", "deepl", "groq"],
+            ["nvidia", "groq"],
         )
-
-    def test_openrouter_success_is_attributed_and_stops_deeper_fallbacks(self):
-        t = _make_translator()
-        t._engines = [
-            _mock_engine("nvidia", None),
-            _mock_engine("openrouter", "正確翻譯"),
-            _mock_engine("deepl", "deepl"),
-            _mock_engine("groq", "groq"),
-        ]
-        _set_provider_failure(t._engines[0])
-
-        with _translation_mode("live"):
-            outcome = t.translate_event("안녕하세요")
-
-        self.assertEqual(outcome.target_text, "正確翻譯")
-        self.assertEqual(outcome.engine, "openrouter")
-        self.assertEqual(outcome.model, "openrouter-test-model")
-        self.assertEqual(t._active_idx, 1)
-        t._engines[2].translate.assert_not_called()
-        t._engines[3].translate.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# NvidiaEngine unit tests
-# ---------------------------------------------------------------------------
 
 class TestNvidiaEngine(unittest.TestCase):
 
@@ -3639,6 +3126,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()
         stop = threading.Event()
+        committed = MagicMock()
         orig_delay = getattr(translator_module.cfg.translation, "max_subtitle_output_delay_ms", 30000)
 
         class _SlowFakeTranslator:
@@ -3658,6 +3146,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
                     incomplete=incomplete,
                     engine="fake",
                     model="fake-model",
+                    deferred_success=committed,
                 )
 
         object.__setattr__(translator_module.cfg.translation, "max_subtitle_output_delay_ms", 1)
@@ -3679,6 +3168,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
             )
 
         self.assertTrue(subtitle_q.empty())
+        committed.assert_not_called()
         events.emit.assert_called_once()
         self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
         self.assertEqual(events.emit.call_args.kwargs["subtitle_suppressed_reason"], "stale_output_delay")
@@ -3971,12 +3461,11 @@ class TestTranslatorThreadPause(unittest.TestCase):
         pause = threading.Event()
         pause.set()   # start paused
 
-        with patch("anthropic.Anthropic") as mock_cls:
-            mock_cls.return_value.messages.create.return_value = _claude_resp("你好")
-            translator_start(sentence_q, subtitle_q, stop, pause_event=pause)
-            sentence_q.put({"text": "안녕하세요", "incomplete": False})
-            time.sleep(0.5)
-            stop.set()
+        translator_start(sentence_q, subtitle_q, stop, pause_event=pause)
+        sentence_q.put({"text": "?????", "incomplete": False})
+        time.sleep(0.5)
+        stop.set()
+
 
         self.assertTrue(subtitle_q.empty(), "No output expected while paused")
 
@@ -4044,6 +3533,105 @@ class TestPreserveAsIsAcceptance(unittest.TestCase):
 
 
 class TestFallbackProbe(unittest.TestCase):
+    def test_probe_stop_during_commit_rolls_back_and_emits_nothing(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        shared.fallback.active_idx = 1
+        initial_state = translator_module._copy_fallback_state(shared.fallback)
+        stop = threading.Event()
+        merge_reached = threading.Event()
+        engines = [
+            _mock_engine("nvidia", "recovered"),
+            _mock_engine("groq", "fallback"),
+        ]
+        real_merge = translator_module._merge_fallback_state
+
+        def stop_during_merge(target, before, after):
+            merge_reached.set()
+            stop.set()
+            real_merge(target, before, after)
+
+        with _live_backend("nvidia"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ), patch.object(
+            translator_module,
+            "_merge_fallback_state",
+            side_effect=stop_during_merge,
+        ):
+            thread = translator_module._start_fallback_probe_thread(
+                shared,
+                stop,
+                interval_seconds=0.01,
+            )
+            self.assertTrue(merge_reached.wait(timeout=2))
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(shared.fallback, initial_state)
+        self.assertEqual(fallback_events, [])
+
+    def test_probe_completion_after_stop_cannot_emit_or_commit_state(self):
+        fallback_events = []
+        shared = translator_module._new_translator_shared_state(
+            fallback_event_sink=lambda action, **fields: fallback_events.append(
+                {"action": action, **fields}
+            )
+        )
+        shared.fallback.active_idx = 1
+        initial_state = translator_module._copy_fallback_state(shared.fallback)
+        stop = threading.Event()
+        probe_started = threading.Event()
+        release_probe = threading.Event()
+        primary = _mock_engine("nvidia", "recovered")
+        primary.translate.side_effect = lambda *args, **kwargs: (
+            probe_started.set(), release_probe.wait(timeout=3), "recovered"
+        )[-1]
+        engines = [primary, _mock_engine("groq", "fallback")]
+
+        with _live_backend("nvidia"), patch.object(
+            translator_module,
+            "_build_engine_chain",
+            return_value=engines,
+        ):
+            thread = translator_module._start_fallback_probe_thread(
+                shared,
+                stop,
+                interval_seconds=0.01,
+            )
+            self.assertTrue(probe_started.wait(timeout=2))
+            stop.set()
+            release_probe.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(fallback_events, [])
+        self.assertEqual(shared.fallback, initial_state)
+
+    def test_translator_owns_and_joins_recovery_probe(self):
+        sentence_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        probe_thread = MagicMock()
+        probe_thread.is_alive.return_value = False
+
+        with patch.object(
+            translator_module,
+            "_start_fallback_probe_thread",
+            return_value=probe_thread,
+        ):
+            thread = translator_module.start(sentence_q, subtitle_q, stop)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        probe_thread.join.assert_called_once()
+
     def test_shared_state_exposes_one_first_class_conversation_history(self):
         shared = translator_module._new_translator_shared_state()
 
@@ -4256,7 +3844,7 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(event["api_error_message_class"], "read_timeout")
         self.assertGreater(event["cooldown_remaining_ms"], 0)
 
-    def test_live_openrouter_chain_uses_provider_neutral_circuit(self):
+    def test_live_deepseek_chain_uses_provider_neutral_circuit(self):
         fallback_events = []
         shared = translator_module._new_translator_shared_state(
             fallback_event_sink=lambda action, **fields: fallback_events.append(
@@ -4264,12 +3852,12 @@ class TestFallbackProbe(unittest.TestCase):
             )
         )
         engines = [
-            _mock_engine("openrouter", None),
-            _mock_engine("deepl", "fallback"),
+            _mock_engine("deepseek", None),
+            _mock_engine("groq", "fallback"),
         ]
         _set_provider_failure(engines[0])
 
-        with _translation_mode("live"), _live_backend("anthropic"), patch.object(
+        with _translation_mode("live"), _live_backend("deepseek"), patch.object(
             translator_module,
             "_build_engine_chain",
             return_value=engines,
@@ -4282,12 +3870,12 @@ class TestFallbackProbe(unittest.TestCase):
         self.assertEqual(len(fallback_events), 1)
         event = fallback_events[0]
         self.assertEqual(event["action"], "circuit_opened")
-        self.assertEqual(event["primary_engine"], "openrouter")
+        self.assertEqual(event["primary_engine"], "deepseek")
         self.assertEqual(
             event["primary_route"],
-            "openrouter:openrouter-test-model",
+            "deepseek:deepseek-test-model",
         )
-        self.assertEqual(event["active_route"], "deepl:deepl-test-model")
+        self.assertEqual(event["active_route"], "groq:groq-test-model")
         self.assertTrue(
             translator_module._translation_circuit_breaker_enabled()
         )
@@ -4299,7 +3887,7 @@ class TestFallbackProbe(unittest.TestCase):
                 {"action": action, **fields}
             )
         )
-        engines = [_mock_engine("nvidia", "source"), _mock_engine("deepl", "fallback")]
+        engines = [_mock_engine("nvidia", "source"), _mock_engine("groq", "fallback")]
 
         with _translation_mode("live"), _live_backend("nvidia"), patch.object(
             translator_module,
@@ -5824,6 +5412,152 @@ class TestDbCacheGating(unittest.TestCase):
 
 
 class TestProvisionalPromotion(unittest.TestCase):
+    def test_running_provisional_cannot_publish_after_backend_switch(self):
+        sentence_q = queue.Queue()
+        provisional_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        provider_started = threading.Event()
+        release_provider = threading.Event()
+
+        class _BlockingDeepSeek:
+            engine_name = "deepseek"
+            model_name = "deepseek-v4-flash"
+            available = True
+
+            def translate_messages(self, messages):
+                provider_started.set()
+                release_provider.wait(timeout=3)
+                return "預覽翻譯"
+
+        request = ProvisionalRequest(
+            provisional_id="provisional:backend-switch",
+            text="안녕하세요",
+            incomplete=True,
+            profile_id="",
+            source_utterance_ids=("utt-backend-switch",),
+            evidence_source_utterance_ids=("utt-backend-switch",),
+            activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+            requested_at_monotonic=time.monotonic(),
+            first_stt_ready_at_monotonic=time.monotonic(),
+        )
+
+        with _live_backend("deepseek"), patch.object(
+            translator_module,
+            "DeepSeekTranslationEngine",
+            _BlockingDeepSeek,
+        ):
+            thread = translator_module.start(
+                sentence_q,
+                subtitle_q,
+                stop,
+                provisional_queue=provisional_q,
+            )
+            provisional_q.put(request)
+            self.assertTrue(provider_started.wait(timeout=2))
+            object.__setattr__(translator_module.cfg, "live_engine", "nvidia")
+            release_provider.set()
+            stop.wait(0.1)
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertTrue(subtitle_q.empty())
+
+    def test_running_provisional_cannot_publish_after_translator_shutdown(self):
+        sentence_q = queue.Queue()
+        provisional_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        provider_started = threading.Event()
+        release_provider = threading.Event()
+
+        class _BlockingDeepSeek:
+            engine_name = "deepseek"
+            model_name = "deepseek-v4-flash"
+            available = True
+
+            def translate_messages(self, messages):
+                provider_started.set()
+                release_provider.wait(timeout=3)
+                return "預覽翻譯"
+
+        request = ProvisionalRequest(
+            provisional_id="provisional:shutdown",
+            text="안녕하세요",
+            incomplete=True,
+            profile_id="",
+            source_utterance_ids=("utt-shutdown",),
+            evidence_source_utterance_ids=("utt-shutdown",),
+            activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+            requested_at_monotonic=time.monotonic(),
+            first_stt_ready_at_monotonic=time.monotonic(),
+        )
+
+        with _live_backend("deepseek"), patch.object(
+            translator_module,
+            "DeepSeekTranslationEngine",
+            _BlockingDeepSeek,
+        ), patch.object(translator_module, "runtime_events") as events:
+            thread = translator_module.start(
+                sentence_q,
+                subtitle_q,
+                stop,
+                provisional_queue=provisional_q,
+            )
+            provisional_q.put(request)
+            self.assertTrue(provider_started.wait(timeout=2))
+            stop.set()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            release_provider.set()
+            stop.wait(0.1)
+
+        self.assertTrue(subtitle_q.empty())
+        succeeded = [
+            call
+            for call in events.emit.call_args_list
+            if call.args == ("provisional_translation",)
+            and call.kwargs.get("action") == "succeeded"
+        ]
+        self.assertEqual(succeeded, [])
+
+    def test_non_deepseek_backend_defensively_rejects_queued_provisional_work(self):
+        sentence_q = queue.Queue()
+        provisional_q = queue.Queue()
+        subtitle_q = queue.Queue()
+        stop = threading.Event()
+        request = ProvisionalRequest(
+            provisional_id="provisional:nvidia",
+            text="안녕하세요",
+            incomplete=True,
+            profile_id="",
+            source_utterance_ids=("utt-nvidia",),
+            evidence_source_utterance_ids=("utt-nvidia",),
+            activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+            requested_at_monotonic=time.monotonic(),
+            first_stt_ready_at_monotonic=time.monotonic(),
+        )
+        deepseek_cls = MagicMock()
+        with _live_backend("nvidia"), patch.object(
+            translator_module, "DeepSeekTranslationEngine", deepseek_cls
+        ):
+            thread = translator_module.start(
+                sentence_q,
+                subtitle_q,
+                stop,
+                provisional_queue=provisional_q,
+            )
+            provisional_q.put(request)
+            deadline = time.monotonic() + 2
+            while not provisional_q.empty() and time.monotonic() < deadline:
+                stop.wait(0.005)
+            stop.wait(0.05)
+            stop.set()
+            thread.join(timeout=2)
+
+        deepseek_cls.assert_not_called()
+        self.assertTrue(subtitle_q.empty())
+
     def test_route_off_defensively_rejects_queued_provisional_work(self):
         sentence_q = queue.Queue()
         provisional_q = queue.Queue()
@@ -5941,6 +5675,29 @@ class TestProvisionalPromotion(unittest.TestCase):
         self.assertEqual(outcome.result_source, "provisional_promotion")
         engine.translate_messages.assert_not_called()
         self.assertTrue(translator._last_provisional_trace["promotion_passed"])
+
+    def test_non_deepseek_backend_never_promotes_deepseek_candidate(self):
+        translator = _make_translator()
+        nvidia = _route_engine("nvidia", "NVIDIA final")
+        translator._engines = [nvidia]
+        source = "이것은 테스트입니다"
+        snapshot = capture_activity_snapshot("chatting", source="manual")
+
+        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
+            candidate = self._candidate(translator, source, "DeepSeek preview")
+            with _live_backend("nvidia"):
+                outcome = translator.translate_event(
+                    source,
+                    True,
+                    provisional_candidate=candidate,
+                    source_utterance_ids=("utt-preview",),
+                    evidence_source_utterance_ids=("utt-preview",),
+                )
+
+        self.assertEqual(outcome.target_text, "NVIDIA final")
+        self.assertEqual(outcome.engine, "nvidia")
+        self.assertNotEqual(outcome.result_source, "provisional_promotion")
+        nvidia.translate.assert_called_once()
 
     def test_changed_evidence_identity_discards_preview_and_translates_normally(self):
         translator = _make_translator()
@@ -6132,13 +5889,13 @@ class TestSemanticTerminologyIntegration(unittest.TestCase):
     def test_semantics_share_frozen_mapping_across_fallback(self):
         translator = _make_translator()
         primary = _route_engine("deepseek", "我變成小廢物了")
-        fallback = _route_engine("openrouter", "我變成__LT_SEM_1__了")
+        fallback = _route_engine("groq", "我變成__LT_SEM_1__了")
         translator._engines = [primary, fallback]
 
         outcome = translator.translate_event("我看了之後有點 사패가 되는 것 같아")
 
         self.assertEqual(outcome.target_text, "我變成反社會人格了")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertIn(
             "__LT_SEM_1__", fallback.translate_messages.call_args.args[0][-1][1]
         )
@@ -6150,7 +5907,7 @@ class TestSemanticTerminologyIntegration(unittest.TestCase):
             "打賢님按右鍵後__LT_SEM_1__即可。",
         )
         fallback = _route_engine(
-            "openrouter",
+            "groq",
             "塔賢按右鍵後__LT_SEM_1__即可。",
         )
         translator._engines = [primary, fallback]
@@ -6160,7 +5917,7 @@ class TestSemanticTerminologyIntegration(unittest.TestCase):
         )
 
         self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "openrouter")
+        self.assertEqual(outcome.engine, "groq")
         self.assertEqual(outcome.target_text, "塔賢按右鍵後解除增幅即可。")
         for engine in (primary, fallback):
             sent = engine.translate_messages.call_args.args[0][-1][1]

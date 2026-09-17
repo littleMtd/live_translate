@@ -51,6 +51,7 @@ from modules.provisional_subtitles import (
     ProvisionalRequest,
     ProvisionalStore,
     SubtitlePayload,
+    deepseek_provisional_eligible,
     provisional_fingerprint,
 )
 from modules.db import _get_db
@@ -71,7 +72,6 @@ from modules.translation_engines import (
     _build_engine_chain,
     build_effective_deepseek_messages,
     build_effective_groq_messages,
-    build_effective_qwen_messages,
     effective_system_prompt_for_engine,
     _request_entity_capsule,
     engine_chain_config_key,
@@ -1735,6 +1735,13 @@ def _copy_fallback_state(state: FallbackState) -> FallbackState:
     )
 
 
+def _replace_fallback_state(target: FallbackState, source: FallbackState) -> None:
+    target.active_idx = source.active_idx
+    target.consecutive_primary_failures = source.consecutive_primary_failures
+    target.primary_cooldown_until = source.primary_cooldown_until
+    target.consecutive_probe_successes = source.consecutive_probe_successes
+
+
 def _send_fallback_event(
     shared_state: _TranslatorSharedState | None,
     action: str,
@@ -2242,16 +2249,13 @@ class Translator:
             "deepseek": build_effective_deepseek_messages(
                 provider_text, system_prompt, incomplete, history
             ),
-            "openrouter": build_effective_qwen_messages(
-                provider_text, system_prompt, incomplete, history
-            ),
         }
         effective_deepseek_messages = frozen_messages_by_engine["deepseek"]
         deadline_at = _translation_deadline_at()
         promoted = False
         result = None
         used_engine = None
-        if provisional_candidate is not None:
+        if provisional_candidate is not None and deepseek_provisional_eligible():
             snapshot = bound_activity_snapshot()
             profile_snapshot = bound_profile_snapshot()
             if profile_snapshot is None:
@@ -2703,9 +2707,6 @@ class Translator:
             "deepseek": build_effective_deepseek_messages(
                 provider_source, system_prompt, incomplete, history
             ),
-            "openrouter": build_effective_qwen_messages(
-                provider_source, system_prompt, incomplete, history
-            ),
             "groq": build_effective_groq_messages(
                 provider_source, system_prompt, incomplete, history
             ),
@@ -3035,10 +3036,17 @@ def _start_fallback_probe_thread(
                 except Exception:
                     log.exception("Fallback primary probe failed unexpectedly")
                     continue
+            if stop_event.is_set():
+                return
             probe_elapsed_ms = round((time.monotonic() - probe_started) * 1000, 2)
             with shared_state.lock:
+                if stop_event.is_set():
+                    return
                 committed_before = _copy_fallback_state(shared_state.fallback)
                 _merge_fallback_state(shared_state.fallback, before_state, probe_state)
+                if stop_event.is_set():
+                    _replace_fallback_state(shared_state.fallback, committed_before)
+                    return
                 committed_after = _copy_fallback_state(shared_state.fallback)
 
             observation = probe_observations[-1] if probe_observations else {}
@@ -3095,7 +3103,11 @@ def _start_fallback_probe_thread(
                 action = "probe_succeeded"
             else:
                 action = "probe_failed"
+            if stop_event.is_set():
+                return
             _send_fallback_event(shared_state, action, **common_fields)
+            if stop_event.is_set():
+                return
             if (
                 bool(observation.get("recovered"))
                 and committed_before.active_idx > 0
@@ -3132,12 +3144,14 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
         next_emit_seq = 0
         last_result = ""
         last_result_time = 0.0
-        _start_fallback_probe_thread(shared_state, stop_event)
+        fallback_probe_thread = _start_fallback_probe_thread(shared_state, stop_event)
+        provisional_publication_lock = threading.Lock()
+        provisional_publication_open = True
 
         def translate_provisional(request: ProvisionalRequest) -> None:
             started = time.monotonic()
             request_contract_id = ""
-            if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
+            if not deepseek_provisional_eligible():
                 return
             if (
                 request.profile_snapshot is not None
@@ -3281,7 +3295,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         )
                         # Re-check at the actual call boundary so stale queued work
                         # cannot reach DeepSeek after the emergency route is disabled.
-                        if str(getattr(cfg.translation, "deepseek_route", "off")) != "primary":
+                        if not deepseek_provisional_eligible():
                             return
                         if (
                             request.profile_snapshot is not None
@@ -3297,6 +3311,9 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             )
                             return
                         raw_target = engine.translate_messages(messages)
+                        if stop_event.is_set() or not deepseek_provisional_eligible():
+                            provisional_store.close(request.provisional_id)
+                            return
                         if (
                             request.profile_snapshot is not None
                             and request.profile_snapshot.generation
@@ -3365,46 +3382,57 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             revision=0,
                             phase="provisional",
                         )
-                        if not provisional_store.publish_and_enqueue(
-                            candidate,
-                            lambda: put_latest(
-                                subtitle_queue,
-                                preview_payload,
-                                log,
-                                "subtitle_queue",
-                            ),
-                        ):
+                        with provisional_publication_lock:
+                            if (
+                                stop_event.is_set()
+                                or not provisional_publication_open
+                                or not deepseek_provisional_eligible()
+                            ):
+                                provisional_store.close(request.provisional_id)
+                                return
+                            if not provisional_store.publish_and_enqueue(
+                                candidate,
+                                lambda: put_latest(
+                                    subtitle_queue,
+                                    preview_payload,
+                                    log,
+                                    "subtitle_queue",
+                                ),
+                            ):
+                                runtime_events.emit(
+                                    "provisional_translation",
+                                    action="cancelled_late",
+                                    provisional_id=request.provisional_id,
+                                )
+                                return
                             runtime_events.emit(
                                 "provisional_translation",
-                                action="cancelled_late",
+                                action="succeeded",
                                 provisional_id=request.provisional_id,
+                                target_text=display_target,
+                                latency_ms=round((completed - started) * 1000, 2),
+                                stt_ready_to_subtitle_ms=round(
+                                    max(
+                                        0.0,
+                                        completed
+                                        - request.first_stt_ready_at_monotonic,
+                                    )
+                                    * 1000,
+                                    2,
+                                ),
+                                engine=engine.engine_name,
+                                model=engine.model_name,
+                                request_contract_id=request_contract_id,
+                                input_tokens=usage.get("prompt"),
+                                output_tokens=usage.get("output"),
+                                cache_hit_tokens=usage.get("cache_read"),
+                                cache_miss_tokens=usage.get("cache_write"),
+                                cost_usd=diagnostics.get("api_cost_usd"),
                             )
-                            return
-                        runtime_events.emit(
-                            "provisional_translation",
-                            action="succeeded",
-                            provisional_id=request.provisional_id,
-                            target_text=display_target,
-                            latency_ms=round((completed - started) * 1000, 2),
-                            stt_ready_to_subtitle_ms=round(
-                                max(
-                                    0.0,
-                                    completed
-                                    - request.first_stt_ready_at_monotonic,
-                                )
-                                * 1000,
-                                2,
-                            ),
-                            engine=engine.engine_name,
-                            model=engine.model_name,
-                            request_contract_id=request_contract_id,
-                            input_tokens=usage.get("prompt"),
-                            output_tokens=usage.get("output"),
-                            cache_hit_tokens=usage.get("cache_read"),
-                            cache_miss_tokens=usage.get("cache_write"),
-                            cost_usd=diagnostics.get("api_cost_usd"),
-                        )
             except Exception:
+                if stop_event.is_set():
+                    provisional_store.close(request.provisional_id)
+                    return
                 log.exception("Provisional translation failed")
                 runtime_events.emit(
                     "provisional_translation",
@@ -3848,6 +3876,22 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     and shared_state.policy.last_input == item.policy_input
                 ):
                     shared_state.policy.reset_last_input()
+            if result:
+                max_output_delay_ms = _translation_max_output_delay_ms()
+                if max_output_delay_ms > 0 and output_delay_ms > max_output_delay_ms:
+                    metrics.increment("translation.subtitle.stale_skipped")
+                    log.warning(
+                        "Skipping stale subtitle after %.0fms output delay: %s",
+                        output_delay_ms,
+                        result[:30],
+                    )
+                    runtime_events.emit(
+                        "translation",
+                        **event_fields,
+                        subtitle_emitted=False,
+                        subtitle_suppressed_reason="stale_output_delay",
+                    )
+                    return
             if outcome.deferred_success is not None:
                 try:
                     # Commit conversation state in sequence order, not provider
@@ -3875,21 +3919,6 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         **event_fields,
                         subtitle_emitted=False,
                         subtitle_suppressed_reason="duplicate",
-                    )
-                    return
-                max_output_delay_ms = _translation_max_output_delay_ms()
-                if max_output_delay_ms > 0 and output_delay_ms > max_output_delay_ms:
-                    metrics.increment("translation.subtitle.stale_skipped")
-                    log.warning(
-                        "Skipping stale subtitle after %.0fms output delay: %s",
-                        output_delay_ms,
-                        result[:30],
-                    )
-                    runtime_events.emit(
-                        "translation",
-                        **event_fields,
-                        subtitle_emitted=False,
-                        subtitle_suppressed_reason="stale_output_delay",
                     )
                     return
                 last_result = result
@@ -3965,6 +3994,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     )
                     next_seq += 1
         finally:
+            with provisional_publication_lock:
+                provisional_publication_open = False
             provisional_executor.shutdown(wait=False, cancel_futures=True)
             # Stop accepting work but let already-submitted translations finish:
             # cancel_futures=True dropped completed-but-unemitted and in-flight
@@ -3989,6 +4020,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         future.cancel()
                     break
                 time.sleep(_TRANSLATION_LOOP_POLL_SEC)
+            fallback_probe_thread.join(
+                timeout=max(0.0, deadline - time.monotonic())
+            )
+            if fallback_probe_thread.is_alive():
+                log.warning("Fallback recovery probe did not stop before drain deadline")
             log.info("Translator stopped")
     return start_daemon_thread("Translator", run)
 

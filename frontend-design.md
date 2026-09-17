@@ -268,7 +268,6 @@ pub struct SplitterConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TranslationConfig {
-    pub engine_chain:   Vec<String>,  // configurable non-protected chain: ["openrouter", "deepl", "groq"]
     pub target_lang:    String,       // "zh-TW"
     pub max_tokens:     u32,
     pub temperature:    f32,
@@ -700,7 +699,6 @@ export interface SttConfig {
 }
 
 export interface TranslationConfig {
-    engine_chain: string[];   // configurable non-protected chain: ["openrouter", "deepl", "groq"]
     max_tokens: number;
 }
 
@@ -898,10 +896,7 @@ main {
 
     <div class="section">
       <h3>Translation Engine</h3>
-      <label>
-        Engine Chain (comma-separated, first = primary):
-        <input v-model="engineChainInput" placeholder="claude,gemini,google_translate" />
-      </label>
+      <p>Production route: DeepSeek → Groq</p>
       <label>
         Max Tokens:
         <input v-model.number="localConfig.translation.max_tokens" type="number" min="10" max="200" />
@@ -939,7 +934,7 @@ const cloneOrDefault = (c: ConfigDto | null): ConfigDto =>
              vad_min_speech_sec: 0.8, vad_max_speech_sec: 8.0, queue_maxsize: 10 },
     stt: { primary_engine: 'groq', language: 'ko', queue_maxsize: 20 },
     splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-    translation: { engine_chain: ['claude', 'gemini', 'google_translate'], target_lang: 'zh-TW',
+    translation: { target_lang: 'zh-TW',
                    max_tokens: 200, temperature: 0.1, queue_maxsize: 2, slang: {} },
     subtitle: { font_family: 'Microsoft JhengHei', font_size: 22, font_style: 'bold',
                 idle_hide_ms: 30000, alpha: 1.0, queue_maxsize: 10 },

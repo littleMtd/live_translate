@@ -6,10 +6,8 @@ from modules.entity_registry import (
     ReviewedEntity,
 )
 from modules.translation_engines import (
-    _deepl_context,
     _deepseek_system_prompt,
     _groq_system_prompt,
-    _openrouter_system_prompt,
 )
 from modules.provisional_subtitles import provisional_fingerprint
 from modules.profile_context import profile_state
@@ -90,13 +88,10 @@ def test_request_capsule_survives_all_compact_llm_prompts():
         "base\n\n[Request entity mappings]\n- 멤논 => Memnon"
         "\n[End request entity mappings]"
     )
-    for build in (_groq_system_prompt, _openrouter_system_prompt, _deepseek_system_prompt):
+    for build in (_groq_system_prompt, _deepseek_system_prompt):
         prompt = build(source_prompt)
         assert prompt.count("[Request entity mappings]") == 1
         assert "멤논 => Memnon" in prompt
-
-    deepl_context, _ = _deepl_context([], source_prompt)
-    assert "멤논 => Memnon" in deepl_context
 
 
 def test_lookup_is_read_only_with_respect_to_registry_identity():

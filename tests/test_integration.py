@@ -657,53 +657,6 @@ class TestPauseEventIntegration(unittest.TestCase):
 
 @pytest.mark.live_api
 @unittest.skipUnless(
-    _LIVE_TESTS_ENABLED and os.getenv("ANTHROPIC_API_KEY"),
-    "set RUN_LIVE_TESTS=1 and ANTHROPIC_API_KEY to run live Claude tests",
-)
-class TestRealClaude(unittest.TestCase):
-    """Live Claude API calls — requires ANTHROPIC_API_KEY."""
-
-    @classmethod
-    def setUpClass(cls):
-        import importlib
-        # Other test files stub anthropic/google with MagicMock at load time.
-        # importlib.import_module() checks sys.modules first, so we must pop()
-        # the stub BEFORE importing the real package, then restore in tearDownClass
-        # so subsequent mock-based tests still pass.
-        cls._stubs: dict = {}
-        for mod in ("google", "google.genai", "anthropic"):
-            if isinstance(sys.modules.get(mod), MagicMock):
-                cls._stubs[mod] = sys.modules.pop(mod)
-                try:
-                    sys.modules[mod] = importlib.import_module(mod)
-                except ImportError:
-                    raise unittest.SkipTest(f"{mod} not installed")
-        from modules.translator import Translator
-        cls.translator = Translator()
-
-    @classmethod
-    def tearDownClass(cls):
-        # Restore stubs so subsequent mock-based tests (test_translator) still pass
-        for mod, stub in cls._stubs.items():
-            sys.modules[mod] = stub
-
-    def test_translates_korean_greeting(self):
-        result = self.translator.translate("안녕하세요", incomplete=False)
-        self.assertIsNotNone(result)
-        self.assertGreater(len(result), 0)
-
-    def test_translates_slang(self):
-        result = self.translator.translate("진짜 대박이에요 ㅋㅋ", incomplete=False)
-        self.assertIsNotNone(result)
-        self.assertGreater(len(result), 0)
-
-    def test_incomplete_sentence_translated(self):
-        result = self.translator.translate("지금 게임 하고", incomplete=True)
-        self.assertIsNotNone(result)
-
-
-@pytest.mark.live_api
-@unittest.skipUnless(
     _LIVE_TESTS_ENABLED and os.getenv("GROQ_API_KEY"),
     "set RUN_LIVE_TESTS=1 and GROQ_API_KEY to run live Groq STT tests",
 )

@@ -247,29 +247,9 @@ def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
     assert not any("only in clear fandom" in term for term in output_terms)
 
 
-def test_live_path_uses_qwen_prompt(monkeypatch):
-    """_BASE_PROMPT is benchmark-only: the 2026-07 fixes (number units,
-    name-rule tightening, anti-echo) live only in _QWEN_PROMPT. If this
-    fails, the live engine is no longer a qwen model — port those fixes to
-    _BASE_PROMPT before switching."""
-    configured_keys = replace(
-        cfg.keys,
-        anthropic="test-key",
-        google_translate="test-key",
-        deepl="test-key",
-        openrouter="test-key",
-        groq_fallback="test-key",
-    )
-    monkeypatch.setattr(
-        translation_prompts,
-        "cfg",
-        replace(cfg, keys=configured_keys),
-    )
-
-    assert translation_prompts._is_qwen_model(), (
-        "live path no longer selects _QWEN_PROMPT; _BASE_PROMPT is stale "
-        "(missing the 2026-07 prompt fixes) — port them before switching engines"
-    )
+def test_deepseek_live_path_is_not_classified_as_qwen():
+    assert cfg.live_engine == "deepseek"
+    assert not translation_prompts._is_qwen_model()
 
 
 def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():

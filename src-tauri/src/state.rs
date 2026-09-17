@@ -86,9 +86,6 @@ pub struct SplitterConfig {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct TranslationConfig {
-    pub engine_chain: Vec<String>,
-    pub model: String,
-    pub google_translate_lang: String,
     pub target_lang: String,
     pub max_tokens: u32,
     pub temperature: f32,
@@ -207,9 +204,6 @@ mod tests {
                 force_cut_seconds: 8,
             },
             translation: TranslationConfig {
-                engine_chain: vec!["openrouter".into(), "groq".into()],
-                model: "claude-sonnet-4-6".into(),
-                google_translate_lang: "zh-TW".into(),
                 target_lang: "zh-TW".into(),
                 max_tokens: 80,
                 temperature: 0.0,
@@ -344,7 +338,6 @@ mod tests {
         assert_eq!(cfg.subtitle.font_size, 24);
         // a section absent from the JSON defaults rather than erroring
         assert_eq!(cfg.translation.max_tokens, 0);
-        assert!(cfg.translation.engine_chain.is_empty());
         assert!(cfg.scene.publish_open_set_activity);
     }
 

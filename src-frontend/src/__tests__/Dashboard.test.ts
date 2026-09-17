@@ -14,8 +14,7 @@ const fakeConfig = {
          queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
          max_japanese_chars: 2, max_repeat_ratio: 0.7 },
   splitter: { min_wait_seconds: 3, force_cut_seconds: 8 },
-  translation: { engine_chain: ['openrouter', 'groq'], model: 'claude-sonnet-4-6',
-                 google_translate_lang: 'zh-TW',
+  translation: {
                  target_lang: 'zh-TW', max_tokens: 80, temperature: 0.0, queue_maxsize: 2,
                  context_window: 10, translation_mode: 'live', streamer_profile: 'hades_chxxnnx',
                  use_profile: true, current_activity: '', slang: {} },
@@ -197,7 +196,6 @@ describe('Dashboard', () => {
       audio: { ...fakeConfig.audio, vad_silence_sec: 0.9, vad_max_speech_sec: 6.5 },
       translation: {
         ...fakeConfig.translation,
-        engine_chain: ['openrouter', 'deepl', 'groq'],
         max_tokens: 200,
       },
     })
@@ -228,9 +226,6 @@ describe('Dashboard', () => {
 
     const panel = wrapper.findComponent({ name: 'ConfigPanel' })
     expect(panel.exists()).toBe(true)
-    expect((panel.props('config') as typeof fakeConfig).translation.engine_chain).toEqual([
-      'openrouter', 'deepl', 'groq',
-    ])
     expect((panel.props('config') as typeof fakeConfig).translation.max_tokens).toBe(200)
     expect((panel.props('config') as typeof fakeConfig).audio.vad_silence_sec).toBe(0.9)
   })
@@ -414,7 +409,7 @@ describe('Dashboard', () => {
 
   it('reloads Python effective config after startup instead of using the Rust cache', async () => {
     const effective = cloneConfig({
-      translation: { ...fakeConfig.translation, engine_chain: ['groq'] },
+      translation: { ...fakeConfig.translation, target_lang: 'zh-TW' },
     })
     let started = false
     mockInvoke.mockImplementation((cmd: string) => {
@@ -439,6 +434,6 @@ describe('Dashboard', () => {
 
     expect(mockInvoke).toHaveBeenCalledWith('reload_config')
     const panel = wrapper.findComponent({ name: 'ConfigPanel' })
-    expect((panel.props('config') as typeof fakeConfig).translation.engine_chain).toEqual(['groq'])
+    expect((panel.props('config') as typeof fakeConfig).translation.target_lang).toBe('zh-TW')
   })
 })

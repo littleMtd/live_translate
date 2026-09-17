@@ -43,6 +43,7 @@ def test_validate_config_accepts_nvidia_backend_without_engine_chain(
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
     monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
 
     main_module._validate_config(stt_only=False)
@@ -55,20 +56,15 @@ def test_validate_config_warns_for_missing_nvidia_fallback_key(
     import main as main_module
 
     warnings = []
-    original_chain = main_module.cfg.translation.engine_chain
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
     monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
     monkeypatch.setattr(
         main_module.log,
         "warning",
         lambda message, *args: warnings.append(message % args),
     )
-    try:
-        object.__setattr__(main_module.cfg.translation, "engine_chain", ("groq",))
-
-        main_module._validate_config(stt_only=False)
-    finally:
-        object.__setattr__(main_module.cfg.translation, "engine_chain", original_chain)
+    main_module._validate_config(stt_only=False)
 
     assert warnings == ["Engine 'groq' skipped - API key not set"]
 
@@ -80,6 +76,7 @@ def test_validate_config_rejects_nvidia_backend_without_key(
     import main as main_module
 
     monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
+    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
     monkeypatch.setattr(main_module, "engine_is_configured", lambda _name: False)
 
     try:
@@ -90,41 +87,23 @@ def test_validate_config_rejects_nvidia_backend_without_key(
         raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
 
 
-def test_validate_config_warns_when_deepl_key_is_missing(
+def test_protected_deepseek_route_warns_when_groq_fallback_key_is_missing(
     monkeypatch,
     isolate_scene_vision_startup_validation,
 ):
     import main as main_module
 
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "deepseek")
+    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("deepseek", "groq"))
+    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "deepseek")
     warnings = []
-    original_chain = main_module.cfg.translation.engine_chain
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
     monkeypatch.setattr(
         main_module.log,
         "warning",
         lambda message, *args: warnings.append(message % args),
     )
-    try:
-        object.__setattr__(main_module.cfg.translation, "engine_chain", ("deepl",))
-        main_module._validate_config(stt_only=False)
-    finally:
-        object.__setattr__(main_module.cfg.translation, "engine_chain", original_chain)
-
-    assert warnings == ["Engine 'deepl' skipped - API key not set"]
-
-
-def test_protected_deepseek_route_requires_flash_and_qwen_keys(
-    monkeypatch,
-    isolate_scene_vision_startup_validation,
-):
-    import main as main_module
-
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "anthropic")
-    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "deepseek")
-    with pytest.raises(SystemExit) as captured:
-        main_module._validate_config(stt_only=False)
-    assert captured.value.code == 1
+    main_module._validate_config(stt_only=False)
+    assert warnings == ["Engine 'groq' skipped - API key not set"]
 
 
 def test_protected_deepseek_route_accepts_flash_and_qwen_keys(
@@ -133,11 +112,12 @@ def test_protected_deepseek_route_accepts_flash_and_qwen_keys(
 ):
     import main as main_module
 
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "anthropic")
+    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "deepseek")
+    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("deepseek", "groq"))
     monkeypatch.setattr(
         main_module,
         "engine_is_configured",
-        lambda name: name in {"deepseek", "openrouter"},
+        lambda name: name in {"deepseek", "groq"},
     )
     main_module._validate_config(stt_only=False)
 

@@ -31,14 +31,10 @@
       <label>
         Live backend:
         <select v-model="local.live_engine">
-          <option value="anthropic">Engine chain</option>
+          <option value="deepseek">DeepSeek → Groq</option>
           <option value="nvidia">NVIDIA NIM</option>
           <option value="ollama">Ollama</option>
         </select>
-      </label>
-      <label>
-        Fallback chain:
-        <input v-model="engineChainText" type="text" />
       </label>
       <label>
         Mode:
@@ -159,7 +155,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import type { ConfigDto, ProfileStatus } from '../types/config'
 
 const props = defineProps<{ config: ConfigDto, profileStatus?: ProfileStatus | null }>()
@@ -173,16 +169,6 @@ const clone = (config: ConfigDto): ConfigDto => {
 }
 
 const local = ref<ConfigDto>(clone(props.config))
-
-const engineChainText = computed({
-  get: () => local.value.translation.engine_chain.join(', '),
-  set: (value: string) => {
-    local.value.translation.engine_chain = value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean) as ConfigDto['translation']['engine_chain']
-  },
-})
 
 watch(() => props.config, (config) => { local.value = clone(config) }, { deep: true })
 

@@ -39,8 +39,7 @@ def test_build_report_flags_wall_time_gap_without_claiming_single_engine(tmp_pat
     assert dom["worker_elapsed_field_~=_translation_latency"] >= dom["predecessor_stall_gt_50pct"]
     assert dom["final_api_wall_gt_80pct"] == 5
     assert dom["had_api_timeout"] == 0
-    assert report["code_verification"]["openrouter_timeout_is_wired"] is True
-    assert report["code_verification"]["original_candidate_fix_status"].startswith("falsified")
+    assert report["code_verification"]["status"] == "historical_snapshot_only"
     assert report["openrouter_wall_time_gap"]["final_api_over_configured_socket_timeout"] == 5
     assert report["nvidia_retry_tradeoff"]["implementation_status"].startswith("proposal_only")
 

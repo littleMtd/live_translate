@@ -158,9 +158,6 @@ mod tests {
                 force_cut_seconds: 8,
             },
             translation: TranslationConfig {
-                engine_chain: vec!["openrouter".into(), "groq".into()],
-                model: "claude-sonnet-4-6".into(),
-                google_translate_lang: "zh-TW".into(),
                 target_lang: "zh-TW".into(),
                 max_tokens: 80,
                 temperature: 0.0,
@@ -319,7 +316,6 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2 = parse_config(&json).unwrap();
         assert_eq!(cfg.subtitle.font_size, cfg2.subtitle.font_size);
-        assert_eq!(cfg.translation.engine_chain, cfg2.translation.engine_chain);
         assert_eq!(cfg.stt.language, cfg2.stt.language);
         assert_eq!(
             cfg.translation.current_activity,

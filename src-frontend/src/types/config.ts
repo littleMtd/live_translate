@@ -12,8 +12,7 @@ export interface ConfigDto {
   nvidia: NvidiaConfig
 }
 
-export type BackendEngine = 'anthropic' | 'ollama' | 'nvidia'
-export type TranslationEngine = 'claude' | 'google_translate' | 'ollama' | 'nvidia' | 'openrouter' | 'groq'
+export type BackendEngine = 'deepseek' | 'ollama' | 'nvidia'
 
 export interface AudioConfig {
   sample_rate: number
@@ -51,9 +50,6 @@ export interface SplitterConfig {
 }
 
 export interface TranslationConfig {
-  engine_chain: TranslationEngine[]
-  model: string
-  google_translate_lang: string
   target_lang: string
   max_tokens: number
   temperature: number

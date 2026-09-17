@@ -38,13 +38,12 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
     assert merged.subtitle.font == ("Foo", 30, base.subtitle.font[2])
     assert merged.translation.max_tokens == 123
     assert merged.translation.target_lang == "ja"
-    assert merged.translation.engine_chain == ("groq",)  # list coerced back to tuple
     assert merged.stt.primary_engine == "sensevoice"
     assert merged.audio.vad_enabled is False
     assert merged.audio.vad_max_speech_sec == 12.0
     assert merged.scene.publish_open_set_activity is True
     # NON-whitelisted fields in the JSON must NOT leak through
-    assert merged.translation.model == base.translation.model
+    assert not hasattr(merged.translation, "engine_chain")
     assert merged.subtitle.bg == base.subtitle.bg
     assert merged.scene.vision_model == base.scene.vision_model
 
@@ -126,7 +125,7 @@ def test_malformed_enum_types_are_ignored_without_crashing_or_losing_valid_field
         assert merged.subtitle.idle_hide_ms == 12000
 
 
-def test_duplicate_translation_routes_are_ignored(tmp_path):
+def test_retired_translation_routes_are_ignored(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "duplicate-routes.json"
     _write(json_path, {
@@ -136,7 +135,7 @@ def test_duplicate_translation_routes_are_ignored(tmp_path):
 
     merged = config_mod._apply_dashboard_overrides(base, json_path)
 
-    assert merged.translation.engine_chain == base.translation.engine_chain
+    assert not hasattr(merged.translation, "engine_chain")
     assert merged.subtitle.idle_hide_ms == 12000
 
 
@@ -152,8 +151,7 @@ def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
         {
             "translation": {
                 "deepseek_route": "off",
-                # This is a valid dashboard override for other backends, but
-                # it must not alter the protected ordinary-live route.
+                # Retired dashboard route ordering must not alter production.
                 "engine_chain": ["groq"],
             }
         },
@@ -162,7 +160,6 @@ def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
     merged = config_mod._apply_dashboard_overrides(base, json_path)
 
     assert merged.translation.deepseek_route == "primary"
-    assert merged.translation.engine_chain == ("groq",)
     with patch.object(translation_engines, "cfg", merged):
         assert translation_engines.effective_engine_chain_names() == (
             "deepseek",

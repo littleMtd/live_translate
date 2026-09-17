@@ -20,19 +20,16 @@ pairs (404 comparable) and explicitly overrode the former 500-pair and strict
 no-regression pre-cutover gate. Integrity, attribution, rollback, and
 post-cutover validation remain mandatory.
 
-Current implementation note (verified 2026-08-26): the protected provider
-order and emergency-off route remain active, but the record-only DeepSeek
-shadow/model-comparison plumbing, quality retry, Japanese translation
-shadow/active path, and `source_fuzzy_shadow` have since been retired and
-removed. Provider candidates now share the production unknown-name and
-semantic-terminology escrow plus one authoritative finalization path. The
-dated shadow evidence below remains historical evidence, not executable
-production architecture.
+Current implementation note (verified 2026-09-16): the ordinary live route is
+the fixed DeepSeek V4 Flash -> Groq chain; emergency-off is Groq-only. Claude,
+Google Translate, OpenRouter translation, and DeepL adapters have been retired.
+OpenRouter remains available only to scene vision. Historical provider fields
+below remain evidence and analyzer input, not executable production routing.
 
 The authorized live-chain contract is:
 
 ```text
-DeepSeek V4 Flash -> OpenRouter Qwen -> DeepL -> Groq
+DeepSeek V4 Flash -> Groq
 ```
 
 - Flash is production primary only for the ordinary live chain. Clip, Ollama,

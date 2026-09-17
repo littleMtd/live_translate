@@ -168,7 +168,7 @@ Translation:
   target corrections, deterministic publication guards, ordered emission,
   translation events, and the background recovery-probe thread.
 - `modules/translation_engines.py`: engine registry and API adapters for
-  Claude, Google Translate, DeepL, Ollama, NVIDIA, OpenRouter, DeepSeek, and Groq;
+  Ollama, NVIDIA, DeepSeek, and Groq;
   request/history shaping, per-call diagnostics, attempt chains, and token
   usage.
 - `modules/translation_runtime.py`: pure cache helpers plus fallback/circuit
@@ -271,11 +271,9 @@ Context, display, and persistence:
 
 `cfg.live_engine` / `cfg.clip_engine` selects the backend:
 
-- `nvidia`: NVIDIA primary followed by each configured/available engine in
-  `cfg.translation.engine_chain` (currently Groq).
-- `anthropic`: historical backend name. Ordinary live use follows the fixed
-  protected DeepSeek-to-Groq route described below; other applicable/clip paths
-  may use `engine_chain`. It does not mean “Claude only”.
+- `deepseek`: DeepSeek V4 Flash followed by the fixed Groq fallback. The
+  persisted legacy value `anthropic` is accepted only as a migration alias.
+- `nvidia`: NVIDIA primary followed by the fixed Groq fallback.
 - `ollama`: local Ollama only.
 
 All translation workers share one `LiveSessionSnapshot`, `ConversationHistory`,

@@ -23,9 +23,10 @@ Windows audio capture
 
 The default STT role is ElevenLabs Scribe v2. Groq is a same-chunk fallback for
 provider failure; SenseVoice is available only when explicitly configured.
-The ordinary live translation route is DeepSeek Flash, followed when necessary
-by OpenRouter Qwen, DeepL, and Groq. Runtime evidence, rather than this default
-list, determines which route actually handled a particular item.
+The ordinary live translation route is DeepSeek Flash followed by Groq. The
+emergency-off route is Groq-only. Runtime evidence determines which route
+actually handled a particular item; historical bundles may contain retired
+provider names.
 
 Translation workers may finish concurrently, but final publication is ordered
 by sequence. Audio, text, and subtitle queues favor freshness; the sentence

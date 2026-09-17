@@ -19,9 +19,9 @@ VB-CABLE / sounddevice
   → ordered subtitle publication
 ```
 
-`LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` 會讓 ordinary live translation 使用 Groq-only emergency rollback。Dashboard 的 `engine_chain` 不能重新排列這條受保護的 production route。
+`LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` selects the Groq-only emergency rollback. Provider order is a fixed contract and is not editable from the dashboard.
 
-OpenRouter 與 DeepL adapter 仍可能存在於程式碼中供明確的非 production/custom 路徑使用，但目前不是 ordinary live fallback。不要把歷史 Qwen、DeepL 或 shadow 文件當成現行 routing。
+OpenRouter is retained for scene vision only. OpenRouter translation, DeepL, Claude, and Google Translate adapters are retired.
 
 ## 啟動
 

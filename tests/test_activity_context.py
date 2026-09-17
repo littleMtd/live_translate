@@ -23,7 +23,6 @@ from modules.activity_context import (
 )
 from modules.profile_context import ProfileSnapshot, bind_profile_snapshot
 from modules.translation_engines import (
-    _deepl_context,
     effective_system_prompt_for_engine,
     engine_chain_config_key,
 )
@@ -461,7 +460,6 @@ def test_bound_snapshot_wins_over_inflight_global_manual_change():
         with bind_activity_snapshot(snapshot):
             object.__setattr__(cfg.translation, "current_activity", "Hades")
             prompt = _compose_system_prompt()
-            deepl_context, _ = _deepl_context(None)
 
         assert effective_activity_value(cfg.translation.current_activity) == "Hades"
     finally:
@@ -469,17 +467,15 @@ def test_bound_snapshot_wins_over_inflight_global_manual_change():
 
     assert "StarCraft" in prompt
     assert "Hades" not in prompt
-    assert "StarCraft" in deepl_context
-    assert "Hades" not in deepl_context
 
 
 def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snapshot():
     original = cfg.translation.current_activity
     seen = {}
 
-    class SwitchingDeepLEngine:
-        engine_name = "deepl"
-        model_name = "fake-deepl"
+    class SwitchingEngine:
+        engine_name = "nvidia"
+        model_name = "fake-nvidia"
         available = True
 
         def translate(self, text, system_prompt, incomplete, history=None):
@@ -494,7 +490,7 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
     object.__setattr__(cfg.translation, "current_activity", "StarCraft")
     try:
         translator = Translator()
-        translator._engines = [SwitchingDeepLEngine()]
+        translator._engines = [SwitchingEngine()]
         translator._engines_key = engine_chain_config_key()
         outcome = translator.translate_event("오늘 방송을 시작합니다")
     finally:

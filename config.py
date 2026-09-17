@@ -13,7 +13,6 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class _Keys:
-    anthropic:        str = os.environ.get("ANTHROPIC_API_KEY", "")
     groq:             str = os.environ.get("GROQ_API_KEY", "")
     groq_fallback:    str = os.environ.get("GROQ_API_KEY_fall_back", "")
     # Prefer ElevenLabs' documented spelling, while accepting the spelling
@@ -24,8 +23,6 @@ class _Keys:
     )
     openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
-    deepl:            str = os.environ.get("DEEPL_API_KEY", "")
-    google_translate: str = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "")
     nvidia:           str = os.environ.get("NVIDIA_API_KEY", "")
 
 
@@ -176,8 +173,8 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 _VALID_STREAMER_PROFILES = known_profile_ids(include_aliases=True)
 _VALID_TRANSLATION_MODES = {"live", "clip"}
 _VALID_DEEPSEEK_ROUTES = {"primary", "off"}
-_VALID_ENGINE_NAMES      = {"claude", "google_translate", "deepl", "ollama", "nvidia", "groq", "openrouter"}
-_VALID_BACKEND_MODES     = {"anthropic", "ollama", "nvidia"}
+_VALID_BACKEND_MODES     = {"deepseek", "ollama", "nvidia"}
+_BACKEND_ALIASES         = {"anthropic": "deepseek"}
 _VALID_SCENE_VISION_PROVIDERS = {"groq", "openrouter"}
 _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 
@@ -185,36 +182,9 @@ _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 @dataclass(frozen=True)
 class _Translation:
     # -------------------------------------------------------------------------
-    # Configurable fallback list. In ordinary live ``anthropic`` mode the
-    # protected route is assembled separately by translation_engines.py:
-    # DeepSeek -> Groq (or Groq
-    # when deepseek_route="off"). Dashboard edits cannot reorder that route.
-    # This tuple remains configurable for NVIDIA/clip/other applicable paths.
-    #
-    # Supported names (must match keys in _make_engine() in translator.py):
-    #   "claude"           — Anthropic Claude     (needs ANTHROPIC_API_KEY)
-    #   "google_translate" — Google Translate v2  (needs GOOGLE_TRANSLATE_API_KEY)
-    #   "deepseek"         — DeepSeek V4 Flash    (needs DEEPSEEK_API_KEY;
-    #                           protected live route only, not dashboard chain)
-    #   "deepl"            — DeepL API v2         (needs DEEPL_API_KEY)
-    #
-    # To add a new configurable-chain engine:
-    #   1. Add its name to engine_chain below and to the validated name set.
-    #   2. Add its model/config field(s) in this class (see examples below).
-    #   3. Implement a TranslationEngine subclass in modules/translator.py.
-    #   4. Register the name in _make_engine() in translator.py.
-    # -------------------------------------------------------------------------
-    # Configured fallback chain for NVIDIA/clip/other applicable paths.
-    # Groq is the sole production fallback. Other registered engines remain
-    # available only to explicit NVIDIA/clip/custom chains.
-    engine_chain:   tuple        = ("groq",)
-
-    # --- Model / API settings (one block per engine) -------------------------
-    # Claude model selection (change to switch modes):
-    #   "claude-sonnet-4-6"          — quality mode  (cache kicks in at ≥ 2048 sys-tokens)
-    #   "claude-haiku-4-5-20251001"  — economy mode  (cache kicks in at ≥ 4096 sys-tokens)
-    model:                    str = "claude-sonnet-4-6"
-    claude_timeout:           float = 5.0   # per-request timeout (seconds) for ClaudeEngine
+    # Translation routes are fixed contracts, not a dashboard-ordered provider
+    # list. DeepSeek uses Groq as its only fallback; NVIDIA also falls back to
+    # Groq; Ollama is local-only.
     # Groq fallback (uses GROQ_API_KEY_fall_back). Qwen3-32B is scheduled
     # for removal by Groq; use the production GPT-OSS model instead.
     groq_translation_model:   str = "openai/gpt-oss-120b"
@@ -229,20 +199,6 @@ class _Translation:
     groq_translation_context_window: int = 2
     groq_translation_history_source_chars: int = 160
     groq_translation_history_target_chars: int = 220
-    # OpenRouter fallback (uses OPENROUTER_API_KEY). Paid model, called only
-    # after higher-priority engines in the active chain fail.
-    openrouter_model: str = "qwen/qwen3-next-80b-a3b-instruct"
-    openrouter_timeout: int = 8
-    openrouter_compact_prompt: bool = True
-    openrouter_max_tokens: int = 160
-    openrouter_context_window: int = 2
-    openrouter_history_source_chars: int = 160
-    openrouter_history_target_chars: int = 220
-    openrouter_http_referer: str = "http://localhost/live_translate"
-    openrouter_app_name: str = "live_translate"
-    # Google Translate v2 — target lang uses BCP-47 (zh-TW is supported)
-    google_translate_lang:    str = "zh-TW"
-    google_translate_timeout: float = 5.0
     # Owner-authorized protected live route. ``primary`` selects the fixed
     # Flash -> Groq chain; ``off`` restores the exact fixed Groq-only chain.
     # Dashboard engine ordering cannot alter it.
@@ -252,23 +208,15 @@ class _Translation:
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_timeout: float = 4.0
     deepseek_max_tokens: int = 160
+    deepseek_context_window: int = 2
+    deepseek_history_source_chars: int = 160
+    deepseek_history_target_chars: int = 220
     # Pricing snapshot verified from DeepSeek's official pricing page on
     # 2026-08-15. Keeping rates explicit makes every recorded cost auditable.
     deepseek_cache_hit_usd_per_million: float = 0.0028
     deepseek_cache_miss_usd_per_million: float = 0.14
     deepseek_output_usd_per_million: float = 0.28
     deepseek_pricing_revision: str = "2026-08-15"
-    # DeepL     (target lang uses a different code from target_lang below)
-    # DeepL API v2. Traditional Chinese must be requested as ZH-HANT.
-    # Free keys (ending in :fx) use api-free.deepl.com automatically; all
-    # other keys use the Pro endpoint.
-    deepl_target_lang: str = "ZH-HANT"
-    deepl_timeout: float = 4.0
-    deepl_context_window: int = 2
-    deepl_history_source_chars: int = 160
-    deepl_history_target_chars: int = 220
-    deepl_context_max_chars: int = 1400
-
     # --- Shared translation settings -----------------------------------------
     # Live reliability is route-neutral: every configured provider/model route
     # uses the same circuit policy and shares one end-to-end API deadline.
@@ -342,19 +290,9 @@ class _Translation:
                 f"cfg.translation.streamer_profile invalid: {self.streamer_profile!r} "
                 f"(must be one of {_VALID_STREAMER_PROFILES})"
             )
-        for name in self.engine_chain:
-            if name not in _VALID_ENGINE_NAMES:
-                raise ValueError(
-                    f"cfg.translation.engine_chain contains unknown engine {name!r} "
-                    f"(must be one of {_VALID_ENGINE_NAMES})"
-                )
-        if len(set(self.engine_chain)) != len(self.engine_chain):
-            raise ValueError("cfg.translation.engine_chain entries must be unique")
         for field_name in (
             "circuit_recovery_cooldown_sec",
             "live_total_deadline_sec",
-            "claude_timeout",
-            "google_translate_timeout",
             "deepseek_timeout",
             "deepseek_cache_hit_usd_per_million",
             "deepseek_cache_miss_usd_per_million",
@@ -629,12 +567,10 @@ class _Config:
     translation:         _Translation = field(default_factory=_Translation)
     subtitle:            _Subtitle    = field(default_factory=_Subtitle)
     database:            _Database    = field(default_factory=_Database)
-    # Translation backend per mode — options: "anthropic" | "ollama" | "nvidia"
-    # Ordinary live "anthropic" uses the fixed protected route described
-    # above; other applicable anthropic/clip and NVIDIA paths may use
-    # translation.engine_chain. Ollama bypasses it.
-    live_engine:         str          = "anthropic"
-    clip_engine:         str          = "anthropic"
+    # Translation backend per mode — options: "deepseek" | "ollama" | "nvidia".
+    # Persisted "anthropic" values are normalized as a compatibility alias.
+    live_engine:         str          = "deepseek"
+    clip_engine:         str          = "deepseek"
     ollama:              _Ollama      = field(default_factory=_Ollama)
     nvidia:              _Nvidia      = field(default_factory=_Nvidia)
     scene:               _Scene       = field(default_factory=_Scene)
@@ -645,6 +581,12 @@ class _Config:
         return canonical_profile_id(self.translation.streamer_profile)
 
     def __post_init__(self):
+        object.__setattr__(
+            self, "live_engine", _BACKEND_ALIASES.get(self.live_engine, self.live_engine)
+        )
+        object.__setattr__(
+            self, "clip_engine", _BACKEND_ALIASES.get(self.clip_engine, self.clip_engine)
+        )
         if self.live_engine not in _VALID_BACKEND_MODES:
             raise ValueError(
                 f"cfg.live_engine invalid: {self.live_engine!r} "
@@ -668,7 +610,7 @@ _DASHBOARD_OVERRIDE_ENV = "LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG"
 _DASHBOARD_OVERRIDE_FIELDS = {
     "audio": ("vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
     "stt": ("primary_engine",),
-    "translation": ("engine_chain", "translation_mode", "max_tokens", "target_lang",
+    "translation": ("translation_mode", "max_tokens", "target_lang",
                     "current_activity", "streamer_profile", "use_profile", "profile_mode"),
     "scene": ("publish_open_set_activity",),
     "subtitle": ("idle_hide_ms", "alpha"),
@@ -711,13 +653,6 @@ def _dashboard_value_is_valid(
     if section == "stt" and name == "primary_engine":
         return _is_typed_enum(value, {"elevenlabs", "groq", "sensevoice"})
     if section == "translation":
-        if name == "engine_chain":
-            return (
-                isinstance(value, list)
-                and bool(value)
-                and all(isinstance(engine, str) and engine in _VALID_ENGINE_NAMES for engine in value)
-                and len(set(value)) == len(value)
-            )
         if name == "translation_mode":
             return _is_typed_enum(value, _VALID_TRANSLATION_MODES)
         if name == "max_tokens":
@@ -778,8 +713,6 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
             for name in fields_
             if name in sub and _dashboard_value_is_valid(section, name, sub[name], base)
         }
-        if isinstance(changes.get("engine_chain"), list):
-            changes["engine_chain"] = tuple(changes["engine_chain"])
         if section == "subtitle" and any(
             key in sub for key in ("font_family", "font_size", "font_style")
         ) and _dashboard_font_is_valid(sub, base.subtitle.font):
@@ -794,12 +727,14 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
                 section_updates[section] = replace(getattr(base, section), **changes)
             except (TypeError, ValueError):
                 return base
-    top_changes = {
-        name: data[name]
-        for name in _DASHBOARD_OVERRIDE_TOP
-        if name in data
-        and _is_typed_enum(data[name], _VALID_BACKEND_MODES)
-    }
+    top_changes = {}
+    for name in _DASHBOARD_OVERRIDE_TOP:
+        value = data.get(name)
+        if not isinstance(value, str):
+            continue
+        normalized = _BACKEND_ALIASES.get(value, value)
+        if normalized in _VALID_BACKEND_MODES:
+            top_changes[name] = normalized
     if not section_updates and not top_changes:
         return base
     try:

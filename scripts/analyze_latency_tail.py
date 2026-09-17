@@ -209,16 +209,9 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
         "per_engine": per_engine,
         "top10_by_latency": top_rows,
         "code_verification": {
-            "openrouter_timeout_is_wired": True,
-            "source": "modules/translation_engines.py:911,1012",
-            "wiring": "self._timeout = cfg.translation.openrouter_timeout; "
-                      "urllib.request.urlopen(req, timeout=self._timeout)",
-            "timeout_semantics": "urllib timeout bounds blocking socket operations, not an "
-                                 "end-to-end wall-clock deadline for the whole response.",
-            "original_candidate_fix_status": "falsified: the configured timeout is already "
-                                             "passed to urlopen",
-            "safe_live_change_status": "blocked pending a reviewed hard-deadline/cancellation "
-                                       "design; do not emulate it with an abandoned worker thread",
+            "status": "historical_snapshot_only",
+            "note": "OpenRouter translation has been retired; current repository code must not "
+                    "be inferred from this historical latency report.",
         },
         "mode_coverage": {
             "translation_mode_present": sum(

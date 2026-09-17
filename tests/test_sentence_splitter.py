@@ -38,6 +38,9 @@ def _fast_cfg(
     m.splitter.provisional_enabled = False
     m.splitter.provisional_hold_seconds = 0.15
     m.translation.deepseek_route = "primary"
+    m.translation.translation_mode = "live"
+    m.live_engine = "deepseek"
+    m.clip_engine = "deepseek"
     return m
 
 
@@ -286,6 +289,32 @@ class TestSentenceSplitterThread(unittest.TestCase):
                     engine="elevenlabs",
                     profile_id="url",
                     utterance_id="utt-route-off",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.1,
+                )
+            )
+            time.sleep(0.3)
+            self.assertTrue(pq.empty())
+            stop.set()
+            thread.join(timeout=2)
+
+    def test_nvidia_backend_does_not_produce_deepseek_provisional_request(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        pq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.6, force_cut=0.8, pending_timeout=0.4)
+        cfg.splitter.provisional_enabled = True
+        cfg.live_engine = "nvidia"
+
+        with patch("modules.sentence_splitter.cfg", cfg):
+            thread = start(tq, sq, stop, provisional_queue=pq)
+            tq.put(
+                TranscriptionEvent(
+                    text="provisional nvidia source",
+                    engine="elevenlabs",
+                    profile_id="url",
+                    utterance_id="utt-nvidia",
                     avg_logprob=-0.2,
                     no_speech_prob=0.1,
                 )

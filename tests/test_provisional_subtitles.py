@@ -1,8 +1,10 @@
 from modules.provisional_subtitles import (
     ProvisionalCandidate,
     ProvisionalStore,
+    deepseek_provisional_eligible,
     provisional_fingerprint,
 )
+from config import cfg
 import threading
 
 
@@ -102,3 +104,26 @@ def test_preview_enqueue_is_ordered_before_finalizer_can_close_candidate():
 
     assert order == ["preview_enqueued", "closed"]
     assert store.is_closed(candidate.provisional_id)
+
+
+def test_deepseek_provisional_eligibility_respects_selected_backend():
+    original_backend = cfg.live_engine
+    original_mode = cfg.translation.translation_mode
+    original_route = cfg.translation.deepseek_route
+    try:
+        object.__setattr__(cfg.translation, "translation_mode", "live")
+        object.__setattr__(cfg.translation, "deepseek_route", "primary")
+        object.__setattr__(cfg, "live_engine", "deepseek")
+        assert deepseek_provisional_eligible()
+
+        for backend in ("nvidia", "ollama"):
+            object.__setattr__(cfg, "live_engine", backend)
+            assert not deepseek_provisional_eligible()
+
+        object.__setattr__(cfg, "live_engine", "deepseek")
+        object.__setattr__(cfg.translation, "deepseek_route", "off")
+        assert not deepseek_provisional_eligible()
+    finally:
+        object.__setattr__(cfg, "live_engine", original_backend)
+        object.__setattr__(cfg.translation, "translation_mode", original_mode)
+        object.__setattr__(cfg.translation, "deepseek_route", original_route)

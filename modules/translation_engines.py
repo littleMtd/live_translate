@@ -28,13 +28,8 @@ _NVIDIA_MAX_ATTEMPTS = 2
 _NVIDIA_RETRY_DELAY_SEC = 0.5
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
-_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_USER_AGENT = "live_translate/1.0"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
 _DEEPSEEK_USER_AGENT = "live_translate/1.0"
-_DEEPL_FREE_BASE_URL = "https://api-free.deepl.com/v2"
-_DEEPL_PRO_BASE_URL = "https://api.deepl.com/v2"
-_DEEPL_USER_AGENT = "live_translate/1.0"
 _PROTECTED_LIVE_BASE_CHAIN = ("groq",)
 # Shared invariants for the compact (TPM-budget) prompts. These engines now
 # carry most traffic on nvidia-degradation days, so the systematic error
@@ -57,10 +52,7 @@ _COMPACT_INVARIANTS = (
     "(4) Output Traditional Chinese (zh-TW) only, never Simplified; when a "
     "character form is uncertain, prefer Taiwan lexicon (影片, 遊戲, 網路, 品質)."
 )
-# One preamble for every compact engine: the groq/openrouter versions used to
-# be two hand-written near-copies that drifted apart for no reason (same
-# disease as the standard/qwen profile split). This merges the stronger
-# phrasing of each.
+# Compact fallback prompt used by Groq.
 _COMPACT_SYSTEM_PROMPT = (
     "You are a Traditional Chinese live subtitle translator. "
     "Translate coherent Korean, English, or Japanese livestream speech into natural zh-TW. "
@@ -403,11 +395,11 @@ def _build_user_message(text: str, incomplete: bool) -> str:
     return f"input: {text}"
 
 
-def _build_openrouter_history_user_message(text: str) -> str:
+def _build_compact_history_user_message(text: str) -> str:
     return f"[CONTEXT ONLY — DO NOT TRANSLATE OR REPEAT]\nsource: {text}"
 
 
-def _build_openrouter_current_user_message(text: str, incomplete: bool) -> str:
+def _build_compact_current_user_message(text: str, incomplete: bool) -> str:
     return (
         "[CURRENT INPUT — TRANSLATE ONLY THIS]\n"
         + _build_user_message(text, incomplete)
@@ -520,25 +512,6 @@ def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[s
     return _limited_history(history, config_prefix="groq_translation")
 
 
-def _limited_openrouter_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
-    return _limited_history(history, config_prefix="openrouter")
-
-
-def build_effective_qwen_messages(
-    text: str,
-    system_prompt: str,
-    incomplete: bool,
-    history: list[tuple[str, str]] | None,
-) -> tuple[tuple[str, str], ...]:
-    """Freeze the exact role/content sequence used by production Qwen."""
-    return _build_effective_compact_messages(
-        text,
-        _openrouter_system_prompt(system_prompt),
-        incomplete,
-        history,
-    )
-
-
 def build_effective_deepseek_messages(
     text: str,
     system_prompt: str,
@@ -551,6 +524,7 @@ def build_effective_deepseek_messages(
         _deepseek_system_prompt(system_prompt),
         incomplete,
         history,
+        config_prefix="deepseek",
     )
 
 
@@ -577,89 +551,17 @@ def _build_effective_compact_messages(
     effective_prompt: str,
     incomplete: bool,
     history: list[tuple[str, str]] | None,
+    *,
+    config_prefix: str,
 ) -> tuple[tuple[str, str], ...]:
     """Apply the shared bounded history and current-input message structure."""
-    limited_history = _limited_openrouter_history(history)
+    limited_history = _limited_history(history, config_prefix=config_prefix)
     messages: list[tuple[str, str]] = [("system", effective_prompt)]
     for source, target in limited_history:
-        messages.append(("user", _build_openrouter_history_user_message(source)))
+        messages.append(("user", _build_compact_history_user_message(source)))
         messages.append(("assistant", target))
-    messages.append(("user", _build_openrouter_current_user_message(text, incomplete)))
+    messages.append(("user", _build_compact_current_user_message(text, incomplete)))
     return tuple(messages)
-
-
-def _deepl_base_url(api_key: str) -> str:
-    """Select DeepL's API endpoint from the documented Free-key suffix."""
-    return _DEEPL_FREE_BASE_URL if (api_key or "").strip().endswith(":fx") else _DEEPL_PRO_BASE_URL
-
-
-@lru_cache(maxsize=1)
-def _deepl_ssl_context():
-    """Return a CA-bundle-backed context for DeepL's certificate chain.
-
-    Python's default Windows OpenSSL store can retain expired Let's Encrypt
-    intermediates and fail to build a chain that the Windows certificate store
-    accepts. Certifi provides a current Mozilla CA bundle while preserving
-    normal hostname and certificate verification.
-    """
-    import ssl
-
-    import certifi
-
-    return ssl.create_default_context(cafile=certifi.where())
-
-
-def _direct_translation_source_lang(text: str) -> str:
-    """Infer the source code for direct APIs after STT admits foreign speech.
-
-    Korean wins for mixed sentences. Japanese requires kana (not CJK alone),
-    and Latin-only speech is treated as English. This deliberately stays
-    conservative because names and game terms commonly contain Latin text.
-    """
-    text = text or ""
-    if any("\uac00" <= char <= "\ud7a3" for char in text):
-        return "KO"
-    kana_count = sum(
-        1 for char in text
-        if "\u3040" <= char <= "\u309f" or "\u30a0" <= char <= "\u30ff"
-    )
-    if kana_count >= 2:
-        return "JA"
-    latin_count = sum(char.isascii() and char.isalpha() for char in text)
-    if latin_count >= 3:
-        return "EN"
-    return "KO"
-
-
-def _deepl_context(
-    history: list[tuple[str, str]] | None,
-    system_prompt: str = "",
-) -> tuple[str, int]:
-    """Build the small, non-billed context supported by DeepL's text API."""
-    parts = ["Livestream subtitles for a Taiwan audience."]
-    entity_capsule = _request_entity_capsule(system_prompt)
-    if entity_capsule:
-        parts.append(entity_capsule)
-    activity = effective_activity_value(
-        getattr(cfg.translation, "current_activity", "")
-    )
-    if activity:
-        parts.append(f"Current stream activity: {activity}.")
-    profile_id = effective_profile_id(
-        getattr(cfg, "active_streamer_profile", "")
-    )
-    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
-        digest = _compact_profile_digest(profile_id)
-        if digest:
-            parts.append(digest.strip())
-
-    limited_history = _limited_history(history, config_prefix="deepl")
-    for source, target in limited_history:
-        parts.append(f"Recent subtitle: {source} -> {target}.")
-    max_chars = _clamp_int(
-        getattr(cfg.translation, "deepl_context_max_chars", 1400), 1400
-    )
-    return _truncate_for_groq(" ".join(parts), max_chars), len(limited_history)
 
 
 _DIGEST_MAX_RULES = 15
@@ -746,42 +648,6 @@ def _groq_system_prompt(system_prompt: str) -> str:
     return _append_request_entity_capsule(prompt, system_prompt)
 
 
-def _openrouter_capsule_prompt(profile_id: str) -> str:
-    """Production copy of the 40-case Qwen3-Next domain capsule."""
-    facts = get_translation_profile_facts(profile_id).strip()
-    prompt = f"""You translate noisy live-stream subtitles into natural colloquial Traditional Chinese used in Taiwan.
-
-[Contract]
-- Output only the translation. No labels, quotes, notes, explanations, apologies, or alternatives.
-- Translate coherent Korean, English, or Japanese speech. Use Traditional Chinese, never Simplified Chinese.
-- Input comes from STT and may be fragmented, cut off, misheard, or contain hallucinated syllables. Translate only what is actually supported; never invent or complete missing meaning.
-- For incoherent English-like word sequences, omit only the unsupported noise and still translate any coherent Korean; never literalize the noise into a plausible story. Preserve coherent English normally.
-- Preserve grammatical roles, direction, and sentence type: never reverse who does/wants what, and keep questions as questions.
-- Use recent message history only to resolve references and continuity. Never copy or import a name, number, or fact that appears only in history into the answer.
-- Preserve the speaker's tone, emotion, slang, and profanity. Avoid formal or literal phrasing.
-- Obey every exact profile mapping below. Profile rules override generic translation habits.
-- Keep official titles, game/skill names, streamer IDs, brands, and established English names unchanged.
-- For an unlisted Korean personal/stage name, preserve its Hangul instead of inventing a Chinese transliteration. Hangul is allowed only for such proper names or explicitly preserved profile terms.
-- Preserve numeric value and units exactly. Korean 만 means 10,000; never drop, duplicate, or change a digit or magnitude.
-- If the input is pure noise with no defensible meaning, output an empty string.
-
-[Active profile facts]
-{facts}
-
-Final check before answering: translation only; Traditional Chinese; no unsupported completion; exact profile names/titles; exact numbers and units."""
-    activity = activity_prompt_capsule(
-        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
-    )
-    if activity:
-        final_check = (
-            "\n\nFinal check before answering: translation only; Traditional Chinese; "
-            "no unsupported completion; exact profile names/titles; exact numbers and units."
-        )
-        prompt = prompt.removesuffix(final_check)
-        prompt += "\n\n" + activity + final_check
-    return prompt
-
-
 def _deepseek_capsule_prompt(profile_id: str) -> str:
     """Dedicated real-time production contract for DeepSeek V4 Flash."""
     facts = get_translation_profile_facts(profile_id).strip()
@@ -809,19 +675,6 @@ def _deepseek_capsule_prompt(profile_id: str) -> str:
     return prompt
 
 
-def _openrouter_system_prompt(system_prompt: str) -> str:
-    if not bool(getattr(cfg.translation, "openrouter_compact_prompt", True)):
-        return system_prompt
-    profile_id = (
-        effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if bool(getattr(cfg.translation, "use_profile", False))
-        else ""
-    )
-    return _append_request_entity_capsule(
-        _openrouter_capsule_prompt(profile_id), system_prompt
-    )
-
-
 def _deepseek_system_prompt(system_prompt: str) -> str:
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
@@ -833,28 +686,6 @@ def _deepseek_system_prompt(system_prompt: str) -> str:
     )
 
 
-def _deepl_prompt_signature() -> str:
-    """Stable cache identity for DeepL results (review P1).
-
-    DeepL ignores the LLM system prompt, so hashing that prompt both under-
-    and over-rotates its cache: changing deepl_target_lang or the context
-    budget kept hitting stale rows, while unrelated qwen-prompt edits
-    needlessly invalidated DeepL entries. Build the identity from what
-    actually shapes a DeepL response: target language, the per-call history
-    budget, and the non-history context (preamble + activity + profile
-    digest, already truncated the same way real requests are).
-    """
-    context, _ = _deepl_context(None)
-    return "|".join((
-        "deepl-v1",
-        str(getattr(cfg.translation, "deepl_target_lang", "")),
-        str(_clamp_int(getattr(cfg.translation, "deepl_context_window", 2), 2)),
-        str(_clamp_int(getattr(cfg.translation, "deepl_history_source_chars", 160), 160)),
-        str(_clamp_int(getattr(cfg.translation, "deepl_history_target_chars", 220), 220)),
-        context,
-    ))
-
-
 def effective_system_prompt_for_engine(
     engine: "TranslationEngine | str | None",
     system_prompt: str,
@@ -862,16 +693,8 @@ def effective_system_prompt_for_engine(
     engine_name = getattr(engine, "engine_name", engine) or ""
     if engine_name == "groq":
         return _groq_system_prompt(system_prompt)
-    if engine_name == "openrouter":
-        return _openrouter_system_prompt(system_prompt)
     if engine_name == "deepseek":
         return _deepseek_system_prompt(system_prompt)
-    if engine_name == "deepl":
-        # Not a prompt — DeepL never sees it. It is the engine's cache
-        # signature: translator hashes this into prompt_ver, which keys both
-        # the in-memory cache and the DB prompt_version column, so every
-        # setting above rotates the cache and nothing else does.
-        return _deepl_prompt_signature()
     return system_prompt
 
 
@@ -980,13 +803,13 @@ class TranslationEngine(ABC):
     """
     Common interface for all translation backends.
 
-    To add a new engine: see the step-by-step guide in config.py (_Translation.engine_chain).
+    Current production routes are fixed by ``effective_engine_chain_names``.
     """
 
     @property
     @abstractmethod
     def engine_name(self) -> str:
-        """Short identifier stored in the DB (e.g. 'nvidia', 'claude', 'openrouter')."""
+        """Short identifier stored in the DB (e.g. 'deepseek', 'groq', 'nvidia')."""
         ...
 
     @property
@@ -1197,335 +1020,6 @@ def call_engine_with_deadline(
     if completion.exception is not None:
         raise completion.exception
     return completion.result
-
-class ClaudeEngine(TranslationEngine):
-    def __init__(self):
-        self._client = None
-        self._timeout = float(
-            getattr(cfg.translation, "claude_timeout", 5.0) or 5.0
-        )
-        if not cfg.keys.anthropic:
-            log.error("ANTHROPIC_API_KEY not set")
-            return
-        try:
-            import anthropic
-            self._client = anthropic.Anthropic(api_key=cfg.keys.anthropic)
-            log.info("ClaudeEngine ready (model=%s)", cfg.translation.model)
-        except Exception as e:
-            log.error("Failed to init Anthropic: %s", e)
-
-    @property
-    def engine_name(self) -> str:
-        return "claude"
-
-    @property
-    def model_name(self) -> str:
-        return cfg.translation.model
-
-    @property
-    def available(self) -> bool:
-        return self._client is not None
-
-    def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
-        if self._client is None:
-            return None
-        timeout = float(
-            getattr(
-                self,
-                "_timeout",
-                getattr(cfg.translation, "claude_timeout", 5.0),
-            )
-            or 5.0
-        )
-        started_at: float | None = None
-        messages = []
-
-        def record(error: BaseException | None = None) -> None:
-            error_type, message_class = (
-                _classify_api_error(error) if error is not None else (None, None)
-            )
-            _set_last_engine_diagnostics(
-                "claude",
-                api_attempt_count=1 if started_at is not None else 0,
-                api_timeout_count=(
-                    1
-                    if error is not None and _is_timeout_exception(error)
-                    else 0
-                ),
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                api_first_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=_timeout_config_ms(timeout),
-                api_attempt_timeout_ms=_timeout_config_ms(timeout),
-                api_attempt_index=1 if started_at is not None else 0,
-                source_text_char_count=len(text or ""),
-                prompt_char_count=len(system_prompt or ""),
-                message_count=len(messages) if messages else None,
-                context_item_count=len(history or []),
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-            )
-
-        record()
-        try:
-            system_content: dict = {"type": "text", "text": system_prompt}
-            if cfg.translation.translation_mode == "live":
-                system_content["cache_control"] = {"type": "ephemeral"}
-            for ko, zh in _limited_primary_history(history, text):
-                messages.append({"role": "user", "content": f"input: {ko}"})
-                messages.append({"role": "assistant", "content": zh})
-            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
-            started_at = time.monotonic()
-            resp = self._client.messages.create(
-                model=cfg.translation.model,
-                max_tokens=cfg.translation.max_tokens,
-                temperature=cfg.translation.temperature,
-                system=[system_content],
-                messages=messages,
-                timeout=timeout,
-            )
-            log.info(
-                "Claude translate: %.0fms",
-                (time.monotonic() - started_at) * 1000,
-            )
-            _log_token_usage("Claude", getattr(resp, "usage", None))
-            result = resp.content[0].text.strip()
-            record()
-            log.debug("Claude: %.30s → %s", text, result)
-            return result
-        except Exception as e:
-            kind = classify_error(e)
-            if kind == "auth":
-                log.error("Claude auth error (check ANTHROPIC_API_KEY): %s", e)
-            elif kind == "rate_limit":
-                log.warning("Claude rate-limit: %s", e)
-            elif kind == "network":
-                log.warning("Claude network error: %s", e)
-            else:
-                log.error("Claude error: %s", e)
-            record(e)
-            return None
-
-
-class GoogleTranslateEngine(TranslationEngine):
-    """Google Cloud Translation API v2 (Basic). No LLM — ignores system_prompt."""
-
-    _URL = "https://translation.googleapis.com/language/translate/v2"
-
-    def __init__(self):
-        self._api_key = cfg.keys.google_translate
-        self._target_lang = cfg.translation.google_translate_lang
-        self._timeout = cfg.translation.google_translate_timeout
-        if not self._api_key:
-            log.error("GOOGLE_TRANSLATE_API_KEY not set")
-
-    @property
-    def engine_name(self) -> str:
-        return "google_translate"
-
-    @property
-    def model_name(self) -> str:
-        return "google-translate-v2"
-
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
-
-    def translate(self, text: str, _system_prompt: str, _incomplete: bool,
-                  _history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
-        if not self._api_key:
-            return None
-        timeout = float(
-            getattr(
-                self,
-                "_timeout",
-                getattr(cfg.translation, "google_translate_timeout", 5.0),
-            )
-            or 5.0
-        )
-        started_at: float | None = None
-        payload: bytes | None = None
-
-        def record(error: BaseException | None = None) -> None:
-            error_type, message_class = (
-                _classify_api_error(error) if error is not None else (None, None)
-            )
-            _set_last_engine_diagnostics(
-                "google_translate",
-                api_attempt_count=1 if started_at is not None else 0,
-                api_timeout_count=(
-                    1
-                    if error is not None and _is_timeout_exception(error)
-                    else 0
-                ),
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                api_first_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=_timeout_config_ms(timeout),
-                api_attempt_timeout_ms=_timeout_config_ms(timeout),
-                api_attempt_index=1 if started_at is not None else 0,
-                source_text_char_count=len(text or ""),
-                request_body_char_count=len(payload) if payload is not None else None,
-                message_count=1,
-                context_item_count=0,
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-            )
-
-        record()
-        try:
-            import urllib.request
-            import urllib.parse
-            import json as _json
-            payload = _json.dumps({
-                "q": text,
-                "source": _direct_translation_source_lang(text).lower(),
-                "target": self._target_lang,
-                "format": "text",
-            }).encode()
-            url = f"{self._URL}?key={urllib.parse.quote(self._api_key, safe='')}"
-            req = urllib.request.Request(url, data=payload,
-                                         headers={"Content-Type": "application/json"})
-            started_at = time.monotonic()
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data = _json.loads(r.read())
-            result = data["data"]["translations"][0]["translatedText"].strip()
-            record()
-            log.info(
-                "GoogleTranslate translate: %.0fms",
-                (time.monotonic() - started_at) * 1000,
-            )
-            log.debug("GoogleTranslate: %.30s → %s", text, result)
-            return result
-        except Exception as e:
-            safe = str(e).replace(self._api_key, "***") if self._api_key else str(e)
-            kind = classify_error(e)
-            if kind == "auth":
-                log.error("GoogleTranslate auth error (check GOOGLE_TRANSLATE_API_KEY): %s", safe)
-            elif kind == "rate_limit":
-                log.warning("GoogleTranslate rate-limit: %s", safe)
-            elif kind == "network":
-                log.warning("GoogleTranslate network error: %s", safe)
-            else:
-                log.error("GoogleTranslate error: %s", safe)
-            record(e)
-            return None
-
-
-class DeepLEngine(TranslationEngine):
-    """DeepL Text API v2 direct translation fallback.
-
-    DeepL does not accept a system prompt for this endpoint. Its short
-    ``context`` field is deliberately used instead: it improves continuity
-    without adding billable source characters or carrying the tested-worse
-    global custom instruction.
-    """
-
-    def __init__(self):
-        self._api_key = cfg.keys.deepl
-        self._target_lang = cfg.translation.deepl_target_lang
-        self._timeout = cfg.translation.deepl_timeout
-        self._base_url = _deepl_base_url(self._api_key)
-        if not self._api_key:
-            log.error("DEEPL_API_KEY not set")
-
-    @property
-    def engine_name(self) -> str:
-        return "deepl"
-
-    @property
-    def model_name(self) -> str:
-        return "deepl-api-v2"
-
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
-
-    def translate(self, text: str, system_prompt: str, _incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:  # pyright: ignore[reportUnusedParameter]
-        if not self._api_key:
-            return None
-
-        import json as _json
-        import urllib.error
-        import urllib.request
-
-        context, context_item_count = _deepl_context(history, system_prompt)
-        body: dict[str, object] = {
-            "text": [text],
-            "source_lang": _direct_translation_source_lang(text),
-            "target_lang": self._target_lang,
-        }
-        if context:
-            body["context"] = context
-        payload = _json.dumps(body, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self._base_url}/translate",
-            data=payload,
-            headers={
-                "Authorization": f"DeepL-Auth-Key {self._api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": _DEEPL_USER_AGENT,
-            },
-        )
-        started_at = time.monotonic()
-
-        def record(error: BaseException | None = None) -> None:
-            error_type, message_class = (
-                _classify_api_error(error) if error is not None else (None, None)
-            )
-            _set_last_engine_diagnostics(
-                "deepl",
-                api_attempt_count=1,
-                api_timeout_count=1 if error is not None and _is_timeout_exception(error) else 0,
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                api_first_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=_timeout_config_ms(self._timeout),
-                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
-                api_attempt_index=1,
-                source_text_char_count=len(text),
-                request_body_char_count=len(payload),
-                message_count=1,
-                context_item_count=context_item_count,
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-            )
-
-        try:
-            with urllib.request.urlopen(
-                req,
-                timeout=self._timeout,
-                context=_deepl_ssl_context(),
-            ) as response:
-                data = _json.loads(response.read())
-            result = data["translations"][0]["text"].strip()
-            record()
-            log.info("DeepL translate: %.0fms", (time.monotonic() - started_at) * 1000)
-            log.debug("DeepL: %.30s -> %s", text, result)
-            return result
-        except urllib.error.HTTPError as error:
-            if error.code in (401, 403):
-                log.error("DeepL auth error (check DEEPL_API_KEY)")
-            elif error.code == 429:
-                log.warning("DeepL rate-limit (429)")
-            elif error.code == 456:
-                log.warning("DeepL character quota exhausted (456)")
-            else:
-                log.error("DeepL HTTP %d", error.code)
-            record(error)
-            return None
-        except Exception as error:
-            kind = classify_error(error)
-            if _is_timeout_exception(error) or kind == "network":
-                log.warning("DeepL network/timeout error: %s", error)
-            else:
-                log.error("DeepL error: %s", error)
-            record(error)
-            return None
-
 
 class OllamaEngine(TranslationEngine):
     """Ollama local model via OpenAI-compatible /v1/chat/completions endpoint."""
@@ -1829,182 +1323,6 @@ class NvidiaEngine(TranslationEngine):
                 record_diagnostics(error_type, message_class)
                 return None
         return None
-
-
-class OpenRouterTranslationEngine(TranslationEngine):
-    """OpenRouter hosted OpenAI-compatible models. Used as paid live fallback."""
-
-    def __init__(self):
-        self._api_key = cfg.keys.openrouter
-        self._model = cfg.translation.openrouter_model
-        self._timeout = cfg.translation.openrouter_timeout
-        self._max_tokens = min(
-            cfg.translation.max_tokens,
-            _clamp_int(getattr(cfg.translation, "openrouter_max_tokens", 256), 256, 1),
-        )
-        _m = self._model.lower()
-        self._strip_think = "qwen3" in _m or "qwen-3" in _m
-        if not self._api_key:
-            log.error("OPENROUTER_API_KEY not set - OpenRouterTranslationEngine unavailable")
-        else:
-            log.info("OpenRouterTranslationEngine ready (model=%s)", self._model)
-
-    @property
-    def engine_name(self) -> str:
-        return "openrouter"
-
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
-
-    def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
-        return self.translate_messages(
-            build_effective_qwen_messages(text, system_prompt, incomplete, history),
-            source_text_char_count=len(text or ""),
-        )
-
-    def translate_messages(
-        self,
-        messages_frozen: tuple[tuple[str, str], ...],
-        *,
-        source_text_char_count: int | None = None,
-    ) -> str | None:
-        timeout_config_ms = _timeout_config_ms(self._timeout)
-        current_input = messages_frozen[-1][1] if messages_frozen else ""
-        if source_text_char_count is None:
-            source_text_char_count = len(current_input.removeprefix("input: "))
-        prompt_char_count = len(messages_frozen[0][1]) if messages_frozen else 0
-        history_count = max(0, (len(messages_frozen) - 2) // 2)
-
-        def record_diagnostics(
-            started_at: float | None = None,
-            api_error_type: str | None = None,
-            api_error_message_class: str | None = None,
-            request_body_char_count: int | None = None,
-            message_count: int | None = None,
-            api_cost_usd: float | None = None,
-        ) -> None:
-            _set_last_engine_diagnostics(
-                "openrouter",
-                0,
-                "",
-                api_attempt_count=1 if started_at is not None else 0,
-                api_timeout_count=1 if api_error_type == "timeout" else 0,
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=timeout_config_ms,
-                api_attempt_timeout_ms=timeout_config_ms,
-                api_attempt_index=1 if started_at is not None else 0,
-                source_text_char_count=source_text_char_count,
-                prompt_char_count=prompt_char_count,
-                request_body_char_count=request_body_char_count,
-                message_count=message_count,
-                context_item_count=history_count,
-                api_error_type=api_error_type,
-                api_error_message_class=api_error_message_class,
-                api_cost_usd=api_cost_usd,
-            )
-
-        record_diagnostics()
-        if not self._api_key:
-            return None
-        import urllib.request
-        import urllib.error
-        import json as _json
-
-        messages = [
-            {"role": role, "content": content}
-            for role, content in messages_frozen
-        ]
-
-        body = {
-            "model": self._model,
-            "messages": messages,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": self._max_tokens,
-            "reasoning": {"effort": "none", "exclude": True},
-        }
-        payload_text = _json.dumps(body)
-        payload = payload_text.encode()
-        request_body_char_count = len(payload_text)
-        message_count = len(messages)
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": _OPENROUTER_USER_AGENT,
-            "Authorization": f"Bearer {self._api_key}",
-        }
-        referer = str(getattr(cfg.translation, "openrouter_http_referer", "") or "").strip()
-        app_name = str(getattr(cfg.translation, "openrouter_app_name", "") or "").strip()
-        if referer:
-            headers["HTTP-Referer"] = referer
-        if app_name:
-            headers["X-Title"] = app_name
-
-        req = urllib.request.Request(_OPENROUTER_BASE_URL, data=payload, headers=headers)
-        started_at: float | None = None
-        try:
-            started_at = time.monotonic()
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                data = _json.loads(r.read())
-            log.info("OpenRouter translate: %.0fms", (time.monotonic() - started_at) * 1000)
-            usage = data.get("usage") or {}
-            _log_token_usage("OpenRouter", usage)
-            content = (data["choices"][0]["message"].get("content") or "").strip()
-            if self._strip_think:
-                content = _strip_think_tags(content)
-            record_diagnostics(
-                started_at=started_at,
-                request_body_char_count=request_body_char_count,
-                message_count=message_count,
-                api_cost_usd=usage.get("cost"),
-            )
-            log.debug("OpenRouter: %.30s -> %s", current_input, content)
-            return content or None
-        except urllib.error.HTTPError as e:
-            error_body = ""  # L6: don't shadow the request `body` dict
-            try:
-                error_body = e.read().decode()
-            except Exception:
-                pass
-            if e.code == 401:
-                log.error("OpenRouter auth error - OPENROUTER_API_KEY invalid or expired")
-            elif e.code == 402:
-                log.error("OpenRouter credits exhausted or payment required")
-            elif e.code == 429:
-                log.warning("OpenRouter rate-limit (429): %s", error_body or e)
-            else:
-                log.error("OpenRouter HTTP %d: %s", e.code, error_body or e)
-            error_type, message_class = _classify_api_error(e)
-            record_diagnostics(
-                started_at=started_at,
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-                request_body_char_count=request_body_char_count,
-                message_count=message_count,
-            )
-            return None
-        except Exception as e:
-            kind = classify_error(e)
-            if _is_timeout_exception(e) or kind == "network":
-                log.warning("OpenRouter network/timeout error: %s", e)
-            else:
-                log.error("OpenRouter error: %s", e)
-            error_type, message_class = _classify_api_error(e)
-            record_diagnostics(
-                started_at=started_at,
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-                request_body_char_count=request_body_char_count,
-                message_count=message_count,
-            )
-            return None
 
 
 class DeepSeekTranslationEngine(TranslationEngine):
@@ -2421,16 +1739,8 @@ class EngineSpec:
 
 
 _ENGINE_REGISTRY = MappingProxyType({
-    "claude": EngineSpec(ClaudeEngine, lambda: bool(cfg.keys.anthropic)),
-    "google_translate": EngineSpec(
-        GoogleTranslateEngine, lambda: bool(cfg.keys.google_translate)
-    ),
-    "deepl": EngineSpec(DeepLEngine, lambda: bool(cfg.keys.deepl)),
     "ollama": EngineSpec(OllamaEngine, lambda: True),
     "nvidia": EngineSpec(NvidiaEngine, lambda: bool(cfg.keys.nvidia)),
-    "openrouter": EngineSpec(
-        OpenRouterTranslationEngine, lambda: bool(cfg.keys.openrouter)
-    ),
     "deepseek": EngineSpec(
         DeepSeekTranslationEngine, lambda: bool(cfg.keys.deepseek)
     ),
@@ -2452,7 +1762,7 @@ def _make_engine(name: str) -> "TranslationEngine | None":
     """Instantiate an engine by name. Returns None if unavailable or unknown."""
     spec = _ENGINE_REGISTRY.get(name)
     if spec is None:
-        log.warning("Unknown engine %r in engine_chain — skipping", name)
+        log.warning("Unknown translation engine %r — skipping", name)
         return None
     if not spec.is_configured():
         return None
@@ -2467,56 +1777,46 @@ def engine_chain_config_key() -> tuple:
         mode,
         backend,
         getattr(cfg.translation, "deepseek_route", "off"),
-        tuple(getattr(cfg.translation, "engine_chain", ())),
-        getattr(cfg.translation, "model", ""),
-        getattr(cfg.translation, "claude_timeout", ""),
         getattr(cfg.ollama, "base_url", ""),
         getattr(cfg.ollama, "model", ""),
         getattr(cfg.ollama, "timeout", ""),
         getattr(cfg.nvidia, "model", ""),
         getattr(cfg.nvidia, "timeout", ""),
         getattr(cfg.nvidia, "live_timeout", ""),
-        getattr(cfg.translation, "openrouter_model", ""),
-        getattr(cfg.translation, "openrouter_timeout", ""),
         getattr(cfg.translation, "deepseek_model", ""),
         getattr(cfg.translation, "deepseek_timeout", ""),
         getattr(cfg.translation, "deepseek_max_tokens", ""),
+        getattr(cfg.translation, "deepseek_context_window", ""),
+        getattr(cfg.translation, "deepseek_history_source_chars", ""),
+        getattr(cfg.translation, "deepseek_history_target_chars", ""),
         getattr(cfg.translation, "groq_translation_model", ""),
         getattr(cfg.translation, "groq_translation_reasoning_effort", ""),
         getattr(cfg.translation, "groq_translation_timeout", ""),
-        getattr(cfg.translation, "google_translate_lang", ""),
-        getattr(cfg.translation, "google_translate_timeout", ""),
-        getattr(cfg.translation, "deepl_target_lang", ""),
-        getattr(cfg.translation, "deepl_timeout", ""),
-        getattr(cfg.translation, "deepl_context_window", ""),
-        getattr(cfg.translation, "deepl_history_source_chars", ""),
-        getattr(cfg.translation, "deepl_history_target_chars", ""),
-        getattr(cfg.translation, "deepl_context_max_chars", ""),
     )
 
 
 def effective_engine_chain_names() -> tuple[str, ...]:
-    """Return the protected live chain without dashboard-order influence."""
-    names = tuple(getattr(cfg.translation, "engine_chain", ()))
+    """Return the fixed provider route for the selected backend."""
     mode = str(getattr(cfg.translation, "translation_mode", "live") or "live")
     backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
-    if mode == "live" and backend == "anthropic":
+    if backend == "deepseek":
         if str(getattr(cfg.translation, "deepseek_route", "off")) == "primary":
             return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
-        # The rollback setting selects the fixed Groq-only emergency route even
-        # if a persisted dashboard config changed engine_chain.
         return _PROTECTED_LIVE_BASE_CHAIN
-    return names
+    if backend == "nvidia":
+        return ("nvidia", *_PROTECTED_LIVE_BASE_CHAIN)
+    if backend == "ollama":
+        return ("ollama",)
+    return ()
 
 
 def _build_engine_chain() -> "list[TranslationEngine]":
     """Build an ordered list of available engines.
 
     Picks cfg.live_engine or cfg.clip_engine based on current translation_mode.
-    "ollama" bypasses engine_chain entirely.
-    "nvidia" uses NvidiaEngine first, then appends available engines from engine_chain.
-    "anthropic" (default) uses the fixed protected live chain; non-live routes
-    retain their configured engine_chain behavior.
+    Ollama is a local-only route.
+    "nvidia" uses NvidiaEngine followed by the fixed Groq fallback.
+    "deepseek" uses DeepSeek followed by Groq, or Groq-only emergency mode.
     """
     mode = cfg.translation.translation_mode
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine
@@ -2524,17 +1824,6 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     if engine_name == "ollama":
         engine = _make_engine("ollama")
         return [engine] if engine is not None else []
-    if engine_name == "nvidia":
-        e = _make_engine("nvidia")
-        if e is None:
-            log.error("NvidiaEngine unavailable — check NVIDIA_API_KEY")
-            return []
-        fallbacks = [fb for name in cfg.translation.engine_chain
-                     if (fb := _make_engine(name)) is not None]
-        if fallbacks:
-            log.info("NvidiaEngine ready with fallback chain: %s",
-                     [fb.engine_name for fb in fallbacks])
-        return [e] + fallbacks
     engines = [e for name in effective_engine_chain_names()
                if (e := _make_engine(name)) is not None]
     if not engines:

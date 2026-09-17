@@ -1,12 +1,5 @@
-import sys
 import unittest
-from unittest.mock import MagicMock, patch
 from utils.api_retry import classify_error, _RETRY_DELAYS
-
-# Stub heavy packages so translator can be imported
-for _mod in ("anthropic", "google", "google.genai"):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
 
 
 class TestClassifyError(unittest.TestCase):
@@ -58,48 +51,6 @@ class TestClassifyError(unittest.TestCase):
     def test_other_value_error(self):
         self.assertEqual(classify_error(ValueError("bad value")), "other")
 
-
-class TestTranslatorRetry(unittest.TestCase):
-
-    def _make_claude(self, side_effect):
-        from modules.translation_engines import ClaudeEngine
-        e = ClaudeEngine.__new__(ClaudeEngine)
-        e._client = MagicMock()
-        e._client.messages.create.side_effect = side_effect
-        return e
-
-    def test_no_retry_on_plain_exception(self):
-        e = self._make_claude(Exception("generic error"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
-        mock_sleep.assert_not_called()
-
-    def test_no_retry_on_auth_error(self):
-        AuthErr = type("AuthenticationError", (Exception,), {})
-        e = self._make_claude(AuthErr("invalid key"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
-        mock_sleep.assert_not_called()
-
-    def test_rate_limit_returns_none_immediately_no_sleep(self):
-        RateErr = type("RateLimitError", (Exception,), {})
-        e = self._make_claude(RateErr("429"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
-        mock_sleep.assert_not_called()
-        self.assertEqual(e._client.messages.create.call_count, 1)
-
-    def test_network_error_returns_none_immediately(self):
-        NetErr = type("APIConnectionError", (Exception,), {})
-        e = self._make_claude(NetErr("connection reset"))
-        with patch("time.sleep") as mock_sleep:
-            result = e.translate("안녕", "system", False)
-        self.assertIsNone(result)
-        self.assertEqual(e._client.messages.create.call_count, 1)
-        mock_sleep.assert_not_called()
 
 
 if __name__ == "__main__":

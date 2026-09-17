@@ -44,12 +44,8 @@ def _selected_translation_backend() -> str:
     return cfg.live_engine
 
 
-def _warn_missing_engine_chain_keys() -> list[str]:
-    chain = (
-        effective_engine_chain_names()
-        if _selected_translation_backend() == "anthropic"
-        else tuple(cfg.translation.engine_chain)
-    )
+def _warn_missing_route_keys() -> list[str]:
+    chain = effective_engine_chain_names()
     available = [name for name in chain
                  if engine_is_configured(name)]
     missing = [name for name in chain if name not in available]
@@ -76,32 +72,16 @@ def _validate_config(stt_only: bool):
     if stt_only:
         return
     backend = _selected_translation_backend()
-    if backend != "anthropic":
-        if not engine_is_configured(backend):
-            log.error("Startup error: no API key set for translation backend %r", backend)
-            sys.exit(1)
-        if backend == "nvidia":
-            _warn_missing_engine_chain_keys()
-    else:
-        if (
-            cfg.translation.translation_mode == "live"
-            and cfg.translation.deepseek_route == "primary"
-        ):
-            required = [
-                name for name in ("deepseek", "openrouter")
-                if not engine_is_configured(name)
-            ]
-            if required:
-                log.error(
-                    "Startup error: protected DeepSeek route requires API keys for %s",
-                    ", ".join(required),
-                )
-                sys.exit(1)
-        available = _warn_missing_engine_chain_keys()
-        if not available:
-            log.error("Startup error: no API key set for any engine in engine_chain %s",
-                      cfg.translation.engine_chain)
-            sys.exit(1)
+    route = tuple(effective_engine_chain_names())
+    primary = route[:1]
+    if not primary or not engine_is_configured(primary[0]):
+        log.error(
+            "Startup error: translation route %r requires an API key for %s",
+            backend,
+            primary[0] if primary else backend,
+        )
+        sys.exit(1)
+    _warn_missing_route_keys()
     _validate_scene_vision_config()
 
 
