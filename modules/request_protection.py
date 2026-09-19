@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 
 from modules.semantic_terminology import (
     SemanticTerminologyEscrow,
@@ -22,8 +23,18 @@ from modules.unknown_name_escrow import (
 )
 
 
-PROTECTION_POLICY_VERSION = "request-source-protection-v1"
+PROTECTION_POLICY_VERSION = "request-source-protection-v2"
 _PROTECTION_POLICY_VERSION = PROTECTION_POLICY_VERSION
+_HONORIFIC_PARTICLE = r"(?:께서|에게|보다|처럼|하고|한테|은|는|이|가|을|를|께|도|와|과|랑|의)"
+_NON_HANGUL_OR_END = r"(?=$|[^\uac00-\ud7a3])"
+_SOURCE_HONORIFIC_BOUNDARY = (
+    rf"(?=$|[^\uac00-\ud7a3]|{_HONORIFIC_PARTICLE}{_NON_HANGUL_OR_END})"
+)
+_OPTIONAL_HONORIFIC_PARTICLE = rf"{_HONORIFIC_PARTICLE}?"
+
+
+def _contains_hangul_syllable(value: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in value)
 
 
 @dataclass(frozen=True)
@@ -36,6 +47,7 @@ class ProtectedSourceSpan:
     rendering: str
     rule_id: str = ""
     placeholder: str = ""
+    source_honorifics: tuple[str, ...] = ()
 
     def identity_row(self) -> dict[str, object]:
         return {
@@ -45,6 +57,7 @@ class ProtectedSourceSpan:
             "rendering": self.rendering,
             "rule_id": self.rule_id,
             "placeholder": self.placeholder,
+            "source_honorifics": list(self.source_honorifics),
         }
 
 
@@ -91,10 +104,36 @@ class RequestProtection:
     def approved_hangul_terms(self) -> tuple[str, ...]:
         return self.unresolved_referents.approved_hangul_terms
 
+    def _normalize_resolved_entity_honorifics(self, candidate: str) -> str:
+        """Remove only source-proven Korean honorific residue from canonicals.
+
+        A reviewed Hangul canonical is allowed to remain in a zh-TW subtitle,
+        but a provider may copy an adjacent Korean ``님``/``씨`` as part of the
+        name.  The canonical owner also owns that exact source morphology for
+        this request.  Limit replacements to the number observed in the source
+        so this cannot become a general Hangul cleanup path.
+        """
+        normalized = candidate
+        for span in self.spans:
+            if (
+                span.owner != "resolved_entity"
+                or not span.source_honorifics
+                or not _contains_hangul_syllable(span.rendering)
+            ):
+                continue
+            for honorific in span.source_honorifics:
+                pattern = re.compile(
+                    rf"{re.escape(span.rendering)}\s*{re.escape(honorific)}"
+                    + _OPTIONAL_HONORIFIC_PARTICLE
+                    + _NON_HANGUL_OR_END
+                )
+                normalized = pattern.sub(span.rendering, normalized, count=1)
+        return normalized
+
     def evaluate_provider_candidate(
         self, candidate: str | None
     ) -> ProviderProtectionEvaluation:
-        value = candidate or ""
+        value = self._normalize_resolved_entity_honorifics(candidate or "")
         semantic_passed, semantic_reason = (
             self.semantic_terms.evaluate_provider_candidate(value)
         )
@@ -155,13 +194,32 @@ def resolve_request_protection(
     known_source_spans: tuple[tuple[int, int], ...] = (),
 ) -> RequestProtection:
     """Resolve every deterministic rendering owner before any provider call."""
+    resolved_with_morphology: list[ProtectedSourceSpan] = []
+    for span in resolved_spans:
+        honorifics: list[str] = []
+        for _, end in span.source_spans:
+            match = re.match(
+                r"\s*(님|씨)" + _SOURCE_HONORIFIC_BOUNDARY,
+                source[end:],
+            )
+            if match:
+                honorifics.append(match.group(1))
+        resolved_with_morphology.append(ProtectedSourceSpan(
+            owner=span.owner,
+            source_text=span.source_text,
+            source_spans=span.source_spans,
+            rendering=span.rendering,
+            rule_id=span.rule_id,
+            placeholder=span.placeholder,
+            source_honorifics=tuple(honorifics),
+        ))
     unresolved = resolve_unknown_name_escrow(
         source,
         known_source_spans=known_source_spans,
     )
     semantic = resolve_semantic_terminology(unresolved.provider_source)
 
-    protected: list[ProtectedSourceSpan] = list(resolved_spans)
+    protected: list[ProtectedSourceSpan] = resolved_with_morphology
     protected.extend(
         ProtectedSourceSpan(
             owner="unresolved_referent",

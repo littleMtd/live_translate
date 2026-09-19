@@ -3532,6 +3532,43 @@ class TestPreserveAsIsAcceptance(unittest.TestCase):
             self.assertTrue(_looks_untranslated("Wish Me Love", "Wish Me Love"))
 
 
+class TestReviewedEntityHonorificFinalization(unittest.TestCase):
+    def test_run_20260919_reviewed_hangul_name_honorific_is_finalized_locally(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        source = "영화 같던 이 밤의 기억 속에 머물러 줘. 랑코 님 보단이라고 하면 안 되나요?"
+
+        with _active_translation_profile("url"):
+            guard = _translation_output_guard(
+                engine,
+                "請留在這宛如電影般的夜晚記憶裡。不能說是「比랑코님還不如」嗎？",
+                source,
+            )
+
+        self.assertNotIn("reason", guard)
+        self.assertEqual(
+            guard["candidate_output"],
+            "請留在這宛如電影般的夜晚記憶裡。不能說是「比랑코還不如」嗎？",
+        )
+        self.assertEqual(guard["canonical_obligations"]["satisfied"], ["랑코"])
+        spans = guard["request_protection"]["spans"]
+        self.assertEqual(spans[0]["source_honorifics"], ["님"])
+
+    def test_reviewed_name_honorific_cleanup_requires_matching_source_morphology(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+
+        with _active_translation_profile("url"):
+            guard = _translation_output_guard(
+                engine,
+                "比랑코님更好嗎？",
+                "랑코보다 낫다고 하면 안 되나요?",
+            )
+
+        self.assertEqual(guard["reason"], "unexpected_hangul")
+        self.assertEqual(guard["candidate_output"], "比랑코님更好嗎？")
+
+
 class TestFallbackProbe(unittest.TestCase):
     def test_probe_stop_during_commit_rolls_back_and_emits_nothing(self):
         fallback_events = []
