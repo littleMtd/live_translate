@@ -20,23 +20,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# config.py translation knobs as of 2026-06-24 (cite as baseline; verify before acting).
-CONFIG_BASELINE = {
-    "nvidia_live_timeout_s": 5,
-    "nvidia_clip_timeout_s": 60,
-    "engine_chain": ["openrouter", "groq"],
-    "openrouter_timeout_s": 8,
-    "groq_translation_timeout_s": 12,
-    "claude_timeout_s": 5,
-}
-ENGINE_TIMEOUT_S = {
-    "nvidia": 5,        # live_timeout; clip path is 60
-    "openrouter": 8,
-    "groq": 12,
-    "claude": 5,
-}
-
-
 def _load(paths: list[str]) -> list[dict]:
     out = []
     for path in paths:
@@ -50,7 +33,8 @@ def _load(paths: list[str]) -> list[dict]:
                 except (json.JSONDecodeError, ValueError):
                     continue
                 if (isinstance(e, dict) and e.get("event_type") == "translation"
-                        and e.get("schema_version") == 2 and e.get("status") == "success"):
+                        and isinstance(e.get("schema_version"), int)
+                        and e["schema_version"] >= 2 and e.get("status") == "success"):
                     out.append(e)
     return out
 
@@ -66,6 +50,24 @@ def _pcts(values: list[float]) -> dict:
 def _num(e: dict, field: str) -> float:
     v = e.get(field)
     return float(v) if isinstance(v, (int, float)) else 0.0
+
+
+def _attempts(event: dict) -> list[dict]:
+    raw = event.get("attempts")
+    return [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+
+
+def _attempt_timeout_ms(attempt: dict) -> float:
+    return _num(attempt, "api_attempt_timeout_ms") or _num(attempt, "timeout_config_ms")
+
+
+def _comparable_attempt_wall_ms(attempt: dict) -> float:
+    final_attempt = _num(attempt, "api_final_attempt_ms")
+    if final_attempt > 0:
+        return final_attempt
+    if _num(attempt, "api_attempt_count") <= 1:
+        return _num(attempt, "api_total_wall_ms")
+    return 0.0
 
 
 def _tail_quantile_arg(value: str) -> float:
@@ -113,27 +115,19 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
         if _num(e, "latency_ms") - _num(e, "api_total_wall_ms")
         >= 0.5 * max(1.0, _num(e, "latency_ms"))
     )
-    nvidia_retry_rescues = [
-        e
-        for e in ev
-        if e.get("engine") == "nvidia" and _num(e, "retry_count") > 0
-    ]
-    openrouter_rows = [e for e in ev if e.get("engine") == "openrouter"]
-    openrouter_tail_rows = [e for e in tail if e.get("engine") == "openrouter"]
-    openrouter_double_nvidia_timeout_signature = sum(
-        1
-        for e in openrouter_tail_rows
-        if 9000 <= max(0.0, _num(e, "latency_ms") - _num(e, "api_total_wall_ms")) <= 12000
-    )
-    openrouter_final_api_over_socket_timeout = sum(
-        1
-        for e in openrouter_rows
-        if _num(e, "api_total_wall_ms") > CONFIG_BASELINE["openrouter_timeout_s"] * 1000
-    )
+    tail_attempts = [attempt for event in tail for attempt in _attempts(event)]
 
     # Per-engine tail breakdown + observed engine_latency vs configured timeout.
     per_engine = {}
-    for engine in sorted({e.get("engine") for e in tail if e.get("engine")}):
+    engines = {
+        str(engine)
+        for engine in (
+            *(e.get("engine") for e in tail),
+            *(attempt.get("engine") for attempt in tail_attempts),
+        )
+        if engine
+    }
+    for engine in sorted(engines):
         rows = [e for e in tail if e.get("engine") == engine]
         eng_lat = _pcts([_num(e, "engine_latency_ms") for e in rows])
         final_api_lat = _pcts([
@@ -146,8 +140,23 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
             for e in rows
             if _num(e, "api_total_wall_ms") > 0
         ])
-        configured = ENGINE_TIMEOUT_S.get(engine)
-        observed_max_s = (eng_lat.get("max") or 0) / 1000.0
+        engine_attempts = [
+            attempt for attempt in tail_attempts if attempt.get("engine") == engine
+        ]
+        timeout_values = sorted({
+            _attempt_timeout_ms(attempt)
+            for attempt in engine_attempts
+            if _attempt_timeout_ms(attempt) > 0
+        })
+        timed_attempts = [
+            attempt for attempt in engine_attempts
+            if _attempt_timeout_ms(attempt) > 0
+            and _comparable_attempt_wall_ms(attempt) > 0
+        ]
+        over_timeout = sum(
+            1 for attempt in timed_attempts
+            if _comparable_attempt_wall_ms(attempt) > _attempt_timeout_ms(attempt) * 1.1
+        )
         per_engine[engine] = {
             "tail_count": len(rows),
             "engine_latency_ms": eng_lat,
@@ -156,11 +165,13 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
             "final_api_diagnostics_coverage": (
                 final_api_lat.get("n", 0) / len(rows) if rows else 0.0
             ),
-            "configured_timeout_s": configured,
-            "observed_max_s": round(observed_max_s, 1),
-            "timeout_appears_unenforced": bool(
-                configured is not None and observed_max_s > 2 * configured
+            "attempt_ledger_rows": len(engine_attempts),
+            "comparable_attempt_timeout_coverage": (
+                len(timed_attempts) / len(engine_attempts) if engine_attempts else 0.0
             ),
+            "recorded_timeout_ms": timeout_values,
+            "attempts_over_recorded_timeout_margin": over_timeout,
+            "timeout_appears_unenforced": bool(timed_attempts and over_timeout),
         }
 
     top = sorted(tail, key=lambda e: -_num(e, "latency_ms"))[:10]
@@ -177,6 +188,8 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
         "queue_wait_ms": int(_num(e, "queue_wait_ms")),
         "predecessor_stall_ms": int(_num(e, "predecessor_stall_ms")),
         "forced": e.get("forced"),
+        "schema_version": e.get("schema_version"),
+        "attempt_count": len(_attempts(e)),
     } for e in top]
 
     return {
@@ -186,8 +199,8 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
             "--events \"logs/runtime_events_2026061*.jsonl\" "
             "\"logs/runtime_events_2026062[0-4].jsonl\""
         ),
-        "config_baseline": CONFIG_BASELINE,
-        "population": "schema_version==2 success translations",
+        "population": "schema_version>=2 success translations",
+        "schema_version_distribution": dict(Counter(e.get("schema_version") for e in ev)),
         "overall_latency_ms": overall,
         "tail_quantile": tail_quantile,
         "tail_threshold_ms": thr,
@@ -208,10 +221,10 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
         "tail_engine_distribution": dict(Counter(e.get("engine") for e in tail)),
         "per_engine": per_engine,
         "top10_by_latency": top_rows,
-        "code_verification": {
-            "status": "historical_snapshot_only",
-            "note": "OpenRouter translation has been retired; current repository code must not "
-                    "be inferred from this historical latency report.",
+        "timeout_evidence": {
+            "source": "per-attempt runtime ledger",
+            "margin": "comparable single/final attempt wall time > 1.1 * recorded attempt timeout",
+            "limitation": "Rows without attempt ledgers, recorded timeout values, or a single/final-attempt wall time remain unattributable.",
         },
         "mode_coverage": {
             "translation_mode_present": sum(
@@ -223,45 +236,11 @@ def build_report(paths: list[str], *, tail_quantile: float = 0.95) -> dict:
                                    "historical corpus predates the diagnostic and remains "
                                    "unattributable until a new run is collected",
         },
-        "nvidia_retry_tradeoff": {
-            "current_max_attempts": 2,
-            "retry_delay_s": 0.5,
-            "code_source": "modules/translation_engines.py:13-14,800-901",
-            "successful_translations_rescued_by_nvidia_retry": len(nvidia_retry_rescues),
-            "success_population": len(ev),
-            "rescue_rate": round(len(nvidia_retry_rescues) / len(ev), 4) if ev else 0.0,
-            "rescue_latency_ms": _pcts([_num(e, "latency_ms") for e in nvidia_retry_rescues]),
-            "openrouter_tail_rows_with_9_to_12s_pre_final_residual": (
-                openrouter_double_nvidia_timeout_signature
-            ),
-            "candidate_delta": "live mode only: NVIDIA max attempts 2 -> 1 before OpenRouter fallback",
-            "expected_effect": "Remove roughly one 5s socket timeout plus the 0.5s retry "
-                               "delay from fallback-bound live cases.",
-            "tradeoff": "NVIDIA retry rescues would instead use the paid fallback; do not "
-                        "apply to clip mode or while translation_mode is absent from events.",
-            "implementation_status": "proposal_only_until_mode_is_logged_and_reviewed",
-        },
-        "openrouter_wall_time_gap": {
-            "successful_openrouter_translations": len(openrouter_rows),
-            "final_api_over_configured_socket_timeout": openrouter_final_api_over_socket_timeout,
-            "final_api_wall_ms": _pcts([
-                _num(e, "api_total_wall_ms")
-                for e in openrouter_rows
-                if _num(e, "api_total_wall_ms") > 0
-            ]),
-            "finding": "Rare final OpenRouter API calls exceed the per-blocking-operation "
-                       "socket timeout; a separate reviewed end-to-end deadline is required.",
-        },
         "caveats": {
-            "timeout_appears_unenforced_is_heuristic": "observed_max_s > 2x configured. It "
-                "flags a gap to verify in code, not a proven bug.",
-            "nvidia_live_vs_clip": "ENGINE_TIMEOUT_S uses nvidia live_timeout=5, but clip/offline "
-                "translations use timeout=60. The events here are not split by live/clip, so a "
-                "nvidia observed_max of ~23s may be legitimate clip-mode, not an unenforced live "
-                "timeout. Resolve live/clip before acting on the nvidia flag.",
-            "openrouter_single_value": "openrouter_timeout=8 has no live/clip split, so an "
-                "observed 120s is ~15x the only configured value. This proves a wall-time gap, "
-                "but not missing wiring: urlopen already receives the configured socket timeout.",
+            "timeout_appears_unenforced_is_heuristic": "The 10% margin flags a runtime wall-time "
+                "gap for code verification; it does not prove which blocking operation exceeded its deadline.",
+            "legacy_rows": "Schema-v2 rows without attempt ledgers remain usable for aggregate "
+                "latency, but cannot support attempt-level timeout attribution.",
         },
     }
 

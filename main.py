@@ -288,10 +288,24 @@ def main():
         _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         sys.exit(1)
 
-    threads = [audio_thread, profile_control.start(stop_event)]
+    threads = [audio_thread]
     pipeline_error: Exception | None = None
+    fatal_worker_errors: list[BaseException] = []
+
+    def record_fatal_worker_error(exc: BaseException) -> None:
+        fatal_worker_errors.append(exc)
+
     try:
-        threads.append(stt.start(audio_queue, text_queue, stop_event, pause_event))
+        threads.append(profile_control.start(stop_event))
+        threads.append(
+            stt.start(
+                audio_queue,
+                text_queue,
+                stop_event,
+                pause_event,
+                on_fatal=record_fatal_worker_error,
+            )
+        )
         threads.append(
             sentence_splitter.start(
                 text_queue,
@@ -331,6 +345,10 @@ def main():
         log.error("Pipeline aborted: %s", exc, exc_info=True)
     finally:
         _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
+        if pipeline_error is None and fatal_worker_errors:
+            pipeline_error = RuntimeError(
+                f"Background worker failed: {fatal_worker_errors[0]}"
+            )
         if ocr_proc is not None and ocr_proc.poll() is None:
             ocr_proc.terminate()
             log.info("Donation OCR panel terminated")

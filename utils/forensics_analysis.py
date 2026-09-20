@@ -348,6 +348,19 @@ def analyze_forensics_bundle(bundle: Path) -> dict[str, Any]:
             elif len(resolved) != 1:
                 issues.append(_issue("missing_translation_request_contract", "provider attempt contract does not resolve uniquely", event_ordinal=ordinal, reference=contract_id))
                 chain_issues.append("missing_translation_request_contract")
+            exact_messages_available = bool(
+                len(resolved) == 1
+                and resolved[0].get("exact_messages_available") is True
+            )
+            if len(resolved) == 1 and not exact_messages_available:
+                issues.append(_issue(
+                    "exact_provider_messages_unavailable",
+                    "provider attempt is linked to a synthetic message manifest; exact provider-bound messages were not recorded",
+                    severity="unresolved",
+                    event_ordinal=ordinal,
+                    reference=contract_id,
+                ))
+                chain_issues.append("exact_provider_messages_unavailable")
             guard = attempt.get("output_guard") if isinstance(attempt.get("output_guard"), dict) else {}
             if not guard:
                 issues.append(_issue("adjudication_evidence_missing", "provider attempt has no stage-level adjudication ledger", severity="unresolved", event_ordinal=ordinal, reference=str(index)))
@@ -372,6 +385,7 @@ def analyze_forensics_bundle(bundle: Path) -> dict[str, Any]:
                 "status": attempt.get("status", ""),
                 "request_contract_id": contract_id,
                 "contract_event_ordinal": resolved[0].get("_bundle_ordinal") if len(resolved) == 1 else None,
+                "exact_messages_available": exact_messages_available,
                 "adjudication": {
                     "disposition": guard.get("disposition", ""),
                     "primary_reason": guard.get("primary_reason", guard.get("reason", "")),
@@ -408,7 +422,14 @@ def analyze_forensics_bundle(bundle: Path) -> dict[str, Any]:
         if cache_contract.get("cache_key_sha256"):
             cache_payload = {
                 key: cache_contract.get(key)
-                for key in ("prepared_source_text", "incomplete", "prompt_version", "route_id", "history_cohort_id")
+                for key in (
+                    "prepared_source_text",
+                    "incomplete",
+                    "prompt_version",
+                    "request_contract_id",
+                    "route_id",
+                    "history_cohort_id",
+                )
             }
             if str(cache_contract["cache_key_sha256"]) != stable_identity(cache_payload):
                 issues.append(_issue("cache_key_hash_mismatch", "cache lookup key hash is invalid", event_ordinal=ordinal))

@@ -20,6 +20,11 @@ Core scripts worth checking first:
 - `scripts/analyze_runtime_events.py`
 - `scripts/analyze_forensics_bundle.py`
 - `scripts/analyze_latency_tail.py`
+- `scripts/suggest_identity_ocr_aliases.py`: mines only persisted calibrated
+  identity-ROI observations, ranks repeated exact OCR strings against reviewed
+  member aliases, and emits advisory JSON/Markdown candidates with collision
+  margins. It never activates an alias or modifies the registry; every
+  candidate remains manual-review-only.
 - `scripts/analyze_groq_error_bursts.py`
 - `scripts/analyze_cache.py`
 - `scripts/check_translator_core.py`
@@ -44,6 +49,26 @@ Core scripts worth checking first:
   Missing or ambiguous lineage stays unresolved. `--json-output` writes the
   machine report and `--report-output` writes compact Markdown; exit code 2
   means an integrity error was found.
+- `scripts/analyze_latency_tail.py`: accepts successful translation events
+  from runtime schema v2 onward. Aggregate latency remains available for legacy
+  rows; timeout attribution requires a per-attempt ledger with its recorded
+  timeout. The analyzer does not infer current timeouts from repository
+  defaults or apply retired-provider assumptions to current runs.
+
+Identity OCR alias candidate report:
+```powershell
+.\live-subtitle-env\Scripts\python.exe scripts\suggest_identity_ocr_aliases.py `
+  "logs\runtime_events_*.jsonl" `
+  --json-output scratch\analysis\identity_ocr_alias_candidates.json `
+  --report-output scratch\analysis\identity_ocr_alias_candidates.md
+```
+
+Only `profile_resolution` observations with
+`identity_authority=calibrated_channel_identity_roi` and a recorded identity
+read are counted. Resolved input paths are deduplicated before counting.
+Repeated observations in one run may reach `review`; `run_count` remains
+separate so a human reviewer can distinguish recurrence across sessions. A
+`review` row is still only an advisory candidate, never activation evidence.
 
 The next blind semantic pass is not another repository script. It uses the
 designated ChatGPT Project through computer use, following

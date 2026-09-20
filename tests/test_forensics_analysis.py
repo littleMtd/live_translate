@@ -33,12 +33,15 @@ def _write_bundle(tmp_path: Path, *, corrupt: set[str] | None = None) -> Path:
         "provider_source_sha256": sha256_text("안녕"),
         "effective_system_prompt": "translate",
         "effective_system_prompt_sha256": sha256_text("translate"),
+        "exact_messages_available": "synthetic_messages" not in corrupt,
         "messages": list(message_manifest(messages)),
         "messages_sha256": stable_identity({"messages": list(messages)}),
         "artifact_hashes": {},
     }
     if "message_hash" in corrupt:
         translation_contract["messages"][1]["content_sha256"] = "bad"
+    if "missing_exact_messages_flag" in corrupt:
+        translation_contract.pop("exact_messages_available")
     if "source_hash" in corrupt:
         translation_contract["provider_source_sha256"] = "bad"
     events = [
@@ -91,7 +94,23 @@ def _write_bundle(tmp_path: Path, *, corrupt: set[str] | None = None) -> Path:
                     "failed_invariants": [],
                 },
             }],
-            "cache_lookup_contract": {"lookup_result": "miss"},
+            "cache_lookup_contract": {
+                "prepared_source_text": "안녕",
+                "incomplete": False,
+                "prompt_version": "prompt-v1",
+                "request_contract_id": "tr-c1",
+                "route_id": "deepseek:deepseek-v4-flash",
+                "history_cohort_id": "session:unknown:1",
+                "cache_key_sha256": stable_identity({
+                    "prepared_source_text": "안녕",
+                    "incomplete": False,
+                    "prompt_version": "prompt-v1",
+                    "request_contract_id": "tr-c1",
+                    "route_id": "deepseek:deepseek-v4-flash",
+                    "history_cohort_id": "session:unknown:1",
+                }),
+                "lookup_result": "miss",
+            },
         },
     ]
     if "ambiguous_sentence" in corrupt:
@@ -184,6 +203,28 @@ def test_contract_index_content_must_match_runtime_source_of_truth(tmp_path):
 
     assert "contract_index_content_mismatch" in _codes(report)
     assert report["integrity_ok"] is False
+
+
+def test_synthetic_provider_messages_are_an_explicit_attribution_gap(tmp_path):
+    report = analyze_forensics_bundle(
+        _write_bundle(tmp_path, corrupt={"synthetic_messages"})
+    )
+
+    assert report["integrity_ok"] is True
+    assert "exact_provider_messages_unavailable" in _codes(report)
+    chain = report["chains"][0]
+    assert chain["attribution_supported"] is False
+    assert "exact_provider_messages_unavailable" in chain["attribution_gaps"]
+    assert chain["provider_attempts"][0]["exact_messages_available"] is False
+
+
+def test_missing_exact_provider_messages_flag_fails_closed(tmp_path):
+    report = analyze_forensics_bundle(
+        _write_bundle(tmp_path, corrupt={"missing_exact_messages_flag"})
+    )
+
+    assert "exact_provider_messages_unavailable" in _codes(report)
+    assert report["chains"][0]["attribution_supported"] is False
 
 
 def test_cli_writes_machine_and_human_reports(tmp_path):

@@ -258,7 +258,7 @@ class _Translation:
     translation_mode: str        = "live"
     # Streamer-specific few-shot profile appended to base prompt.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa", "hades_chxxnnx", "mwmeu", "irise", "url"
-    streamer_profile: str        = "isegye_lilpa"
+    streamer_profile: str        = "mwmeu"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile
     profile_mode:     str        = "auto"  # auto content override or manual hard lock
     # Manual session state: what the streamer is doing right now (e.g.

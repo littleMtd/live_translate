@@ -29,9 +29,7 @@ jobs:
         run: python -m pytest tests -q
         env:
           # No real keys – all API calls are mocked in unit tests
-          ANTHROPIC_API_KEY: ""
           GROQ_API_KEY: ""
-          GEMINI_API_KEY: ""
 
   test-real-apis:
     runs-on: ubuntu-latest
@@ -51,12 +49,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-ci.txt
 
-      - name: Integration tests (real APIs)
+      - name: Detect live API credentials
+        id: live-api
+        shell: bash
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -n "$GROQ_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GROQ_API_KEY is unavailable; no live API evidence was produced."
+          fi
+
+      - name: Integration tests (live Groq API)
+        if: steps.live-api.outputs.enabled == 'true'
         run: python -m unittest tests/test_integration.py -v
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RUN_LIVE_TESTS: "1"
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
   frontend:
     runs-on: ubuntu-latest

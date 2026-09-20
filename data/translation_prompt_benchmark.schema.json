@@ -49,6 +49,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "contract_status",
+        "current_runtime_contract",
         "provider_system_prompt_builders",
         "provider_message_builders",
         "history_user_label",
@@ -57,6 +59,8 @@
         "provider_envelopes_excluded"
       ],
       "properties": {
+        "contract_status": { "const": "historical_observation_at_collection_time" },
+        "current_runtime_contract": { "const": false },
         "provider_system_prompt_builders": {
           "type": "object",
           "additionalProperties": false,

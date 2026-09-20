@@ -61,13 +61,16 @@ is:
 | `mwmeu` | member/fandom mappings, hot glossary, and personality paragraph | examples |
 | `url` | group/member/company/title mappings | two examples |
 
-This benchmark preserves that current behavior. It does not promote omitted
-facts into the effective prompt.
+This benchmark preserves the behavior observed when the cases were collected.
+It does not promote omitted facts into the effective prompt. The builder names
+in `production_message_contract` are historical provenance and may refer to
+providers or symbols retired from the current runtime.
 
 ## Reconstructing production messages
 
-An evaluator must use the current production builders named in
-`production_message_contract` and construct each request as follows:
+The stored historical request shape was reconstructed as follows. Current
+candidate generation must record its own request contract rather than importing
+the historical builder names as current code:
 
 1. Build the compact system capsule using the stored `profile_id`,
    `effective_profile_facts`, and stored `activity.capsule`.

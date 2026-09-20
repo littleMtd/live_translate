@@ -3,6 +3,8 @@ import json
 import pytest
 
 from modules.unknown_name_escrow import (
+    UnknownNameEscrow,
+    UnknownNameEscrowEntry,
     load_unknown_name_policy,
     resolve_unknown_name_escrow,
 )
@@ -199,3 +201,17 @@ def test_final_invariant_rejects_loss_duplication_and_placeholder_leakage():
     assert not escrow.evaluate_final("我是普順。").passed
     assert not escrow.evaluate_final("我是푸순，푸순。").passed
     assert not escrow.evaluate_final("我是__LT_UNK_1__。").passed
+
+
+def test_final_invariant_counts_nested_names_as_non_overlapping_matches():
+    escrow = UnknownNameEscrow(
+        original_source="가나와 가나다",
+        provider_source="__LT_UNK_1__와 __LT_UNK_2__",
+        entries=(
+            UnknownNameEscrowEntry("가나", "__LT_UNK_1__", ((0, 2),)),
+            UnknownNameEscrowEntry("가나다", "__LT_UNK_2__", ((4, 7),)),
+        ),
+    )
+
+    assert escrow.evaluate_final("가나和가나다").passed
+    assert not escrow.evaluate_final("가나다").passed

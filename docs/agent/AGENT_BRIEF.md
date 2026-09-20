@@ -54,6 +54,17 @@ provisional promotion converge on the same finalization/publication path.
 Quality retry and the former translation shadow experiments are retired; this
 does not retire current source normalization or Hangul/Kana safety guards.
 
+Auto profile mode starts neutral; `general` is the display form of an empty
+effective profile, not a detected identity. When a valid calibrated
+channel-name ROI exists, it supersedes whole-scene profile resolution as the
+sole automatic authority and accepts exact reviewed visible/OCR aliases only;
+without one, the existing whole-scene consensus remains available. Provider or
+capture failures preserve confirmed ownership, while an unconfirmed startup
+remains neutral. Identity-vision 429 responses install a provider reset fence
+that ROI changes cannot bypass. Offline OCR alias scouting may propose
+candidates from persisted calibrated reads, but only manual review can add an
+exact `identity_ocr` alias to the registry.
+
 Preserve these cross-cutting invariants unless the task explicitly changes them:
 
 - A failed fallback or shadow path must not corrupt the user-visible primary path.

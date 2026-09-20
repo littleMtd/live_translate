@@ -321,6 +321,94 @@ def test_downstream_start_failure_cleans_up_started_stages(monkeypatch):
     exported.assert_called_once_with(status="failed")
 
 
+def test_profile_control_start_failure_cleans_up_audio_and_exports(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    audio_thread = MagicMock(name="audio_thread")
+    audio_thread.name = "AudioCapture"
+    audio_thread.is_alive.return_value = False
+    main_module.stop_event.clear()
+    main_module.pause_event.clear()
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(main_module.audio_capture, "start", lambda *_args: audio_thread)
+    monkeypatch.setattr(
+        main_module.profile_control,
+        "start",
+        MagicMock(side_effect=RuntimeError("profile watcher failed")),
+    )
+    exported = MagicMock()
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    try:
+        with pytest.raises(SystemExit) as captured:
+            main_module.main()
+    finally:
+        main_module.stop_event.clear()
+
+    assert captured.value.code == 1
+    audio_thread.join.assert_called_once()
+    exported.assert_called_once_with(status="failed")
+
+
+def test_fatal_stt_worker_marks_shutdown_failed(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    def stopped_thread(name):
+        thread = MagicMock(name=name)
+        thread.name = name
+        thread.is_alive.return_value = False
+        return thread
+
+    def start_stt(*_args, on_fatal=None, **_kwargs):
+        on_fatal(RuntimeError("STT worker exploded"))
+        main_module.stop_event.set()
+        return stopped_thread("STT")
+
+    main_module.stop_event.clear()
+    main_module.pause_event.clear()
+    monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        main_module.audio_capture,
+        "start",
+        lambda *_args: stopped_thread("AudioCapture"),
+    )
+    monkeypatch.setattr(
+        main_module.profile_control,
+        "start",
+        lambda *_args: stopped_thread("ProfileControl"),
+    )
+    monkeypatch.setattr(main_module.stt, "start", start_stt)
+    monkeypatch.setattr(
+        main_module.sentence_splitter,
+        "start",
+        lambda *_args: stopped_thread("SentenceSplitter"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_stt_printer",
+        lambda *_args: stopped_thread("STTPrinter"),
+    )
+    exported = MagicMock()
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    try:
+        with pytest.raises(SystemExit) as captured:
+            main_module.main()
+    finally:
+        main_module.stop_event.clear()
+
+    assert captured.value.code == 1
+    exported.assert_called_once_with(status="failed")
+
+
 def test_pre_audio_startup_failure_exports_and_preserves_exit(monkeypatch):
     import main as main_module
 

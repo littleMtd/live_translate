@@ -842,6 +842,15 @@
           "order": {
             "identity_ocr": 0
           }
+        },
+        {
+          "value": "밍굴_",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 1
+          }
         }
       ],
       "provenance": "migrated_reviewed_production_data",

@@ -242,7 +242,13 @@ Context, display, and persistence:
   calibration UI and continues normal startup after Save; the dashboard only
   launches that same UI. A valid saved ROI becomes the sole automatic profile identity
   authority. Blank, unknown, unreadable, or unavailable reads retain the
-  confirmed profile; whole-scene member markers cannot override it.
+  confirmed profile; whole-scene member markers cannot override it. Before any
+  identity has been confirmed, the empty effective profile is displayed as
+  `general`. Reviewed OCR variants remain isolated to the `identity_ocr` alias
+  scope and cannot become STT or translation evidence. A provider 429 response
+  fences all identity reads, including changed ROI frames, until the reported
+  reset duration has elapsed from receipt of the failure; a successful read
+  clears that provider-level fence.
 - `modules/profile_control.py`: validates and atomically hot-reloads dashboard
   profile selection and `data/streamer_profiles.json`; invalid reloads retain
   the prior valid generation and a privacy-safe status file feeds the dashboard.
@@ -333,6 +339,8 @@ for actual repairs.
 - `data/translation_profiles.json`: standard and Qwen prompt-profile text.
 - `data/entity_registry.json`: reviewed exact entity aliases, canonical targets,
   and the only production source for required entity publication obligations.
+  Identity OCR variants require manual review and the `identity_ocr` scope;
+  offline similarity reports never grant runtime ownership.
 - `data/translation_corrections.json`: deterministic source/target corrections,
   profile-scoped boundary-aware source aliases, entity references, and legacy
   repair-only name-rendering rules.

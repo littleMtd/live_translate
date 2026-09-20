@@ -20,6 +20,8 @@ def test_current_suite_has_exactly_75_unique_cases():
     assert suite["case_count"] == 75
     assert len({case["case_id"] for case in suite["cases"]}) == 75
     contract = suite["production_message_contract"]
+    assert contract["contract_status"] == "historical_observation_at_collection_time"
+    assert contract["current_runtime_contract"] is False
     assert contract["provider_message_builders"] == {
         "deepseek": "modules.translation_engines.build_effective_deepseek_messages",
         "openrouter": "modules.translation_engines.build_effective_qwen_messages",
@@ -27,6 +29,20 @@ def test_current_suite_has_exactly_75_unique_cases():
     assert contract["shared_history_and_current_input_structure"] is True
     assert "runtime_events_20260826.jsonl" in suite["runtime_sources"]
     assert "translations_20260826.txt" in suite["runtime_sources"]
+
+
+def test_historical_contract_status_is_declared_by_structural_schema():
+    schema_path = tool.ROOT / "data" / "translation_prompt_benchmark.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    contract = schema["$defs"]["productionMessageContract"]
+
+    assert {"contract_status", "current_runtime_contract"}.issubset(
+        contract["required"]
+    )
+    assert contract["properties"]["contract_status"]["const"] == (
+        "historical_observation_at_collection_time"
+    )
+    assert contract["properties"]["current_runtime_contract"]["const"] is False
 
 
 def test_live26_asr_cases_freeze_positive_and_negative_controls():

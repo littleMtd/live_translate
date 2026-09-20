@@ -2151,10 +2151,13 @@ class Translator:
         self._refresh_engines_if_needed()
         system_prompt = self._build_system_prompt(entity_context.capsule)
         engine = self._active_engine()
+        with self._state_guard():
+            history = self._history_state().context(history_cohort)
         prompt_ver = self._prompt_version_for_engine(
             engine,
             system_prompt,
             protection_identity=request_protection.fingerprint_identity,
+            history=history,
         )
         self._log_prompt_mode_once()
 
@@ -2243,8 +2246,6 @@ class Translator:
                 deferred_success=success_commit,
             )
 
-        with self._state_guard():
-            history = self._history_state().context(history_cohort)
         frozen_messages_by_engine = {
             "deepseek": build_effective_deepseek_messages(
                 provider_text, system_prompt, incomplete, history
@@ -2328,6 +2329,7 @@ class Translator:
             engine,
             system_prompt,
             protection_identity=request_protection.fingerprint_identity,
+            history=history,
         )
         request_contract_id = (
             provisional_candidate.request_contract_id
@@ -2636,6 +2638,7 @@ class Translator:
         system_prompt: str,
         *,
         protection_identity: str = "",
+        history: list[tuple[str, str]] | None = None,
     ) -> str:
         snapshot = bound_activity_snapshot()
         if snapshot is None:
@@ -2678,6 +2681,12 @@ class Translator:
             + f"{cohort[0]}:{cohort[1]}:{cohort[2]}"
             + (
                 "\n[history-session] " + self._history_session()
+                if int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+                else ""
+            )
+            + (
+                "\n[selected-history] "
+                + stable_identity({"history": list(history or ())})
                 if int(getattr(cfg.translation, "context_window", 0) or 0) > 0
                 else ""
             )
@@ -3880,6 +3889,12 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                 max_output_delay_ms = _translation_max_output_delay_ms()
                 if max_output_delay_ms > 0 and output_delay_ms > max_output_delay_ms:
                     metrics.increment("translation.subtitle.stale_skipped")
+                    with shared_state.lock:
+                        if (
+                            item.policy_input
+                            and shared_state.policy.last_input == item.policy_input
+                        ):
+                            shared_state.policy.reset_last_input()
                     log.warning(
                         "Skipping stale subtitle after %.0fms output delay: %s",
                         output_delay_ms,

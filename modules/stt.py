@@ -1657,7 +1657,13 @@ class STTEngine:
 
 def start(audio_queue: queue.Queue, text_queue: queue.Queue,
           stop_event: threading.Event,
-          pause_event: threading.Event | None = None) -> threading.Thread:
+          pause_event: threading.Event | None = None,
+          *,
+          on_fatal=None) -> threading.Thread:
+    def report_fatal(exc: BaseException) -> None:
+        if callable(on_fatal):
+            on_fatal(exc)
+
     def run_pipeline():
         engine = STTEngine()
         if not engine.available:
@@ -1665,6 +1671,7 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             # consuming audio chunks that we can never transcribe — signal
             # shutdown so main.py can tear down the rest of the pipeline.
             log.error("STT thread aborting: no engine available")
+            report_fatal(RuntimeError("STT engine unavailable"))
             stop_event.set()
             return
         # Collection-mode audio dump: one session dir per run so per-run
@@ -1724,6 +1731,7 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             # A dead STT consumer otherwise leaves capture/UI running forever
             # while audio queues accumulate and no subtitles can be produced.
             log.error("STT worker aborted: %s", exc, exc_info=True)
+            report_fatal(exc)
             stop_event.set()
 
     return start_daemon_thread("STT", run)

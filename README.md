@@ -41,6 +41,27 @@ Copy-Item .env.example .env
 
 自然 production 證據必須由使用者執行 `python main.py`，並在自己的 SOOP/CHZZK 直播觀看流程中產生。分析工具不得自行搜尋、播放或下載外部直播代替 production evidence。
 
+## Profile identity
+
+Auto mode 啟動時是 neutral；畫面上的 `profile=general` 表示尚未取得 reviewed identity evidence，不是辨識到一個名為 general 的主播。`config.py` 的 `streamer_profile` 只保留 configured source metadata，不能在 auto mode 自動取得 ownership。校準方式：
+
+```powershell
+.\live-subtitle-env\Scripts\python.exe main.py --calibrate-identity-roi
+```
+
+存在有效 calibrated SOOP/CHZZK identity ROI 時，它會取代 whole-scene profile resolution，並只接受 ROI 中 exact reviewed visible/OCR aliases。沒有有效 ROI 時仍使用既有 whole-scene consensus。Blank、unknown、capture failure 或 provider failure 都 fail closed；已確認 profile 會被保留，startup 尚未確認時則維持 general。Groq vision 回傳 HTTP 429 時，identity reader 會依 provider reset duration 進入 backoff，ROI 畫面改變也不能繞過該 fence。
+
+直播前或 fresh run 後可產生 OCR alias 候選報告：
+
+```powershell
+.\live-subtitle-env\Scripts\python.exe scripts\suggest_identity_ocr_aliases.py `
+  "logs\runtime_events_*.jsonl" `
+  --json-output scratch\analysis\identity_ocr_alias_candidates.json `
+  --report-output scratch\analysis\identity_ocr_alias_candidates.md
+```
+
+此工具只讀取具 calibrated ROI provenance 的 persisted observations，且只輸出人工審核候選；它不修改 registry，也不允許 fuzzy runtime activation。核准的變形只能加入 `identity_ocr` scope。
+
 ## Translation correctness ownership
 
 - `modules/entity_registry.py`：reviewed global entity data 與 exact alias activation。

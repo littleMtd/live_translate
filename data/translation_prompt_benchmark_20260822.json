@@ -20,6 +20,8 @@
     "translations_20260826.txt"
   ],
   "production_message_contract": {
+    "contract_status": "historical_observation_at_collection_time",
+    "current_runtime_contract": false,
     "provider_system_prompt_builders": {
       "deepseek": "modules.translation_engines._deepseek_capsule_prompt",
       "openrouter": "modules.translation_engines._openrouter_capsule_prompt"

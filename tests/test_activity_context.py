@@ -22,6 +22,7 @@ from modules.activity_context import (
     normalize_activity,
 )
 from modules.profile_context import ProfileSnapshot, bind_profile_snapshot
+from modules.forensics_contract import stable_identity
 from modules.translation_engines import (
     effective_system_prompt_for_engine,
     engine_chain_config_key,
@@ -509,6 +510,11 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
                 + f"{translator._shared_state.history_session_id}:starcraft:0"
             + (
                 f"\n[history-session] {translator._shared_state.history_session_id}"
+                if cfg.translation.context_window > 0
+                else ""
+            )
+            + (
+                "\n[selected-history] " + stable_identity({"history": []})
                 if cfg.translation.context_window > 0
                 else ""
             )

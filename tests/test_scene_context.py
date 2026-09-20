@@ -29,6 +29,7 @@ from modules.scene_context import (
     sanitize_activity,
 )
 from modules.scene_vision import (
+    VisionAttemptDiagnostics,
     VisionClassification,
     VisionDiagnostics,
     VisionProviderFailure,
@@ -443,6 +444,170 @@ def test_identity_roi_provider_failure_records_bounded_vision_diagnostics():
     assert event["vision_provider"] == "groq"
     assert event["vision_model"] == "qwen/qwen3.8-27b"
     assert "response" not in repr(event).casefold()
+
+
+def test_identity_roi_rate_limit_reset_fences_changed_frame_retries():
+    state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
+    failure = VisionProviderFailure(
+        VisionDiagnostics(
+            outcome="error",
+            attempt_limit=1,
+            error_type="rate_limit",
+            http_status=429,
+            rate_limit_reset_tokens_sec=46.0,
+            provider="groq",
+            model="qwen/qwen3.8-27b",
+            retryable=True,
+        )
+    )
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, clock = make_updater(
+            frames=[
+                image_frame_with_identity_block(30),
+                image_frame_with_identity_block(220),
+                image_frame_with_identity_block(100),
+            ],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=QuerySequence([]),
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+        )
+        def delayed_rate_limit():
+            clock.advance(3)
+            raise failure
+
+        identity_reader = QuerySequence([
+            delayed_rate_limit,
+            '{"identity":"밍굴_"}',
+        ])
+        updater._identity_roi_vision = identity_reader
+        updater.tick()
+        clock.advance(44.5)
+        updater.tick()
+        assert len(identity_reader.calls) == 1
+        clock.advance(3)
+        updater.tick()
+
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+    failure_event = [
+        item for item in events
+        if item.get("event_type") == "profile_resolution"
+        and item.get("status") == "provider_error"
+    ][-1]
+    assert failure_event["profile_provider_retry_after_sec"] == 47.0
+
+
+def test_identity_roi_zero_second_rate_reset_uses_fast_gap_floor():
+    state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
+    failure = VisionProviderFailure(
+        VisionDiagnostics(
+            outcome="error",
+            attempt_limit=1,
+            error_type="rate_limit",
+            http_status=429,
+            rate_limit_reset_tokens_sec=0.0,
+        )
+    )
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame_with_identity_block(30)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=QuerySequence([failure]),
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+        )
+        updater.tick()
+
+    event = [
+        item for item in events
+        if item.get("event_type") == "profile_resolution"
+    ][-1]
+    assert event["profile_provider_retry_after_sec"] == 5.0
+
+
+def test_identity_rate_limit_fence_survives_fallback_success_and_roi_removal():
+    state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
+    diagnostics = VisionDiagnostics(
+        outcome="success",
+        attempt_limit=2,
+        provider="openrouter",
+        model="fallback-model",
+        attempt_chain=(
+            VisionAttemptDiagnostics(
+                provider="groq",
+                model="primary-model",
+                outcome="error",
+                retryable=True,
+                error_type="rate_limit",
+                http_status=429,
+                rate_limit_reset_tokens_sec=20.0,
+            ),
+            VisionAttemptDiagnostics(
+                provider="openrouter",
+                model="fallback-model",
+                outcome="success",
+                retryable=False,
+            ),
+        ),
+    )
+    roi_store = FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1))
+    identity_reader = QuerySequence([
+        VisionClassification('{"identity":"밍굴_"}', diagnostics),
+    ])
+    whole_scene = QuerySequence([
+        '{"profile_id":"mwmeu","matched_markers":["mwmeu_member_mwmeu"]}'
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, clock = make_updater(
+            frames=[
+                image_frame_with_identity_block(30),
+                image_frame_with_identity_block(220),
+                image_frame_with_identity_block(100),
+            ],
+            profile_resolution_enabled=True,
+            profile_vision_provider=whole_scene,
+            identity_roi_provider=identity_reader,
+            identity_roi_store=roi_store,
+        )
+        updater.tick()
+        roi_store.roi = None
+        clock.advance(10)
+        updater.tick()
+        assert len(whole_scene.calls) == 0
+        clock.advance(12)
+        updater.tick()
+
+    assert len(identity_reader.calls) == 1
+    assert len(whole_scene.calls) == 1
+
+
+def test_discarded_identity_roi_read_does_not_publish_new_registry_match():
+    state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame_with_identity_block(30)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=QuerySequence([]),
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+        )
+
+        def change_generation():
+            state.confirm_no_profile()
+            return '{"identity":"밍굴_"}'
+
+        updater._identity_roi_vision = QuerySequence([change_generation])
+        updater.tick()
+
+    event = [
+        item for item in events
+        if item.get("event_type") == "profile_resolution"
+    ][-1]
+    assert event["status"] == "discarded"
+    assert event["normalized_observed_identity"] == ""
+    assert event["reviewed_member_match"] == ""
+    assert event["candidate_profile_id"] == ""
 
 
 def test_small_roi_capture_noise_does_not_spend_an_identity_read():

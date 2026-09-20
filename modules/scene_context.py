@@ -1102,6 +1102,7 @@ class SceneContextUpdater:
         )
         self._profile_attempt_times: deque[float] = deque()
         self._profile_provider_failure_streak = 0
+        self._profile_provider_backoff_until = 0.0
         self._profile_recovery_clear_sec = float(
             getattr(cfg.scene, "profile_identity_recovery_clear_sec", 15.0)
         )
@@ -1532,6 +1533,43 @@ class SceneContextUpdater:
             else self._profile_stable_gap if stable else self._profile_fast_gap
         )
 
+    def _install_profile_provider_rate_limit_fence(
+        self,
+        diagnostics: VisionDiagnostics | None,
+        *,
+        now: float,
+    ) -> float:
+        """Install one provider-level fence from any rate-limited route attempt."""
+        if diagnostics is None:
+            return 0.0
+        attempts = diagnostics.attempt_chain or ()
+        rate_limited = [
+            attempt
+            for attempt in attempts
+            if attempt.error_type == "rate_limit" or attempt.http_status == 429
+        ]
+        if not rate_limited and (
+            diagnostics.error_type == "rate_limit"
+            or diagnostics.http_status == 429
+        ):
+            reset_values = [diagnostics.rate_limit_reset_tokens_sec]
+        else:
+            reset_values = [
+                attempt.rate_limit_reset_tokens_sec for attempt in rate_limited
+            ]
+        if not reset_values:
+            return 0.0
+        retry_after = max(
+            self._profile_fast_gap,
+            max(60.0 if reset is None else float(reset) for reset in reset_values)
+            + 1.0,
+        )
+        self._profile_provider_backoff_until = max(
+            self._profile_provider_backoff_until,
+            now + retry_after,
+        )
+        return max(0.0, self._profile_provider_backoff_until - now)
+
     def _emit_profile_resolution(self, **fields: object) -> None:
         fields.setdefault("resolver_state", self._profile_resolver_state)
         fields.setdefault("last_detection_at", self._utc_now().isoformat())
@@ -1638,6 +1676,8 @@ class SceneContextUpdater:
                     build_profile_identity_prompt(registry)
                 )
         roi = self._identity_roi_store.get(calibration_key(identity.platform))
+        if now < self._profile_provider_backoff_until:
+            return
         if roi is not None:
             self._identity_roi_active = True
             self._resolve_authoritative_identity_roi(
@@ -1717,6 +1757,11 @@ class SceneContextUpdater:
                     * (2 ** (self._profile_provider_failure_streak - 1)),
                     30.0,
                 )
+                retry_after = self._install_profile_provider_rate_limit_fence(
+                    failure_diagnostics,
+                    now=self._clock(),
+                )
+                cooldown = max(cooldown, retry_after)
                 cleared = self._enter_profile_recovery(
                     now,
                     "provider_error",
@@ -1743,6 +1788,10 @@ class SceneContextUpdater:
                 return
             if isinstance(result, VisionClassification):
                 request_diagnostics.append(result.diagnostics)
+                self._install_profile_provider_rate_limit_fence(
+                    result.diagnostics,
+                    now=self._clock(),
+                )
                 self._release_unused_profile_attempts(
                     route_capacity,
                     max(1, len(result.diagnostics.attempt_chain)),
@@ -1761,6 +1810,7 @@ class SceneContextUpdater:
                     "invalid_schema",
                 }
                 and retry_count < self._profile_schema_retry_limit
+                and self._clock() >= self._profile_provider_backoff_until
             ):
                 break
             validation = self._resolver.validate(identity)
@@ -2047,6 +2097,8 @@ class SceneContextUpdater:
             roi_key,
             observation.thumb,
         )
+        if now < self._profile_provider_backoff_until:
+            return
         validation = self._resolver.validate(identity)
         discard = self._window_discard_reason(
             validation,
@@ -2102,6 +2154,7 @@ class SceneContextUpdater:
             result = self._identity_roi_vision.classify(observation.jpeg)
             raw = result.text if isinstance(result, VisionClassification) else result
         except Exception as exc:
+            failure_now = self._clock()
             self._reset_unsupported_identity_evidence()
             diagnostics = exc.diagnostics if isinstance(exc, VisionProviderFailure) else None
             diagnostic_fields = (
@@ -2114,7 +2167,16 @@ class SceneContextUpdater:
             )
             used_attempts = max(1, len(diagnostics.attempt_chain)) if diagnostics is not None else 1
             self._release_unused_profile_attempts(route_capacity, used_attempts)
-            self._schedule_profile_resolution(now, "identity_roi_provider_error", stable=False)
+            retry_after = self._install_profile_provider_rate_limit_fence(
+                diagnostics,
+                now=failure_now,
+            )
+            self._schedule_profile_resolution(
+                failure_now,
+                "identity_roi_provider_error",
+                stable=False,
+                gap=retry_after or None,
+            )
             self._emit_profile_resolution(
                 status="provider_error",
                 reason=type(exc).__name__,
@@ -2127,6 +2189,9 @@ class SceneContextUpdater:
                 normalized_observed_identity="",
                 reviewed_member_match="",
                 latency_ms=round((self._clock() - started) * 1000, 2),
+                profile_provider_retry_after_sec=(
+                    round(retry_after, 3) if retry_after else None
+                ),
                 window_generation=window_generation,
                 **diagnostic_fields,
                 **profile_state.current().as_metadata(),
@@ -2138,6 +2203,15 @@ class SceneContextUpdater:
             else 1
         )
         self._release_unused_profile_attempts(route_capacity, used_attempts)
+        result_diagnostics = (
+            result.diagnostics if isinstance(result, VisionClassification) else None
+        )
+        retry_after = self._install_profile_provider_rate_limit_fence(
+            result_diagnostics,
+            now=self._clock(),
+        )
+        if not retry_after:
+            self._profile_provider_backoff_until = 0.0
         discard = self._window_discard_reason(
             self._resolver.validate(identity),
             resolver_generation=resolver_generation,
@@ -2150,7 +2224,13 @@ class SceneContextUpdater:
             discard = "profile_generation_changed"
         observed = parse_observed_identity(raw)
         normalized = normalize_identity(observed)
-        marker = exact_reviewed_member(observed, profile_state.registry)
+        marker = (
+            None
+            if discard
+            else exact_reviewed_member(observed, profile_state.registry)
+        )
+        if discard:
+            normalized = ""
         if discard:
             self._reset_unsupported_identity_evidence()
             decision = "discard_stale_identity_read"

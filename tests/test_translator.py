@@ -3130,8 +3130,10 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         orig_delay = getattr(translator_module.cfg.translation, "max_subtitle_output_delay_ms", 30000)
 
         class _SlowFakeTranslator:
+            shared = None
+
             def __init__(self, shared_state=None):
-                pass
+                self.__class__.shared = shared_state
 
             def translate_event(
                 self, text: str, incomplete: bool = False, *, repetition_evidence=None
@@ -3173,6 +3175,7 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
         self.assertEqual(events.emit.call_args.kwargs["subtitle_suppressed_reason"], "stale_output_delay")
         self.assertGreater(events.emit.call_args.kwargs["output_delay_ms"], 1)
+        self.assertEqual(_SlowFakeTranslator.shared.policy.last_input, "")
 
     def test_final_publication_rejects_unexpected_script_before_memory_commit(self):
         for target_text, expected_reason in (
@@ -4705,6 +4708,29 @@ class TestTranslateOptimizations(unittest.TestCase):
             object.__setattr__(cfg.translation, "context_window", original)
 
         self.assertEqual(memory.recent.maxlen, 10)
+
+    def test_prompt_version_changes_with_selected_history_content(self):
+        from config import cfg
+
+        original = cfg.translation.context_window
+        object.__setattr__(cfg.translation, "context_window", 2)
+        try:
+            translator = _make_translator()
+            engine = translator._engines[0]
+            first = translator._prompt_version_for_engine(
+                engine,
+                "prompt",
+                history=[("같은 질문", "첫 문맥")],
+            )
+            second = translator._prompt_version_for_engine(
+                engine,
+                "prompt",
+                history=[("같은 질문", "다른 문맥")],
+            )
+        finally:
+            object.__setattr__(cfg.translation, "context_window", original)
+
+        self.assertNotEqual(first, second)
 
     def test_prompt_version_uses_effective_engine_prompt(self):
         from config import cfg

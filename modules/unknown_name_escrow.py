@@ -107,10 +107,26 @@ class UnknownNameEscrow:
             return UnknownNameEscrowEvaluation(True, "", (), (), ())
 
         expected = tuple(entry.source_name for entry in self.entries)
+        counts = {name: 0 for name in expected}
+        occupied: list[tuple[int, int]] = []
+        candidates: list[tuple[int, int, str]] = []
+        for name in counts:
+            start = value.find(name)
+            while start >= 0:
+                candidates.append((start, start + len(name), name))
+                start = value.find(name, start + 1)
+        for start, end, name in sorted(
+            candidates,
+            key=lambda item: (-(item[1] - item[0]), item[0], item[2]),
+        ):
+            if any(start < used_end and end > used_start for used_start, used_end in occupied):
+                continue
+            occupied.append((start, end))
+            counts[name] += 1
         missing: list[str] = []
         duplicated: list[str] = []
         for entry in self.entries:
-            count = value.count(entry.source_name)
+            count = counts[entry.source_name]
             if count < entry.expected_count:
                 missing.append(entry.source_name)
             elif count > entry.expected_count:
