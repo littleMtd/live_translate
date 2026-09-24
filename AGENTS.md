@@ -212,14 +212,24 @@ initial rating.
 ### Model and Agent Assignment
 
 Model assignment is a preference, not a requirement the repository can
-guarantee. When the host environment actually supports the requested model
-assignments and independent subagents, prefer Terra Ultra for Discovery and Sol
-Light for Independent Verification and the Final Report. Keep the verification
-context independent enough to challenge discovery claims. If those models,
-reasoning levels, or subagents are unavailable, the current agent must execute
-the phases in order and disclose that limitation; never claim that a model or
-independent agent was used when it was not. `AGENTS.md` cannot force the host
-environment to expose or switch models.
+guarantee. Prefer Sol Light as the primary agent for the Code Review Workflow.
+The primary agent may independently decide whether and when to delegate to
+available subagents, including Terra Ultra, based on task complexity, expected
+value, reasoning needs, and available resources. Do not prescribe a fixed
+number of subagents or require a particular model for a specific task category.
+Do not end Discovery merely because an initial plausible defect has been found.
+When deeper architectural reasoning, complex control-flow analysis, or
+unresolved interactions could materially change the findings, the primary
+agent may delegate further investigation to an available higher-reasoning
+subagent, including Terra Ultra.
+The primary agent retains responsibility for orchestration, evidence
+integration, independent verification of every discovery finding, and the
+final report. Keep the verification context independent enough to challenge
+discovery claims. Model and subagent selection is capability-dependent. If the
+preferred model, reasoning levels, or subagents are unavailable, the current
+agent must execute the phases in order and disclose that limitation; never
+claim that a model or subagent was used when it was not actually invoked.
+`AGENTS.md` cannot force the host environment to expose or switch models.
 
 ## Implementation Completion Reports
 

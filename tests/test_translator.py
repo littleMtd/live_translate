@@ -59,6 +59,62 @@ from modules.activity_context import (
 from modules.pipeline_events import SentenceEvent
 
 
+def test_worker_startup_exception_reports_fatal():
+    sentence_queue = queue.Queue()
+    subtitle_queue = queue.Queue()
+    stop_event = threading.Event()
+    failures = []
+
+    with patch.object(
+        translator_module,
+        "_new_translator_shared_state",
+        side_effect=RuntimeError("translator exploded"),
+    ):
+        thread = translator_module.start(
+            sentence_queue,
+            subtitle_queue,
+            stop_event,
+            on_fatal=failures.append,
+        )
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert stop_event.is_set()
+    assert len(failures) == 1
+    assert str(failures[0]) == "translator exploded"
+
+
+def test_worker_loop_exception_stops_pipeline_before_drain_wait():
+    sentence_queue = queue.Queue()
+    subtitle_queue = queue.Queue()
+    stop_event = threading.Event()
+    upstream_done = threading.Event()
+    failures = []
+
+    with patch.object(
+        translator_module,
+        "poll_queue",
+        side_effect=RuntimeError("translator loop exploded"),
+    ):
+        started = time.monotonic()
+        thread = translator_module.start(
+            sentence_queue,
+            subtitle_queue,
+            stop_event,
+            upstream_done_event=upstream_done,
+            on_fatal=failures.append,
+        )
+        assert stop_event.wait(timeout=0.5)
+        upstream_done.set()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert time.monotonic() - started < 2
+    assert stop_event.is_set()
+    assert len(failures) == 1
+    assert str(failures[0]) == "translator loop exploded"
+
+
 class _NoOpDB:
     """No-op DB that keeps unit tests isolated from the on-disk production DB."""
     @property

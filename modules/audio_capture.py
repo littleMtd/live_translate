@@ -676,12 +676,17 @@ class _CapturedFrame:
 
 
 def start(audio_queue: queue.Queue, stop_event: threading.Event,
-          pause_event: threading.Event | None = None) -> threading.Thread:
+          pause_event: threading.Event | None = None, *,
+          on_fatal=None) -> threading.Thread:
     # Resolve the loopback device synchronously so a missing device fails fast
     # in the caller's thread instead of silently killing a daemon thread.
     device = _find_loopback_device()
     startup_condition = threading.Condition()
     startup_state: dict[str, object] = {"status": "pending", "error": None}
+
+    def report_fatal(exc: BaseException) -> None:
+        if callable(on_fatal):
+            on_fatal(exc)
 
     def publish_startup(status: str, error: Exception | None = None) -> bool:
         with startup_condition:
@@ -832,6 +837,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                     # The frame worker is a separate daemon thread, so its
                     # exception cannot reach this enclosing try/except.
                     log.error("Audio frame worker aborted: %s", exc, exc_info=True)
+                    report_fatal(exc)
                     stop_event.set()
 
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
@@ -911,6 +917,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
             # the failure and shut down cleanly.
             log.error("Audio capture aborted: %s", exc, exc_info=True)
             publish_startup("error", exc)
+            report_fatal(exc)
             stop_event.set()
             return
         finally:

@@ -691,6 +691,41 @@ class TestShutdownOrdering(unittest.TestCase):
     tracked separately).
     """
 
+    def test_splitter_tail_is_translated_before_consumer_shutdown(self):
+        text_queue = queue.Queue()
+        sentence_queue = queue.Queue()
+        subtitle_queue = queue.Queue()
+        stop_event = threading.Event()
+        splitter_done = threading.Event()
+
+        with _mock_primary("最終字幕"):
+            splitter_thread = sentence_splitter.start(
+                text_queue,
+                sentence_queue,
+                stop_event,
+                done_event=splitter_done,
+            )
+            translator_thread = translator.start(
+                sentence_queue,
+                subtitle_queue,
+                stop_event,
+                upstream_done_event=splitter_done,
+            )
+            text_queue.put("이 문장은 종료 시 버퍼에 남아 있고")
+            deadline = time.monotonic() + 2.0
+            while not text_queue.empty() and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+            stop_event.set()
+            # Match main.py's reverse join: the consumer waits while the
+            # splitter flushes its buffered tail and signals done.
+            translator_thread.join(timeout=6)
+            splitter_thread.join(timeout=2)
+
+        self.assertFalse(translator_thread.is_alive())
+        self.assertFalse(splitter_thread.is_alive())
+        self.assertEqual(subtitle_queue.get_nowait(), "最終字幕")
+
     @staticmethod
     def _well_behaved_thread(stop: threading.Event, name: str) -> threading.Thread:
         """A thread that watches stop_event and exits promptly."""
@@ -757,6 +792,36 @@ class TestShutdownOrdering(unittest.TestCase):
         finally:
             release.set()
             stuck_thread.join(timeout=1)
+
+    def test_shutdown_rechecks_consumer_after_later_join(self):
+        from main import _shutdown_threads
+
+        class _Stage:
+            def __init__(self, name, on_join=None):
+                self.name = name
+                self.alive = True
+                self.on_join = on_join
+
+            def join(self, timeout=None):
+                if self.on_join is not None:
+                    self.on_join()
+
+            def is_alive(self):
+                return self.alive
+
+        consumer = _Stage("Translator")
+
+        def finish_upstream():
+            consumer.alive = False
+            upstream.alive = False
+
+        upstream = _Stage("SentenceSplitter", finish_upstream)
+        stop = threading.Event()
+
+        stuck = _shutdown_threads([upstream, consumer], stop, join_timeout=0)
+
+        self.assertTrue(stop.is_set())
+        self.assertEqual(stuck, [])
 
     def test_shutdown_joins_in_reverse_order(self):
         """Threads are joined in reverse list order (consumer-to-producer)."""

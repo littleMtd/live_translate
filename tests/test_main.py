@@ -287,6 +287,52 @@ def test_stt_printer_exits_on_stop_event_when_queue_idle(tmp_path, monkeypatch):
     assert not t.is_alive(), "STT printer did not exit after stop_event with empty queue"
 
 
+def test_stt_printer_drains_tail_until_splitter_done(tmp_path, monkeypatch):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_LOG_DIR", tmp_path)
+
+    sentence_queue: queue.Queue = queue.Queue()
+    stop_event = threading.Event()
+    splitter_done_event = threading.Event()
+    t = main_module._stt_printer(
+        sentence_queue,
+        stop_event,
+        upstream_done_event=splitter_done_event,
+    )
+
+    stop_event.set()
+    sentence_queue.put(SentenceEvent(text="final buffered tail", incomplete=True))
+    splitter_done_event.set()
+    t.join(timeout=3.0)
+
+    assert not t.is_alive(), "STT printer did not finish after splitter completion"
+    log_file = next(tmp_path.glob("stt_*.txt"))
+    assert "final buffered tail" in log_file.read_text(encoding="utf-8")
+
+
+def test_stt_printer_reports_fatal_exception(tmp_path, monkeypatch):
+    import main as main_module
+
+    monkeypatch.setattr(main_module, "_LOG_DIR", tmp_path)
+    sentence_queue: queue.Queue = queue.Queue()
+    sentence_queue.put(object())
+    stop_event = threading.Event()
+    failures = []
+
+    thread = main_module._stt_printer(
+        sentence_queue,
+        stop_event,
+        on_fatal=failures.append,
+    )
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert stop_event.is_set()
+    assert len(failures) == 1
+    assert isinstance(failures[0], AttributeError)
+
+
 def test_downstream_start_failure_cleans_up_started_stages(monkeypatch):
     import main as main_module
     import utils.config_export as config_export
@@ -301,7 +347,11 @@ def test_downstream_start_failure_cleans_up_started_stages(monkeypatch):
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
     monkeypatch.setattr(config_export, "write", lambda: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
-    monkeypatch.setattr(main_module.audio_capture, "start", lambda *_args: audio_thread)
+    monkeypatch.setattr(
+        main_module.audio_capture,
+        "start",
+        lambda *_args, **_kwargs: audio_thread,
+    )
     exported = MagicMock()
     monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
     monkeypatch.setattr(
@@ -334,7 +384,11 @@ def test_profile_control_start_failure_cleans_up_audio_and_exports(monkeypatch):
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
     monkeypatch.setattr(config_export, "write", lambda: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
-    monkeypatch.setattr(main_module.audio_capture, "start", lambda *_args: audio_thread)
+    monkeypatch.setattr(
+        main_module.audio_capture,
+        "start",
+        lambda *_args, **_kwargs: audio_thread,
+    )
     monkeypatch.setattr(
         main_module.profile_control,
         "start",
@@ -378,7 +432,7 @@ def test_fatal_stt_worker_marks_shutdown_failed(monkeypatch):
     monkeypatch.setattr(
         main_module.audio_capture,
         "start",
-        lambda *_args: stopped_thread("AudioCapture"),
+        lambda *_args, **_kwargs: stopped_thread("AudioCapture"),
     )
     monkeypatch.setattr(
         main_module.profile_control,
@@ -389,12 +443,125 @@ def test_fatal_stt_worker_marks_shutdown_failed(monkeypatch):
     monkeypatch.setattr(
         main_module.sentence_splitter,
         "start",
-        lambda *_args: stopped_thread("SentenceSplitter"),
+        lambda *_args, **_kwargs: stopped_thread("SentenceSplitter"),
     )
     monkeypatch.setattr(
         main_module,
         "_stt_printer",
-        lambda *_args: stopped_thread("STTPrinter"),
+        lambda *_args, **_kwargs: stopped_thread("STTPrinter"),
+    )
+    exported = MagicMock()
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    try:
+        with pytest.raises(SystemExit) as captured:
+            main_module.main()
+    finally:
+        main_module.stop_event.clear()
+
+    assert captured.value.code == 1
+    exported.assert_called_once_with(status="failed")
+
+
+def test_stuck_critical_worker_marks_shutdown_failed(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    def stopped_thread(name):
+        thread = MagicMock(name=name)
+        thread.name = name
+        thread.is_alive.return_value = False
+        return thread
+
+    stuck_stt_thread = MagicMock(name="stuck_stt_thread")
+    stuck_stt_thread.name = "STT"
+    stuck_stt_thread.is_alive.return_value = True
+
+    def start_stt(*_args, **_kwargs):
+        main_module.stop_event.set()
+        return stuck_stt_thread
+
+    main_module.stop_event.clear()
+    main_module.pause_event.clear()
+    monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(
+        main_module.audio_capture,
+        "start",
+        lambda *_args, **_kwargs: stopped_thread("AudioCapture"),
+    )
+    monkeypatch.setattr(
+        main_module.profile_control,
+        "start",
+        lambda *_args: stopped_thread("ProfileControl"),
+    )
+    monkeypatch.setattr(main_module.stt, "start", start_stt)
+    monkeypatch.setattr(
+        main_module.sentence_splitter,
+        "start",
+        lambda *_args, **_kwargs: stopped_thread("SentenceSplitter"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_stt_printer",
+        lambda *_args, **_kwargs: stopped_thread("STTPrinter"),
+    )
+    exported = MagicMock()
+    monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)
+
+    try:
+        with pytest.raises(SystemExit) as captured:
+            main_module.main()
+    finally:
+        main_module.stop_event.clear()
+
+    assert captured.value.code == 1
+    exported.assert_called_once_with(status="failed")
+
+
+def test_fatal_audio_worker_marks_shutdown_failed(monkeypatch):
+    import main as main_module
+    import utils.config_export as config_export
+
+    def stopped_thread(name):
+        thread = MagicMock(name=name)
+        thread.name = name
+        thread.is_alive.return_value = False
+        return thread
+
+    def start_audio(*_args, on_fatal=None, **_kwargs):
+        on_fatal(RuntimeError("audio worker exploded"))
+        main_module.stop_event.set()
+        return stopped_thread("AudioCapture")
+
+    main_module.stop_event.clear()
+    main_module.pause_event.clear()
+    monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
+    monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
+    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(main_module.audio_capture, "start", start_audio)
+    monkeypatch.setattr(
+        main_module.profile_control,
+        "start",
+        lambda *_args, **_kwargs: stopped_thread("ProfileControl"),
+    )
+    monkeypatch.setattr(
+        main_module.stt,
+        "start",
+        lambda *_args, **_kwargs: stopped_thread("STT"),
+    )
+    monkeypatch.setattr(
+        main_module.sentence_splitter,
+        "start",
+        lambda *_args, **_kwargs: stopped_thread("SentenceSplitter"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_stt_printer",
+        lambda *_args, **_kwargs: stopped_thread("STTPrinter"),
     )
     exported = MagicMock()
     monkeypatch.setattr(main_module, "_export_chatgpt_bundle_on_shutdown", exported)

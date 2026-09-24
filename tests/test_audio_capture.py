@@ -781,14 +781,17 @@ class TestStreamReadiness(unittest.TestCase):
                 return False
 
         stop = threading.Event()
+        failures = []
         with patch.object(ac, "cfg", self._cfg()), \
                 patch.object(ac, "_find_loopback_device", return_value=ac._CaptureDevice(3, "CABLE Output", "MME", 2, 44100)), \
                 patch.object(ac.sd, "InputStream", _FailingStream), \
                 patch.object(ac, "_load_silero") as load_silero:
             with self.assertRaisesRegex(RuntimeError, "device busy"):
-                ac.start(queue.Queue(), stop)
+                ac.start(queue.Queue(), stop, on_fatal=failures.append)
 
         self.assertTrue(stop.is_set())
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(str(failures[0]), "device busy")
         load_silero.assert_not_called()
 
     def test_stream_open_timeout_rejects_late_success_without_silero(self):

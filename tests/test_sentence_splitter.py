@@ -18,6 +18,33 @@ from modules.sentence_buffer import SentenceCut
 from modules.provisional_subtitles import ProvisionalRequest
 from modules.profile_context import ProfileSnapshot, profile_state
 
+
+def test_worker_exception_reports_fatal_and_signals_done():
+    text_queue = queue.Queue()
+    sentence_queue = queue.Queue()
+    stop_event = threading.Event()
+    done_event = threading.Event()
+    failures = []
+
+    with patch(
+        "modules.sentence_splitter.SentenceBuffer",
+        side_effect=RuntimeError("splitter exploded"),
+    ):
+        thread = start(
+            text_queue,
+            sentence_queue,
+            stop_event,
+            on_fatal=failures.append,
+            done_event=done_event,
+        )
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert stop_event.is_set()
+    assert done_event.is_set()
+    assert len(failures) == 1
+    assert str(failures[0]) == "splitter exploded"
+
 # Fast config used by all thread tests: min_wait=0.3s, force_cut=0.8s.
 # Default config (3s / 8s) would make thread tests take 10–30 s each.
 def _fast_cfg(

@@ -118,8 +118,10 @@ def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
 def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None,
-          provisional_queue: queue.Queue | None = None) -> threading.Thread:
-    def run():
+          provisional_queue: queue.Queue | None = None, *,
+          on_fatal=None,
+          done_event: threading.Event | None = None) -> threading.Thread:
+    def run_pipeline():
         buffer = SentenceBuffer(
             segment_gap_split_enabled=_bool_setting(
                 getattr(cfg.splitter, "segment_gap_split_enabled", False),
@@ -684,6 +686,18 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
             emit_cut(final_cut)
         finish_shadow_without_chunk("splitter_stopped", time.monotonic())
         log.info("Sentence splitter stopped")
+
+    def run():
+        try:
+            run_pipeline()
+        except Exception as exc:
+            log.error("Sentence splitter aborted: %s", exc, exc_info=True)
+            if callable(on_fatal):
+                on_fatal(exc)
+            stop_event.set()
+        finally:
+            if done_event is not None:
+                done_event.set()
 
     return start_daemon_thread("SentenceSplitter", run)
 

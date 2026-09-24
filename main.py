@@ -139,11 +139,9 @@ def _shutdown_threads(
 ) -> list[threading.Thread]:
     """Signal stop and reverse-join the pipeline.
 
-    Reverse order (consumer-to-producer) means subscribers wind down before
-    their upstream producers stop emitting. This only reorders the join
-    sequence and warns on stuck threads; it makes no promise that residual
-    queue items are consumed before exit. The follow-up two-stage shutdown
-    that handles in-flight queue items is tracked as future work (#7b).
+    Reverse order (consumer-to-producer) means subscribers are joined before
+    their upstream producers. Queue-drain behavior remains a stage-specific
+    contract; this helper only signals, joins, and reports stuck threads.
 
     Returns the threads still alive after the join attempt — useful for tests
     and for callers that want to take further action (force terminate, etc.).
@@ -155,7 +153,9 @@ def _shutdown_threads(
         if t.is_alive():
             logger.warning("Thread %s did not stop within %ss", t.name, join_timeout)
             stuck.append(t)
-    return stuck
+    # A thread can exit while later stages are being joined. Report only
+    # threads that are still alive after the whole join pass.
+    return [t for t in stuck if t.is_alive()]
 
 
 def _apply_listen_mode_config() -> None:
@@ -178,15 +178,23 @@ def _stt_printer(
     stop_event: threading.Event,
     mode_label: str = "STT-only",
     log_prefix: str = "stt",
+    *,
+    upstream_done_event: threading.Event | None = None,
+    on_fatal=None,
 ) -> threading.Thread:
     """Reads sentences and prints them to console + log file. No API calls."""
     _LOG_DIR.mkdir(exist_ok=True)
     log_path = _LOG_DIR / f"{log_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
-    def run():
+    def run_pipeline():
         print(f"\n  [{mode_label} mode] sentences → {log_path}\n", flush=True)
         with open(log_path, "w", encoding="utf-8") as f:
-            while not stop_event.is_set():
+            while True:
+                upstream_done = (
+                    upstream_done_event is None or upstream_done_event.is_set()
+                )
+                if stop_event.is_set() and upstream_done and sentence_queue.empty():
+                    break
                 try:
                     item = sentence_queue.get(timeout=1)
                 except queue.Empty:
@@ -198,6 +206,15 @@ def _stt_printer(
                 f.write(line + "\n")
                 f.flush()
         log.info("STT printer stopped")
+
+    def run():
+        try:
+            run_pipeline()
+        except Exception as exc:
+            log.error("STT printer aborted: %s", exc, exc_info=True)
+            if callable(on_fatal):
+                on_fatal(exc)
+            stop_event.set()
 
     t = threading.Thread(target=run, name="STTPrinter", daemon=True)
     t.start()
@@ -277,8 +294,19 @@ def main():
         subtitle_queue,
     ]
 
+    pipeline_error: Exception | None = None
+    fatal_worker_errors: list[BaseException] = []
+
+    def record_fatal_worker_error(exc: BaseException) -> None:
+        fatal_worker_errors.append(exc)
+
     try:
-        audio_thread = audio_capture.start(audio_queue, stop_event, pause_event)
+        audio_thread = audio_capture.start(
+            audio_queue,
+            stop_event,
+            pause_event,
+            on_fatal=record_fatal_worker_error,
+        )
     except Exception as exc:
         log.error("Audio capture failed to start: %s", exc)
         stop_event.set()
@@ -289,52 +317,67 @@ def main():
         sys.exit(1)
 
     threads = [audio_thread]
-    pipeline_error: Exception | None = None
-    fatal_worker_errors: list[BaseException] = []
-
-    def record_fatal_worker_error(exc: BaseException) -> None:
-        fatal_worker_errors.append(exc)
+    critical_threads = {audio_thread}
+    splitter_done_event = threading.Event()
 
     try:
         threads.append(profile_control.start(stop_event))
-        threads.append(
-            stt.start(
-                audio_queue,
-                text_queue,
-                stop_event,
-                pause_event,
-                on_fatal=record_fatal_worker_error,
-            )
+        stt_thread = stt.start(
+            audio_queue,
+            text_queue,
+            stop_event,
+            pause_event,
+            on_fatal=record_fatal_worker_error,
         )
-        threads.append(
-            sentence_splitter.start(
-                text_queue,
-                sentence_queue,
-                stop_event,
-                pause_event,
-                None if stt_only else provisional_queue,
-            )
+        threads.append(stt_thread)
+        critical_threads.add(stt_thread)
+        splitter_thread = sentence_splitter.start(
+            text_queue,
+            sentence_queue,
+            stop_event,
+            pause_event,
+            None if stt_only else provisional_queue,
+            on_fatal=record_fatal_worker_error,
+            done_event=splitter_done_event,
         )
+        threads.append(splitter_thread)
+        critical_threads.add(splitter_thread)
 
         if stt_only:
             if args.listen:
-                threads.append(_stt_printer(sentence_queue, stop_event, "listen", "listen"))
+                consumer_thread = _stt_printer(
+                    sentence_queue,
+                    stop_event,
+                    "listen",
+                    "listen",
+                    upstream_done_event=splitter_done_event,
+                    on_fatal=record_fatal_worker_error,
+                )
                 log.info("Listen mode — press Ctrl+C to stop")
             else:
-                threads.append(_stt_printer(sentence_queue, stop_event))
+                consumer_thread = _stt_printer(
+                    sentence_queue,
+                    stop_event,
+                    upstream_done_event=splitter_done_event,
+                    on_fatal=record_fatal_worker_error,
+                )
                 log.info("STT-only mode — press Ctrl+C to stop")
+            threads.append(consumer_thread)
+            critical_threads.add(consumer_thread)
             while not stop_event.is_set():
                 stop_event.wait(1.0)
         else:
-            threads.append(
-                translator.start(
-                    sentence_queue,
-                    subtitle_queue,
-                    stop_event,
-                    pause_event,
-                    provisional_queue=provisional_queue,
-                )
+            consumer_thread = translator.start(
+                sentence_queue,
+                subtitle_queue,
+                stop_event,
+                pause_event,
+                provisional_queue=provisional_queue,
+                upstream_done_event=splitter_done_event,
+                on_fatal=record_fatal_worker_error,
             )
+            threads.append(consumer_thread)
+            critical_threads.add(consumer_thread)
             if cfg.scene.enabled:
                 from modules import scene_context
                 threads.append(scene_context.start(stop_event, pause_event))
@@ -344,11 +387,18 @@ def main():
         pipeline_error = exc
         log.error("Pipeline aborted: %s", exc, exc_info=True)
     finally:
-        _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
+        stuck_threads = _shutdown_threads(threads, stop_event, cfg.thread_join_timeout)
         if pipeline_error is None and fatal_worker_errors:
             pipeline_error = RuntimeError(
                 f"Background worker failed: {fatal_worker_errors[0]}"
             )
+        if pipeline_error is None:
+            critical_stuck = [t for t in stuck_threads if t in critical_threads]
+            if critical_stuck:
+                names = ", ".join(t.name for t in critical_stuck)
+                pipeline_error = RuntimeError(
+                    f"Critical pipeline thread did not stop: {names}"
+                )
         if ocr_proc is not None and ocr_proc.poll() is None:
             ocr_proc.terminate()
             log.info("Donation OCR panel terminated")

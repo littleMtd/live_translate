@@ -3131,8 +3131,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
           stop_event: threading.Event,
           pause_event: threading.Event | None = None,
           *,
-          provisional_queue: queue.Queue | None = None) -> threading.Thread:
-    def run():
+          provisional_queue: queue.Queue | None = None,
+          upstream_done_event: threading.Event | None = None,
+          on_fatal=None) -> threading.Thread:
+    def run_pipeline():
         shared_state = _new_translator_shared_state(
             fallback_event_sink=_emit_fallback_runtime_event,
         )
@@ -4008,39 +4010,86 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         submitted_at_utc,
                     )
                     next_seq += 1
+        except Exception:
+            # Wake the rest of the graph before bounded drain begins. Without
+            # this, a translator-loop failure could wait for the splitter's
+            # done signal while the splitter was still waiting on stop_event.
+            stop_event.set()
+            raise
         finally:
             with provisional_publication_lock:
                 provisional_publication_open = False
             provisional_executor.shutdown(wait=False, cancel_futures=True)
-            # Stop accepting work but let already-submitted translations finish:
-            # cancel_futures=True dropped completed-but-unemitted and in-flight
-            # subtitles at stop. Drain in order with a bounded wait so shutdown
-            # can't hang on a stuck engine call.
-            executor.shutdown(wait=False, cancel_futures=False)
+            # Keep accepting the splitter's final flushed sentence until its
+            # done_event is set, then drain all accepted work in order. This is
+            # bounded so a stuck engine call still cannot hang shutdown.
             deadline = time.monotonic() + _stop_drain_timeout_sec()
-            while True:
-                collect_finished()
-                while next_emit_seq in completed:
-                    emit_completed(completed.pop(next_emit_seq))
-                    next_emit_seq += 1
-                if not pending and not completed:
-                    break
-                if time.monotonic() >= deadline:
-                    log.warning(
-                        "Stop drain timed out with %d pending / %d completed translations",
-                        len(pending),
-                        len(completed),
+            discard_queued_sentences = bool(pause_event and pause_event.is_set())
+            try:
+                while True:
+                    while (
+                        discard_queued_sentences
+                        or len(pending) < _MAX_PENDING_TRANSLATIONS
+                    ):
+                        try:
+                            item = sentence_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        if discard_queued_sentences:
+                            continue
+                        submitted_at = time.monotonic()
+                        submitted_at_utc = datetime.now(timezone.utc).isoformat()
+                        pending[next_seq] = executor.submit(
+                            translate_item,
+                            next_seq,
+                            item,
+                            submitted_at,
+                            submitted_at_utc,
+                        )
+                        next_seq += 1
+                    collect_finished()
+                    while next_emit_seq in completed:
+                        emit_completed(completed.pop(next_emit_seq))
+                        next_emit_seq += 1
+                    upstream_done = (
+                        upstream_done_event is None or upstream_done_event.is_set()
                     )
-                    for future in pending.values():
-                        future.cancel()
-                    break
-                time.sleep(_TRANSLATION_LOOP_POLL_SEC)
+                    if (
+                        upstream_done
+                        and sentence_queue.empty()
+                        and not pending
+                        and not completed
+                    ):
+                        break
+                    if time.monotonic() >= deadline:
+                        log.warning(
+                            "Stop drain timed out with %d queued / %d pending / %d completed translations",
+                            sentence_queue.qsize(),
+                            len(pending),
+                            len(completed),
+                        )
+                        for future in pending.values():
+                            future.cancel()
+                        break
+                    time.sleep(_TRANSLATION_LOOP_POLL_SEC)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=False)
             fallback_probe_thread.join(
                 timeout=max(0.0, deadline - time.monotonic())
             )
             if fallback_probe_thread.is_alive():
                 log.warning("Fallback recovery probe did not stop before drain deadline")
             log.info("Translator stopped")
+
+    def run():
+        try:
+            run_pipeline()
+        except Exception as exc:
+            log.error("Translator worker aborted: %s", exc, exc_info=True)
+            if callable(on_fatal):
+                on_fatal(exc)
+            stop_event.set()
+
     return start_daemon_thread("Translator", run)
 
 
