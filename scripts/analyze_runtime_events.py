@@ -48,6 +48,7 @@ ANALYZER_OUTPUT_NOTES = [
     "predecessor_stall_ms includes up to _TRANSLATION_LOOP_POLL_SEC of translator poll-gap noise.",
     "duplicate-suppressed translations still include ordering delay; output_delay_ms is pipeline delay, not user-visible subtitle delay.",
     "translation workers share recent/context/cache/fallback state; worker-local diagnostics remain isolated per call.",
+    "combined_observed translation cost includes observed provisional calls; unknown provider cost and legacy provisional records can make it a lower bound.",
 ]
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -108,6 +109,10 @@ def analyze_runtime_events(
             if str(event.get("run_id") or "") == resolved_run_id
         ]
     translation_events = [event for event in events if event.get("event_type") == "translation"]
+    provisional_events = [
+        event for event in events
+        if event.get("event_type") == "provisional_translation"
+    ]
     translation_shadow_events = [
         event for event in events if event.get("event_type") == "translation_shadow"
     ]
@@ -173,6 +178,7 @@ def analyze_runtime_events(
         ),
         "total_events": len(events),
         "translation_events": len(translation_events),
+        "provisional_translation_events": len(provisional_events),
         "translation_shadow_events": len(translation_shadow_events),
         "translation_fallback_events": len(fallback_events),
         "stt_events": len(stt_events),
@@ -235,7 +241,9 @@ def analyze_runtime_events(
             translation_events,
             top_n,
         ),
-        "api_diagnostics": _api_diagnostics_summary(translation_events, top_n),
+        "api_diagnostics": _api_diagnostics_summary(
+            translation_events, top_n, provisional_events=provisional_events
+        ),
         "dependency_markers": _dependency_marker_summary(translation_events),
         "translation_fallback": _fallback_summary(fallback_events),
         "translation_model_shadow": _translation_model_shadow_summary(
@@ -253,6 +261,7 @@ def analyze_runtime_events(
             audio_startup_events,
             activity_shadow_events,
             activity_publication_events,
+            provisional_events,
             labels,
             top_n,
         ),
@@ -325,6 +334,7 @@ def _run_summaries(
     audio_startup_events: list[dict[str, Any]],
     activity_shadow_events: list[dict[str, Any]],
     activity_publication_events: list[dict[str, Any]],
+    provisional_events: list[dict[str, Any]],
     labels: dict[str, dict[str, str]],
     top_n: int,
 ) -> list[dict[str, Any]]:
@@ -355,9 +365,18 @@ def _run_summaries(
         grouped_activity_publication.setdefault(
             str(event.get("run_id") or "unknown"), []
         ).append(event)
+    grouped_provisional: dict[str, list[dict[str, Any]]] = {}
+    for event in provisional_events:
+        grouped_provisional.setdefault(
+            str(event.get("run_id") or "unknown"), []
+        ).append(event)
+    for run_id in grouped_provisional:
+        grouped.setdefault(run_id, [])
 
     summaries = []
     for run_id, run_events in grouped.items():
+        provisional_run_events = grouped_provisional.get(run_id, [])
+        provenance_event = (run_events or provisional_run_events)[0]
         label = labels.get(run_id, {})
         template_events = [event for event in run_events if _has_template_phrase(event)]
         quality_flags = Counter(
@@ -373,12 +392,12 @@ def _run_summaries(
         summaries.append(
             {
                 "run_id": run_id,
-                "run_kind": _effective_run_kind(run_events[0]),
-                "git_sha": str(run_events[0].get("git_sha") or ""),
-                "git_dirty": run_events[0].get("git_dirty"),
+                "run_kind": _effective_run_kind(provenance_event),
+                "git_sha": str(provenance_event.get("git_sha") or ""),
+                "git_dirty": provenance_event.get("git_dirty"),
                 "label": label.get("label", ""),
                 "note": label.get("note", ""),
-                **_time_summary(run_events),
+                **_time_summary(run_events or provisional_run_events),
                 "translation_events": len(run_events),
                 "status_breakdown": _status_breakdown(run_events),
                 "by_status": _count_by(run_events, "status"),
@@ -428,7 +447,11 @@ def _run_summaries(
                     run_events,
                     top_n,
                 ),
-                "api_diagnostics": _api_diagnostics_summary(run_events, top_n),
+                "api_diagnostics": _api_diagnostics_summary(
+                    run_events,
+                    top_n,
+                    provisional_events=provisional_run_events,
+                ),
                 "dependency_markers": _dependency_marker_summary(run_events),
                 "translation_fallback": _fallback_summary(grouped_fallback.get(run_id, [])),
                 "activity_shadow": _activity_shadow_summary(
@@ -1611,6 +1634,19 @@ def _deepseek_output_guard_summary(
             if not isinstance(guard, dict) or not guard.get("reason"):
                 continue
             later = chain[index + 1 :]
+            fallback_attempted = bool(later)
+            fallback_success = any(
+                str(candidate.get("status") or "") == "success"
+                for candidate in later
+            )
+            selected_fallback = next(
+                (
+                    candidate for candidate in later
+                    if str(candidate.get("status") or "") == "success"
+                    and bool(candidate.get("selected_for_output"))
+                ),
+                None,
+            )
             qwen_attempted = any(
                 str(candidate.get("engine") or "") == "openrouter"
                 for candidate in later
@@ -1642,6 +1678,19 @@ def _deepseek_output_guard_summary(
                         "candidate_corrections", []
                     ),
                     "selected_output": _short(str(event.get("target_text") or "")),
+                    "fallback_attempted_after_guard": fallback_attempted,
+                    "fallback_success_after_guard": fallback_success,
+                    "fallback_selected_after_guard": selected_fallback is not None,
+                    "fallback_attempted_engines": sorted({
+                        str(candidate.get("engine") or "")
+                        for candidate in later
+                        if candidate.get("engine")
+                    }),
+                    "fallback_selected_engine": (
+                        str(selected_fallback.get("engine") or "")
+                        if selected_fallback is not None else ""
+                    ),
+                    # Historical Qwen fields remain for old cutover reports.
                     "qwen_attempted_after_guard": qwen_attempted,
                     "qwen_success_after_guard": qwen_success,
                     "qwen_selected_after_guard": qwen_selected,
@@ -1672,6 +1721,26 @@ def _deepseek_output_guard_summary(
             else 0.0
         ),
         "by_reason": _count_by(rows, "reason"),
+        "fallback_attempted_after_guard": sum(
+            bool(row["fallback_attempted_after_guard"]) for row in rows
+        ),
+        "fallback_success_after_guard": sum(
+            bool(row["fallback_success_after_guard"]) for row in rows
+        ),
+        "fallback_selected_after_guard": sum(
+            bool(row["fallback_selected_after_guard"]) for row in rows
+        ),
+        "guard_without_fallback_attempt": sum(
+            not bool(row["fallback_attempted_after_guard"]) for row in rows
+        ),
+        "fallback_attempts_by_engine": [
+            {"engine": engine, "count": count}
+            for engine, count in sorted(Counter(
+                engine
+                for row in rows
+                for engine in row["fallback_attempted_engines"]
+            ).items())
+        ],
         "qwen_selected_after_guard": sum(
             bool(row["qwen_selected_after_guard"]) for row in rows
         ),
@@ -1691,9 +1760,70 @@ def _deepseek_output_guard_summary(
     }
 
 
+def _provisional_cost_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count one observed provider call per run/provisional identity.
+
+    New call-boundary events take precedence over legacy successful previews.
+    Legacy rows establish only a lower bound because rejected or cancelled
+    calls did not consistently record cost.
+    """
+    calls: dict[tuple[str, str], dict[str, Any]] = {}
+    duplicate_completions = 0
+    for index, event in enumerate(events):
+        action = str(event.get("action") or "")
+        if action not in {"api_attempt_completed", "succeeded"}:
+            continue
+        provisional_id = str(event.get("provisional_id") or "")
+        identity = (
+            str(event.get("run_id") or ""),
+            provisional_id if provisional_id else f"missing:{index}",
+        )
+        previous = calls.get(identity)
+        if action == "api_attempt_completed":
+            if previous is not None and previous.get("action") == action:
+                duplicate_completions += 1
+                continue
+            calls[identity] = event
+        elif previous is None:
+            calls[identity] = event
+
+    priced: list[tuple[str, float]] = []
+    unknown_cost_calls = 0
+    legacy_success_only_calls = 0
+    for event in calls.values():
+        is_completion = event.get("action") == "api_attempt_completed"
+        if not is_completion:
+            legacy_success_only_calls += 1
+        cost = _float_or_none(
+            event.get("api_cost_usd" if is_completion else "cost_usd")
+        )
+        if cost is None:
+            unknown_cost_calls += 1
+        else:
+            priced.append((str(event.get("engine") or ""), cost))
+
+    by_engine: dict[str, float] = {}
+    for engine, cost in priced:
+        by_engine[engine] = by_engine.get(engine, 0.0) + cost
+    return {
+        "call_records": len(calls),
+        "observations": len(priced),
+        "unknown_cost_calls": unknown_cost_calls,
+        "legacy_success_only_calls": legacy_success_only_calls,
+        "duplicate_completion_events": duplicate_completions,
+        "total": round(sum(cost for _, cost in priced), 8),
+        "by_engine": [
+            {"engine": engine, "cost_usd": round(cost, 8)}
+            for engine, cost in sorted(by_engine.items())
+        ],
+    }
+
+
 def _api_diagnostics_summary(
     events: list[dict[str, Any]],
     top_n: int = 20,
+    *,
+    provisional_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     attempt_chains = [
         event.get("attempts")
@@ -1777,6 +1907,23 @@ def _api_diagnostics_summary(
             for engine, cost in sorted(selected_cost_by_engine.items())
         ],
     }
+    provisional_cost = _provisional_cost_summary(provisional_events or [])
+    combined_by_engine = dict(cost_by_engine)
+    for row in provisional_cost["by_engine"]:
+        engine = str(row["engine"])
+        combined_by_engine[engine] = (
+            combined_by_engine.get(engine, 0.0) + float(row["cost_usd"])
+        )
+    combined_observed_cost = {
+        "observations": len(cost_rows) + provisional_cost["observations"],
+        "total": round(all_attempt_cost["total"] + provisional_cost["total"], 8),
+        "by_engine": [
+            {"engine": engine, "cost_usd": round(cost, 8)}
+            for engine, cost in sorted(combined_by_engine.items())
+        ],
+        "unpriced_provisional_calls": provisional_cost["unknown_cost_calls"],
+        "legacy_success_only_calls": provisional_cost["legacy_success_only_calls"],
+    }
     return {
         "total_events": len(events),
         "api_events": len(api_events),
@@ -1808,6 +1955,8 @@ def _api_diagnostics_summary(
             **all_attempt_cost,
             "all_attempts": all_attempt_cost,
             "selected_attempts": selected_attempt_cost,
+            "provisional_observed": provisional_cost,
+            "combined_observed": combined_observed_cost,
         },
         "attempt_chain": {
             "events_with_chain": len(attempt_chains),

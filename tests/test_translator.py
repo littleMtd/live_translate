@@ -5531,6 +5531,91 @@ class TestDbCacheGating(unittest.TestCase):
 
 
 class TestProvisionalPromotion(unittest.TestCase):
+    def test_provisional_api_completion_records_return_empty_and_exception(self):
+        for expected_outcome in ("returned", "guarded", "empty", "exception"):
+            with self.subTest(outcome=expected_outcome):
+                sentence_q = queue.Queue()
+                provisional_q = queue.Queue()
+                subtitle_q = queue.Queue()
+                stop = threading.Event()
+                completion_seen = threading.Event()
+                guard_seen = threading.Event()
+                completions = []
+
+                class _FakeDeepSeek:
+                    engine_name = "deepseek"
+                    model_name = "deepseek-v4-flash"
+                    available = True
+
+                    def translate_messages(self, messages):
+                        if expected_outcome == "exception":
+                            raise RuntimeError("synthetic provider failure")
+                        return "這是翻譯" if expected_outcome in ("returned", "guarded") else None
+
+                def record_event(event_type, **fields):
+                    if (
+                        event_type == "provisional_translation"
+                        and fields.get("action") == "api_attempt_completed"
+                    ):
+                        completions.append(fields)
+                        completion_seen.set()
+                    if (
+                        event_type == "provisional_translation"
+                        and fields.get("action") == "guard_rejected"
+                    ):
+                        guard_seen.set()
+
+                request = ProvisionalRequest(
+                    provisional_id=f"provisional:{expected_outcome}",
+                    text="이 문장은 아직 끝나지 않았고",
+                    incomplete=True,
+                    profile_id="",
+                    source_utterance_ids=(f"utt-{expected_outcome}",),
+                    evidence_source_utterance_ids=(f"utt-{expected_outcome}",),
+                    activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+                    requested_at_monotonic=time.monotonic(),
+                    first_stt_ready_at_monotonic=time.monotonic(),
+                )
+
+                with _live_backend("deepseek"), patch.object(
+                    translator_module, "DeepSeekTranslationEngine", _FakeDeepSeek
+                ), patch.object(translator_module, "runtime_events") as events, patch.object(
+                    translator_module,
+                    "get_last_engine_api_diagnostics",
+                    return_value={"api_cost_usd": 0.001},
+                ), patch.object(
+                    translator_module,
+                    "get_last_token_usage",
+                    return_value={"prompt": 10, "output": 5},
+                ), patch.object(
+                    translator_module,
+                    "_translation_output_guard",
+                    return_value=(
+                        {"reason": "unexpected_hangul"}
+                        if expected_outcome == "guarded" else {}
+                    ),
+                ):
+                    events.emit.side_effect = record_event
+                    thread = translator_module.start(
+                        sentence_q, subtitle_q, stop, provisional_queue=provisional_q
+                    )
+                    provisional_q.put(request)
+                    self.assertTrue(completion_seen.wait(timeout=2))
+                    if expected_outcome == "guarded":
+                        self.assertTrue(guard_seen.wait(timeout=2))
+                    stop.set()
+                    thread.join(timeout=2)
+
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(completions), 1)
+                self.assertEqual(
+                    completions[0]["call_outcome"],
+                    "returned" if expected_outcome == "guarded" else expected_outcome,
+                )
+                self.assertEqual(completions[0]["api_cost_usd"], 0.001)
+                self.assertEqual(completions[0]["input_tokens"], 10)
+                self.assertTrue(completions[0]["request_contract_id"])
+
     def test_running_provisional_cannot_publish_after_backend_switch(self):
         sentence_q = queue.Queue()
         provisional_q = queue.Queue()
@@ -5565,7 +5650,17 @@ class TestProvisionalPromotion(unittest.TestCase):
             translator_module,
             "DeepSeekTranslationEngine",
             _BlockingDeepSeek,
-        ):
+        ), patch.object(translator_module, "runtime_events") as events:
+            completion_seen = threading.Event()
+
+            def record_event(event_type, **fields):
+                if (
+                    event_type == "provisional_translation"
+                    and fields.get("action") == "api_attempt_completed"
+                ):
+                    completion_seen.set()
+
+            events.emit.side_effect = record_event
             thread = translator_module.start(
                 sentence_q,
                 subtitle_q,
@@ -5576,7 +5671,7 @@ class TestProvisionalPromotion(unittest.TestCase):
             self.assertTrue(provider_started.wait(timeout=2))
             object.__setattr__(translator_module.cfg, "live_engine", "nvidia")
             release_provider.set()
-            stop.wait(0.1)
+            self.assertTrue(completion_seen.wait(timeout=2))
             stop.set()
             thread.join(timeout=2)
 
@@ -5617,6 +5712,16 @@ class TestProvisionalPromotion(unittest.TestCase):
             "DeepSeekTranslationEngine",
             _BlockingDeepSeek,
         ), patch.object(translator_module, "runtime_events") as events:
+            completion_seen = threading.Event()
+
+            def record_event(event_type, **fields):
+                if (
+                    event_type == "provisional_translation"
+                    and fields.get("action") == "api_attempt_completed"
+                ):
+                    completion_seen.set()
+
+            events.emit.side_effect = record_event
             thread = translator_module.start(
                 sentence_q,
                 subtitle_q,
@@ -5629,7 +5734,7 @@ class TestProvisionalPromotion(unittest.TestCase):
             thread.join(timeout=2)
             self.assertFalse(thread.is_alive())
             release_provider.set()
-            stop.wait(0.1)
+            self.assertTrue(completion_seen.wait(timeout=2))
 
         self.assertTrue(subtitle_q.empty())
         succeeded = [

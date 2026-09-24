@@ -1471,6 +1471,25 @@ def test_queue_observability_summaries_include_retry_and_dependency_marker(tmp_p
                 {"engine": "openrouter", "cost_usd": 0.002},
             ],
         },
+        "provisional_observed": {
+            "call_records": 0,
+            "observations": 0,
+            "unknown_cost_calls": 0,
+            "legacy_success_only_calls": 0,
+            "duplicate_completion_events": 0,
+            "total": 0,
+            "by_engine": [],
+        },
+        "combined_observed": {
+            "observations": 2,
+            "total": 0.003,
+            "by_engine": [
+                {"engine": "groq", "cost_usd": 0.001},
+                {"engine": "openrouter", "cost_usd": 0.002},
+            ],
+            "unpriced_provisional_calls": 0,
+            "legacy_success_only_calls": 0,
+        },
     }
     assert report["api_diagnostics"]["fields"]["api_total_wall_ms"]["max"] == 12000
     assert report["api_diagnostics"]["fields"]["api_attempt_timeout_ms"]["p50"] == 10000
@@ -1543,6 +1562,14 @@ def test_analyzer_reports_deepseek_guard_and_qwen_continuity(tmp_path):
     assert guard["guarded_attempts"] == 1
     assert guard["guard_rate"] == 1.0
     assert guard["by_reason"] == [{"value": "unexpected_hangul", "count": 1}]
+    assert guard["fallback_attempted_after_guard"] == 1
+    assert guard["fallback_success_after_guard"] == 1
+    assert guard["fallback_selected_after_guard"] == 1
+    assert guard["guard_without_fallback_attempt"] == 0
+    assert guard["fallback_attempts_by_engine"] == [
+        {"engine": "openrouter", "count": 1}
+    ]
+    assert guard["samples"][0]["fallback_selected_engine"] == "openrouter"
     assert guard["qwen_attempted_after_guard"] == 1
     assert guard["qwen_success_after_guard"] == 1
     assert guard["qwen_selected_after_guard"] == 1
@@ -1568,6 +1595,102 @@ def test_analyzer_reports_deepseek_guard_and_qwen_continuity(tmp_path):
         "total": 0.002,
         "by_engine": [{"engine": "openrouter", "cost_usd": 0.002}],
     }
+
+
+def test_analyzer_reports_current_fallback_and_all_observed_provisional_cost(tmp_path):
+    path = tmp_path / "runtime_events_20260920.jsonl"
+
+    def provisional(run_id, provisional_id, action, **fields):
+        return {
+            "schema_version": 6,
+            "run_kind": "live",
+            "event_type": "provisional_translation",
+            "run_id": run_id,
+            "provisional_id": provisional_id,
+            "action": action,
+            "engine": "deepseek",
+            **fields,
+        }
+
+    _write_jsonl(path, [
+        _translation_event(
+            run_id="run-a",
+            engine="groq",
+            attempts=[
+                {
+                    "engine": "deepseek", "status": "rejected_output",
+                    "api_cost_usd": 0.001, "selected_for_output": False,
+                    "output_guard": {"reason": "unexpected_hangul"},
+                },
+                {
+                    "engine": "groq", "status": "success",
+                    "api_cost_usd": 0.002, "selected_for_output": True,
+                },
+            ],
+        ),
+        provisional("run-a", "p1", "api_attempt_completed", api_cost_usd=0.003),
+        provisional("run-a", "p1", "api_attempt_completed", api_cost_usd=0.099),
+        provisional("run-a", "p1", "succeeded", cost_usd=0.003),
+        provisional("run-a", "p2", "api_attempt_completed", api_cost_usd=None),
+        provisional("run-a", "p2", "failed"),
+        provisional("run-a", "p3", "succeeded", cost_usd=0.004),
+        provisional("run-a", "p4", "api_attempt_completed", api_cost_usd=0.005),
+        provisional("run-a", "p4", "guard_rejected"),
+        _translation_event(run_id="run-b", api_cost_usd=0.007),
+        provisional("run-b", "p1", "api_attempt_completed", api_cost_usd=0.006),
+    ])
+
+    report = analyze_runtime_events(path)
+    guard = report["api_diagnostics"]["deepseek_output_guard"]
+    assert guard["fallback_attempted_after_guard"] == 1
+    assert guard["fallback_success_after_guard"] == 1
+    assert guard["fallback_selected_after_guard"] == 1
+    assert guard["guard_without_fallback_attempt"] == 0
+    assert guard["fallback_attempts_by_engine"] == [{"engine": "groq", "count": 1}]
+    assert guard["qwen_attempted_after_guard"] == 0  # historical field
+
+    cost = report["api_diagnostics"]["cost_usd"]
+    assert cost["all_attempts"]["total"] == 0.01
+    assert cost["provisional_observed"]["call_records"] == 5
+    assert cost["provisional_observed"]["observations"] == 4
+    assert cost["provisional_observed"]["unknown_cost_calls"] == 1
+    assert cost["provisional_observed"]["legacy_success_only_calls"] == 1
+    assert cost["provisional_observed"]["duplicate_completion_events"] == 1
+    assert cost["provisional_observed"]["total"] == 0.018
+    assert cost["combined_observed"]["total"] == 0.028
+
+    runs = {row["run_id"]: row for row in report["runs"]}
+    assert runs["run-a"]["api_diagnostics"]["cost_usd"]["provisional_observed"]["total"] == 0.012
+    assert runs["run-b"]["api_diagnostics"]["cost_usd"]["provisional_observed"]["total"] == 0.006
+    pinned = analyze_runtime_events(path, run_id="run-a")
+    assert pinned["api_diagnostics"]["cost_usd"]["combined_observed"]["total"] == 0.015
+
+
+def test_analyzer_keeps_provisional_only_run_in_per_run_cost(tmp_path):
+    path = tmp_path / "runtime_events_20260920.jsonl"
+    _write_jsonl(path, [
+        _translation_event(run_id="final-run", api_cost_usd=0.002),
+        {
+            "schema_version": 6,
+            "run_kind": "live",
+            "event_type": "provisional_translation",
+            "run_id": "preview-only-run",
+            "git_sha": "preview-sha",
+            "provisional_id": "p1",
+            "action": "api_attempt_completed",
+            "engine": "deepseek",
+            "api_cost_usd": 0.003,
+        },
+    ])
+
+    report = analyze_runtime_events(path)
+    runs = {row["run_id"]: row for row in report["runs"]}
+    assert set(runs) == {"final-run", "preview-only-run"}
+    preview = runs["preview-only-run"]
+    assert preview["translation_events"] == 0
+    assert preview["git_sha"] == "preview-sha"
+    assert preview["api_diagnostics"]["cost_usd"]["combined_observed"]["total"] == 0.003
+    assert report["api_diagnostics"]["cost_usd"]["combined_observed"]["total"] == 0.005
 
 
 def test_run_summaries_group_by_run_id_with_labels(tmp_path):

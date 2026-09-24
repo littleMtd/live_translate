@@ -138,9 +138,14 @@ disagreements. Multiple
 `--events` paths are accepted so a cross-midnight run is not truncated.
 Protected Flash-primary files additionally report
 `api_diagnostics.deepseek_output_guard`: total Flash attempts, provider
-failures, content-guard rate/reasons, successful Qwen continuity, bounded
-candidate/selected samples, explicit all-attempt versus selected-attempt cost,
-and any impossible selected guarded attempt. This
+failures, content-guard rate/reasons, following fallback attempts and selected
+routes, bounded candidate/selected samples, and any impossible selected guarded
+attempt. Historical Qwen counters remain for old runs; use the route-neutral
+fallback counters for the current DeepSeek-to-Groq chain.
+`api_diagnostics.cost_usd` keeps final all-attempt and selected-attempt totals
+and separately reports observed provisional API cost plus their combined
+observed total. Legacy previews and provider calls without returned cost can
+make the combined figure a lower bound. This
 is the post-cutover owner; do not add a separate guard analyzer.
 
 Cache analysis:

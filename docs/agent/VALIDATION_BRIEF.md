@@ -12,11 +12,10 @@ labeling, STT, and analyzer guidance remains in `VALIDATION.md` and is routed by
   widen only when risk or evidence requires it.
 - Use an existing test, replay, analyzer, or benchmark before adding a new tool.
 - Keep offline evaluation separate from live production behavior.
-- Do not call paid APIs without explicit user authorization.
+- Follow the global safety rules in `AGENTS.md`.
 - Do not treat a successful API response, clean output format, or empty QA flag
   set as proof of translation/subtitle quality.
 - Record exact commands and concise results for the completion report.
-- Preserve unrelated dirty files and inspect only the scoped diff.
 
 ## Common Workflow
 
@@ -29,7 +28,7 @@ labeling, STT, and analyzer guidance remains in `VALIDATION.md` and is routed by
 6. Inspect `git status --short`, scoped `git diff`, and `git diff --stat`.
 7. Confirm no generated artifacts, secrets, caches, or unrelated changes entered
    the scoped diff.
-8. Complete the independent read-only review required by `AGENTS.md`.
+8. Complete independent read-only review when required by `AGENTS.md`.
 
 ## Test Selection
 
@@ -61,15 +60,5 @@ script, harness, analyzer, replay, benchmark, sampler, or maintenance command.
 
 ## Completion Evidence
 
-At minimum, retain:
-
-- changed-file list;
-- `git status --short` summary;
-- `git diff --stat` summary;
-- exact validation commands;
-- pass/fail/output summary;
-- checklist status and scope deviations;
-- blockers and remaining risks;
-- independent reviewer verdict.
-
-The authoritative completion-report format remains in `AGENTS.md`.
+Retain the exact validation commands, their results, and relevant scoped diff
+evidence. Use the completion-report format in `AGENTS.md`.

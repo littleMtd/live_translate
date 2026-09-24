@@ -223,7 +223,8 @@ an unconstrained "latest" run.
   every candidate-only QA/canonical/script regression before any cutover;
 - for current production, inspect the schema-v6 request contracts and attempt
   ledger for DeepSeek guard reasons, Groq fallback continuity, selected route,
-  all-attempt cost, and zero guarded-attempt selection violations. Exercise
+  final and provisional observed cost, and zero guarded-attempt selection
+  violations. Treat unknown provider cost as missing rather than zero. Exercise
   `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off` only when that operational rollback is
   specifically under test; its expected translation route is Groq-only;
 - recent STT-context provenance is summarized under

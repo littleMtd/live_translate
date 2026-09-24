@@ -3321,7 +3321,34 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 **request.profile_snapshot.as_metadata(),
                             )
                             return
-                        raw_target = engine.translate_messages(messages)
+                        api_call_started = time.monotonic()
+                        api_call_outcome = "exception"
+                        try:
+                            raw_target = engine.translate_messages(messages)
+                            api_call_outcome = "returned" if raw_target else "empty"
+                        finally:
+                            # Record the API call before any post-call lifecycle or
+                            # content guard can discard this provisional result.
+                            api_diagnostics = get_last_engine_api_diagnostics()
+                            api_usage = get_last_token_usage()
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="api_attempt_completed",
+                                provisional_id=request.provisional_id,
+                                request_contract_id=request_contract_id,
+                                engine=engine.engine_name,
+                                model=engine.model_name,
+                                call_outcome=api_call_outcome,
+                                latency_ms=round(
+                                    (time.monotonic() - api_call_started) * 1000,
+                                    2,
+                                ),
+                                api_cost_usd=api_diagnostics.get("api_cost_usd"),
+                                input_tokens=api_usage.get("prompt"),
+                                output_tokens=api_usage.get("output"),
+                                cache_hit_tokens=api_usage.get("cache_read"),
+                                cache_miss_tokens=api_usage.get("cache_write"),
+                            )
                         if stop_event.is_set() or not deepseek_provisional_eligible():
                             provisional_store.close(request.provisional_id)
                             return
