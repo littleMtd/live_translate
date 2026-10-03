@@ -17,6 +17,7 @@ from modules.translation_engines import (
 from modules.provisional_subtitles import (
     ProvisionalCandidate,
     ProvisionalRequest,
+    ProvisionalStore,
     provisional_fingerprint,
 )
 from modules.translation_prompts import (
@@ -483,7 +484,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(adjudication.rejection_owner, "script_safety")
         self.assertEqual(
             adjudication.evidence["policy_version"],
-            "candidate-adjudication-v2",
+            "candidate-adjudication-v3",
         )
         self.assertEqual(adjudication.evidence["disposition"], "rejected")
         self.assertIn(
@@ -535,7 +536,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(adjudication.reason, "meta_garbage_output")
         self.assertEqual(adjudication.rejection_owner, "model_output")
 
-    def test_run_20260909_provisional_simplified_output_is_rejected(self):
+    def test_run_20260909_provisional_simplified_output_is_normalized(self):
         engine = MagicMock()
         engine.engine_name = "deepseek"
 
@@ -545,11 +546,49 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             "와, 너무 과장이다. 감기 걸린 사람처럼 코가 막혀버렸어. 아! 아!",
         )
 
-        self.assertEqual(guard["reason"], "simplified_chinese")
+        self.assertNotIn("reason", guard)
+        self.assertEqual(guard["simplified_chinese_spans"], [])
         self.assertEqual(
-            guard["simplified_chinese_spans"],
-            ["夸", "张", "样"],
+            guard["candidate_output"],
+            "哇，太誇張了。像感冒的人一樣鼻子塞住了。啊！啊！",
         )
+        self.assertEqual(
+            guard["candidate_stages"]["raw_provider"]["text"],
+            "哇，太夸张了。像感冒的人一样鼻子塞住了。啊！啊！",
+        )
+        self.assertEqual(
+            guard["candidate_stages"]["source_corrected"]["text"],
+            "哇，太夸张了。像感冒的人一样鼻子塞住了。啊！啊！",
+        )
+        self.assertEqual(
+            guard["candidate_stages"]["script_normalized"]["text"],
+            guard["candidate_output"],
+        )
+        self.assertEqual(
+            guard["candidate_corrections"][-1]["rule"], "opencc:s2twp"
+        )
+
+    def test_opencc_does_not_change_fallback_or_cache_guard_policy(self):
+        source = "백스테이지 모습이 너무 과장됐어."
+        target = "后台的样子很夸张。"
+        groq = MagicMock()
+        groq.engine_name = "groq"
+        for engine in (groq, None):
+            with self.subTest(engine=getattr(engine, "engine_name", "cache")):
+                guard = _translation_output_guard(engine, target, source)
+                self.assertEqual(guard["reason"], "simplified_chinese")
+                self.assertEqual(guard["candidate_output"], target)
+
+    def test_opencc_preserves_placeholders_and_known_name(self):
+        engine = MagicMock()
+        engine.engine_name = "deepseek"
+        with _active_translation_profile("hades_chxxnnx"):
+            guard = _translation_output_guard(
+                engine, "Chaenna在这里，__LT_UNK_1__也来了。", "챈나와 모찌도 왔어."
+            )
+        self.assertIn("Chaenna", guard["candidate_output"])
+        self.assertIn("__LT_UNK_1__", guard["candidate_output"])
+        self.assertNotIn("这里", guard["candidate_output"])
 
     def test_traditional_script_guard_preserves_existing_traditional_and_names(self):
         engine = MagicMock()
@@ -654,7 +693,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(outcome.engine, "groq")
         self.assertEqual(translator._active_idx, 0)
 
-    def test_final_provider_output_uses_same_traditional_guard_and_fallback(self):
+    def test_final_provider_output_is_normalized_before_publication(self):
         translator = _make_translator()
         primary = _route_engine("deepseek", "后台的样子很夸张。")
         fallback = _route_engine("groq", "後臺的樣子很誇張。")
@@ -664,7 +703,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.target_text, "後臺的樣子很誇張。")
-        self.assertEqual(outcome.engine, "groq")
+        self.assertEqual(outcome.engine, "deepseek")
 
     def test_uncertain_honorific_source_is_not_claimed_by_translation_guard(self):
         engine = MagicMock()
@@ -2066,7 +2105,7 @@ class TestTranslationFallbackChain(unittest.TestCase):
         self.assertEqual(outcome.engine, "groq")
         self.assertEqual(len(flash.messages), 1)
         self.assertNotEqual(flash.messages, groq.messages)
-        self.assertIn("overwhelmingly more likely", flash.messages[0][0][1])
+        self.assertIn("Repair an ordinary word only when", flash.messages[0][0][1])
         self.assertIn(
             "Traditional Chinese live subtitle translator",
             groq.messages[0][0][1],
@@ -5531,6 +5570,58 @@ class TestDbCacheGating(unittest.TestCase):
 
 
 class TestProvisionalPromotion(unittest.TestCase):
+    def test_closed_during_preparation_skips_provisional_provider_call(self):
+        sentence_q, provisional_q, subtitle_q = queue.Queue(), queue.Queue(), queue.Queue()
+        stop = threading.Event()
+        skipped = threading.Event()
+        provider_calls = []
+
+        class _FakeDeepSeek:
+            engine_name = "deepseek"
+            model_name = "deepseek-v4-flash"
+            available = True
+
+            def translate_messages(self, messages):
+                provider_calls.append(messages)
+                return "測試字幕"
+
+        original_admit = ProvisionalStore.admit_call
+
+        def close_before_admission(store, provisional_id):
+            store.close(provisional_id)
+            return original_admit(store, provisional_id)
+
+        request = ProvisionalRequest(
+            provisional_id="provisional:closed-before-call",
+            text="이 게임을 하면", incomplete=True, profile_id="",
+            source_utterance_ids=("utt-closed-before-call",),
+            evidence_source_utterance_ids=("utt-closed-before-call",),
+            activity_snapshot=capture_activity_snapshot("chatting", source="manual"),
+            requested_at_monotonic=time.monotonic(),
+            first_stt_ready_at_monotonic=time.monotonic(),
+        )
+
+        with _live_backend("deepseek"), patch.object(
+            translator_module, "DeepSeekTranslationEngine", _FakeDeepSeek
+        ), patch.object(
+            ProvisionalStore, "admit_call", close_before_admission
+        ), patch.object(translator_module, "runtime_events") as events:
+            events.emit.side_effect = lambda kind, **fields: (
+                skipped.set() if kind == "provisional_translation"
+                and fields.get("action") == "cancelled_before_call" else None
+            )
+            thread = translator_module.start(
+                sentence_q, subtitle_q, stop, provisional_queue=provisional_q
+            )
+            provisional_q.put(request)
+            self.assertTrue(skipped.wait(timeout=2))
+            stop.set()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(provider_calls, [])
+        self.assertTrue(subtitle_q.empty())
+
     def test_provisional_api_completion_records_return_empty_and_exception(self):
         for expected_outcome in ("returned", "guarded", "empty", "exception"):
             with self.subTest(outcome=expected_outcome):
@@ -5582,7 +5673,11 @@ class TestProvisionalPromotion(unittest.TestCase):
                 ), patch.object(translator_module, "runtime_events") as events, patch.object(
                     translator_module,
                     "get_last_engine_api_diagnostics",
-                    return_value={"api_cost_usd": 0.001},
+                    return_value={
+                        "api_cost_usd": 0.001,
+                        "api_cost_basis": "peak_upper_bound",
+                        "api_pricing_revision": "2026-10-04-peak-upper-bound",
+                    },
                 ), patch.object(
                     translator_module,
                     "get_last_token_usage",
@@ -5613,6 +5708,11 @@ class TestProvisionalPromotion(unittest.TestCase):
                     "returned" if expected_outcome == "guarded" else expected_outcome,
                 )
                 self.assertEqual(completions[0]["api_cost_usd"], 0.001)
+                self.assertEqual(completions[0]["api_cost_basis"], "peak_upper_bound")
+                self.assertEqual(
+                    completions[0]["api_pricing_revision"],
+                    "2026-10-04-peak-upper-bound",
+                )
                 self.assertEqual(completions[0]["input_tokens"], 10)
                 self.assertTrue(completions[0]["request_contract_id"])
 

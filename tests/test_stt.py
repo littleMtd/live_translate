@@ -1442,6 +1442,46 @@ class TestGroqPromptBuilder(unittest.TestCase):
         )
 
     @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
+    def test_audio_session_change_clears_groq_context_then_new_session_can_reuse_it(self):
+        eng = _make_engine_groq()
+        audio = np.full(16000, 0.1, dtype=np.float32)
+        eng._groq_client.audio.transcriptions.create.side_effect = [
+            _make_groq_resp(
+                text,
+                segments=[{"avg_logprob": -0.2, "no_speech_prob": 0.1, "compression_ratio": 1.0}],
+            )
+            for text in ("첫번째 문장", "두번째 문장", "세번째 문장")
+        ]
+        with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit"):
+            mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.sample_rate = 16000
+            mock_cfg.stt.groq_prompt = "seed prompt"
+            mock_cfg.stt.use_profile_glossary = False
+            mock_cfg.stt.groq_model = "whisper-large-v3"
+            mock_cfg.stt.language = "ko"
+            mock_cfg.stt.no_speech_threshold = 0.6
+            mock_cfg.stt.avg_logprob_threshold = -1.0
+            mock_cfg.stt.context_avg_logprob_threshold = -0.7
+            mock_cfg.stt.context_no_speech_threshold = 0.3
+            mock_cfg.stt.context_max_age_sec = 30.0
+            mock_cfg.stt.context_min_chars = 4
+            mock_cfg.stt.max_japanese_chars = 2
+            first = eng.transcribe_event(AudioChunk(audio, audio_session_id="session-a"))
+            second = eng.transcribe_event(AudioChunk(audio, audio_session_id="session-b"))
+            third = eng.transcribe_event(AudioChunk(audio, audio_session_id="session-b"))
+
+        assert [first.text, second.text, third.text] == [
+            "첫번째 문장", "두번째 문장", "세번째 문장"
+        ]
+        assert eng._current_audio_session_id == "session-b"
+        prompts = [call.kwargs["prompt"] for call in eng._groq_client.audio.transcriptions.create.call_args_list]
+        assert prompts == [
+            "seed prompt",
+            "seed prompt",
+            "seed prompt\nRecent Korean transcript context: 두번째 문장",
+        ]
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
     def test_low_confidence_groq_result_is_not_next_prompt_context(self):
         eng = _make_engine_groq()
         audio = np.full(16000, 0.1, dtype=np.float32)

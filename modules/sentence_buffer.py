@@ -13,6 +13,14 @@ from utils.text_heuristics import (
 )
 
 
+def profile_sources_differ(previous: TranscriptionEvent | None, incoming: str | TranscriptionEvent) -> bool:
+    if previous is None or not isinstance(incoming, TranscriptionEvent):
+        return False
+    if previous.profile_snapshot is not None and incoming.profile_snapshot is not None:
+        return previous.profile_snapshot.cache_identity != incoming.profile_snapshot.cache_identity
+    return previous.profile_id != incoming.profile_id
+
+
 _COMPLETE_ENDINGS = SENTENCE_COMPLETE_ENDINGS
 _INCOMPLETE_ENDINGS = SENTENCE_INCOMPLETE_ENDINGS
 
@@ -307,6 +315,8 @@ class SentenceCut:
     evidence_source_utterance_ids: tuple[str, ...] = ()
     source_avg_logprobs: tuple[float | None, ...] = ()
     source_no_speech_probs: tuple[float | None, ...] = ()
+    # Preserve request identity when a carried residual has no current STT source.
+    profile_source: TranscriptionEvent | None = None
 
 
 def is_complete(text: str) -> bool:
@@ -345,6 +355,7 @@ class SentenceBuffer:
         self._buffer = ""
         self._first_token_time: float | None = None
         self._latest_source: TranscriptionEvent | None = None
+        self._profile_source: TranscriptionEvent | None = None
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids: list[str] = []
@@ -358,6 +369,7 @@ class SentenceBuffer:
         self._buffer = ""
         self._first_token_time = None
         self._latest_source = None
+        self._profile_source = None
         self._chunk_count = 0
         self._total_audio_seconds = 0.0
         self._source_utterance_ids = []
@@ -391,6 +403,7 @@ class SentenceBuffer:
         start_index = len(self._buffer) + (1 if self._buffer else 0)
         if isinstance(token, TranscriptionEvent):
             self._latest_source = token
+            self._profile_source = token
             self._total_audio_seconds += token.audio_seconds
             self._record_segment_gap_boundaries(token, start_index)
             if self._silence_complete_enabled and token.vad_cut_reason == "silence":
@@ -403,16 +416,7 @@ class SentenceBuffer:
         self._buffer = (self._buffer + " " + token_text).strip() if self._buffer else token_text
 
     def requires_profile_switch(self, token: str | TranscriptionEvent) -> bool:
-        if not self._buffer or not isinstance(token, TranscriptionEvent):
-            return False
-        previous = self._latest_source
-        if previous is None:
-            return False
-        previous_snapshot = previous.profile_snapshot
-        next_snapshot = token.profile_snapshot
-        if previous_snapshot is not None and next_snapshot is not None:
-            return previous_snapshot.cache_identity != next_snapshot.cache_identity
-        return previous.profile_id != token.profile_id
+        return bool(self._buffer) and profile_sources_differ(self._profile_source, token)
 
     def flush_profile_switch(self, now: float) -> SentenceCut | None:
         cut = self.flush(now)
@@ -456,6 +460,7 @@ class SentenceBuffer:
             evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
             source_avg_logprobs=tuple(self._source_avg_logprobs),
             source_no_speech_probs=tuple(self._source_no_speech_probs),
+            profile_source=self._profile_source,
         )
 
     def assess_semantic_early_cut(
@@ -532,6 +537,7 @@ class SentenceBuffer:
             evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
             source_avg_logprobs=tuple(self._source_avg_logprobs),
             source_no_speech_probs=tuple(self._source_no_speech_probs),
+            profile_source=self._profile_source,
         )
         self.reset()
         return cut
@@ -568,6 +574,7 @@ class SentenceBuffer:
                     evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                     source_avg_logprobs=tuple(self._source_avg_logprobs),
                     source_no_speech_probs=tuple(self._source_no_speech_probs),
+                    profile_source=self._profile_source,
                 )
                 self.reset()
                 return cut
@@ -596,6 +603,7 @@ class SentenceBuffer:
                     evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                     source_avg_logprobs=tuple(self._source_avg_logprobs),
                     source_no_speech_probs=tuple(self._source_no_speech_probs),
+                    profile_source=self._profile_source,
                 )
                 if residual and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL:
                     # Residual policy (c): carry it back into the buffer and
@@ -641,6 +649,7 @@ class SentenceBuffer:
                 evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                 source_avg_logprobs=tuple(self._source_avg_logprobs),
                 source_no_speech_probs=tuple(self._source_no_speech_probs),
+                profile_source=self._profile_source,
             )
             self.reset()
             return cut
@@ -659,6 +668,7 @@ class SentenceBuffer:
                 evidence_source_utterance_ids=tuple(self._evidence_source_utterance_ids),
                 source_avg_logprobs=tuple(self._source_avg_logprobs),
                 source_no_speech_probs=tuple(self._source_no_speech_probs),
+                profile_source=self._profile_source,
             )
             self.reset()
             return cut

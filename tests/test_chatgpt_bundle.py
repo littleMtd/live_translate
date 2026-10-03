@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts.analyze_runtime_events import analyze_runtime_events
 from scripts.llm_quality_reviewer import iter_translation_events, resolve_event_paths
-from utils.chatgpt_bundle import bundle_event_paths, export_bundle, list_runs, sanitize_value
+from utils.chatgpt_bundle import SourceEvent, _subtitle_rows, bundle_event_paths, export_bundle, list_runs, sanitize_value
 
 
 def _write_events(path: Path, events: list[dict]) -> None:
@@ -76,6 +76,20 @@ def test_selected_run_complete_preservation_order_and_provenance(tmp_path):
     assert rows[0]["run_id"] == "run-a"
     assert rows[0]["source_event_ordinal"] == "2"
     assert rows[0]["profile_generation"] == "2"
+    guide = (bundle / "CHATGPT_PROJECT_README.md").read_text(encoding="utf-8")
+    assert "Chronological producer-selected subtitles" in guide
+    assert "does not establish screen display" in guide
+
+
+def test_subtitle_table_requires_explicit_producer_output_evidence(tmp_path):
+    rows = [
+        SourceEvent(
+            {"event_type": "translation", "target_text": "字幕", **extra},
+            tmp_path / "runtime.jsonl", index, index,
+        )
+        for index, extra in enumerate(({}, {"subtitle_emitted": False}, {"subtitle_emitted": True}), 1)
+    ]
+    assert [row["source_event_ordinal"] for row in _subtitle_rows(rows)] == [3]
 
 
 def test_recursive_secret_redaction_does_not_remove_token_telemetry(tmp_path):

@@ -50,7 +50,7 @@ Downstream compatibility paths may consume the current typed snapshot when an ol
 The ordinary live backend is `deepseek`. Persisted dashboard values using the old
 `anthropic` backend name are normalized to `deepseek` when loaded.
 
-- `deepseek_route="primary"` (default): DeepSeek `deepseek-v4-flash` -> Groq `openai/gpt-oss-120b`.
+- `deepseek_route="primary"` (default): DeepSeek `deepseek-flash` -> Groq `openai/gpt-oss-120b`.
 - `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off`: Groq only. This is the operational emergency rollback.
 - `nvidia`: NVIDIA primary plus the fixed Groq fallback.
 - `ollama`: local Ollama only.

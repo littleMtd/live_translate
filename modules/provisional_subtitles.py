@@ -93,6 +93,17 @@ class ProvisionalStore:
         self._candidates: dict[str, ProvisionalCandidate] = {}
         self._closed: set[str] = set()
 
+    def admit_call(self, provisional_id: str) -> bool:
+        """Order provider admission against closure without holding the lock during I/O.
+
+        A later close cannot cancel a call that was already admitted, even if
+        transport starts after the lock is released.
+        """
+        with self._lock:
+            if not provisional_id or provisional_id in self._closed:
+                return False
+            return True
+
     def publish(self, candidate: ProvisionalCandidate) -> bool:
         return self.publish_and_enqueue(candidate, lambda: None)
 

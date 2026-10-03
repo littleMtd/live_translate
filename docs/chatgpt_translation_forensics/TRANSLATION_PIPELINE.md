@@ -69,14 +69,17 @@ but follow different candidate histories.
 
 Use final translation status, `subtitle_emitted`, suppression reason,
 `sequence_id`, provisional/final identifiers, and subtitle lifecycle events
-where present. A successful provider response is not necessarily publication.
-Conversely, the absence of a general display event does not prove non-display
-when publication evidence is carried by the translation event.
+where present. A successful provider response alone does not establish a
+producer output decision. The absence of a general display event also does
+not prove non-display because ordinary final subtitles lack a display ack.
+`subtitle_emitted=True` records the producer's output decision after an enqueue
+attempt. It does not prove queue admission, overlay drawing, or screen display;
+the overlay may replace a queued subtitle before drawing it.
 
 ## Practical correlation sequence
 
 ```text
-published subtitle
+producer-selected subtitle
   -> translation event and selected attempt
   -> sentence event and source/evidence utterances
   -> STT and optional retained WAV

@@ -521,7 +521,7 @@ def render_forensics_report(report: dict[str, Any]) -> str:
         lines.append(
             f"- `{chain['chain_id']}`: audio={len(chain['audio'])}, STT={len(chain['stt'])}, "
             f"sentence=`{chain['sentence_id'] or 'missing'}`, attempts={len(chain['provider_attempts'])}, "
-            f"published={chain['publication']['subtitle_emitted']}, attribution={'yes' if chain['attribution_supported'] else 'unresolved'}"
+            f"producer_selected={chain['publication']['subtitle_emitted']}, attribution={'yes' if chain['attribution_supported'] else 'unresolved'}"
         )
     lines += ["", "## Findings", ""]
     for issue in report.get("issues", []):

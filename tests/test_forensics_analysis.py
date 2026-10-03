@@ -161,6 +161,7 @@ def test_valid_bundle_builds_complete_structural_chain_and_reports_evidence_gap(
 
     human = render_forensics_report(report)
     assert "translation-event-5" in human
+    assert "producer_selected=True" in human
     assert "UNRESOLVED" in human
 
 

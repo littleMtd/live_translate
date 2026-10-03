@@ -300,6 +300,25 @@ def test_calibrated_roi_uses_reviewed_sompunch_ocr_alias_from_runtime_evidence()
     assert event["activation_decision"] == "authoritative_identity_confirmed"
 
 
+@pytest.mark.parametrize("observed", ["릴파♪", "릴파♬"])
+def test_calibrated_roi_confirms_reviewed_lilpa_music_variants(observed):
+    state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
+    identity_reader = QuerySequence([json.dumps({"identity": observed}, ensure_ascii=False)])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, events, _clock = make_updater(
+            frames=[image_frame()],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "isegye_lilpa"
+    event = next(item for item in events if item["event_type"] == "profile_resolution")
+    assert event["reviewed_member_match"] == "isegye_member_lilpa"
+    assert event["activation_decision"] == "authoritative_identity_confirmed"
+
+
 def test_unknown_identity_roi_retains_confirmed_profile_and_does_not_fallback():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     state.confirm_content("url", evidence_source="authoritative_identity_roi")

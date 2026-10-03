@@ -63,6 +63,16 @@ def test_closed_store_rejects_late_preview_publish():
     assert store.is_closed("preview-1")
 
 
+def test_provider_call_admission_is_ordered_after_final_closure():
+    store = ProvisionalStore()
+    assert not store.admit_call("")
+    store.close("preview-closed")
+    assert not store.admit_call("preview-closed")
+    assert store.admit_call("preview-open")
+    store.close("preview-open")
+    assert not store.admit_call("preview-open")
+
+
 def test_preview_enqueue_is_ordered_before_finalizer_can_close_candidate():
     store = ProvisionalStore()
     candidate = ProvisionalCandidate(

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
+from opencc import OpenCC
 from zhconv import convert as convert_chinese
 
 from config import cfg
@@ -645,6 +646,7 @@ def _source_activated_name_canonicals(
 # actually fired on the current translation, so the runtime event can show
 # whether "海洞 -> 해둥이"-style rescues are routine or rarely needed anymore.
 _LAST_CORRECTIONS = threading.local()
+_S2TWP_CONVERTER = threading.local()
 
 
 def reset_corrections() -> None:
@@ -662,6 +664,18 @@ def _record_correction(stage: str, rule: str, before: str, after: str) -> None:
 def get_corrections() -> list[dict]:
     value = getattr(_LAST_CORRECTIONS, "value", None)
     return list(value) if isinstance(value, list) else []
+
+
+def _normalize_deepseek_taiwan_script(text: str) -> str:
+    """Convert provider output with a per-worker OpenCC converter."""
+    converter = getattr(_S2TWP_CONVERTER, "value", None)
+    if converter is None:
+        converter = OpenCC("s2twp.json")
+        _S2TWP_CONVERTER.value = converter
+    normalized = converter.convert(text)
+    if normalized != text:
+        _record_correction("target_script_normalization", "opencc:s2twp", text, normalized)
+    return normalized
 
 
 def _replace_recording(text: str, wrong: str, right: str, *, stage: str, rule_id: str) -> str:
@@ -1060,6 +1074,22 @@ def _adjudicate_translation_candidate(
         corrected, corrections = _preview_source_aware_corrections(
             source, restored_result
         )
+    source_corrected = corrected
+    if is_deepseek:
+        if record_corrections:
+            corrected = _normalize_deepseek_taiwan_script(corrected)
+            corrections = get_corrections()
+        else:
+            previous = getattr(_LAST_CORRECTIONS, "value", None)
+            _LAST_CORRECTIONS.value = []
+            try:
+                corrected = _normalize_deepseek_taiwan_script(corrected)
+                corrections += get_corrections()
+            finally:
+                if previous is None:
+                    delattr(_LAST_CORRECTIONS, "value")
+                else:
+                    _LAST_CORRECTIONS.value = previous
     final_protection_evaluation = request_protection.evaluate_final(corrected)
     unactivated_entity_targets = _unactivated_registry_targets(source, corrected)
     simplified_chinese_spans = _simplified_chinese_evidence(corrected)
@@ -1225,7 +1255,8 @@ def _adjudicate_translation_candidate(
         "candidate_stages": {
             "raw_provider": {"text": result, "sha256": sha256_text(result)},
             "protection_restored": {"text": restored_result, "sha256": sha256_text(restored_result)},
-            "source_corrected": {"text": corrected, "sha256": sha256_text(corrected)},
+            "source_corrected": {"text": source_corrected, "sha256": sha256_text(source_corrected)},
+            "script_normalized": {"text": corrected, "sha256": sha256_text(corrected)},
         },
         "candidate_raw_output": result,
         "candidate_output": corrected,
@@ -3321,6 +3352,14 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 **request.profile_snapshot.as_metadata(),
                             )
                             return
+                        if not provisional_store.admit_call(request.provisional_id):
+                            runtime_events.emit(
+                                "provisional_translation",
+                                action="cancelled_before_call",
+                                provisional_id=request.provisional_id,
+                                request_contract_id=request_contract_id,
+                            )
+                            return
                         api_call_started = time.monotonic()
                         api_call_outcome = "exception"
                         try:
@@ -3344,6 +3383,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                     2,
                                 ),
                                 api_cost_usd=api_diagnostics.get("api_cost_usd"),
+                                api_cost_basis=api_diagnostics.get("api_cost_basis"),
+                                api_pricing_revision=api_diagnostics.get("api_pricing_revision"),
                                 input_tokens=api_usage.get("prompt"),
                                 output_tokens=api_usage.get("output"),
                                 cache_hit_tokens=api_usage.get("cache_read"),
@@ -3466,6 +3507,8 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 cache_hit_tokens=usage.get("cache_read"),
                                 cache_miss_tokens=usage.get("cache_write"),
                                 cost_usd=diagnostics.get("api_cost_usd"),
+                                api_cost_basis=diagnostics.get("api_cost_basis"),
+                                api_pricing_revision=diagnostics.get("api_pricing_revision"),
                             )
             except Exception:
                 if stop_event.is_set():

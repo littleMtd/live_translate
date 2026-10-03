@@ -205,18 +205,22 @@ class _Translation:
     deepseek_route: str = os.environ.get(
         "LIVE_TRANSLATE_DEEPSEEK_ROUTE", "primary"
     ).strip().lower()
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = "deepseek-flash"
+    # DeepSeek's published translation setting; keep other providers on the
+    # shared temperature so this route can be evaluated independently.
+    deepseek_temperature: float = 1.3
     deepseek_timeout: float = 4.0
     deepseek_max_tokens: int = 160
     deepseek_context_window: int = 2
     deepseek_history_source_chars: int = 160
     deepseek_history_target_chars: int = 220
-    # Pricing snapshot verified from DeepSeek's official pricing page on
-    # 2026-08-15. Keeping rates explicit makes every recorded cost auditable.
-    deepseek_cache_hit_usd_per_million: float = 0.0028
-    deepseek_cache_miss_usd_per_million: float = 0.14
-    deepseek_output_usd_per_million: float = 0.28
-    deepseek_pricing_revision: str = "2026-08-15"
+    # Official DeepSeek Flash USD peak rates checked on 2026-10-04. These
+    # deliberately estimate an upper bound because off-peak and Chinese public
+    # holiday discounts cannot be inferred from a token-usage response alone.
+    deepseek_cache_hit_usd_per_million: float = 0.006
+    deepseek_cache_miss_usd_per_million: float = 0.3
+    deepseek_output_usd_per_million: float = 1.2
+    deepseek_pricing_revision: str = "2026-10-04-peak-upper-bound"
     # --- Shared translation settings -----------------------------------------
     # Live reliability is route-neutral: every configured provider/model route
     # uses the same circuit policy and shares one end-to-end API deadline.
@@ -282,6 +286,13 @@ class _Translation:
                 f"{self.deepseek_route!r} "
                 f"(must be one of {_VALID_DEEPSEEK_ROUTES})"
             )
+        if (
+            isinstance(self.deepseek_temperature, bool)
+            or not isinstance(self.deepseek_temperature, (int, float))
+            or not math.isfinite(self.deepseek_temperature)
+            or not 0.0 <= self.deepseek_temperature <= 2.0
+        ):
+            raise ValueError("cfg.translation.deepseek_temperature must be between 0 and 2")
         canonical_streamer_profile = canonical_profile_id(self.streamer_profile)
         if self.profile_mode not in {"auto", "manual"}:
             raise ValueError("cfg.translation.profile_mode must be auto or manual")

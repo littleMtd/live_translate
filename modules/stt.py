@@ -439,18 +439,24 @@ class STTEngine:
     def transcribe_event(self, audio: np.ndarray | AudioChunk) -> TranscriptionEvent | None:
         request_profile = profile_state.current()
         previous_profile = getattr(self, "_current_profile_snapshot", None)
+        chunk = _audio_chunk(audio)
+        next_audio_session_id = str(chunk.audio_session_id or "")
         if (
             previous_profile is not None
             and previous_profile.generation != request_profile.generation
         ):
             self.reset_stream_context("profile_changed")
+        elif (
+            getattr(self, "_utterance_seq", 0) > 0
+            and getattr(self, "_current_audio_session_id", "") != next_audio_session_id
+        ):
+            self.reset_stream_context("audio_session_changed")
         self._current_profile_snapshot = request_profile
-        chunk = _audio_chunk(audio)
         audio = chunk.audio
         self._utterance_seq += 1
         self._current_utterance_id = f"utt-{self._utterance_seq}"
         self._current_audio_chunk_id = str(chunk.audio_chunk_id or "")
-        self._current_audio_session_id = str(chunk.audio_session_id or "")
+        self._current_audio_session_id = next_audio_session_id
         self._last_audio_seconds = _audio_seconds(audio)
         self._current_overlap_seconds = float(chunk.overlap_seconds or 0.0)
         self._current_overlap_represented = self._overlap_matches_last_represented_audio(

@@ -38,12 +38,17 @@ class TestConfig(unittest.TestCase):
         from config import _Translation
 
         self.assertEqual(cfg.translation.deepseek_route, "primary")
-        self.assertEqual(cfg.translation.deepseek_model, "deepseek-v4-flash")
+        self.assertEqual(cfg.translation.deepseek_model, "deepseek-flash")
+        self.assertEqual(cfg.translation.deepseek_temperature, 1.3)
         with self.assertRaisesRegex(ValueError, "deepseek_route invalid"):
             _Translation(deepseek_route="automatic")
         self.assertEqual(_Translation(deepseek_route="off").deepseek_route, "off")
         with self.assertRaisesRegex(ValueError, "positive integer"):
             _Translation(deepseek_max_tokens=0)
+        for temperature in (-0.1, 2.1, float("nan"), True):
+            with self.subTest(temperature=temperature):
+                with self.assertRaisesRegex(ValueError, "deepseek_temperature"):
+                    _Translation(deepseek_temperature=temperature)
 
     def test_live_fallback_chain_keeps_protected_base_order(self):
         self.assertEqual(cfg.live_engine, "deepseek")

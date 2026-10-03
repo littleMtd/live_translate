@@ -277,7 +277,7 @@ Context, display, and persistence:
 
 `cfg.live_engine` / `cfg.clip_engine` selects the backend:
 
-- `deepseek`: DeepSeek V4 Flash followed by the fixed Groq fallback. The
+- `deepseek`: DeepSeek V4.1 Flash (`deepseek-flash`) followed by the fixed Groq fallback. The
   persisted legacy value `anthropic` is accepted only as a migration alias.
 - `nvidia`: NVIDIA primary followed by the fixed Groq fallback.
 - `ollama`: local Ollama only.
@@ -375,8 +375,12 @@ Preserve it and do not stage/commit it unless the user asks.
   API latency, source evidence, profile/activity, correction trace, quality
   flags/classifications, additive profile QA evidence, and subtitle
   emission/suppression.
-- Ordinary live-chain mode derives `deepseek-v4-flash -> Groq` when
+- Ordinary live-chain mode derives `deepseek-flash -> Groq` when
   `deepseek_route=primary`; `off` is the Groq-only operational rollback.
+  DeepSeek uses its provider-specific translation temperature of 1.3. Its
+  recorded USD cost uses the published peak rates as an upper-bound estimate;
+  attempt and provisional events carry `api_cost_basis` and
+  `api_pricing_revision` so reports can identify that estimate.
   DeepSeek and fallback consume the same immutable profile, activity, history,
   protected-source, and canonical request ownership. A script/meta guard is a
   sentence-local content rejection, so rejected output cannot enter subtitle,

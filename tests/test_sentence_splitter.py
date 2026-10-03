@@ -416,6 +416,61 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(result.text, "partial thought")
         self.assertTrue(result.incomplete)
 
+    def test_pending_incomplete_is_emitted_before_new_profile_token(self):
+        text_queue, sentence_queue = queue.Queue(), queue.Queue()
+        stop = threading.Event()
+        first_profile = profile_state.legacy_snapshot("isegye_lilpa")
+        second_profile = profile_state.legacy_snapshot("url")
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(0.1, 0.2)):
+            thread = start(text_queue, sentence_queue, stop)
+            text_queue.put(TranscriptionEvent(
+                text="이 게임을 하면", engine="test", profile_id="isegye_lilpa",
+                profile_snapshot=first_profile, utterance_id="first",
+            ))
+            time.sleep(0.4)
+            assert sentence_queue.empty()
+            text_queue.put(TranscriptionEvent(
+                text="즐겁게 놀 수 있어요.", engine="test", profile_id="url",
+                profile_snapshot=second_profile, utterance_id="second",
+            ))
+            first = sentence_queue.get(timeout=2)
+            second = sentence_queue.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+        assert first.text == "이 게임을 하면"
+        assert first.profile_snapshot is first_profile
+        assert second.text == "즐겁게 놀 수 있어요."
+        assert second.profile_snapshot is second_profile
+
+    def test_forced_prefix_residual_is_flushed_under_its_original_profile(self):
+        text_queue, sentence_queue = queue.Queue(), queue.Queue()
+        stop = threading.Event()
+        first_profile = profile_state.legacy_snapshot("isegye_lilpa")
+        second_profile = profile_state.legacy_snapshot("url")
+        with patch("modules.sentence_splitter.cfg", _fast_cfg(0.1, 0.2)):
+            thread = start(text_queue, sentence_queue, stop)
+            text_queue.put(TranscriptionEvent(
+                text="오늘은 정말 재미있어요! 이 게임을 하면", engine="test",
+                profile_id="isegye_lilpa", profile_snapshot=first_profile,
+                utterance_id="first",
+            ))
+            prefix = sentence_queue.get(timeout=2)
+            text_queue.put(TranscriptionEvent(
+                text="즐겁게 놀 수 있어요.", engine="test", profile_id="url",
+                profile_snapshot=second_profile, utterance_id="second",
+            ))
+            residual = sentence_queue.get(timeout=2)
+            later = sentence_queue.get(timeout=2)
+            stop.set()
+            thread.join(timeout=2)
+        assert prefix.profile_snapshot is first_profile
+        assert residual.text == "이 게임을 하면"
+        assert residual.profile_snapshot is first_profile
+        assert residual.source_utterance_ids == ()
+        assert residual.evidence_source_utterance_ids == ("first",)
+        assert later.text == "즐겁게 놀 수 있어요."
+        assert later.profile_snapshot is second_profile
+
     def test_two_incomplete_cuts_emit_bounded_merge(self):
         tq: queue.Queue = queue.Queue()
         sq: queue.Queue = queue.Queue()

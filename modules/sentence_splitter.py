@@ -25,7 +25,7 @@ from modules.provisional_subtitles import (
     ProvisionalRequest,
     deepseek_provisional_eligible,
 )
-from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete
+from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete, profile_sources_differ
 from modules.sentence_hold_shadow import (
     UnfinishedTail,
     analyze_unfinished_tail,
@@ -78,6 +78,8 @@ def _merged_text_len(first: SentenceCut, second: SentenceCut) -> int:
 
 
 def _can_merge_cuts(first: SentenceCut, second: SentenceCut) -> bool:
+    if profile_sources_differ(first.profile_source or first.source, second.profile_source or second.source):
+        return False
     max_sources = _int_setting(
         getattr(cfg.splitter, "max_merge_source_count", _DEFAULT_MAX_MERGE_SOURCE_COUNT),
         _DEFAULT_MAX_MERGE_SOURCE_COUNT,
@@ -112,6 +114,7 @@ def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
         ),
         source_avg_logprobs=first.source_avg_logprobs + second.source_avg_logprobs,
         source_no_speech_probs=first.source_no_speech_probs + second.source_no_speech_probs,
+        profile_source=second.profile_source or second.source or first.profile_source or first.source,
     )
 
 
@@ -305,9 +308,10 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
                 log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
             log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
             source = cut.source
+            profile_source = cut.profile_source or source
             profile_snapshot = (
-                source.profile_snapshot
-                if source is not None and source.profile_snapshot is not None
+                profile_source.profile_snapshot
+                if profile_source is not None and profile_source.profile_snapshot is not None
                 else profile_state.current()
             )
             profile_id = profile_snapshot.effective_profile_id
@@ -440,9 +444,16 @@ def start(text_queue: queue.Queue, sentence_queue: queue.Queue,
 
         def admit_token(token: str | TranscriptionEvent, received_at: float) -> None:
             nonlocal active_provisional_id, active_provisional_source_id
-            if buffer.requires_profile_switch(token):
-                switch_cut = buffer.flush_profile_switch(received_at)
-                if pending_incomplete is not None:
+            pending_switch = (
+                pending_incomplete is not None
+                and profile_sources_differ(
+                    pending_incomplete.profile_source or pending_incomplete.source, token
+                )
+            )
+            buffer_switch = buffer.requires_profile_switch(token)
+            if pending_switch or buffer_switch:
+                switch_cut = buffer.flush_profile_switch(received_at) if buffer_switch else None
+                if pending_switch or (buffer_switch and pending_incomplete is not None):
                     emit_cut(pending_incomplete, track_shadow=False)
                     clear_pending()
                 if switch_cut is not None:

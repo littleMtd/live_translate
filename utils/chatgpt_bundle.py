@@ -234,7 +234,7 @@ def _subtitle_rows(rows: list[SourceEvent]) -> list[dict[str, Any]]:
     output = []
     for row in rows:
         event = row.event
-        if event.get("event_type") != "translation" or event.get("subtitle_emitted") is False:
+        if event.get("event_type") != "translation" or event.get("subtitle_emitted") is not True:
             continue
         target = event.get("target_text", event.get("translation", event.get("translated_text", "")))
         if not target:
@@ -453,7 +453,7 @@ def _markdown(manifest: dict[str, Any], subtitles: list[dict[str, Any]]) -> str:
     }
     for event_type, count in manifest["event_counts"].items():
         lines.append(f"- `{event_type}` ({count}): {glossary.get(event_type, 'retained runtime event; inspect raw fields without assuming undocumented semantics')}")
-    lines += ["", "Join attempts and results through `request_contract_id` or `stt_request_contract_id`. Candidate `output_guard` records retain raw, restored, corrected stages and every failed invariant.", "", "## Chronological published subtitles", ""]
+    lines += ["", "Join attempts and results through `request_contract_id` or `stt_request_contract_id`. Candidate `output_guard` records retain raw, restored, corrected stages and every failed invariant.", "", "## Chronological producer-selected subtitles", "", "Only events with `subtitle_emitted=True` appear here. Older events without that field remain in the raw event files. These rows record an output decision and enqueue attempt; the overlay may replace, discard, or fail to draw an item. This table does not establish screen display.", ""]
     headers = ["timestamp", "source Korean", "final zh-TW", "provider", "effective profile", "sentence/provisional/final IDs", "raw event"]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join("---" for _ in headers) + " |")

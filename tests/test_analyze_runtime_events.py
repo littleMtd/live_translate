@@ -1620,6 +1620,7 @@ def test_analyzer_reports_current_fallback_and_all_observed_provisional_cost(tmp
                 {
                     "engine": "deepseek", "status": "rejected_output",
                     "api_cost_usd": 0.001, "selected_for_output": False,
+                    "api_cost_basis": "peak_upper_bound",
                     "output_guard": {"reason": "unexpected_hangul"},
                 },
                 {
@@ -1628,7 +1629,8 @@ def test_analyzer_reports_current_fallback_and_all_observed_provisional_cost(tmp
                 },
             ],
         ),
-        provisional("run-a", "p1", "api_attempt_completed", api_cost_usd=0.003),
+        provisional("run-a", "p1", "api_attempt_completed", api_cost_usd=0.003,
+                    api_cost_basis="peak_upper_bound"),
         provisional("run-a", "p1", "api_attempt_completed", api_cost_usd=0.099),
         provisional("run-a", "p1", "succeeded", cost_usd=0.003),
         provisional("run-a", "p2", "api_attempt_completed", api_cost_usd=None),
@@ -1658,6 +1660,16 @@ def test_analyzer_reports_current_fallback_and_all_observed_provisional_cost(tmp
     assert cost["provisional_observed"]["duplicate_completion_events"] == 1
     assert cost["provisional_observed"]["total"] == 0.018
     assert cost["combined_observed"]["total"] == 0.028
+    assert cost["all_attempts"]["peak_upper_bound_estimate"] == {
+        "observations": 1, "total_usd": 0.001,
+    }
+    assert cost["provisional_observed"]["peak_upper_bound_estimate"] == {
+        "observations": 1, "total_usd": 0.003,
+    }
+    assert cost["combined_observed"]["total_cost_basis"] == "includes_peak_upper_bound_estimate"
+    assert cost["combined_observed"]["peak_upper_bound_estimate"] == {
+        "observations": 2, "total_usd": 0.004,
+    }
 
     runs = {row["run_id"]: row for row in report["runs"]}
     assert runs["run-a"]["api_diagnostics"]["cost_usd"]["provisional_observed"]["total"] == 0.012

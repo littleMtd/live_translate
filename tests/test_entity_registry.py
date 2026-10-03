@@ -66,6 +66,8 @@ def test_alias_scopes_are_isolated_and_lookup_is_exact():
         ("고세구!", "isegye_lilpa", "isegye_gosegu"),
         ("징버거☆", "isegye_lilpa", "isegye_jingburger"),
         ("릴파🎵", "isegye_lilpa", "isegye_lilpa_member"),
+        ("릴파♪", "isegye_lilpa", "isegye_lilpa_member"),
+        ("릴파♬", "isegye_lilpa", "isegye_lilpa_member"),
         ("아이네🎵", "isegye_lilpa", "isegye_ine"),
         ("띵귤_", "hades_chxxnnx", "hades_singgyul"),
         ("연초록🎵", "hades_chxxnnx", "hades_yeon_chorok"),

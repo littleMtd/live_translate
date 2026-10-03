@@ -70,6 +70,8 @@ def test_identity_parser_and_lookup_are_exact_and_conservative():
     assert exact_reviewed_member("고세구!", registry).marker_id == "isegye_member_gosegu"
     assert exact_reviewed_member("징버거☆", registry).marker_id == "isegye_member_jingburger"
     assert exact_reviewed_member("릴파🎵", registry).marker_id == "isegye_member_lilpa"
+    assert exact_reviewed_member("릴파♪", registry).marker_id == "isegye_member_lilpa"
+    assert exact_reviewed_member("릴파♬", registry).marker_id == "isegye_member_lilpa"
     assert exact_reviewed_member("아이네🎵", registry).marker_id == "isegye_member_ine"
     assert exact_reviewed_member("띵귤_", registry).marker_id == "hades_member_singgyul"
     assert exact_reviewed_member("밍굴_", registry).marker_id == "hades_member_singgyul"

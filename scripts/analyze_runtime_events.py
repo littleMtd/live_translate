@@ -1760,6 +1760,20 @@ def _deepseek_output_guard_summary(
     }
 
 
+def _label_peak_upper_bound_cost(
+    summary: dict[str, Any], rows: list[tuple[str, float, str]]
+) -> dict[str, Any]:
+    """Distinguish conservative DeepSeek estimates from billed cost."""
+    estimates = [cost for _engine, cost, basis in rows if basis == "peak_upper_bound"]
+    if estimates:
+        summary["total_cost_basis"] = "includes_peak_upper_bound_estimate"
+        summary["peak_upper_bound_estimate"] = {
+            "observations": len(estimates),
+            "total_usd": round(sum(estimates), 8),
+        }
+    return summary
+
+
 def _provisional_cost_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Count one observed provider call per run/provisional identity.
 
@@ -1787,7 +1801,7 @@ def _provisional_cost_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         elif previous is None:
             calls[identity] = event
 
-    priced: list[tuple[str, float]] = []
+    priced: list[tuple[str, float, str]] = []
     unknown_cost_calls = 0
     legacy_success_only_calls = 0
     for event in calls.values():
@@ -1800,23 +1814,27 @@ def _provisional_cost_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         if cost is None:
             unknown_cost_calls += 1
         else:
-            priced.append((str(event.get("engine") or ""), cost))
+            priced.append((
+                str(event.get("engine") or ""),
+                cost,
+                str(event.get("api_cost_basis") or ""),
+            ))
 
     by_engine: dict[str, float] = {}
-    for engine, cost in priced:
+    for engine, cost, _basis in priced:
         by_engine[engine] = by_engine.get(engine, 0.0) + cost
-    return {
+    return _label_peak_upper_bound_cost({
         "call_records": len(calls),
         "observations": len(priced),
         "unknown_cost_calls": unknown_cost_calls,
         "legacy_success_only_calls": legacy_success_only_calls,
         "duplicate_completion_events": duplicate_completions,
-        "total": round(sum(cost for _, cost in priced), 8),
+        "total": round(sum(cost for _, cost, _basis in priced), 8),
         "by_engine": [
             {"engine": engine, "cost_usd": round(cost, 8)}
             for engine, cost in sorted(by_engine.items())
         ],
-    }
+    }, priced)
 
 
 def _api_diagnostics_summary(
@@ -1867,8 +1885,8 @@ def _api_diagnostics_summary(
         for event in api_events
         if (_float_or_none(event.get("api_total_wall_ms")) or 0) >= 10_000
     ]
-    cost_rows: list[tuple[str, float]] = []
-    selected_cost_rows: list[tuple[str, float]] = []
+    cost_rows: list[tuple[str, float, str]] = []
+    selected_cost_rows: list[tuple[str, float, str]] = []
     for event in events:
         chain = [
             attempt
@@ -1879,34 +1897,38 @@ def _api_diagnostics_summary(
         for source in sources:
             cost = _float_or_none(source.get("api_cost_usd"))
             if cost is not None:
-                row = (str(source.get("engine") or ""), cost)
+                row = (
+                    str(source.get("engine") or ""),
+                    cost,
+                    str(source.get("api_cost_basis") or ""),
+                )
                 cost_rows.append(row)
                 if not chain or bool(source.get("selected_for_output")):
                     selected_cost_rows.append(row)
     cost_by_engine: dict[str, float] = {}
-    for engine, cost in cost_rows:
+    for engine, cost, _basis in cost_rows:
         cost_by_engine[engine] = cost_by_engine.get(engine, 0.0) + cost
     selected_cost_by_engine: dict[str, float] = {}
-    for engine, cost in selected_cost_rows:
+    for engine, cost, _basis in selected_cost_rows:
         selected_cost_by_engine[engine] = (
             selected_cost_by_engine.get(engine, 0.0) + cost
         )
-    all_attempt_cost = {
+    all_attempt_cost = _label_peak_upper_bound_cost({
         "observations": len(cost_rows),
-        "total": round(sum(cost for _, cost in cost_rows), 8),
+        "total": round(sum(cost for _, cost, _basis in cost_rows), 8),
         "by_engine": [
             {"engine": engine, "cost_usd": round(cost, 8)}
             for engine, cost in sorted(cost_by_engine.items())
         ],
-    }
-    selected_attempt_cost = {
+    }, cost_rows)
+    selected_attempt_cost = _label_peak_upper_bound_cost({
         "observations": len(selected_cost_rows),
-        "total": round(sum(cost for _, cost in selected_cost_rows), 8),
+        "total": round(sum(cost for _, cost, _basis in selected_cost_rows), 8),
         "by_engine": [
             {"engine": engine, "cost_usd": round(cost, 8)}
             for engine, cost in sorted(selected_cost_by_engine.items())
         ],
-    }
+    }, selected_cost_rows)
     provisional_cost = _provisional_cost_summary(provisional_events or [])
     combined_by_engine = dict(cost_by_engine)
     for row in provisional_cost["by_engine"]:
@@ -1924,6 +1946,21 @@ def _api_diagnostics_summary(
         "unpriced_provisional_calls": provisional_cost["unknown_cost_calls"],
         "legacy_success_only_calls": provisional_cost["legacy_success_only_calls"],
     }
+    final_upper = all_attempt_cost.get("peak_upper_bound_estimate") or {}
+    provisional_upper = provisional_cost.get("peak_upper_bound_estimate") or {}
+    upper_observations = int(final_upper.get("observations") or 0) + int(
+        provisional_upper.get("observations") or 0
+    )
+    if upper_observations:
+        combined_observed_cost["total_cost_basis"] = "includes_peak_upper_bound_estimate"
+        combined_observed_cost["peak_upper_bound_estimate"] = {
+            "observations": upper_observations,
+            "total_usd": round(
+                float(final_upper.get("total_usd") or 0)
+                + float(provisional_upper.get("total_usd") or 0),
+                8,
+            ),
+        }
     return {
         "total_events": len(events),
         "api_events": len(api_events),
