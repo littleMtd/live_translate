@@ -4,7 +4,7 @@ import threading
 import time
 from html import escape
 from abc import ABC, abstractmethod
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
@@ -85,10 +85,111 @@ _LIVE_SEMANTIC_SELF_CHECK = (
 _ENGINE_DIAGNOSTICS = threading.local()
 _TOKEN_USAGE = threading.local()
 _TRANSLATION_CALL_TRACE = threading.local()
+_RESULT_CAPTURE: ContextVar["_ResultCapture | None"] = ContextVar(
+    "translation_engine_result_capture", default=None
+)
 _NVIDIA_INFLIGHT_LOCK = threading.Lock()
 _NVIDIA_INFLIGHT_COUNT = 0
 _ROUTE_CALL_LIMITERS_LOCK = threading.Lock()
 _ROUTE_CALL_LIMITERS: dict[tuple[str, int], threading.BoundedSemaphore] = {}
+
+
+@dataclass(frozen=True)
+class EngineResult:
+    text: str | None
+    usage: tuple[tuple[str, Any], ...]
+    diagnostics: tuple[tuple[str, Any], ...]
+    cost_usd: float | None
+    cost_basis: str
+    finish_reason: str
+    system_fingerprint: str
+    error_type: str
+    error_message_class: str
+    deadline_exceeded: bool
+    deadline_scope: str
+    deadline_budget_ms: float | None
+
+    def usage_dict(self) -> dict[str, Any]:
+        return dict(self.usage)
+
+    def diagnostics_dict(self) -> dict[str, Any]:
+        return dict(self.diagnostics)
+
+
+@dataclass
+class _ResultCapture:
+    diagnostics: dict[str, Any]
+    usage: dict[str, Any]
+    metadata: dict[str, Any]
+
+
+def _capture_response_metadata(data: dict[str, Any], choice: dict[str, Any]) -> None:
+    capture = _RESULT_CAPTURE.get()
+    if capture is not None:
+        capture.metadata = {
+            "finish_reason": str(choice.get("finish_reason") or ""),
+            "system_fingerprint": str(data.get("system_fingerprint") or ""),
+        }
+
+
+def _run_with_engine_result(engine, call: Callable[[], str | None]) -> EngineResult:
+    capture = _ResultCapture({}, {}, {})
+    token = _RESULT_CAPTURE.set(capture)
+    try:
+        text = call()
+    finally:
+        _RESULT_CAPTURE.reset(token)
+    diagnostics = dict(capture.diagnostics)
+    usage = dict(capture.usage)
+    metadata = capture.metadata
+    return EngineResult(
+        text=text,
+        usage=tuple(usage.items()),
+        diagnostics=tuple(diagnostics.items()),
+        cost_usd=diagnostics.get("api_cost_usd"),
+        cost_basis=str(diagnostics.get("api_cost_basis") or ""),
+        finish_reason=str(metadata.get("finish_reason") or ""),
+        system_fingerprint=str(metadata.get("system_fingerprint") or ""),
+        error_type=str(diagnostics.get("api_error_type") or ""),
+        error_message_class=str(diagnostics.get("api_error_message_class") or ""),
+        deadline_exceeded=bool(diagnostics.get("deadline_exceeded")),
+        deadline_scope=str(diagnostics.get("deadline_scope") or ""),
+        deadline_budget_ms=diagnostics.get("deadline_budget_ms"),
+    )
+
+
+def synthetic_engine_result(diagnostics: dict[str, Any]) -> EngineResult:
+    """Represent a deadline or admission failure without a provider response."""
+    return EngineResult(
+        text=None, usage=(), diagnostics=tuple(diagnostics.items()),
+        cost_usd=None, cost_basis="", finish_reason="", system_fingerprint="",
+        error_type=str(diagnostics.get("api_error_type") or ""),
+        error_message_class=str(diagnostics.get("api_error_message_class") or ""),
+        deadline_exceeded=bool(diagnostics.get("deadline_exceeded")),
+        deadline_scope=str(diagnostics.get("deadline_scope") or ""),
+        deadline_budget_ms=diagnostics.get("deadline_budget_ms"),
+    )
+
+
+def legacy_engine_result(
+    text: str | None,
+    diagnostics: dict[str, Any],
+    usage: dict[str, Any],
+) -> EngineResult:
+    """Keep a legacy adapter's text and side-channel data together."""
+    return EngineResult(
+        text=text, usage=tuple(usage.items()),
+        diagnostics=tuple(diagnostics.items()),
+        cost_usd=diagnostics.get("api_cost_usd"),
+        cost_basis=str(diagnostics.get("api_cost_basis") or ""),
+        finish_reason=str(diagnostics.get("finish_reason") or ""),
+        system_fingerprint=str(diagnostics.get("system_fingerprint") or ""),
+        error_type=str(diagnostics.get("api_error_type") or ""),
+        error_message_class=str(diagnostics.get("api_error_message_class") or ""),
+        deadline_exceeded=bool(diagnostics.get("deadline_exceeded")),
+        deadline_scope=str(diagnostics.get("deadline_scope") or ""),
+        deadline_budget_ms=diagnostics.get("deadline_budget_ms"),
+    )
 
 
 def _int_diagnostic(value, default: int = 0) -> int:
@@ -159,7 +260,7 @@ def _set_last_engine_diagnostics(
     retry_reason: str = "",
     **api_fields,
 ) -> None:
-    _ENGINE_DIAGNOSTICS.value = {
+    value = {
         "engine": engine,
         "retry_count": retry_count,
         "retry_reason": retry_reason,
@@ -192,6 +293,10 @@ def _set_last_engine_diagnostics(
         "deadline_scope": str(api_fields.get("deadline_scope") or ""),
         "deadline_budget_ms": _float_diagnostic(api_fields.get("deadline_budget_ms")),
     }
+    _ENGINE_DIAGNOSTICS.value = value
+    capture = _RESULT_CAPTURE.get()
+    if capture is not None:
+        capture.diagnostics = dict(value)
 
 
 def get_last_engine_diagnostics() -> dict[str, int | str]:
@@ -247,6 +352,9 @@ def get_last_engine_api_diagnostics() -> dict[str, int | float | str | None]:
 def reset_last_engine_diagnostics() -> None:
     """Clear per-thread engine diagnostics before a new translation attempt."""
     _ENGINE_DIAGNOSTICS.value = {}
+    capture = _RESULT_CAPTURE.get()
+    if capture is not None:
+        capture.diagnostics = {}
 
 
 def reset_translation_call_trace() -> None:
@@ -262,14 +370,21 @@ def record_translation_attempt(
     result: str | None = None,
     rejected_output: bool = False,
     exception: BaseException | None = None,
+    engine_result: EngineResult | None = None,
 ) -> dict[str, Any]:
     """Snapshot one engine call before another call overwrites thread-local state."""
     attempts = getattr(_TRANSLATION_CALL_TRACE, "attempts", None)
     if not isinstance(attempts, list):
         attempts = []
         _TRANSLATION_CALL_TRACE.attempts = attempts
-    diagnostics = get_last_engine_api_diagnostics()
-    usage = get_last_token_usage()
+    diagnostics = (
+        engine_result.diagnostics_dict() if engine_result is not None
+        else get_last_engine_api_diagnostics()
+    )
+    usage = (
+        engine_result.usage_dict() if engine_result is not None
+        else get_last_token_usage()
+    )
     if exception is not None:
         status = "exception"
     elif not result:
@@ -288,6 +403,9 @@ def record_translation_attempt(
         "selected_for_output": False,
         **{key: value for key, value in diagnostics.items() if key != "engine"},
     }
+    if engine_result is not None:
+        entry["finish_reason"] = engine_result.finish_reason
+        entry["system_fingerprint"] = engine_result.system_fingerprint
     if exception is not None:
         entry["exception_type"] = type(exception).__name__
     for key, value in usage.items():
@@ -768,6 +886,9 @@ def _usage_value(usage, *names: str):
 def reset_last_token_usage() -> None:
     """Clear per-thread token usage so a cache hit/failure can't inherit a stale count."""
     _TOKEN_USAGE.value = {}
+    capture = _RESULT_CAPTURE.get()
+    if capture is not None:
+        capture.usage = {}
 
 
 def get_last_token_usage() -> dict[str, int | None]:
@@ -818,6 +939,9 @@ def _log_token_usage(engine: str, usage) -> None:
         "cache_read": _optional_int_diagnostic(cache_read),
         "cache_write": _optional_int_diagnostic(cache_write),
     }
+    capture = _RESULT_CAPTURE.get()
+    if capture is not None:
+        capture.usage = dict(_TOKEN_USAGE.value)
 
     parts = [
         f"{engine} tokens",
@@ -885,9 +1009,20 @@ class TranslationEngine(ABC):
 
     @abstractmethod
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
+                  history: list[tuple[str, str]] | None = None, *,
+                  route_request=None) -> str | None:
         """Translate text, returning None on provider or transport failure."""
         ...
+
+    def translate_result(
+        self, text: str, system_prompt: str, incomplete: bool,
+        history: list[tuple[str, str]] | None = None, *, route_request,
+    ) -> EngineResult:
+        """Return all provider output and diagnostics on one explicit result."""
+        return self.translate(
+            text, system_prompt, incomplete, history,
+            route_request=route_request,
+        )
 
 
 def translation_route_id(engine: TranslationEngine | object | None) -> str:
@@ -903,7 +1038,7 @@ def translation_route_id(engine: TranslationEngine | object | None) -> str:
 
 @dataclass(frozen=True)
 class EngineCallCompletion:
-    result: str | None
+    result: str | EngineResult | None
     exception: BaseException | None
     diagnostics: dict[str, Any]
     token_usage: dict[str, Any]
@@ -930,7 +1065,7 @@ def record_engine_deadline_exceeded(
     *,
     deadline_scope: str,
     deadline_budget_ms: float = 0.0,
-) -> None:
+) -> EngineResult:
     """Publish a synthetic timeout when no wall-clock budget remains."""
     _set_last_engine_diagnostics(
         str(getattr(engine, "engine_name", "") or ""),
@@ -945,6 +1080,15 @@ def record_engine_deadline_exceeded(
         deadline_budget_ms=deadline_budget_ms,
     )
     reset_last_token_usage()
+    return synthetic_engine_result({
+        "engine": str(getattr(engine, "engine_name", "") or ""),
+        "retry_count": 0, "retry_reason": "total_deadline",
+        "api_attempt_count": 0, "api_timeout_count": 1,
+        "api_total_wall_ms": 0.0, "api_error_type": "timeout",
+        "api_error_message_class": "total_deadline",
+        "deadline_exceeded": True, "deadline_scope": deadline_scope,
+        "deadline_budget_ms": deadline_budget_ms,
+    })
 
 
 def call_engine_with_deadline(
@@ -958,7 +1102,8 @@ def call_engine_with_deadline(
     max_inflight: int,
     deadline_scope: str = "route",
     messages_frozen: tuple[tuple[str, str], ...] | None = None,
-) -> str | None:
+    route_request=None,
+) -> str | EngineResult | None:
     """Run one synchronous adapter behind a hard caller-side wall deadline.
 
     ``urllib`` timeouts are socket-operation limits and may exceed their
@@ -993,7 +1138,7 @@ def call_engine_with_deadline(
             deadline_exceeded=True,
         )
         _restore_engine_call_context(completion)
-        return None
+        return synthetic_engine_result(diagnostics) if route_request is not None else None
 
     completed: queue.Queue[EngineCallCompletion] = queue.Queue(maxsize=1)
 
@@ -1001,8 +1146,22 @@ def call_engine_with_deadline(
         reset_last_engine_diagnostics()
         reset_last_token_usage()
         try:
-            if messages_frozen is not None and hasattr(engine, "translate_messages"):
-                result = engine.translate_messages(messages_frozen)
+            if route_request is not None and route_request.body:
+                result = engine.translate_result(
+                    text, system_prompt, incomplete, history,
+                    route_request=route_request,
+                )
+            elif messages_frozen is not None and hasattr(engine, "translate_messages"):
+                result = (
+                    engine.translate_messages(messages_frozen, route_request=route_request)
+                    if route_request is not None else
+                    engine.translate_messages(messages_frozen)
+                )
+            elif route_request is not None:
+                result = engine.translate(
+                    text, system_prompt, incomplete, history,
+                    route_request=route_request,
+                )
             else:
                 result = engine.translate(text, system_prompt, incomplete, history)
             exception: BaseException | None = None
@@ -1061,6 +1220,12 @@ def call_engine_with_deadline(
     _restore_engine_call_context(completion)
     if completion.exception is not None:
         raise completion.exception
+    if route_request is not None and not isinstance(completion.result, EngineResult):
+        if completion.result is not None and not isinstance(completion.result, str):
+            raise TypeError("translation adapter must return str, EngineResult, or None")
+        return legacy_engine_result(
+            completion.result, completion.diagnostics, completion.token_usage,
+        )
     return completion.result
 
 class OllamaEngine(TranslationEngine):
@@ -1085,34 +1250,62 @@ class OllamaEngine(TranslationEngine):
         return True
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
+                  history: list[tuple[str, str]] | None = None, *,
+                  route_request=None) -> str | EngineResult | None:
+        if route_request is not None:
+            return _run_with_engine_result(
+                self,
+                lambda: self._translate_text(
+                    text, system_prompt, incomplete, history,
+                    route_request=route_request,
+                ),
+            )
+        return self._translate_text(text, system_prompt, incomplete, history)
+
+    def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
+                        history: list[tuple[str, str]] | None = None, *,
+                        route_request=None) -> str | None:
         import urllib.request
         import urllib.error
         import json as _json
 
-        messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in _limited_primary_history(history, text):
-            messages.append({"role": "user", "content": f"input: {ko}"})
-            messages.append({"role": "assistant", "content": zh})
-        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+        if route_request is not None:
+            messages = [
+                {"role": role, "content": content}
+                for role, content in route_request.messages
+            ]
+        else:
+            messages = [{"role": "system", "content": system_prompt}]
+            for ko, zh in _limited_primary_history(history, text):
+                messages.append({"role": "user", "content": f"input: {ko}"})
+                messages.append({"role": "assistant", "content": zh})
+            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
 
-        payload = _json.dumps({
-            "model": self._model,
-            "messages": messages,
-            "stream": False,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": cfg.translation.max_tokens,
-        }).encode()
+        if route_request is None:
+            payload = _json.dumps({
+                "model": self._model,
+                "messages": messages,
+                "stream": False,
+                "temperature": cfg.translation.temperature,
+                "max_tokens": cfg.translation.max_tokens,
+            }).encode()
+        else:
+            payload = route_request.body
 
         url = f"{self._base_url}/v1/chat/completions"
         req = urllib.request.Request(url, data=payload,
                                      headers={"Content-Type": "application/json"})
         try:
             _t0 = time.monotonic()
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            with urllib.request.urlopen(
+                req,
+                timeout=(route_request.timeout_seconds if route_request is not None
+                         else self._timeout),
+            ) as r:
                 data = _json.loads(r.read())
             log.info("Ollama translate: %.0fms", (time.monotonic() - _t0) * 1000)
             _log_token_usage("Ollama", data.get("usage"))
+            _capture_response_metadata(data, data["choices"][0])
             result = data["choices"][0]["message"]["content"].strip()
             log.debug("Ollama: %.30s → %s", text, result)
             return result
@@ -1171,8 +1364,24 @@ class NvidiaEngine(TranslationEngine):
         return bool(self._api_key)
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
-        timeout_config_ms = _timeout_config_ms(self._timeout)
+                  history: list[tuple[str, str]] | None = None, *,
+                  route_request=None) -> str | EngineResult | None:
+        if route_request is not None:
+            return _run_with_engine_result(
+                self,
+                lambda: self._translate_text(
+                    text, system_prompt, incomplete, history,
+                    route_request=route_request,
+                ),
+            )
+        return self._translate_text(text, system_prompt, incomplete, history)
+
+    def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
+                        history: list[tuple[str, str]] | None = None, *,
+                        route_request=None) -> str | None:
+        timeout_config_ms = _timeout_config_ms(
+            route_request.timeout_seconds if route_request is not None else self._timeout
+        )
         api_attempt_count = 0
         api_timeout_count = 0
         api_total_start: float | None = None
@@ -1187,11 +1396,21 @@ class NvidiaEngine(TranslationEngine):
         retry_reason = ""
         source_text_char_count = len(text or "")
         prompt_char_count = len(system_prompt or "")
-        history = _limited_primary_history(history, text)
-        context_item_count = len(history)
+        history = (
+            _limited_primary_history(history, text)
+            if route_request is None else list(history or ())
+        )
+        context_item_count = (
+            len(history) if route_request is None else
+            max(0, (len(route_request.messages) - 2) // 2)
+        )
         request_body_char_count: int | None = None
         message_count: int | None = None
-        retry_transient_errors = bool(getattr(self, "_retry_transient_errors", True))
+        retry_transient_errors = (
+            bool(route_request.options_dict()["retry_transient_errors"])
+            if route_request is not None else
+            bool(getattr(self, "_retry_transient_errors", True))
+        )
 
         def record_diagnostics(
             api_error_type: str | None = None,
@@ -1239,24 +1458,35 @@ class NvidiaEngine(TranslationEngine):
         import urllib.error
         import json as _json
 
-        messages = [{"role": "system", "content": system_prompt}]
-        for ko, zh in history:
-            messages.append({"role": "user", "content": f"input: {ko}"})
-            messages.append({"role": "assistant", "content": zh})
-        messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
+        if route_request is not None:
+            messages = [
+                {"role": role, "content": content}
+                for role, content in route_request.messages
+            ]
+        else:
+            messages = [{"role": "system", "content": system_prompt}]
+            for ko, zh in history:
+                messages.append({"role": "user", "content": f"input: {ko}"})
+                messages.append({"role": "assistant", "content": zh})
+            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
 
-        body: dict = {
-            "model": self._model,
-            "messages": messages,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": cfg.translation.max_tokens,
-        }
-        if self._is_qwen3:
-            body["chat_template_kwargs"] = {"enable_thinking": False}
+        body: dict = {}
+        if route_request is None:
+            body = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": cfg.translation.temperature,
+                "max_tokens": cfg.translation.max_tokens,
+            }
+            if self._is_qwen3:
+                body["chat_template_kwargs"] = {"enable_thinking": False}
         message_count = len(messages)
-        payload_text = _json.dumps(body)
+        payload_text = (
+            route_request.body.decode("utf-8") if route_request is not None
+            else _json.dumps(body)
+        )
         request_body_char_count = len(payload_text)
-        payload = payload_text.encode()
+        payload = route_request.body if route_request is not None else payload_text.encode()
 
         for attempt in range(_NVIDIA_MAX_ATTEMPTS):
             current_attempt_index = attempt + 1
@@ -1277,13 +1507,18 @@ class NvidiaEngine(TranslationEngine):
                 if api_inflight_count_at_start is None:
                     api_inflight_count_at_start = inflight_at_start
                 try:
-                    with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                    with urllib.request.urlopen(
+                        req,
+                        timeout=(route_request.timeout_seconds if route_request is not None
+                                 else self._timeout),
+                    ) as r:
                         data = _json.loads(r.read())
                 finally:
                     _nvidia_inflight_finished()
                 _api_response_loaded = time.monotonic()
                 log.info("Nvidia translate: %.0fms", (_api_response_loaded - _t0) * 1000)
                 _log_token_usage("Nvidia", data.get("usage"))
+                _capture_response_metadata(data, data["choices"][0])
                 msg = data["choices"][0]["message"]
                 content = (msg.get("content") or "").strip()
                 if self._strip_think:
@@ -1405,6 +1640,17 @@ class DeepSeekTranslationEngine(TranslationEngine):
             )
         )
 
+    def translate_messages_result(self, route_request) -> EngineResult:
+        return self.translate_messages(
+            route_request.messages, route_request=route_request
+        )
+
+    def translate_result(
+        self, text: str, system_prompt: str, incomplete: bool,
+        history: list[tuple[str, str]] | None = None, *, route_request,
+    ) -> EngineResult:
+        return self.translate_messages_result(route_request)
+
     def _cost_usd(self, usage: dict[str, Any]) -> float | None:
         if self._model not in {"deepseek-flash", "deepseek-v4-flash"}:
             return None
@@ -1430,6 +1676,23 @@ class DeepSeekTranslationEngine(TranslationEngine):
     def translate_messages(
         self,
         messages: tuple[tuple[str, str], ...],
+        *,
+        route_request=None,
+    ) -> str | EngineResult | None:
+        if route_request is not None:
+            return _run_with_engine_result(
+                self,
+                lambda: self._translate_messages_text(
+                    messages, route_request=route_request
+                ),
+            )
+        return self._translate_messages_text(messages)
+
+    def _translate_messages_text(
+        self,
+        messages: tuple[tuple[str, str], ...],
+        *,
+        route_request=None,
     ) -> str | None:
         import json as _json
         import urllib.error
@@ -1438,24 +1701,33 @@ class DeepSeekTranslationEngine(TranslationEngine):
         self.last_response_metadata = {}
         reset_last_engine_diagnostics()
         reset_last_token_usage()
+        timeout_config_ms = _timeout_config_ms(
+            route_request.timeout_seconds if route_request is not None else self._timeout
+        )
         if not self._api_key:
             return None
 
-        body = {
-            "model": self._model,
-            "messages": [
-                {"role": role, "content": content}
-                for role, content in messages
-            ],
-            "temperature": cfg.translation.deepseek_temperature,
-            "max_tokens": self._max_tokens,
-            "stream": False,
-            "thinking": {"type": "disabled"},
-        }
-        payload_text = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        if route_request is None:
+            body = {
+                "model": self._model,
+                "messages": [
+                    {"role": role, "content": content}
+                    for role, content in messages
+                ],
+                "temperature": cfg.translation.deepseek_temperature,
+                "max_tokens": self._max_tokens,
+                "stream": False,
+                "thinking": {"type": "disabled"},
+            }
+            payload_text = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+            payload = payload_text.encode("utf-8")
+        else:
+            messages = route_request.messages
+            payload = route_request.body
+            payload_text = payload.decode("utf-8")
         request = urllib.request.Request(
             _DEEPSEEK_BASE_URL,
-            data=payload_text.encode("utf-8"),
+            data=payload,
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -1465,11 +1737,16 @@ class DeepSeekTranslationEngine(TranslationEngine):
         )
         started_at = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=(route_request.timeout_seconds if route_request is not None
+                         else self._timeout),
+            ) as response:
                 data = _json.loads(response.read())
             usage = data.get("usage") or {}
             _log_token_usage("DeepSeek", usage)
             choice = data["choices"][0]
+            _capture_response_metadata(data, choice)
             content = (choice["message"].get("content") or "").strip()
             cost = self._cost_usd(usage)
             self.last_response_metadata = {
@@ -1483,8 +1760,8 @@ class DeepSeekTranslationEngine(TranslationEngine):
                 api_attempt_count=1,
                 api_total_wall_ms=_elapsed_ms(started_at),
                 api_final_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=_timeout_config_ms(self._timeout),
-                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
+                timeout_config_ms=timeout_config_ms,
+                api_attempt_timeout_ms=timeout_config_ms,
                 api_attempt_index=1,
                 prompt_char_count=len(messages[0][1]) if messages else 0,
                 request_body_char_count=len(payload_text),
@@ -1503,8 +1780,8 @@ class DeepSeekTranslationEngine(TranslationEngine):
                 api_timeout_count=1 if error_type == "timeout" else 0,
                 api_total_wall_ms=_elapsed_ms(started_at),
                 api_final_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=_timeout_config_ms(self._timeout),
-                api_attempt_timeout_ms=_timeout_config_ms(self._timeout),
+                timeout_config_ms=timeout_config_ms,
+                api_attempt_timeout_ms=timeout_config_ms,
                 api_attempt_index=1,
                 prompt_char_count=len(messages[0][1]) if messages else 0,
                 request_body_char_count=len(payload_text),
@@ -1558,13 +1835,37 @@ class GroqTranslationEngine(TranslationEngine):
         return bool(self._api_key)
 
     def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None) -> str | None:
-        timeout_config_ms = _timeout_config_ms(self._timeout)
-        messages_contract = build_effective_groq_messages(
-            text, system_prompt, incomplete, history
+                  history: list[tuple[str, str]] | None = None, *,
+                  route_request=None) -> str | EngineResult | None:
+        if route_request is not None:
+            return _run_with_engine_result(
+                self,
+                lambda: self._translate_text(
+                    text, system_prompt, incomplete, history,
+                    route_request=route_request,
+                ),
+            )
+        return self._translate_text(text, system_prompt, incomplete, history)
+
+    def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
+                        history: list[tuple[str, str]] | None = None, *,
+                        route_request=None) -> str | None:
+        timeout_config_ms = _timeout_config_ms(
+            route_request.timeout_seconds if route_request is not None else self._timeout
+        )
+        messages_contract = (
+            route_request.messages if route_request is not None else
+            build_effective_groq_messages(text, system_prompt, incomplete, history)
         )
         system_prompt = messages_contract[0][1]
-        history = _limited_groq_history(history)
+        history = (
+            _limited_groq_history(history)
+            if route_request is None else list(history or ())
+        )
+        context_item_count = (
+            len(history) if route_request is None else
+            max(0, (len(messages_contract) - 2) // 2)
+        )
         api_attempt_count = 0
         api_timeout_count = 0
         api_total_start: float | None = None
@@ -1602,7 +1903,7 @@ class GroqTranslationEngine(TranslationEngine):
                 prompt_char_count=prompt_char_count,
                 request_body_char_count=request_body_char_count,
                 message_count=message_count,
-                context_item_count=len(history),
+                context_item_count=context_item_count,
                 api_error_type=api_error_type,
                 api_error_message_class=api_error_message_class,
             )
@@ -1630,17 +1931,20 @@ class GroqTranslationEngine(TranslationEngine):
             for role, content in messages_contract
         ]
 
-        payload_data = {
-            "model": self._model,
-            "messages": messages,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": self._max_tokens,
-        }
-        payload_data.update(_groq_model_options(self._model))
-        payload_text = _json.dumps(payload_data)
+        if route_request is None:
+            payload_data = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": cfg.translation.temperature,
+                "max_tokens": self._max_tokens,
+            }
+            payload_data.update(_groq_model_options(self._model))
+            payload_text = _json.dumps(payload_data)
+        else:
+            payload_text = route_request.body.decode("utf-8")
         request_body_char_count = len(payload_text)
         message_count = len(messages)
-        payload = payload_text.encode()
+        payload = route_request.body if route_request is not None else payload_text.encode()
 
         req = urllib.request.Request(
             _GROQ_BASE_URL,
@@ -1658,11 +1962,16 @@ class GroqTranslationEngine(TranslationEngine):
             if api_total_start is None:
                 api_total_start = attempt_started_at
             api_attempt_count += 1
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+            with urllib.request.urlopen(
+                req,
+                timeout=(route_request.timeout_seconds if route_request is not None
+                         else self._timeout),
+            ) as r:
                 data = _json.loads(r.read())
             record_attempt_duration(1, attempt_started_at)
             log.info("Groq translate: %.0fms", (time.monotonic() - attempt_started_at) * 1000)
             _log_token_usage("Groq", data.get("usage"))
+            _capture_response_metadata(data, data["choices"][0])
             content = (data["choices"][0]["message"].get("content") or "").strip()
             if self._strip_think:
                 content = _strip_think_tags(content)
@@ -1677,26 +1986,37 @@ class GroqTranslationEngine(TranslationEngine):
                 body = e.read().decode()
             except Exception:
                 pass
-            if _is_groq_token_limit_error(e.code, body) and history:
+            if _is_groq_token_limit_error(e.code, body) and (
+                bool(history) if route_request is None
+                else route_request.retry_body is not None
+            ):
                 log.warning("Groq request exceeded token budget; retrying once without history")
                 retry_count = 1
                 retry_reason = "token_limit_without_history"
                 record_diagnostics("http_error", "token_limit")
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": _build_groq_user_message(text, incomplete)},
-                ]
-                payload_data = {
-                    "model": self._model,
-                    "messages": messages,
-                    "temperature": cfg.translation.temperature,
-                    "max_tokens": self._retry_max_tokens,
-                }
-                payload_data.update(_groq_model_options(self._model))
-                payload_text = _json.dumps(payload_data)
+                if route_request is None:
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": _build_groq_user_message(text, incomplete)},
+                    ]
+                    payload_data = {
+                        "model": self._model,
+                        "messages": messages,
+                        "temperature": cfg.translation.temperature,
+                        "max_tokens": self._retry_max_tokens,
+                    }
+                    payload_data.update(_groq_model_options(self._model))
+                    payload_text = _json.dumps(payload_data)
+                    payload = payload_text.encode()
+                else:
+                    messages = [
+                        {"role": role, "content": content}
+                        for role, content in route_request.retry_messages
+                    ]
+                    payload = route_request.retry_body
+                    payload_text = payload.decode("utf-8")
                 request_body_char_count = len(payload_text)
                 message_count = len(messages)
-                payload = payload_text.encode()
                 req = urllib.request.Request(
                     _GROQ_BASE_URL,
                     data=payload,
@@ -1713,11 +2033,16 @@ class GroqTranslationEngine(TranslationEngine):
                     if api_total_start is None:
                         api_total_start = retry_started_at
                     api_attempt_count += 1
-                    with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                    with urllib.request.urlopen(
+                        req,
+                        timeout=(route_request.timeout_seconds if route_request is not None
+                                 else self._timeout),
+                    ) as r:
                         data = _json.loads(r.read())
                     record_attempt_duration(2, retry_started_at)
                     log.info("Groq translate: %.0fms", (time.monotonic() - retry_started_at) * 1000)
                     _log_token_usage("Groq", data.get("usage"))
+                    _capture_response_metadata(data, data["choices"][0])
                     content = (data["choices"][0]["message"].get("content") or "").strip()
                     if self._strip_think:
                         content = _strip_think_tags(content)

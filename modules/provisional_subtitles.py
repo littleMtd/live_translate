@@ -44,6 +44,8 @@ class ProvisionalCandidate:
     usage: dict[str, Any]
     diagnostics: dict[str, Any]
     request_contract_id: str = ""
+    provider_options: tuple[tuple[str, str], ...] = ()
+    system_fingerprint: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,8 @@ def provisional_fingerprint(
     incomplete: bool,
     profile_cache_identity: str = "",
     protection_identity: str = "",
+    provider_options: dict[str, Any] | None = None,
+    timeout_seconds: float | None = None,
 ) -> str:
     payload = {
         "source": prepared_source,
@@ -78,6 +82,8 @@ def provisional_fingerprint(
         "messages": [list(message) for message in messages],
         "incomplete": bool(incomplete),
         "request_protection": protection_identity,
+        "provider_options": provider_options or {},
+        "timeout_seconds": timeout_seconds,
     }
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")

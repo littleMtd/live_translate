@@ -49,6 +49,11 @@ Core scripts worth checking first:
   Missing or ambiguous lineage stays unresolved. `--json-output` writes the
   machine report and `--report-output` writes compact Markdown; exit code 2
   means an integrity error was found.
+- `scripts/replay_translation_contract.py`: offline-only v2 translation
+  contract reconstruction and provider-body hash comparison. Selects one
+  `translation_request_id` in runtime JSONL and requires its complete route
+  event set; v1 contracts expose recorded messages while unavailable options
+  and body bytes remain unknown. It has no provider send mode.
 - `scripts/analyze_latency_tail.py`: accepts successful translation events
   from runtime schema v2 onward. Aggregate latency remains available for legacy
   rows; timeout attribution requires a per-attempt ledger with its recorded

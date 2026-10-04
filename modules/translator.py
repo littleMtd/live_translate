@@ -1,13 +1,15 @@
 import hashlib
+import json
 import queue
 import re
 import threading
 import time
 import unicodedata
 from collections.abc import Callable
+from contextvars import ContextVar
 from contextlib import nullcontext
 from concurrent.futures import Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -70,6 +72,9 @@ from modules.streamer_profiles import common_stt_terms
 from modules.translation_engines import (
     TranslationEngine,
     DeepSeekTranslationEngine,
+    GroqTranslationEngine,
+    NvidiaEngine,
+    OllamaEngine,
     _build_engine_chain,
     build_effective_deepseek_messages,
     build_effective_groq_messages,
@@ -98,12 +103,14 @@ from modules.forensics_contract import (
     stable_identity,
 )
 from modules.translation_runtime import (
+    FallbackResult,
     FallbackState,
     active_engine,
     call_with_fallback,
     probe_primary_recovery,
 )
 from modules.translation_memory import MemoryLookup, TranslationMemory
+from modules.translation_request import TranslationRequest, freeze_route_request
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 from modules.request_protection import (
     PROTECTION_POLICY_VERSION,
@@ -171,6 +178,10 @@ _API_EVENT_DEFAULTS = {
     "api_error_type": None,
     "api_error_message_class": None,
     "api_cost_usd": None,
+    "api_cost_basis": "",
+    "api_pricing_revision": "",
+    "provider_options": {},
+    "system_fingerprint": "",
     "deadline_exceeded": False,
     "deadline_scope": "",
     "deadline_budget_ms": None,
@@ -646,6 +657,12 @@ def _source_activated_name_canonicals(
 # actually fired on the current translation, so the runtime event can show
 # whether "海洞 -> 해둥이"-style rescues are routine or rarely needed anymore.
 _LAST_CORRECTIONS = threading.local()
+_CORRECTION_CAPTURE: ContextVar[list[dict] | None] = ContextVar(
+    "translation_corrections_capture", default=None
+)
+_CORRECTION_PREVIEW: ContextVar[bool] = ContextVar(
+    "translation_corrections_preview", default=False
+)
 _S2TWP_CONVERTER = threading.local()
 
 
@@ -658,7 +675,11 @@ def _record_correction(stage: str, rule: str, before: str, after: str) -> None:
     if not isinstance(bucket, list):
         bucket = []
         _LAST_CORRECTIONS.value = bucket
-    bucket.append({"stage": stage, "rule": rule, "before": before, "after": after})
+    row = {"stage": stage, "rule": rule, "before": before, "after": after}
+    bucket.append(row)
+    captured = _CORRECTION_CAPTURE.get()
+    if captured is not None and not _CORRECTION_PREVIEW.get():
+        captured.append(dict(row))
 
 
 def get_corrections() -> list[dict]:
@@ -999,6 +1020,7 @@ def _preview_source_aware_corrections(
 ) -> tuple[str, list[dict]]:
     """Preview deterministic target fixes without contaminating selected trace."""
     sentinel = object()
+    preview_token = _CORRECTION_PREVIEW.set(True)
     previous = getattr(_LAST_CORRECTIONS, "value", sentinel)
     _LAST_CORRECTIONS.value = []
     try:
@@ -1009,6 +1031,7 @@ def _preview_source_aware_corrections(
         )
         corrections = get_corrections()
     finally:
+        _CORRECTION_PREVIEW.reset(preview_token)
         if previous is sentinel:
             try:
                 delattr(_LAST_CORRECTIONS, "value")
@@ -1080,12 +1103,14 @@ def _adjudicate_translation_candidate(
             corrected = _normalize_deepseek_taiwan_script(corrected)
             corrections = get_corrections()
         else:
+            preview_token = _CORRECTION_PREVIEW.set(True)
             previous = getattr(_LAST_CORRECTIONS, "value", None)
             _LAST_CORRECTIONS.value = []
             try:
                 corrected = _normalize_deepseek_taiwan_script(corrected)
                 corrections += get_corrections()
             finally:
+                _CORRECTION_PREVIEW.reset(preview_token)
                 if previous is None:
                     delattr(_LAST_CORRECTIONS, "value")
                 else:
@@ -1592,6 +1617,9 @@ class TranslationOutcome:
     filter_reason: str = ""
     canonical_obligation_evaluation: CanonicalObligationEvaluation | None = None
     unknown_name_approved_terms: tuple[str, ...] = ()
+    corrections: tuple[dict, ...] = ()
+    provider_options: tuple[tuple[str, str], ...] = ()
+    system_fingerprint: str = ""
     deferred_success: Callable[[], None] | None = field(
         default=None,
         repr=False,
@@ -1685,6 +1713,10 @@ class TranslationOutcome:
             **quality,
             **profile_qa,
             **obligation_fields,
+            "provider_options": {
+                key: json.loads(value) for key, value in self.provider_options
+            },
+            "system_fingerprint": self.system_fingerprint,
         }
 
 
@@ -1889,17 +1921,29 @@ def _retry_diagnostics_apply(outcome: TranslationOutcome, diagnostics: dict[str,
     )
 
 
-def _token_usage_for_outcome(outcome: TranslationOutcome) -> dict[str, int | None]:
+def _token_usage_for_outcome(
+    outcome: TranslationOutcome,
+    selected_attempt: dict[str, object] | None = None,
+) -> dict[str, int | None]:
     if not _outcome_used_api(outcome):
         return {}
-    selected = get_selected_translation_attempt()
+    selected = (
+        selected_attempt if selected_attempt is not None
+        else get_selected_translation_attempt()
+    )
     selected_route = str(selected.get("route_id") or "")
     if selected_route:
         if selected_route != outcome.route_id:
             return {}
     elif str(selected.get("engine") or "").strip().lower() != str(outcome.engine or "").strip().lower():
         return {}
-    return get_selected_token_usage()
+    if selected_attempt is None:
+        return get_selected_token_usage()
+    return {
+        key: selected[f"token_{key}"]
+        for key in ("prompt", "output", "total", "cache_read", "cache_write")
+        if f"token_{key}" in selected
+    }
 
 
 @dataclass(frozen=True)
@@ -2063,14 +2107,20 @@ class Translator:
             source_text=text,
         )
         with bind_activity_snapshot(snapshot):
-            return self._translate_event_with_snapshot(
-                text,
-                incomplete,
-                repetition_evidence=repetition_evidence,
-                provisional_candidate=provisional_candidate,
-                source_utterance_ids=source_utterance_ids,
-                evidence_source_utterance_ids=evidence_source_utterance_ids,
-            )
+            corrections: list[dict] = []
+            token = _CORRECTION_CAPTURE.set(corrections)
+            try:
+                outcome = self._translate_event_with_snapshot(
+                    text,
+                    incomplete,
+                    repetition_evidence=repetition_evidence,
+                    provisional_candidate=provisional_candidate,
+                    source_utterance_ids=source_utterance_ids,
+                    evidence_source_utterance_ids=evidence_source_utterance_ids,
+                )
+            finally:
+                _CORRECTION_CAPTURE.reset(token)
+            return replace(outcome, corrections=tuple(corrections))
 
     def _translate_event_with_snapshot(
         self,
@@ -2084,6 +2134,7 @@ class Translator:
     ) -> TranslationOutcome:
         raw_text = (text or "").strip()
         self._last_provisional_trace = {}
+        self._last_fallback_details = None
         history_cohort = self._history_cohort()
         if repetition_evidence is not None:
             # The call argument is authoritative.  A stale/malformed evidence
@@ -2184,11 +2235,20 @@ class Translator:
         engine = self._active_engine()
         with self._state_guard():
             history = self._history_state().context(history_cohort)
+        translation_request = self._freeze_translation_request(
+            request_protection, system_prompt, incomplete, history,
+            canonical_obligations, history_cohort=history_cohort,
+        )
         prompt_ver = self._prompt_version_for_engine(
             engine,
             system_prompt,
             protection_identity=request_protection.fingerprint_identity,
             history=history,
+            route_request=(
+                translation_request.route(translation_route_id(engine))
+                if engine is not None else None
+            ),
+            translation_request=translation_request,
         )
         self._log_prompt_mode_once()
 
@@ -2277,12 +2337,10 @@ class Translator:
                 deferred_success=success_commit,
             )
 
-        frozen_messages_by_engine = {
-            "deepseek": build_effective_deepseek_messages(
-                provider_text, system_prompt, incomplete, history
-            ),
-        }
-        effective_deepseek_messages = frozen_messages_by_engine["deepseek"]
+        deepseek_route_request = next(
+            (route for route in translation_request.routes if route.engine == "deepseek"),
+            None,
+        )
         deadline_at = _translation_deadline_at()
         promoted = False
         result = None
@@ -2293,6 +2351,13 @@ class Translator:
             if profile_snapshot is None:
                 profile_snapshot = profile_state.current()
             assert snapshot is not None
+            fingerprint_route = (
+                deepseek_route_request if deepseek_route_request is not None
+                and deepseek_route_request.body else None
+            ) or freeze_route_request(
+                DeepSeekTranslationEngine(), provider_text, system_prompt,
+                incomplete, history,
+            )
             fingerprint = provisional_fingerprint(
                 prepared_source=text,
                 source_utterance_ids=source_utterance_ids,
@@ -2301,9 +2366,11 @@ class Translator:
                 profile_cache_identity=profile_snapshot.cache_identity,
                 activity_cache_identity=snapshot.cache_identity,
                 history_cohort=history_cohort,
-                messages=effective_deepseek_messages,
+                messages=fingerprint_route.messages,
                 incomplete=incomplete,
                 protection_identity=request_protection.fingerprint_identity,
+                provider_options=fingerprint_route.options_dict(),
+                timeout_seconds=fingerprint_route.timeout_seconds,
             )
             if fingerprint == provisional_candidate.fingerprint:
                 provisional_engine = DeepSeekTranslationEngine()
@@ -2350,6 +2417,7 @@ class Translator:
                 history,
                 deadline_at=deadline_at,
                 canonical_obligations=canonical_obligations,
+                translation_request=translation_request,
             )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
@@ -2361,15 +2429,29 @@ class Translator:
             system_prompt,
             protection_identity=request_protection.fingerprint_identity,
             history=history,
+            route_request=(
+                translation_request.route(translation_route_id(engine))
+                if engine is not None else None
+            ),
+            translation_request=translation_request,
         )
         request_contract_id = (
             provisional_candidate.request_contract_id
             if promoted and provisional_candidate is not None
             else str(
-                (get_selected_translation_attempt() or {}).get(
+                (getattr(self, "_last_fallback_details", None).selected_attempt
+                 if getattr(self, "_last_fallback_details", None) else {}).get(
                     "request_contract_id", ""
                 )
             )
+        )
+        selected_route = (
+            translation_request.route(translation_route_id(engine))
+            if engine is not None else None
+        )
+        selected_attempt = (
+            getattr(self, "_last_fallback_details", None).selected_attempt
+            if getattr(self, "_last_fallback_details", None) else {}
         )
         return self._finalize_translation_result(
             raw_text=raw_text,
@@ -2384,6 +2466,16 @@ class Translator:
             request_protection=request_protection,
             history_cohort=history_cohort,
             request_contract_id=request_contract_id,
+            provider_options=(
+                provisional_candidate.provider_options
+                if promoted and provisional_candidate is not None
+                else selected_route.provider_options if selected_route else ()
+            ),
+            system_fingerprint=(
+                provisional_candidate.system_fingerprint
+                if promoted and provisional_candidate is not None
+                else str(selected_attempt.get("system_fingerprint") or "")
+            ),
         )
 
     def _reset_failed_input(self) -> None:
@@ -2409,6 +2501,8 @@ class Translator:
         request_protection: RequestProtection,
         history_cohort: HistoryCohort,
         request_contract_id: str = "",
+        provider_options: tuple[tuple[str, str], ...] = (),
+        system_fingerprint: str = "",
     ) -> TranslationOutcome:
         """Sole finalizer for primary, fallback, and provisional candidates."""
         if not provider_result:
@@ -2425,6 +2519,8 @@ class Translator:
                 model=engine.model_name if engine else "",
                 prompt_version=prompt_version,
                 request_contract_id=request_contract_id,
+                provider_options=provider_options,
+                system_fingerprint=system_fingerprint,
                 canonical_obligation_evaluation=evaluate_canonical_obligations(
                     None, canonical_obligations
                 ),
@@ -2452,6 +2548,8 @@ class Translator:
             "model": engine.model_name if engine else "",
             "prompt_version": prompt_version,
             "request_contract_id": request_contract_id,
+            "provider_options": provider_options,
+            "system_fingerprint": system_fingerprint,
         }
         if adjudication.reason:
             reason = adjudication.reason
@@ -2511,6 +2609,8 @@ class Translator:
             model=engine.model_name if engine else "",
             prompt_version=prompt_version,
             request_contract_id=request_contract_id,
+            provider_options=provider_options,
+            system_fingerprint=system_fingerprint,
             canonical_obligation_evaluation=final_obligation_evaluation,
             unknown_name_approved_terms=request_protection.approved_hangul_terms,
             deferred_success=success_commit,
@@ -2670,6 +2770,8 @@ class Translator:
         *,
         protection_identity: str = "",
         history: list[tuple[str, str]] | None = None,
+        route_request=None,
+        translation_request: TranslationRequest | None = None,
     ) -> str:
         snapshot = bound_activity_snapshot()
         if snapshot is None:
@@ -2679,6 +2781,9 @@ class Translator:
                     getattr(cfg.scene, "publish_translation_activity", False)
                 ),
             )
+        if route_request is not None and route_request.body:
+            effective_prompt = route_request.messages[0][1]
+        elif bound_activity_snapshot() is None:
             with bind_activity_snapshot(snapshot):
                 effective_prompt = effective_system_prompt_for_engine(
                     engine,
@@ -2689,7 +2794,23 @@ class Translator:
                 engine,
                 system_prompt,
             )
-        cohort = self._history_cohort()
+        cohort = (
+            translation_request.history_cohort
+            if translation_request is not None else self._history_cohort()
+        )
+        selected_history = (
+            translation_request.history
+            if translation_request is not None else tuple(history or ())
+        )
+        activity_cache_identity = (
+            translation_request.activity_cache_identity
+            if translation_request is not None else snapshot.cache_identity
+        )
+        history_context_enabled = (
+            translation_request.history_context_enabled
+            if translation_request is not None else
+            int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+        )
         # Cache entries can be context-shaped, so the episode boundary is part
         # of the identity even when activity is unknown. Resolver refreshes do
         # not change cohort_epoch; actual scene/profile transitions do.
@@ -2711,21 +2832,73 @@ class Translator:
             + "\n[request-cache-cohort] "
             + f"{cohort[0]}:{cohort[1]}:{cohort[2]}"
             + (
-                "\n[history-session] " + self._history_session()
-                if int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+                "\n[history-session] " + (
+                    cohort[0] if translation_request is not None
+                    else self._history_session()
+                )
+                if history_context_enabled
                 else ""
             )
             + (
                 "\n[selected-history] "
-                + stable_identity({"history": list(history or ())})
-                if int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+                + stable_identity({"history": list(selected_history)})
+                if history_context_enabled
                 else ""
             )
             + (
-                "\n[activity-cache-identity] " + snapshot.cache_identity
-                if snapshot.activity_id
+                "\n[activity-cache-identity] " + activity_cache_identity
+                if activity_cache_identity
                 else ""
             )
+            + (
+                "\n[provider-options] "
+                + stable_identity({
+                    "options": route_request.options_dict(),
+                    "timeout_seconds": route_request.timeout_seconds,
+                })
+                if route_request is not None and route_request.provider_options else ""
+            )
+        )
+
+    def _freeze_translation_request(
+        self,
+        request_protection: RequestProtection,
+        system_prompt: str,
+        incomplete: bool,
+        history: list[tuple[str, str]] | None,
+        canonical_obligations: tuple[CanonicalObligation, ...],
+        *,
+        history_cohort: tuple[str, str, int] | None = None,
+    ) -> TranslationRequest:
+        profile_snapshot = bound_profile_snapshot()
+        activity_snapshot = bound_activity_snapshot()
+        return TranslationRequest(
+            original_source=request_protection.original_source,
+            provider_source=request_protection.provider_source,
+            incomplete=incomplete,
+            history=tuple(history or ()),
+            history_cohort=history_cohort or self._history_cohort(),
+            profile_cache_identity=(
+                profile_snapshot.cache_identity if profile_snapshot else ""
+            ),
+            activity_cache_identity=(
+                activity_snapshot.cache_identity if activity_snapshot else ""
+            ),
+            request_protection_identity=request_protection.identity,
+            canonical_obligations=tuple(
+                json.dumps(item.as_dict(), ensure_ascii=False, sort_keys=True)
+                for item in canonical_obligations
+            ),
+            routes=tuple(
+                freeze_route_request(
+                    engine, request_protection.provider_source, system_prompt,
+                    incomplete, history,
+                ) for engine in self._engines
+            ),
+            history_context_enabled=int(
+                getattr(cfg.translation, "context_window", 0) or 0
+            ) > 0,
+            artifact_hashes=tuple(sorted(_current_artifact_hashes().items())),
         )
 
     def _call_with_fallback(
@@ -2737,67 +2910,66 @@ class Translator:
         *,
         deadline_at: float | None = None,
         canonical_obligations: tuple[CanonicalObligation, ...] | None = None,
+        translation_request: TranslationRequest | None = None,
     ) -> tuple[str | None, TranslationEngine | None]:
         """Returns (result, engine_used). engine_used is the engine that
         actually produced the result — on a soft fallback this differs from
         the active engine, which intentionally stays on primary."""
         source_text = request_protection.original_source
         provider_source = request_protection.provider_source
-        frozen_messages_by_engine = {
-            "deepseek": build_effective_deepseek_messages(
-                provider_source, system_prompt, incomplete, history
-            ),
-            "groq": build_effective_groq_messages(
-                provider_source, system_prompt, incomplete, history
-            ),
-        }
         if canonical_obligations is None:
             entity_context = _resolve_entity_request_context(source_text)
             canonical_obligations = _canonical_obligations_for_request(entity_context)
-        history_cohort = self._history_cohort()
+        if translation_request is None:
+            translation_request = self._freeze_translation_request(
+                request_protection, system_prompt, incomplete, history,
+                canonical_obligations,
+            )
+        profile_snapshot = bound_profile_snapshot()
+        activity_snapshot = bound_activity_snapshot()
+        history_cohort = translation_request.history_cohort
+        frozen_messages_by_engine = {
+            route.engine: route.messages for engine, route in zip(
+                self._engines, translation_request.routes
+            ) if route.engine in {"deepseek", "groq"} or isinstance(engine, (
+                NvidiaEngine, OllamaEngine,
+            ))
+        }
+        route_requests_by_engine = {
+            route.engine: route for engine, route in zip(
+                self._engines, translation_request.routes
+            ) if isinstance(engine, (
+                DeepSeekTranslationEngine,
+                GroqTranslationEngine,
+                NvidiaEngine,
+                OllamaEngine,
+            ))
+        }
         request_contract_ids: dict[str, str] = {}
-        for candidate_engine in self._engines:
+        for route_index, candidate_engine in enumerate(self._engines):
             engine_name = str(candidate_engine.engine_name or "").lower()
             route_id = translation_route_id(candidate_engine)
-            messages = frozen_messages_by_engine.get(engine_name)
-            effective_prompt = effective_system_prompt_for_engine(
-                candidate_engine, system_prompt
+            route_request = translation_request.routes[route_index]
+            messages = route_request.messages
+            effective_prompt = (
+                route_request.messages[0][1] if route_request.body else
+                effective_system_prompt_for_engine(candidate_engine, system_prompt)
             )
-            exact_messages_available = messages is not None
-            if messages is None:
-                messages = (
-                    ("system", effective_prompt),
-                    ("user", provider_source),
-                )
-            profile_snapshot = bound_profile_snapshot()
-            activity_snapshot = bound_activity_snapshot()
-            manifest_payload = {
-                "schema_version": REQUEST_CONTRACT_SCHEMA_VERSION,
-                "route_id": route_id,
-                "provider_source": provider_source,
-                "messages": list(message_manifest(messages)),
-                "history": list(history_manifest(history)),
-                "history_cohort": list(history_cohort),
-                "incomplete": incomplete,
-                "request_protection_identity": request_protection.identity,
-                "canonical_obligations": [
-                    obligation.as_dict() for obligation in canonical_obligations
-                ],
-                "profile_cache_identity": (
-                    profile_snapshot.cache_identity if profile_snapshot else ""
-                ),
-                "activity_cache_identity": (
-                    activity_snapshot.cache_identity if activity_snapshot else ""
-                ),
-                "artifact_hashes": _current_artifact_hashes(),
-            }
-            contract_id = stable_identity(manifest_payload)
+            exact_messages_available = bool(route_request.body)
+            contract_id = translation_request.route_contract_id(route_request)
             request_contract_ids[route_id] = contract_id
             runtime_events.emit_once(
                 "translation_request_contract",
                 contract_id,
                 request_contract_id=contract_id,
                 request_contract_schema_version=REQUEST_CONTRACT_SCHEMA_VERSION,
+                translation_request_id=translation_request.request_id,
+                request_phase=translation_request.phase,
+                route_index=route_index,
+                route_count=len(translation_request.routes),
+                route_body_json_style=(
+                    "compact_utf8" if engine_name == "deepseek" else "python_default"
+                ),
                 route_id=route_id,
                 engine=engine_name,
                 model=str(candidate_engine.model_name or ""),
@@ -2809,8 +2981,21 @@ class Translator:
                 exact_messages_available=exact_messages_available,
                 contract_role="available_route_request",
                 messages=list(message_manifest(messages)),
+                retry_messages=list(message_manifest(route_request.retry_messages)),
+                provider_options=route_request.options_dict(),
+                timeout_seconds=route_request.timeout_seconds,
+                body_sha256=hashlib.sha256(route_request.body).hexdigest(),
+                retry_body_sha256=(
+                    hashlib.sha256(route_request.retry_body).hexdigest()
+                    if route_request.retry_body is not None else ""
+                ),
                 messages_sha256=stable_identity({"messages": list(messages)}),
                 history=list(history_manifest(history)),
+                history_cohort=list(translation_request.history_cohort),
+                history_context_enabled=translation_request.history_context_enabled,
+                profile_cache_identity=translation_request.profile_cache_identity,
+                activity_cache_identity=translation_request.activity_cache_identity,
+                request_protection_identity=translation_request.request_protection_identity,
                 history_cohort_id=(
                     f"{history_cohort[0]}:{history_cohort[1]}:{history_cohort[2]}"
                 ),
@@ -2827,7 +3012,7 @@ class Translator:
                     activity_snapshot_metadata(activity_snapshot)
                     if activity_snapshot else {}
                 ),
-                artifact_hashes=_current_artifact_hashes(),
+                artifact_hashes=dict(translation_request.artifact_hashes),
                 policy_versions={
                     "adjudication": ADJUDICATION_POLICY_VERSION,
                     "canonical_publication": _CANONICAL_PUBLICATION_POLICY_VERSION,
@@ -2843,7 +3028,7 @@ class Translator:
             with lock:
                 before_state = _copy_fallback_state(fallback_state)
                 state = _copy_fallback_state(before_state)
-        result, used_idx = call_with_fallback(
+        result, used_idx, fallback_details = call_with_fallback(
             self._engines,
             state,
             provider_source,
@@ -2861,6 +3046,8 @@ class Translator:
             max_route_inflight=cfg.translation.live_route_max_inflight,
             frozen_messages_by_engine=frozen_messages_by_engine,
             request_contract_ids=request_contract_ids,
+            route_requests_by_engine=route_requests_by_engine,
+            return_details=True,
             output_guard=lambda candidate_engine, candidate, _provider_source: (
                 _translation_output_guard(
                     candidate_engine,
@@ -2871,6 +3058,7 @@ class Translator:
                 )
             ),
         )
+        self._last_fallback_details = fallback_details
         if lock is not None:
             with lock:
                 committed_before = _copy_fallback_state(fallback_state)
@@ -2886,7 +3074,7 @@ class Translator:
         ):
             from_engine = active_engine(self._engines, committed_before.active_idx)
             to_engine = active_engine(self._engines, committed_after.active_idx)
-            attempts = get_translation_attempts()
+            attempts = list(fallback_details.attempts)
             failed_attempt = next(
                 (
                     attempt
@@ -3264,12 +3452,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                         )
                         with shared_state.lock:
                             history = shared_state.history.context(history_cohort)
-                        messages = build_effective_deepseek_messages(
-                            request_protection.provider_source,
-                            system_prompt,
-                            request.incomplete,
-                            history,
+                        route_request = freeze_route_request(
+                            engine, request_protection.provider_source,
+                            system_prompt, request.incomplete, history,
                         )
+                        messages = route_request.messages
                         fingerprint = provisional_fingerprint(
                             prepared_source=prepared_source,
                             source_utterance_ids=request.source_utterance_ids,
@@ -3285,27 +3472,41 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             messages=messages,
                             incomplete=request.incomplete,
                             protection_identity=request_protection.fingerprint_identity,
+                            provider_options=route_request.options_dict(),
+                            timeout_seconds=route_request.timeout_seconds,
                         )
-                        provisional_contract_payload = {
-                            "schema_version": REQUEST_CONTRACT_SCHEMA_VERSION,
-                            "phase": "provisional",
-                            "provisional_id": request.provisional_id,
-                            "route_id": translation_route_id(engine),
-                            "provider_source": request_protection.provider_source,
-                            "messages": list(message_manifest(messages)),
-                            "history": list(history_manifest(history)),
-                            "history_cohort": list(history_cohort),
-                            "request_protection_identity": request_protection.identity,
-                            "profile_cache_identity": request_profile_snapshot.cache_identity,
-                            "activity_cache_identity": request.activity_snapshot.cache_identity,
-                            "incomplete": request.incomplete,
-                        }
-                        request_contract_id = stable_identity(provisional_contract_payload)
+                        translation_request = TranslationRequest(
+                            original_source=prepared_source,
+                            provider_source=request_protection.provider_source,
+                            incomplete=request.incomplete,
+                            history=tuple(history),
+                            history_cohort=history_cohort,
+                            profile_cache_identity=request_profile_snapshot.cache_identity,
+                            activity_cache_identity=request.activity_snapshot.cache_identity,
+                            request_protection_identity=request_protection.identity,
+                            canonical_obligations=tuple(
+                                json.dumps(item.as_dict(), ensure_ascii=False, sort_keys=True)
+                                for item in obligations
+                            ),
+                            routes=(route_request,),
+                            history_context_enabled=int(
+                                getattr(cfg.translation, "context_window", 0) or 0
+                            ) > 0,
+                            artifact_hashes=tuple(sorted(_current_artifact_hashes().items())),
+                            phase="provisional",
+                            provisional_id=request.provisional_id,
+                        )
+                        request_contract_id = translation_request.route_contract_id(route_request)
                         runtime_events.emit_once(
                             "translation_request_contract",
                             request_contract_id,
                             request_contract_id=request_contract_id,
                             request_contract_schema_version=REQUEST_CONTRACT_SCHEMA_VERSION,
+                            translation_request_id=translation_request.request_id,
+                            request_phase="provisional",
+                            route_index=0,
+                            route_count=1,
+                            route_body_json_style="compact_utf8",
                             contract_role="provisional_request",
                             phase="provisional",
                             provisional_id=request.provisional_id,
@@ -3315,10 +3516,20 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             original_source=prepared_source,
                             provider_source=request_protection.provider_source,
                             provider_source_sha256=sha256_text(request_protection.provider_source),
-                            effective_system_prompt=effective_system_prompt_for_engine(engine, system_prompt),
+                            effective_system_prompt=messages[0][1],
                             messages=list(message_manifest(messages)),
+                            retry_messages=[],
+                            provider_options=route_request.options_dict(),
+                            timeout_seconds=route_request.timeout_seconds,
+                            body_sha256=hashlib.sha256(route_request.body).hexdigest(),
+                            retry_body_sha256="",
                             messages_sha256=stable_identity({"messages": list(messages)}),
                             history=list(history_manifest(history)),
+                            history_cohort=list(history_cohort),
+                            history_context_enabled=translation_request.history_context_enabled,
+                            profile_cache_identity=translation_request.profile_cache_identity,
+                            activity_cache_identity=translation_request.activity_cache_identity,
+                            request_protection_identity=translation_request.request_protection_identity,
                             history_cohort_id=f"{history_cohort[0]}:{history_cohort[1]}:{history_cohort[2]}",
                             incomplete=request.incomplete,
                             request_protection={
@@ -3328,7 +3539,7 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             canonical_obligations=[item.as_dict() for item in obligations],
                             profile=request_profile_snapshot.as_metadata(),
                             activity=activity_snapshot_metadata(request.activity_snapshot),
-                            artifact_hashes=_current_artifact_hashes(),
+                            artifact_hashes=dict(translation_request.artifact_hashes),
                             policy_versions={
                                 "adjudication": ADJUDICATION_POLICY_VERSION,
                                 "canonical_publication": _CANONICAL_PUBLICATION_POLICY_VERSION,
@@ -3362,14 +3573,27 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             return
                         api_call_started = time.monotonic()
                         api_call_outcome = "exception"
+                        engine_result = None
                         try:
-                            raw_target = engine.translate_messages(messages)
+                            if route_request.body:
+                                engine_result = engine.translate_messages_result(
+                                    route_request
+                                )
+                                raw_target = engine_result.text
+                            else:
+                                raw_target = engine.translate_messages(messages)
                             api_call_outcome = "returned" if raw_target else "empty"
                         finally:
                             # Record the API call before any post-call lifecycle or
                             # content guard can discard this provisional result.
-                            api_diagnostics = get_last_engine_api_diagnostics()
-                            api_usage = get_last_token_usage()
+                            api_diagnostics = (
+                                engine_result.diagnostics_dict() if engine_result
+                                else get_last_engine_api_diagnostics()
+                            )
+                            api_usage = (
+                                engine_result.usage_dict() if engine_result
+                                else get_last_token_usage()
+                            )
                             runtime_events.emit(
                                 "provisional_translation",
                                 action="api_attempt_completed",
@@ -3377,6 +3601,11 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 request_contract_id=request_contract_id,
                                 engine=engine.engine_name,
                                 model=engine.model_name,
+                                provider_options=route_request.options_dict(),
+                                system_fingerprint=(
+                                    engine_result.system_fingerprint if engine_result
+                                    else ""
+                                ),
                                 call_outcome=api_call_outcome,
                                 latency_ms=round(
                                     (time.monotonic() - api_call_started) * 1000,
@@ -3406,8 +3635,14 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 **request.profile_snapshot.as_metadata(),
                             )
                             return
-                        diagnostics = get_last_engine_api_diagnostics()
-                        usage = get_last_token_usage()
+                        diagnostics = (
+                            engine_result.diagnostics_dict() if engine_result
+                            else get_last_engine_api_diagnostics()
+                        )
+                        usage = (
+                            engine_result.usage_dict() if engine_result
+                            else get_last_token_usage()
+                        )
                         if not raw_target:
                             runtime_events.emit(
                                 "provisional_translation",
@@ -3454,6 +3689,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                             completed_at_monotonic=completed,
                             usage=usage,
                             diagnostics=diagnostics,
+                            provider_options=route_request.provider_options,
+                            system_fingerprint=(
+                                engine_result.system_fingerprint if engine_result else ""
+                            ),
                         )
                         preview_payload = SubtitlePayload(
                             text=display_target,
@@ -3503,6 +3742,10 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                                 model=engine.model_name,
                                 request_contract_id=request_contract_id,
                                 input_tokens=usage.get("prompt"),
+                                provider_options=route_request.options_dict(),
+                                system_fingerprint=(
+                                    engine_result.system_fingerprint if engine_result else ""
+                                ),
                                 output_tokens=usage.get("output"),
                                 cache_hit_tokens=usage.get("cache_read"),
                                 cache_miss_tokens=usage.get("cache_write"),
@@ -3805,16 +4048,27 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     max(0.0, started - snapshot_monotonic) * 1000, 2
                 )
             elapsed = completed_at - started
-            selected_attempt = get_selected_translation_attempt()
-            diagnostics = selected_attempt or get_last_engine_diagnostics()
-            api_diagnostics = selected_attempt or get_last_engine_api_diagnostics()
-            attempts = get_translation_attempts()
+            fallback_details = getattr(worker_translator, "_last_fallback_details", None)
+            selected_attempt = (
+                fallback_details.selected_attempt if fallback_details else {}
+            )
+            attempts = list(fallback_details.attempts) if fallback_details else []
+            diagnostics = (
+                selected_attempt or (attempts[-1] if attempts else None)
+                or get_last_engine_diagnostics()
+            )
+            api_diagnostics = (
+                selected_attempt or (attempts[-1] if attempts else None)
+                or get_last_engine_api_diagnostics()
+            )
             if attempts:
                 metadata["attempts"] = attempts
-            for usage_key, usage_value in _token_usage_for_outcome(outcome).items():
+            for usage_key, usage_value in _token_usage_for_outcome(
+                outcome, selected_attempt
+            ).items():
                 if usage_value is not None:
                     metadata[f"token_{usage_key}"] = usage_value
-            corrections = get_corrections()
+            corrections = list(outcome.corrections)
             if corrections:
                 metadata["corrections"] = corrections
                 metadata["correction_count"] = len(corrections)

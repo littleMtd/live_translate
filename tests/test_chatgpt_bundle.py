@@ -109,6 +109,7 @@ def test_bundle_exports_request_contract_index(tmp_path):
     logs = project / "logs"
     contract = _event(
         "translation_request_contract",
+        request_contract_schema_version=1,
         request_contract_id="contract-1",
         messages=[{"role": "user", "content": "source"}],
     )

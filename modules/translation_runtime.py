@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 
 from modules.translation_engines import (
+    EngineResult,
     TranslationEngine,
     call_engine_with_deadline,
     get_last_engine_api_diagnostics,
@@ -42,6 +43,14 @@ class FallbackState:
     consecutive_probe_successes: int = 0
 
 
+@dataclass(frozen=True)
+class FallbackResult:
+    text: str | None
+    engine_idx: int
+    attempts: tuple[dict[str, object], ...]
+    selected_attempt: dict[str, object]
+
+
 def _observe_probe(
     sink: ProbeObservationSink | None,
     **fields: object,
@@ -56,8 +65,13 @@ def _observe_probe(
         metrics.increment("translation.fallback.probe_observation_error")
 
 
-def _probe_diagnostic_fields() -> dict[str, object]:
-    diagnostics = get_last_engine_api_diagnostics()
+def _probe_diagnostic_fields(
+    engine_result: EngineResult | None = None,
+) -> dict[str, object]:
+    diagnostics = (
+        engine_result.diagnostics_dict() if engine_result is not None
+        else get_last_engine_api_diagnostics()
+    )
     return {
         key: diagnostics.get(key)
         for key in (
@@ -95,22 +109,33 @@ def _call_route(
     max_route_inflight: int,
     clock: Callable[[], float],
     messages_frozen: tuple[tuple[str, str], ...] | None = None,
-) -> tuple[str | None, bool]:
+    route_request=None,
+) -> tuple[str | EngineResult | None, bool]:
     """Return (result, sentence_deadline_exhausted)."""
     if deadline_at is None:
+        if route_request is not None and route_request.body:
+            return engine.translate_result(
+                text, system_prompt, incomplete, history,
+                route_request=route_request,
+            ), False
         if messages_frozen is not None and hasattr(engine, "translate_messages"):
+            if route_request is not None:
+                return engine.translate_messages(messages_frozen, route_request=route_request), False
             return engine.translate_messages(messages_frozen), False
         return engine.translate(text, system_prompt, incomplete, history), False
 
     remaining = deadline_at - clock()
     if remaining <= 0:
-        record_engine_deadline_exceeded(
+        deadline_result = record_engine_deadline_exceeded(
             engine,
             deadline_scope="sentence",
         )
-        return None, True
+        return (deadline_result if route_request is not None else None), True
 
-    configured_timeout = getattr(engine, "request_timeout_seconds", None)
+    configured_timeout = (
+        route_request.timeout_seconds if route_request is not None
+        else getattr(engine, "request_timeout_seconds", None)
+    )
     if not isinstance(configured_timeout, (int, float)) or isinstance(
         configured_timeout, bool
     ):
@@ -135,6 +160,7 @@ def _call_route(
         max_inflight=max_route_inflight,
         deadline_scope=deadline_scope,
         messages_frozen=messages_frozen,
+        route_request=route_request,
     )
     return result, deadline_at - clock() <= 0
 
@@ -281,15 +307,29 @@ def call_with_fallback(
         str, tuple[tuple[str, str], ...]
     ] | None = None,
     request_contract_ids: Mapping[str, str] | None = None,
+    route_requests_by_engine: Mapping[str, object] | None = None,
     output_guard: OutputGuard | None = None,
+    return_details: bool = False,
 ) -> tuple[str | None, int]:
     """Returns (result, engine_idx) where engine_idx is the engine that
     actually produced the result. On a soft fallback state.active_idx is NOT
     advanced, so callers must use the returned index — not the active engine —
     to attribute the result (engine label, diagnostics, DB cache rows)."""
+    local_attempts: list[dict[str, object]] = []
+
+    def finish(text: str | None, index: int):
+        if not return_details:
+            return text, index
+        attempts = tuple(dict(attempt) for attempt in local_attempts)
+        selected = next(
+            (dict(attempt) for attempt in attempts if attempt.get("selected_for_output")),
+            {},
+        )
+        return text, index, FallbackResult(text, index, attempts, selected)
+
     if not engines:
         metrics.increment("translation.fallback.no_engines")
-        return None, -1
+        return finish(None, -1)
 
     # Try the current active engine. Primary recovery probes run on a background thread.
     primary_idx = state.active_idx
@@ -298,7 +338,7 @@ def call_with_fallback(
     reset_last_engine_diagnostics()
     reset_last_token_usage()
     try:
-        result, sentence_deadline_exhausted = _call_route(
+        route_output, sentence_deadline_exhausted = _call_route(
             primary,
             text,
             system_prompt,
@@ -310,9 +350,15 @@ def call_with_fallback(
             messages_frozen=(frozen_messages_by_engine or {}).get(
                 str(getattr(primary, "engine_name", "") or "").lower()
             ),
+            route_request=(route_requests_by_engine or {}).get(
+                str(getattr(primary, "engine_name", "") or "").lower()
+            ),
         )
+        primary_engine_result = route_output if isinstance(route_output, EngineResult) else None
+        result = primary_engine_result.text if primary_engine_result is not None else route_output
     except Exception as exc:
         attempt = record_translation_attempt(primary, phase="fallback_chain", exception=exc)
+        local_attempts.append(attempt)
         attempt["request_contract_id"] = str(
             (request_contract_ids or {}).get(
                 f"{primary.engine_name}:{primary.model_name}", ""
@@ -327,12 +373,21 @@ def call_with_fallback(
         phase="fallback_chain",
         result=result,
         rejected_output=primary_bad,
+        engine_result=primary_engine_result,
     )
+    local_attempts.append(primary_attempt)
     primary_attempt["request_contract_id"] = str(
         (request_contract_ids or {}).get(
             f"{primary.engine_name}:{primary.model_name}", ""
         )
     )
+    if primary_engine_result is not None:
+        primary_route_request = (route_requests_by_engine or {}).get(
+            str(getattr(primary, "engine_name", "") or "").lower()
+        )
+        primary_attempt["provider_options"] = (
+            primary_route_request.options_dict() if primary_route_request else {}
+        )
     primary_failure_scope = _attempt_failure_scope(primary_attempt)
     primary_attempt["failure_scope"] = primary_failure_scope
     if primary_guard:
@@ -344,7 +399,7 @@ def call_with_fallback(
             state.primary_cooldown_until = 0.0
             state.consecutive_probe_successes = 0
         select_translation_attempt(primary_attempt)
-        return result, primary_idx
+        return finish(result, primary_idx)
 
     if result:
         metrics.increment("translation.bad_output")
@@ -392,7 +447,7 @@ def call_with_fallback(
         reset_last_token_usage()
         fallback = engines[index]
         try:
-            fb_result, sentence_deadline_exhausted = _call_route(
+            fallback_output, sentence_deadline_exhausted = _call_route(
                 fallback,
                 text,
                 system_prompt,
@@ -404,9 +459,20 @@ def call_with_fallback(
                 messages_frozen=(frozen_messages_by_engine or {}).get(
                     str(getattr(fallback, "engine_name", "") or "").lower()
                 ),
+                route_request=(route_requests_by_engine or {}).get(
+                    str(getattr(fallback, "engine_name", "") or "").lower()
+                ),
+            )
+            fallback_engine_result = (
+                fallback_output if isinstance(fallback_output, EngineResult) else None
+            )
+            fb_result = (
+                fallback_engine_result.text if fallback_engine_result is not None
+                else fallback_output
             )
         except Exception as exc:
             attempt = record_translation_attempt(fallback, phase="fallback_chain", exception=exc)
+            local_attempts.append(attempt)
             attempt["request_contract_id"] = str(
                 (request_contract_ids or {}).get(
                     f"{fallback.engine_name}:{fallback.model_name}", ""
@@ -421,12 +487,21 @@ def call_with_fallback(
             phase="fallback_chain",
             result=fb_result,
             rejected_output=fallback_bad,
+            engine_result=fallback_engine_result,
         )
+        local_attempts.append(fallback_attempt)
         fallback_attempt["request_contract_id"] = str(
             (request_contract_ids or {}).get(
                 f"{fallback.engine_name}:{fallback.model_name}", ""
             )
         )
+        if fallback_engine_result is not None:
+            fallback_route_request = (route_requests_by_engine or {}).get(
+                str(getattr(fallback, "engine_name", "") or "").lower()
+            )
+            fallback_attempt["provider_options"] = (
+                fallback_route_request.options_dict() if fallback_route_request else {}
+            )
         fallback_attempt["failure_scope"] = _attempt_failure_scope(fallback_attempt)
         if fallback_guard:
             fallback_attempt["output_guard"] = fallback_guard
@@ -464,7 +539,7 @@ def call_with_fallback(
                     fallback.engine_name,
                 )
             select_translation_attempt(fallback_attempt)
-            return fb_result, index
+            return finish(fb_result, index)
         if fb_result:
             metrics.increment("translation.bad_output")
         if (
@@ -477,7 +552,7 @@ def call_with_fallback(
             persistent_switch_idx = index + 1
 
     log.error("All engines failed for: %.40s", text)
-    return None, primary_idx
+    return finish(None, primary_idx)
 
 
 def probe_primary_recovery(
@@ -518,8 +593,21 @@ def probe_primary_recovery(
     metrics.increment("translation.fallback.probe")
     reset_last_engine_diagnostics()
     reset_last_token_usage()
+    probe_route = None
+    from modules.translation_engines import (
+        DeepSeekTranslationEngine, GroqTranslationEngine, NvidiaEngine,
+        OllamaEngine,
+    )
+    if isinstance(engines[0], (
+        DeepSeekTranslationEngine, GroqTranslationEngine, NvidiaEngine,
+        OllamaEngine,
+    )):
+        from modules.translation_request import freeze_route_request
+        probe_route = freeze_route_request(
+            engines[0], probe_text, system_prompt, False, history or [],
+        )
     try:
-        probe, _deadline_exhausted = _call_route(
+        probe_output, _deadline_exhausted = _call_route(
             engines[0],
             probe_text,
             system_prompt,
@@ -528,8 +616,14 @@ def probe_primary_recovery(
             deadline_at=deadline_at,
             max_route_inflight=max_route_inflight,
             clock=clock,
+            messages_frozen=(probe_route.messages if probe_route else None),
+            route_request=probe_route,
         )
-        probe_diagnostics = _probe_diagnostic_fields()
+        probe_result = (
+            probe_output if isinstance(probe_output, EngineResult) else None
+        )
+        probe = probe_result.text if probe_result is not None else probe_output
+        probe_diagnostics = _probe_diagnostic_fields(probe_result)
     except Exception as exc:
         probe_diagnostics = _probe_diagnostic_fields()
         if not circuit_breaker_enabled:

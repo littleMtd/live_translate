@@ -1475,6 +1475,7 @@ class TestTranslationFallbackChain(unittest.TestCase):
             if row.args[0] == "translation_request_contract"
         )
         fields = call.kwargs
+        self.assertFalse(fields["exact_messages_available"])
         self.assertEqual(fields["original_source"], source)
         self.assertEqual(fields["provider_source"], source)
         self.assertEqual(fields["history"][0]["source"], "prior source")
@@ -5953,6 +5954,13 @@ class TestProvisionalPromotion(unittest.TestCase):
         messages = build_effective_deepseek_messages(
             request_protection.provider_source, system_prompt, incomplete, history
         )
+        route_request = translator_module.freeze_route_request(
+            translator_module.DeepSeekTranslationEngine(),
+            request_protection.provider_source,
+            system_prompt,
+            incomplete,
+            history,
+        )
         return ProvisionalCandidate(
             provisional_id="provisional:utt-preview",
             raw_target=target,
@@ -5968,6 +5976,8 @@ class TestProvisionalPromotion(unittest.TestCase):
                 messages=messages,
                 incomplete=incomplete,
                 protection_identity=request_protection.fingerprint_identity,
+                provider_options=route_request.options_dict(),
+                timeout_seconds=route_request.timeout_seconds,
             ),
             engine="deepseek",
             model="deepseek-v4-flash",

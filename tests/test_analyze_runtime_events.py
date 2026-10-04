@@ -16,6 +16,24 @@ def test_analyze_runtime_events_returns_unavailable_for_missing_file(tmp_path):
     assert report["available"] is False
 
 
+def test_analyzer_reads_explicit_v1_translation_contract_event(tmp_path):
+    path = tmp_path / "runtime_events_v1_contract.jsonl"
+    _write_jsonl(path, [
+        {
+            "event_type": "translation_request_contract",
+            "schema_version": 6,
+            "request_contract_schema_version": 1,
+            "run_id": "legacy-run",
+            "request_contract_id": "legacy-contract",
+            "messages": [],
+        },
+        _translation_event(schema_version=6, run_id="legacy-run", run_kind="live"),
+    ])
+    report = analyze_runtime_events(path)
+    assert report["available"] is True
+    assert report["translation_events"] == 1
+
+
 def test_analyzer_defaults_to_live_and_can_include_all_run_kinds(tmp_path):
     path = tmp_path / "runtime_events_20260514.jsonl"
     _write_jsonl(

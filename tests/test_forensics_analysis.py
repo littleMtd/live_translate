@@ -26,6 +26,7 @@ def _write_bundle(tmp_path: Path, *, corrupt: set[str] | None = None) -> Path:
     translation_contract = {
         "schema_version": 6,
         "event_type": "translation_request_contract",
+        "request_contract_schema_version": 1,
         "run_id": "run-1",
         "request_contract_id": "tr-c1",
         "contract_role": "available_route_request",
