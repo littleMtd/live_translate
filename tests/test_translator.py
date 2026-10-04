@@ -484,7 +484,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(adjudication.rejection_owner, "script_safety")
         self.assertEqual(
             adjudication.evidence["policy_version"],
-            "candidate-adjudication-v3",
+            "candidate-adjudication-v4",
         )
         self.assertEqual(adjudication.evidence["disposition"], "rejected")
         self.assertIn(
@@ -518,6 +518,39 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 
         self.assertTrue(adjudication.accepted)
         self.assertEqual(adjudication.candidate_output, "랑콘，謝謝你。")
+
+    def test_runs_20260916_20260920_invented_placeholders_are_rejected(self):
+        # Neither request escrowed a name; DeepSeek imitated the prompt's
+        # placeholder syntax and the raw token was previously published.
+        cases = (
+            ("두빠님 별풍선 백칠십팔개 감사합니다.", "謝謝「__LT_UNK_1__」送的星星氣球一百七十八個。"),
+            ("유택님 구독 1개월 감사합니다.", "__LT_UNK_1__訂閱一個月，謝謝。"),
+            ("킹크랩, 랍스터 월리피를", "帝王蟹、龍蝦 __LT_UNK_0__"),
+            ("두빠님 별풍선 감사합니다.", "謝謝「__LT_UNK_n__」送的星星氣球。"),
+        )
+        for engine_name in ("deepseek", "groq"):
+            engine = MagicMock()
+            engine.engine_name = engine_name
+            for source, candidate in cases:
+                with self.subTest(engine=engine_name, source=source):
+                    protection = resolve_request_protection(source)
+                    self.assertFalse(protection.unresolved_referents.active)
+                    adjudication = _adjudicate_translation_candidate(
+                        engine, candidate, source,
+                        request_protection=protection, publication=True,
+                    )
+                    self.assertFalse(adjudication.accepted)
+                    self.assertEqual(
+                        adjudication.reason, "unknown_name_invented_placeholder"
+                    )
+                    self.assertEqual(adjudication.rejection_owner, "request_protection")
+                    escrow_evidence = adjudication.evidence["unknown_name_escrow"]
+                    self.assertFalse(escrow_evidence["active"])
+                    self.assertTrue(escrow_evidence["mutated_placeholder"])
+                    self.assertEqual(
+                        _translation_output_guard(engine, candidate, source)["reason"],
+                        "unknown_name_invented_placeholder",
+                    )
 
     def test_publication_meta_rejection_precedes_missing_canonical(self):
         source = "모카가 왔어."

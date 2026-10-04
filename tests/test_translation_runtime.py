@@ -333,6 +333,46 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         )
         self.assertTrue(attempts[1]["selected_for_output"])
 
+    def test_invented_placeholder_is_rejected_as_content_and_falls_back(self):
+        from modules.translator import _translation_output_guard
+
+        reset_translation_call_trace()
+        source = "두빠님 별풍선 백칠십팔개 감사합니다."
+        frozen = (("system", "same"), ("user", source))
+        engines = [
+            _capsule_engine("deepseek", "謝謝「__LT_UNK_1__」送的星星氣球一百七十八個。"),
+            _capsule_engine("groq", "謝謝送星星氣球一百七十八個的朋友。"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            source,
+            "prompt",
+            False,
+            [],
+            1,
+            lambda _result, _source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+            frozen_messages_by_engine={"deepseek": frozen, "groq": frozen},
+            output_guard=lambda engine, candidate, _source: (
+                _translation_output_guard(engine, candidate, source)
+            ),
+        )
+
+        self.assertEqual((result, used_idx), ("謝謝送星星氣球一百七十八個的朋友。", 1))
+        self.assertEqual(state.active_idx, 0)
+        attempts = get_translation_attempts()
+        self.assertEqual(attempts[0]["status"], "rejected_output")
+        self.assertEqual(attempts[0]["failure_scope"], "content")
+        self.assertEqual(
+            attempts[0]["output_guard"]["reason"],
+            "unknown_name_invented_placeholder",
+        )
+        self.assertTrue(attempts[1]["selected_for_output"])
+
     def test_generic_deepseek_rejection_preserves_candidate_evidence(self):
         engines = [
             _capsule_engine("deepseek", "overlong candidate"),

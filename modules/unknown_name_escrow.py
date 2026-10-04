@@ -15,6 +15,20 @@ from typing import Any
 
 
 _PLACEHOLDER_RE = re.compile(r"__LT_UNK_[1-9][0-9]*__")
+# Providers can imitate the prompt's placeholder syntax even when no name was
+# escrowed (runs 20260916/20260920). Any such residue is unrestorable, so this
+# is deliberately looser than the issued form: index 0, the literal ``n``,
+# ``__LT_UNK__``/``LT_UNKNOWN`` mutations and stripped underscores all match.
+_INVENTED_PLACEHOLDER_RE = re.compile(r"(?<![A-Za-z])LT_UNK")
+_INVENTED_PLACEHOLDER_REASON = "unknown_name_invented_placeholder"
+
+
+def _invented_placeholder_evaluation(value: str) -> "UnknownNameEscrowEvaluation | None":
+    if not _INVENTED_PLACEHOLDER_RE.search(value):
+        return None
+    return UnknownNameEscrowEvaluation(
+        False, _INVENTED_PLACEHOLDER_REASON, (), (), (), mutated_placeholder=True,
+    )
 _DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "unknown_name_escrow.json"
 _HANGUL_NAME_RE = re.compile(r"^[가-힣]+$")
 
@@ -61,7 +75,9 @@ class UnknownNameEscrow:
     ) -> UnknownNameEscrowEvaluation:
         value = candidate or ""
         if not self.entries:
-            return UnknownNameEscrowEvaluation(True, "", (), (), ())
+            return _invented_placeholder_evaluation(value) or UnknownNameEscrowEvaluation(
+                True, "", (), (), ()
+            )
 
         expected = tuple(entry.placeholder for entry in self.entries)
         missing: list[str] = []
@@ -104,7 +120,9 @@ class UnknownNameEscrow:
     def evaluate_final(self, target: str | None) -> UnknownNameEscrowEvaluation:
         value = target or ""
         if not self.entries:
-            return UnknownNameEscrowEvaluation(True, "", (), (), ())
+            return _invented_placeholder_evaluation(value) or UnknownNameEscrowEvaluation(
+                True, "", (), (), ()
+            )
 
         expected = tuple(entry.source_name for entry in self.entries)
         counts = {name: 0 for name in expected}

@@ -9,7 +9,7 @@ from typing import Iterable, Mapping, Sequence
 
 
 REQUEST_CONTRACT_SCHEMA_VERSION = 2
-ADJUDICATION_POLICY_VERSION = "candidate-adjudication-v3"
+ADJUDICATION_POLICY_VERSION = "candidate-adjudication-v4"
 STT_REQUEST_CONTRACT_SCHEMA_VERSION = 1
 
 

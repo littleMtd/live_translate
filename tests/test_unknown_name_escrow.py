@@ -203,6 +203,38 @@ def test_final_invariant_rejects_loss_duplication_and_placeholder_leakage():
     assert not escrow.evaluate_final("我是__LT_UNK_1__。").passed
 
 
+@pytest.mark.parametrize(
+    "target",
+    (
+        "謝謝「__LT_UNK_1__」送的星星氣球。",
+        "龍蝦 __LT_UNK_0__",
+        "謝謝LT_UNK_2送的氣球。",
+        "謝謝「__LT_UNK_n__」送的氣球。",
+        "謝謝__LT_UNKNOWN_1__送的氣球。",
+        "謝謝__LT_UNK__送的氣球。",
+    ),
+)
+def test_inactive_escrow_rejects_provider_invented_placeholders(target):
+    escrow = resolve_unknown_name_escrow("두빠님 별풍선 백칠십팔개 감사합니다.")
+
+    assert not escrow.active
+    for evaluation in (
+        escrow.evaluate_provider_candidate(target),
+        escrow.evaluate_final(target),
+    ):
+        assert not evaluation.passed
+        assert evaluation.reason == "unknown_name_invented_placeholder"
+        assert evaluation.mutated_placeholder
+
+
+def test_inactive_escrow_still_accepts_ordinary_targets():
+    escrow = resolve_unknown_name_escrow("두빠님 별풍선 감사합니다.")
+
+    for target in ("謝謝두빠送的星星氣球。", "LT 和 UNK 不是佔位符。", "BOLT_UNK_9 型號"):
+        assert escrow.evaluate_provider_candidate(target).passed
+        assert escrow.evaluate_final(target).passed
+
+
 def test_final_invariant_counts_nested_names_as_non_overlapping_matches():
     escrow = UnknownNameEscrow(
         original_source="가나와 가나다",
