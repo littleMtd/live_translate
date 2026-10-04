@@ -390,8 +390,8 @@ Preserve it and do not stage/commit it unless the user asks.
   QA classifications.
 - The runtime analyzer retains read-only support for historical
   `translation_shadow` events, but current production no longer emits them.
-- `activity_shadow` events contain only accepted bounded activity IDs/kinds,
-  parse status/rejection reason, resolver/capture generations, consensus, TTL,
+- `activity_shadow` events contain only accepted bounded activity IDs/kinds
+  and accepted display labels, parse status/rejection reason, resolver/capture generations, consensus, TTL,
   and provider diagnostics. Explicit fallback events include a bounded
   provider/model/latency/token/cost attempt chain. They never contain a
   complete title, frame/fingerprint, evidence key, rejected label, or raw

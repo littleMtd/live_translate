@@ -1872,6 +1872,34 @@ def test_two_distinct_vision_frames_confirm_without_mutating_manual_activity():
     assert events[-1]["stt_terms_applied"] is False
 
 
+def test_hidden_player_keeps_pending_evidence_for_same_window():
+    # Run 20261004T114723Z-17536 saw Minecraft on consecutive vision calls,
+    # but each brief player_not_visible suspension reset the streak to 1.
+    updater, source, _, _, _, events, _ = make_updater(
+        frames=[frame(40), frame(90)],
+        answers=["Minecraft", "Minecraft"],
+    )
+    visible = list(source.candidates)
+
+    assert updater.tick() is None
+    assert updater._consensus.streak == 1
+    window_generation = updater._resolver.window_generation
+
+    source.candidates = [window(title="ChatGPT - Google Chrome", platform="")]
+    assert updater.tick() is None
+    assert events[-1]["discard_reason"] == "observation_suspended"
+    assert updater._consensus.streak == 1
+
+    source.candidates = visible
+    confirmed = updater.tick()
+
+    assert updater._resolver.window_generation == window_generation
+    assert confirmed is not None
+    assert confirmed.activity_id == "minecraft"
+    assert events[-1]["candidate_streak"] == 2
+    assert events[-1]["candidate_display_label"] == "Minecraft"
+
+
 def test_same_or_near_identical_frame_never_increases_consensus():
     updater, *_ = make_updater(
         frames=[frame(40), frame(40), frame(40, delta_index=1)],

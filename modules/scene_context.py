@@ -1416,10 +1416,15 @@ class SceneContextUpdater:
         self._last_window_status = resolution.status
 
     def _mark_profile_observation_suspended(self, now: float) -> None:
-        """Retain confirmed content while its owning browser HWND is alive."""
+        """Retain confirmed content while its owning browser HWND is alive.
+
+        Pending activity evidence is retained too: the HWND is unchanged, a
+        window-generation change still resets consensus, and the consensus
+        window bounds staleness. Resetting here prevented confirmation for an
+        entire run (20261004T114723Z-17536) whenever the player was briefly
+        hidden between two matching vision calls.
+        """
         self._last_window_status = "player_not_visible"
-        self._consensus.reset()
-        self._last_distinct_evidence_at = None
         self._prev_thumb = None
         self._pending_change = True
         if not self._profile_enabled:
@@ -2780,6 +2785,7 @@ class SceneContextUpdater:
             evidence_reused=observation.evidence_reused,
             distinct_frame=observation.distinct_frame,
             candidate_activity_id=observation.activity_id,
+            candidate_display_label=observation.display_label,
             candidate_activity_kind=observation.activity_kind,
             candidate_open_set=observation.open_set,
             candidate_streak=observation.streak,
