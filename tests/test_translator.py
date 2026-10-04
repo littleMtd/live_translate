@@ -484,7 +484,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         self.assertEqual(adjudication.rejection_owner, "script_safety")
         self.assertEqual(
             adjudication.evidence["policy_version"],
-            "candidate-adjudication-v4",
+            "candidate-adjudication-v5",
         )
         self.assertEqual(adjudication.evidence["disposition"], "rejected")
         self.assertIn(
@@ -518,6 +518,88 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 
         self.assertTrue(adjudication.accepted)
         self.assertEqual(adjudication.candidate_output, "랑콘，謝謝你。")
+
+    def test_source_honorific_names_may_stay_in_hangul(self):
+        # Run 20260919T123830Z-28460 seq 56 lost the whole subtitle because
+        # both DeepSeek and Groq kept 랑코님 in Hangul as the prompt requires.
+        accepted = (
+            ("코빼기도 안 보이네. 랑코님보다 못하다고 할 수 없나?", "不能說「比랑코님還不如」嗎？"),
+            ("두빠님 별풍선 백칠십팔개 감사합니다.", "謝謝두빠送的星星氣球一百七十八個。"),
+            ("무채석송 님 별풍선 서른세 개.", "무채석송 님送的星星氣球三十三個。"),
+            ("초록언니도 오늘 들어왔더만.", "초록姐姐今天也來了。"),
+        )
+        rejected = (
+            ("선생님 안녕하세요.", "선생님好。"),
+            ("두빠님 좀 기다려 주세요.", "두빠請좀等一下。"),
+            ("대장님 출근하셔야 합니다.", "대장要上班了。"),
+        )
+        for engine_name in ("deepseek", "groq"):
+            engine = MagicMock()
+            engine.engine_name = engine_name
+            for source, candidate in accepted:
+                with self.subTest(engine=engine_name, accepted=candidate):
+                    adjudication = _adjudicate_translation_candidate(
+                        engine, candidate, source, publication=True,
+                    )
+                    self.assertTrue(adjudication.accepted, adjudication.reason)
+                    self.assertEqual(adjudication.candidate_output, candidate)
+            for source, candidate in rejected:
+                with self.subTest(engine=engine_name, rejected=candidate):
+                    adjudication = _adjudicate_translation_candidate(
+                        engine, candidate, source, publication=True,
+                    )
+                    self.assertEqual(adjudication.reason, "unexpected_hangul")
+
+    def test_honorific_name_terms_exclude_ordinary_titles(self):
+        from modules.translator import _source_honorific_name_terms
+
+        self.assertEqual(
+            _source_honorific_name_terms("비몽님이랑 왁굳 님께서"),
+            frozenset({"비몽", "비몽님", "비몽 님", "왁굳", "왁굳님", "왁굳 님"}),
+        )
+        for source in (
+            "선생님", "대장님", "아저씨", "우리오빠", "시청자님들", "김씨",
+            # pronoun 님 after fillers/adverbs
+            "근데 님은 왜", "아니 님 진짜", "그러니까 님", "모두 님들", "그거 님이",
+            # expletive 씨
+            "아이씨", "에이씨", "진짜 씨",
+            # modifiers and kinship prefixes
+            "아는 오빠", "친한 언니", "옆집 누나", "막내언니", "작은언니", "좋아하는언니",
+            # ordinary titles and subject teachers
+            "방장님", "후원자님", "하나님", "공주님", "왕자님", "이모님", "고모님", "영어쌤",
+            "대리님", "주임님", "차장님", "교장님", "부사장님", "변호사님", "판사님",
+            "형사님", "코치님", "선수님", "목사님", "신부님", "부처님", "조상님",
+            "임금님", "서방님", "아드님",
+            # compound titles ending in an ordinary title
+            "담임선생님", "영어선생님", "택배기사님", "편의점사장님", "담임쌤", "학원쌤", "과외쌤",
+            # 씨 starting another word, and seeds
+            "존나씨발", "미친씨발", "아놔씨", "씨름", "수박씨", "해바라기씨", "호박씨",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_source_honorific_name_terms(source), frozenset())
+        self.assertIn("초은", _source_honorific_name_terms("초은님 고마워"))
+        self.assertIn("지한", _source_honorific_name_terms("지한오빠 왔어"))
+
+    def test_honorific_allowance_does_not_publish_ordinary_words(self):
+        cases = (
+            ("근데 님은 왜 그래요", "근데你為什麼這樣"),
+            ("아는 오빠가 그랬어", "아는哥哥這樣說"),
+            ("방장님 오늘 뭐해요", "방장님今天做什麼"),
+            ("하나님 감사합니다", "感謝하나님"),
+            ("아이씨 진짜", "아이，真的"),
+            ("대리님 이거 봐주세요", "대리님請看這個"),
+            ("담임선생님이 오셨어", "담임선생님來了"),
+            ("존나씨발 뭐야", "존나什麼啊"),
+        )
+        for engine_name in ("deepseek", "groq"):
+            engine = MagicMock()
+            engine.engine_name = engine_name
+            for source, candidate in cases:
+                with self.subTest(engine=engine_name, source=source):
+                    adjudication = _adjudicate_translation_candidate(
+                        engine, candidate, source, publication=True,
+                    )
+                    self.assertEqual(adjudication.reason, "unexpected_hangul")
 
     def test_runs_20260916_20260920_invented_placeholders_are_rejected(self):
         # Neither request escrowed a name; DeepSeek imitated the prompt's

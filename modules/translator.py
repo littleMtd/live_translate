@@ -620,6 +620,84 @@ def _resolve_active_canonical_obligations(
     return _canonical_obligations_for_request(entity_context)
 
 
+# Unknown viewer/donor names are kept in Hangul (the provider prompt asks for
+# exactly that), so a source name directly addressed with an honorific may be
+# published verbatim. Before this allowance both DeepSeek and Groq were
+# rejected as ``unexpected_hangul`` for 랑코님-style names and the whole
+# subtitle was lost (18 of 666 DeepSeek-primary sentences, 2026-09-17..10-04).
+_HONORIFIC_NAME_RE = re.compile(
+    r"(?<![가-힣])([가-힣]{2,10})( ?)(님|씨|언니|오빠|누나|쌤)"
+)
+# Ordinary words that take the same suffixes; keeping these in Hangul would be
+# an untranslated word, not a preserved name. Covers titles/kinship, the
+# pronoun 님 after fillers/adverbs, expletive 씨, and subject teachers (쌤).
+_HONORIFIC_NON_NAMES = frozenset({
+    # titles, roles and kinship
+    "선생", "사장", "대장", "회장", "팀장", "부장", "과장", "실장", "원장", "교수",
+    "감독", "작가", "기사", "고객", "시청자", "구독자", "관리자", "운영자", "매니저",
+    "주인", "회원", "사모", "스승", "도련", "아가", "아저", "마음", "아버", "어머",
+    "할머", "할아버", "우리", "저희", "너희", "여러", "친구", "동생", "언니", "오빠",
+    "누나", "선배", "후배", "사부", "의사", "간호사", "박사", "기장", "반장", "총장",
+    "국장", "본부장", "이사", "대표", "전무", "상무", "편집장", "점장", "방장",
+    "후원자", "하나", "하느", "공주", "왕자", "이모", "고모", "삼촌", "숙모", "외삼촌",
+    "사촌", "막내", "작은", "큰", "옆집", "동네", "아랫집", "윗집", "친척", "엄마",
+    "아빠", "부모", "손님", "형님", "님", "대리", "주임", "차장", "교장",
+    "부사장", "변호사", "판사", "검사", "형사", "경찰", "코치", "선수", "목사",
+    "신부", "수녀", "부처", "스님", "조상", "임금", "서방", "아드", "따님",
+    "담임", "학원", "과외", "택배", "존나", "미친", "아놔",
+    # seed nouns + 씨
+    "수박", "해바라기", "호박", "사과", "포도", "참외", "고추", "참깨", "들깨",
+    # subjects before 쌤
+    "영어", "수학", "국어", "과학", "사회", "미술", "음악", "체육", "역사", "보컬",
+    "댄스", "노래", "피아노", "기타", "드럼",
+    # fillers, adverbs and pronouns that can precede the pronoun 님
+    "근데", "그런데", "아니", "그거", "이거", "저거", "그게", "이게", "저게",
+    "그러니까", "그니까", "그래서", "그리고", "그럼", "그러면", "모두", "진짜",
+    "정말", "너무", "그냥", "혹시", "제발", "저기", "여기", "거기", "이제", "지금",
+    "아까", "그래", "아이고", "어머", "대박", "완전", "다들", "모든", "이분", "그분",
+    "저분", "당신", "자기", "너네", "얘들", "애들",
+    # expletive 씨
+    "아이", "에이", "아우", "아오", "이런", "젠장",
+})
+_KINSHIP_SUFFIXES = frozenset({"언니", "오빠", "누나"})
+# Compound titles (담임선생님, 택배기사님) end in an ordinary title.
+_HONORIFIC_TITLE_ENDINGS = tuple(sorted(
+    {
+        "선생", "사장", "기사", "작가", "대장", "회장", "팀장", "부장", "과장",
+        "실장", "원장", "교수", "감독", "의사", "박사", "대리", "주임", "차장",
+        "교장", "변호사", "판사", "검사", "형사", "코치", "선수", "목사", "신부",
+        "매니저", "관리자", "운영자", "시청자", "구독자", "후원자", "방장", "반장",
+        "점장", "총장", "국장", "이사", "대표", "할머", "할아버", "언니", "오빠",
+        "누나", "분들",
+    },
+    key=len,
+    reverse=True,
+))
+# 씨 followed by these starts another word (씨발, 씨팔, 씨앗, 씨름), not 氏.
+_SSI_WORD_CONTINUATIONS = ("발", "팔", "바", "앗", "름")
+
+
+def _source_honorific_name_terms(source: str) -> frozenset[str]:
+    """Return source-verbatim Hangul names addressed with an honorific."""
+    terms: set[str] = set()
+    text = source or ""
+    for match in _HONORIFIC_NAME_RE.finditer(text):
+        name, space, suffix = match.groups()
+        if name in _HONORIFIC_NON_NAMES or name.endswith(_HONORIFIC_TITLE_ENDINGS):
+            continue
+        if suffix == "씨" and text[match.end():match.end() + 1] in _SSI_WORD_CONTINUATIONS:
+            continue
+        # A spaced suffix is a name only for 님 (``무채석송 님``); ``아는 오빠``
+        # and ``진짜 씨`` are a modifier or an expletive, not an address.
+        if space and suffix != "님":
+            continue
+        # Adnominal modifiers (``아는``/``좋아하던``) before kinship words.
+        if suffix in _KINSHIP_SUFFIXES and name.endswith(("는", "던")):
+            continue
+        terms.update((name, f"{name}{suffix}", f"{name} {suffix}"))
+    return frozenset(terms)
+
+
 def _source_activated_name_canonicals(
     source: str,
     *,
@@ -1128,6 +1206,7 @@ def _adjudicate_translation_candidate(
     # old profile-wide Hangul allowlist.  A Korean span absent from this source
     # and from its activated obligations remains a script violation.
     approved_terms.update(source_proven_quality_terms(source))
+    approved_terms.update(_source_honorific_name_terms(source))
     approved_terms.update(_source_activated_name_canonicals(source))
     approved_terms.update(request_protection.approved_hangul_terms)
     approved_terms = frozenset(approved_terms)
@@ -1370,6 +1449,7 @@ def _quality_telemetry_approved_terms(
             if not _contains_hangul(term)
         )
     terms.update(source_proven_quality_terms(source_text))
+    terms.update(_source_honorific_name_terms(source_text))
     if profile_id:
         terms.update(
             _source_activated_name_canonicals(
