@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 import urllib.error
 
+import pytest
+
+from config import cfg
 from modules.translation_engines import (
     DeepSeekTranslationEngine,
     GroqTranslationEngine,
@@ -22,6 +26,18 @@ _GOLDEN = json.loads(
         encoding="utf-8"
     )
 )
+
+
+@pytest.fixture(autouse=True)
+def _historical_temperature_for_byte_baseline():
+    # This fixture records the Phase 1 pre-refactor wire bytes at 1.3.
+    historical_cfg = replace(
+        cfg, translation=replace(cfg.translation, deepseek_temperature=1.3)
+    )
+    with patch("modules.translation_engines.cfg", historical_cfg), patch(
+        "modules.translation_request.cfg", historical_cfg
+    ):
+        yield
 
 
 class _Response:

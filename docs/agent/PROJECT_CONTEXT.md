@@ -377,7 +377,8 @@ Preserve it and do not stage/commit it unless the user asks.
   emission/suppression.
 - Ordinary live-chain mode derives `deepseek-flash -> Groq` when
   `deepseek_route=primary`; `off` is the Groq-only operational rollback.
-  DeepSeek uses its provider-specific translation temperature of 1.3. Its
+  DeepSeek uses its provider-specific translation temperature of 0.1 during
+  the reproducible translation investigation. Its
   recorded USD cost uses the published peak rates as an upper-bound estimate;
   attempt and provisional events carry `api_cost_basis` and
   `api_pricing_revision` so reports can identify that estimate.

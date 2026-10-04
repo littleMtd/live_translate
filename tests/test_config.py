@@ -39,7 +39,7 @@ class TestConfig(unittest.TestCase):
 
         self.assertEqual(cfg.translation.deepseek_route, "primary")
         self.assertEqual(cfg.translation.deepseek_model, "deepseek-flash")
-        self.assertEqual(cfg.translation.deepseek_temperature, 1.3)
+        self.assertEqual(cfg.translation.deepseek_temperature, 0.1)
         with self.assertRaisesRegex(ValueError, "deepseek_route invalid"):
             _Translation(deepseek_route="automatic")
         self.assertEqual(_Translation(deepseek_route="off").deepseek_route, "off")

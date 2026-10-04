@@ -206,9 +206,9 @@ class _Translation:
         "LIVE_TRANSLATE_DEEPSEEK_ROUTE", "primary"
     ).strip().lower()
     deepseek_model: str = "deepseek-flash"
-    # DeepSeek's published translation setting; keep other providers on the
-    # shared temperature so this route can be evaluated independently.
-    deepseek_temperature: float = 1.3
+    # Keep DeepSeek sampling low during reproducible translation investigation;
+    # other providers retain the shared temperature setting.
+    deepseek_temperature: float = 0.1
     deepseek_timeout: float = 4.0
     deepseek_max_tokens: int = 160
     deepseek_context_window: int = 2
