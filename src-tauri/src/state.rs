@@ -272,7 +272,7 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("zh-TW"));
         assert!(json.contains("\"use_profile_glossary\":true"));
-        assert!(json.contains("openrouter"));
+        assert!(json.contains("\"live_engine\":\"nvidia\""));
     }
 
     #[test]
