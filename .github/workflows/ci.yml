@@ -14,9 +14,9 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -38,9 +38,9 @@ jobs:
     needs: test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -76,8 +76,8 @@ jobs:
         working-directory: src-frontend
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -87,13 +87,16 @@ jobs:
       - run: npm run build
 
   rust:
-    runs-on: ubuntu-latest
+    # Pinned: the Tauri apt packages below are distro-specific, and
+    # ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Re-validate the
+    # package list before moving this job to a newer image.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: src-tauri
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
