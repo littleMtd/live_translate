@@ -32,8 +32,6 @@
         Live backend:
         <select v-model="local.live_engine">
           <option value="deepseek">DeepSeek → Groq</option>
-          <option value="nvidia">NVIDIA NIM</option>
-          <option value="ollama">Ollama</option>
         </select>
       </label>
       <label>
@@ -165,6 +163,10 @@ const clone = (config: ConfigDto): ConfigDto => {
   const copy: ConfigDto = JSON.parse(JSON.stringify(config))
   copy.translation.profile_mode ??= 'auto'
   copy.stt.use_profile_glossary ??= true
+  // Retired backends (nvidia/ollama) may linger in a persisted config until
+  // the backend restarts; config.py migrates them to deepseek, so show that.
+  if (copy.live_engine !== 'deepseek') copy.live_engine = 'deepseek'
+  if (copy.clip_engine !== 'deepseek') copy.clip_engine = 'deepseek'
   return copy
 }
 

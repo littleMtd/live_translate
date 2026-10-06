@@ -19,8 +19,7 @@ def _export() -> dict:
 def test_top_level_sections_present():
     d = _export()
     for section in ("audio", "stt", "splitter", "translation", "subtitle",
-                    "database", "live_engine", "clip_engine", "ollama", "nvidia",
-                    "scene"):
+                    "database", "live_engine", "clip_engine", "scene"):
         assert section in d, f"export missing top-level section: {section}"
 
 

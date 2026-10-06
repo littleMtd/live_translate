@@ -25,15 +25,13 @@ from utils.logger import get_logger
 
 log = get_logger("translation_engines")
 
-_NVIDIA_MAX_ATTEMPTS = 2
-_NVIDIA_RETRY_DELAY_SEC = 0.5
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_USER_AGENT = "live_translate/1.0"
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
 _DEEPSEEK_USER_AGENT = "live_translate/1.0"
 _PROTECTED_LIVE_BASE_CHAIN = ("groq",)
-# Shared invariants for the compact (TPM-budget) prompts. These engines now
-# carry most traffic on nvidia-degradation days, so the systematic error
+# Shared invariants for the compact (TPM-budget) Groq fallback prompt. It
+# carries traffic whenever DeepSeek fails or is rejected, so the systematic error
 # classes observed in runtime logs must be covered even without the full
 # prompt: invented Chinese phonetic names (랑코→朗子/Lanco), Japanese kana
 # escapes (지노와아→ジノワァ), and Korean number-unit drops (만 5천원→五千).
@@ -88,8 +86,6 @@ _TRANSLATION_CALL_TRACE = threading.local()
 _RESULT_CAPTURE: ContextVar["_ResultCapture | None"] = ContextVar(
     "translation_engine_result_capture", default=None
 )
-_NVIDIA_INFLIGHT_LOCK = threading.Lock()
-_NVIDIA_INFLIGHT_COUNT = 0
 _ROUTE_CALL_LIMITERS_LOCK = threading.Lock()
 _ROUTE_CALL_LIMITERS: dict[tuple[str, int], threading.BoundedSemaphore] = {}
 
@@ -238,20 +234,6 @@ def _elapsed_ms(start: float | None, end: float | None = None) -> float | None:
         return None
     end = time.monotonic() if end is None else end
     return _float_diagnostic((end - start) * 1000)
-
-
-def _nvidia_inflight_started() -> int:
-    global _NVIDIA_INFLIGHT_COUNT
-    with _NVIDIA_INFLIGHT_LOCK:
-        inflight_at_start = _NVIDIA_INFLIGHT_COUNT
-        _NVIDIA_INFLIGHT_COUNT += 1
-        return inflight_at_start
-
-
-def _nvidia_inflight_finished() -> None:
-    global _NVIDIA_INFLIGHT_COUNT
-    with _NVIDIA_INFLIGHT_LOCK:
-        _NVIDIA_INFLIGHT_COUNT = max(0, _NVIDIA_INFLIGHT_COUNT - 1)
 
 
 def _set_last_engine_diagnostics(
@@ -611,44 +593,6 @@ def _limited_history(
     return limited
 
 
-def _starts_with_history_dependency_marker(text: str) -> bool:
-    stripped = str(text or "").strip()
-    markers = tuple(
-        getattr(cfg.translation, "adaptive_history_dependency_markers", ()) or ()
-    )
-    boundaries = " \t\r\n.,!?~…。？！,，、:;；"
-    for marker in markers:
-        marker = str(marker or "")
-        if not marker or not stripped.startswith(marker):
-            continue
-        if len(stripped) == len(marker) or stripped[len(marker)] in boundaries:
-            return True
-    return False
-
-
-def _primary_context_window(text: str = "") -> int:
-    maximum = _clamp_int(getattr(cfg.translation, "context_window", 0), 0)
-    if not bool(getattr(cfg.translation, "adaptive_history_enabled", False)):
-        return maximum
-    setting = (
-        "adaptive_history_dependency_window"
-        if _starts_with_history_dependency_marker(text)
-        else "adaptive_history_base_window"
-    )
-    requested = _clamp_int(getattr(cfg.translation, setting, maximum), maximum)
-    return min(maximum, requested)
-
-
-def _limited_primary_history(
-    history: list[tuple[str, str]] | None,
-    text: str = "",
-) -> list[tuple[str, str]]:
-    limit = _primary_context_window(text)
-    if limit <= 0:
-        return []
-    return list(history or [])[-limit:]
-
-
 def _limited_groq_history(history: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
     return _limited_history(history, config_prefix="groq_translation")
 
@@ -975,7 +919,7 @@ class TranslationEngine(ABC):
     @property
     @abstractmethod
     def engine_name(self) -> str:
-        """Short identifier stored in the DB (e.g. 'deepseek', 'groq', 'nvidia')."""
+        """Short identifier stored in the DB (e.g. 'deepseek', 'groq')."""
         ...
 
     @property
@@ -1013,6 +957,24 @@ class TranslationEngine(ABC):
                   route_request=None) -> str | None:
         """Translate text, returning None on provider or transport failure."""
         ...
+
+    def _legacy_route_request(
+        self, text: str, system_prompt: str, incomplete: bool,
+        history: list[tuple[str, str]] | None,
+    ):
+        """Freeze a legacy call with the single body owner, keeping raw timeout.
+
+        Legacy callers historically passed ``self._timeout`` straight to
+        ``urlopen`` (including 0/None), whereas ``request_timeout_seconds``
+        normalizes such values; keep the raw value for byte/behaviour parity.
+        """
+        from dataclasses import replace
+        from modules.translation_request import freeze_route_request
+
+        return replace(
+            freeze_route_request(self, text, system_prompt, incomplete, history),
+            timeout_seconds=getattr(self, "_timeout", None),
+        )
 
     def translate_result(
         self, text: str, system_prompt: str, incomplete: bool,
@@ -1228,380 +1190,6 @@ def call_engine_with_deadline(
         )
     return completion.result
 
-class OllamaEngine(TranslationEngine):
-    """Ollama local model via OpenAI-compatible /v1/chat/completions endpoint."""
-
-    def __init__(self):
-        self._base_url = cfg.ollama.base_url.rstrip("/")
-        self._model = cfg.ollama.model
-        self._timeout = cfg.ollama.timeout
-        log.info("OllamaEngine ready (model=%s, base_url=%s)", self._model, self._base_url)
-
-    @property
-    def engine_name(self) -> str:
-        return "ollama"
-
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None, *,
-                  route_request=None) -> str | EngineResult | None:
-        if route_request is not None:
-            return _run_with_engine_result(
-                self,
-                lambda: self._translate_text(
-                    text, system_prompt, incomplete, history,
-                    route_request=route_request,
-                ),
-            )
-        return self._translate_text(text, system_prompt, incomplete, history)
-
-    def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
-                        history: list[tuple[str, str]] | None = None, *,
-                        route_request=None) -> str | None:
-        import urllib.request
-        import urllib.error
-        import json as _json
-
-        if route_request is not None:
-            messages = [
-                {"role": role, "content": content}
-                for role, content in route_request.messages
-            ]
-        else:
-            messages = [{"role": "system", "content": system_prompt}]
-            for ko, zh in _limited_primary_history(history, text):
-                messages.append({"role": "user", "content": f"input: {ko}"})
-                messages.append({"role": "assistant", "content": zh})
-            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
-
-        if route_request is None:
-            payload = _json.dumps({
-                "model": self._model,
-                "messages": messages,
-                "stream": False,
-                "temperature": cfg.translation.temperature,
-                "max_tokens": cfg.translation.max_tokens,
-            }).encode()
-        else:
-            payload = route_request.body
-
-        url = f"{self._base_url}/v1/chat/completions"
-        req = urllib.request.Request(url, data=payload,
-                                     headers={"Content-Type": "application/json"})
-        try:
-            _t0 = time.monotonic()
-            with urllib.request.urlopen(
-                req,
-                timeout=(route_request.timeout_seconds if route_request is not None
-                         else self._timeout),
-            ) as r:
-                data = _json.loads(r.read())
-            log.info("Ollama translate: %.0fms", (time.monotonic() - _t0) * 1000)
-            _log_token_usage("Ollama", data.get("usage"))
-            _capture_response_metadata(data, data["choices"][0])
-            result = data["choices"][0]["message"]["content"].strip()
-            log.debug("Ollama: %.30s → %s", text, result)
-            return result
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                log.error("模型 %r 不存在，請先執行 `ollama pull %s`", self._model, self._model)
-            else:
-                log.error("Ollama HTTP %d: %s", e.code, e)
-            return None
-        except urllib.error.URLError as e:
-            reason = str(e).lower()
-            # WinError 10061 = connection refused on Windows
-            if "refused" in reason or "10061" in reason or "connect" in reason:
-                log.error("Ollama 未啟動或 base_url 設定錯誤 (%s) — 請先執行 `ollama serve`", self._base_url)
-            else:
-                log.error("Ollama network error: %s", e)
-            return None
-        except Exception as e:
-            log.error("Ollama error: %s", e)
-            return None
-
-
-class NvidiaEngine(TranslationEngine):
-    """NVIDIA NIM hosted models via OpenAI-compatible endpoint."""
-
-    _BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-
-    def __init__(self):
-        self._api_key = cfg.keys.nvidia
-        self._model = cfg.nvidia.model
-        self._timeout = (
-            cfg.nvidia.live_timeout
-            if cfg.translation.translation_mode == "live" and cfg.nvidia.live_timeout
-            else cfg.nvidia.timeout
-        )
-        self._retry_transient_errors = cfg.translation.translation_mode != "live"
-        _m = self._model.lower()
-        self._is_qwen3    = "qwen3" in _m or "qwen-3" in _m
-        self._strip_think = self._is_qwen3 or any(x in _m for x in ("deepseek-v4", "deepseek-r1", "deepseek-v3"))
-        if not self._api_key:
-            log.error("NVIDIA_API_KEY not set")
-        else:
-            log.info("NvidiaEngine ready (model=%s, qwen3=%s, strip_think=%s)",
-                     self._model, self._is_qwen3, self._strip_think)
-
-    @property
-    def engine_name(self) -> str:
-        return "nvidia"
-
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
-
-    def translate(self, text: str, system_prompt: str, incomplete: bool,
-                  history: list[tuple[str, str]] | None = None, *,
-                  route_request=None) -> str | EngineResult | None:
-        if route_request is not None:
-            return _run_with_engine_result(
-                self,
-                lambda: self._translate_text(
-                    text, system_prompt, incomplete, history,
-                    route_request=route_request,
-                ),
-            )
-        return self._translate_text(text, system_prompt, incomplete, history)
-
-    def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
-                        history: list[tuple[str, str]] | None = None, *,
-                        route_request=None) -> str | None:
-        timeout_config_ms = _timeout_config_ms(
-            route_request.timeout_seconds if route_request is not None else self._timeout
-        )
-        api_attempt_count = 0
-        api_timeout_count = 0
-        api_total_start: float | None = None
-        api_final_attempt_ms: float | None = None
-        api_first_attempt_ms: float | None = None
-        api_retry_attempt_ms: float | None = None
-        api_attempt_index = 0
-        api_inflight_count_at_start: int | None = None
-        api_attempt_timeout_ms = timeout_config_ms
-        retry_sleep_ms = 0.0
-        retry_count = 0
-        retry_reason = ""
-        source_text_char_count = len(text or "")
-        prompt_char_count = len(system_prompt or "")
-        history = (
-            _limited_primary_history(history, text)
-            if route_request is None else list(history or ())
-        )
-        context_item_count = (
-            len(history) if route_request is None else
-            max(0, (len(route_request.messages) - 2) // 2)
-        )
-        request_body_char_count: int | None = None
-        message_count: int | None = None
-        retry_transient_errors = (
-            bool(route_request.options_dict()["retry_transient_errors"])
-            if route_request is not None else
-            bool(getattr(self, "_retry_transient_errors", True))
-        )
-
-        def record_diagnostics(
-            api_error_type: str | None = None,
-            api_error_message_class: str | None = None,
-        ) -> None:
-            _set_last_engine_diagnostics(
-                "nvidia",
-                retry_count,
-                retry_reason,
-                api_attempt_count=api_attempt_count,
-                api_timeout_count=api_timeout_count,
-                api_total_wall_ms=_elapsed_ms(api_total_start),
-                api_final_attempt_ms=api_final_attempt_ms,
-                api_first_attempt_ms=api_first_attempt_ms,
-                api_retry_attempt_ms=api_retry_attempt_ms,
-                retry_sleep_ms=retry_sleep_ms,
-                timeout_config_ms=timeout_config_ms,
-                api_attempt_timeout_ms=api_attempt_timeout_ms,
-                api_attempt_index=api_attempt_index,
-                api_inflight_count_at_start=api_inflight_count_at_start,
-                source_text_char_count=source_text_char_count,
-                prompt_char_count=prompt_char_count,
-                request_body_char_count=request_body_char_count,
-                message_count=message_count,
-                context_item_count=context_item_count,
-                api_error_type=api_error_type,
-                api_error_message_class=api_error_message_class,
-            )
-
-        def record_attempt_duration(attempt_index: int, attempt_started_at: float) -> None:
-            nonlocal api_attempt_index, api_final_attempt_ms
-            nonlocal api_first_attempt_ms, api_retry_attempt_ms
-            elapsed_ms = _elapsed_ms(attempt_started_at)
-            api_attempt_index = attempt_index
-            api_final_attempt_ms = elapsed_ms
-            if attempt_index == 1:
-                api_first_attempt_ms = elapsed_ms
-            elif attempt_index == 2:
-                api_retry_attempt_ms = elapsed_ms
-
-        record_diagnostics()
-        if not self._api_key:
-            return None
-        import urllib.request
-        import urllib.error
-        import json as _json
-
-        if route_request is not None:
-            messages = [
-                {"role": role, "content": content}
-                for role, content in route_request.messages
-            ]
-        else:
-            messages = [{"role": "system", "content": system_prompt}]
-            for ko, zh in history:
-                messages.append({"role": "user", "content": f"input: {ko}"})
-                messages.append({"role": "assistant", "content": zh})
-            messages.append({"role": "user", "content": _build_user_message(text, incomplete)})
-
-        body: dict = {}
-        if route_request is None:
-            body = {
-                "model": self._model,
-                "messages": messages,
-                "temperature": cfg.translation.temperature,
-                "max_tokens": cfg.translation.max_tokens,
-            }
-            if self._is_qwen3:
-                body["chat_template_kwargs"] = {"enable_thinking": False}
-        message_count = len(messages)
-        payload_text = (
-            route_request.body.decode("utf-8") if route_request is not None
-            else _json.dumps(body)
-        )
-        request_body_char_count = len(payload_text)
-        payload = route_request.body if route_request is not None else payload_text.encode()
-
-        for attempt in range(_NVIDIA_MAX_ATTEMPTS):
-            current_attempt_index = attempt + 1
-            req = urllib.request.Request(
-                self._BASE_URL,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self._api_key}",
-                },
-            )
-            try:
-                _t0 = time.monotonic()
-                if api_total_start is None:
-                    api_total_start = _t0
-                api_attempt_count += 1
-                inflight_at_start = _nvidia_inflight_started()
-                if api_inflight_count_at_start is None:
-                    api_inflight_count_at_start = inflight_at_start
-                try:
-                    with urllib.request.urlopen(
-                        req,
-                        timeout=(route_request.timeout_seconds if route_request is not None
-                                 else self._timeout),
-                    ) as r:
-                        data = _json.loads(r.read())
-                finally:
-                    _nvidia_inflight_finished()
-                _api_response_loaded = time.monotonic()
-                log.info("Nvidia translate: %.0fms", (_api_response_loaded - _t0) * 1000)
-                _log_token_usage("Nvidia", data.get("usage"))
-                _capture_response_metadata(data, data["choices"][0])
-                msg = data["choices"][0]["message"]
-                content = (msg.get("content") or "").strip()
-                if self._strip_think:
-                    content = _strip_think_tags(content)
-                record_attempt_duration(current_attempt_index, _t0)
-                log.debug("Nvidia: %.30s → %s", text, content)
-                if content:
-                    record_diagnostics()
-                    return content
-                if attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
-                    retry_count = attempt + 1
-                    retry_reason = "empty_response"
-                    record_diagnostics("api_error", "empty_response")
-                    log.warning("Nvidia returned empty response; retrying once")
-                    _sleep_t0 = time.monotonic()
-                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
-                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
-                    continue
-                record_diagnostics("api_error", "empty_response")
-                return None
-            except urllib.error.HTTPError as e:
-                record_attempt_duration(current_attempt_index, _t0)
-                error_body = ""  # L6: don't shadow the request `body` dict
-                try:
-                    error_body = e.read().decode()
-                except Exception:
-                    pass
-                if e.code == 401:
-                    log.error("Nvidia auth error — NVIDIA_API_KEY 無效或已過期")
-                elif e.code == 404:
-                    log.error("Nvidia 模型 %r 不存在 — 請確認 build.nvidia.com 上的模型名稱", self._model)
-                elif e.code == 429:
-                    log.warning("Nvidia rate-limit (429) — 請求過於頻繁，略過此句")
-                else:
-                    log.error("Nvidia HTTP %d: %s", e.code, error_body or e)
-                error_type, message_class = _classify_api_error(e)
-                record_diagnostics(error_type, message_class)
-                return None
-            except urllib.error.URLError as e:
-                record_attempt_duration(current_attempt_index, _t0)
-                if _is_timeout_exception(e):
-                    api_timeout_count += 1
-                if retry_transient_errors and attempt + 1 < _NVIDIA_MAX_ATTEMPTS:
-                    reason = "timeout" if _is_timeout_exception(e) else "network"
-                    retry_count = attempt + 1
-                    retry_reason = reason
-                    error_type, message_class = _classify_api_error(e)
-                    record_diagnostics(error_type, message_class)
-                    log.warning("Nvidia network error; retrying once: %s", e)
-                    _sleep_t0 = time.monotonic()
-                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
-                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
-                    continue
-                log.error("Nvidia network error: %s", e)
-                error_type, message_class = _classify_api_error(e)
-                record_diagnostics(error_type, message_class)
-                return None
-            except Exception as e:
-                record_attempt_duration(current_attempt_index, _t0)
-                if _is_timeout_exception(e):
-                    api_timeout_count += 1
-                reason = "timeout" if _is_timeout_exception(e) else classify_error(e)
-                if (
-                    retry_transient_errors
-                    and reason in ("timeout", "network")
-                    and attempt + 1 < _NVIDIA_MAX_ATTEMPTS
-                ):
-                    retry_count = attempt + 1
-                    retry_reason = reason
-                    error_type, message_class = _classify_api_error(e)
-                    record_diagnostics(error_type, message_class)
-                    log.warning("Nvidia transient error; retrying once: %s", e)
-                    _sleep_t0 = time.monotonic()
-                    time.sleep(_NVIDIA_RETRY_DELAY_SEC)
-                    retry_sleep_ms += _elapsed_ms(_sleep_t0) or 0.0
-                    continue
-                log.error("Nvidia error: %s", e)
-                error_type, message_class = _classify_api_error(e)
-                record_diagnostics(error_type, message_class)
-                return None
-        return None
-
-
 class DeepSeekTranslationEngine(TranslationEngine):
     """Direct DeepSeek adapter for the protected primary route."""
 
@@ -1686,13 +1274,23 @@ class DeepSeekTranslationEngine(TranslationEngine):
                     messages, route_request=route_request
                 ),
             )
-        return self._translate_messages_text(messages)
+        from dataclasses import replace
+        from modules.translation_request import deepseek_route_for_messages
+
+        # Legacy callers keep the raw adapter timeout (see _legacy_route_request).
+        return self._translate_messages_text(
+            messages,
+            route_request=replace(
+                deepseek_route_for_messages(self, messages),
+                timeout_seconds=self._timeout,
+            ),
+        )
 
     def _translate_messages_text(
         self,
         messages: tuple[tuple[str, str], ...],
         *,
-        route_request=None,
+        route_request,
     ) -> str | None:
         import json as _json
         import urllib.error
@@ -1701,30 +1299,13 @@ class DeepSeekTranslationEngine(TranslationEngine):
         self.last_response_metadata = {}
         reset_last_engine_diagnostics()
         reset_last_token_usage()
-        timeout_config_ms = _timeout_config_ms(
-            route_request.timeout_seconds if route_request is not None else self._timeout
-        )
+        timeout_config_ms = _timeout_config_ms(route_request.timeout_seconds)
         if not self._api_key:
             return None
 
-        if route_request is None:
-            body = {
-                "model": self._model,
-                "messages": [
-                    {"role": role, "content": content}
-                    for role, content in messages
-                ],
-                "temperature": cfg.translation.deepseek_temperature,
-                "max_tokens": self._max_tokens,
-                "stream": False,
-                "thinking": {"type": "disabled"},
-            }
-            payload_text = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-            payload = payload_text.encode("utf-8")
-        else:
-            messages = route_request.messages
-            payload = route_request.body
-            payload_text = payload.decode("utf-8")
+        messages = route_request.messages
+        payload = route_request.body
+        payload_text = payload.decode("utf-8")
         request = urllib.request.Request(
             _DEEPSEEK_BASE_URL,
             data=payload,
@@ -1739,8 +1320,7 @@ class DeepSeekTranslationEngine(TranslationEngine):
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=(route_request.timeout_seconds if route_request is not None
-                         else self._timeout),
+                timeout=route_request.timeout_seconds,
             ) as response:
                 data = _json.loads(response.read())
             usage = data.get("usage") or {}
@@ -1801,7 +1381,7 @@ class DeepSeekTranslationEngine(TranslationEngine):
 
 
 class GroqTranslationEngine(TranslationEngine):
-    """Groq hosted models via OpenAI-compatible endpoint. Used as nvidia fallback."""
+    """Groq hosted models via OpenAI-compatible endpoint. Used as DeepSeek fallback."""
 
     def __init__(self):
         self._api_key = cfg.keys.groq_fallback
@@ -1845,27 +1425,20 @@ class GroqTranslationEngine(TranslationEngine):
                     route_request=route_request,
                 ),
             )
-        return self._translate_text(text, system_prompt, incomplete, history)
+        return self._translate_text(
+            text, system_prompt, incomplete, history,
+            route_request=self._legacy_route_request(
+                text, system_prompt, incomplete, history
+            ),
+        )
 
     def _translate_text(self, text: str, system_prompt: str, incomplete: bool,
                         history: list[tuple[str, str]] | None = None, *,
-                        route_request=None) -> str | None:
-        timeout_config_ms = _timeout_config_ms(
-            route_request.timeout_seconds if route_request is not None else self._timeout
-        )
-        messages_contract = (
-            route_request.messages if route_request is not None else
-            build_effective_groq_messages(text, system_prompt, incomplete, history)
-        )
+                        route_request) -> str | None:
+        timeout_config_ms = _timeout_config_ms(route_request.timeout_seconds)
+        messages_contract = route_request.messages
         system_prompt = messages_contract[0][1]
-        history = (
-            _limited_groq_history(history)
-            if route_request is None else list(history or ())
-        )
-        context_item_count = (
-            len(history) if route_request is None else
-            max(0, (len(messages_contract) - 2) // 2)
-        )
+        context_item_count = max(0, (len(messages_contract) - 2) // 2)
         api_attempt_count = 0
         api_timeout_count = 0
         api_total_start: float | None = None
@@ -1931,20 +1504,10 @@ class GroqTranslationEngine(TranslationEngine):
             for role, content in messages_contract
         ]
 
-        if route_request is None:
-            payload_data = {
-                "model": self._model,
-                "messages": messages,
-                "temperature": cfg.translation.temperature,
-                "max_tokens": self._max_tokens,
-            }
-            payload_data.update(_groq_model_options(self._model))
-            payload_text = _json.dumps(payload_data)
-        else:
-            payload_text = route_request.body.decode("utf-8")
+        payload_text = route_request.body.decode("utf-8")
         request_body_char_count = len(payload_text)
         message_count = len(messages)
-        payload = route_request.body if route_request is not None else payload_text.encode()
+        payload = route_request.body
 
         req = urllib.request.Request(
             _GROQ_BASE_URL,
@@ -1964,8 +1527,7 @@ class GroqTranslationEngine(TranslationEngine):
             api_attempt_count += 1
             with urllib.request.urlopen(
                 req,
-                timeout=(route_request.timeout_seconds if route_request is not None
-                         else self._timeout),
+                timeout=route_request.timeout_seconds,
             ) as r:
                 data = _json.loads(r.read())
             record_attempt_duration(1, attempt_started_at)
@@ -1986,35 +1548,20 @@ class GroqTranslationEngine(TranslationEngine):
                 body = e.read().decode()
             except Exception:
                 pass
-            if _is_groq_token_limit_error(e.code, body) and (
-                bool(history) if route_request is None
-                else route_request.retry_body is not None
+            if (
+                _is_groq_token_limit_error(e.code, body)
+                and route_request.retry_body is not None
             ):
                 log.warning("Groq request exceeded token budget; retrying once without history")
                 retry_count = 1
                 retry_reason = "token_limit_without_history"
                 record_diagnostics("http_error", "token_limit")
-                if route_request is None:
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": _build_groq_user_message(text, incomplete)},
-                    ]
-                    payload_data = {
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": cfg.translation.temperature,
-                        "max_tokens": self._retry_max_tokens,
-                    }
-                    payload_data.update(_groq_model_options(self._model))
-                    payload_text = _json.dumps(payload_data)
-                    payload = payload_text.encode()
-                else:
-                    messages = [
-                        {"role": role, "content": content}
-                        for role, content in route_request.retry_messages
-                    ]
-                    payload = route_request.retry_body
-                    payload_text = payload.decode("utf-8")
+                messages = [
+                    {"role": role, "content": content}
+                    for role, content in route_request.retry_messages
+                ]
+                payload = route_request.retry_body
+                payload_text = payload.decode("utf-8")
                 request_body_char_count = len(payload_text)
                 message_count = len(messages)
                 req = urllib.request.Request(
@@ -2035,8 +1582,7 @@ class GroqTranslationEngine(TranslationEngine):
                     api_attempt_count += 1
                     with urllib.request.urlopen(
                         req,
-                        timeout=(route_request.timeout_seconds if route_request is not None
-                                 else self._timeout),
+                        timeout=route_request.timeout_seconds,
                     ) as r:
                         data = _json.loads(r.read())
                     record_attempt_duration(2, retry_started_at)
@@ -2110,8 +1656,6 @@ class EngineSpec:
 
 
 _ENGINE_REGISTRY = MappingProxyType({
-    "ollama": EngineSpec(OllamaEngine, lambda: True),
-    "nvidia": EngineSpec(NvidiaEngine, lambda: bool(cfg.keys.nvidia)),
     "deepseek": EngineSpec(
         DeepSeekTranslationEngine, lambda: bool(cfg.keys.deepseek)
     ),
@@ -2148,12 +1692,6 @@ def engine_chain_config_key() -> tuple:
         mode,
         backend,
         getattr(cfg.translation, "deepseek_route", "off"),
-        getattr(cfg.ollama, "base_url", ""),
-        getattr(cfg.ollama, "model", ""),
-        getattr(cfg.ollama, "timeout", ""),
-        getattr(cfg.nvidia, "model", ""),
-        getattr(cfg.nvidia, "timeout", ""),
-        getattr(cfg.nvidia, "live_timeout", ""),
         getattr(cfg.translation, "deepseek_model", ""),
         getattr(cfg.translation, "deepseek_temperature", ""),
         getattr(cfg.translation, "deepseek_timeout", ""),
@@ -2175,10 +1713,6 @@ def effective_engine_chain_names() -> tuple[str, ...]:
         if str(getattr(cfg.translation, "deepseek_route", "off")) == "primary":
             return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
         return _PROTECTED_LIVE_BASE_CHAIN
-    if backend == "nvidia":
-        return ("nvidia", *_PROTECTED_LIVE_BASE_CHAIN)
-    if backend == "ollama":
-        return ("ollama",)
     return ()
 
 
@@ -2186,16 +1720,11 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     """Build an ordered list of available engines.
 
     Picks cfg.live_engine or cfg.clip_engine based on current translation_mode.
-    Ollama is a local-only route.
-    "nvidia" uses NvidiaEngine followed by the fixed Groq fallback.
     "deepseek" uses DeepSeek followed by Groq, or Groq-only emergency mode.
     """
     mode = cfg.translation.translation_mode
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine
     log.info("Engine selection: mode=%s → engine=%s", mode, engine_name)
-    if engine_name == "ollama":
-        engine = _make_engine("ollama")
-        return [engine] if engine is not None else []
     engines = [e for name in effective_engine_chain_names()
                if (e := _make_engine(name)) is not None]
     if not engines:

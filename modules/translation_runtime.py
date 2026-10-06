@@ -595,13 +595,9 @@ def probe_primary_recovery(
     reset_last_token_usage()
     probe_route = None
     from modules.translation_engines import (
-        DeepSeekTranslationEngine, GroqTranslationEngine, NvidiaEngine,
-        OllamaEngine,
+        DeepSeekTranslationEngine, GroqTranslationEngine,
     )
-    if isinstance(engines[0], (
-        DeepSeekTranslationEngine, GroqTranslationEngine, NvidiaEngine,
-        OllamaEngine,
-    )):
+    if isinstance(engines[0], (DeepSeekTranslationEngine, GroqTranslationEngine)):
         from modules.translation_request import freeze_route_request
         probe_route = freeze_route_request(
             engines[0], probe_text, system_prompt, False, history or [],

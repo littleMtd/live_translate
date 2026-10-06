@@ -18,11 +18,7 @@ from modules.translation_engines import (
     TranslationEngine,
     DeepSeekTranslationEngine,
     GroqTranslationEngine,
-    NvidiaEngine,
-    OllamaEngine,
-    _build_user_message,
     _groq_model_options,
-    _limited_primary_history,
     build_effective_deepseek_messages,
     build_effective_groq_messages,
     translation_route_id,
@@ -123,6 +119,32 @@ def _body(messages: tuple[tuple[str, str], ...], options: dict[str, Any], *,
     return json.dumps(body).encode()
 
 
+def _deepseek_options(engine: DeepSeekTranslationEngine) -> dict[str, Any]:
+    return {
+        "model": engine.model_name,
+        "temperature": cfg.translation.deepseek_temperature,
+        "max_tokens": engine._max_tokens,
+        "stream": False,
+        "thinking": {"type": "disabled"},
+    }
+
+
+def deepseek_route_for_messages(
+    engine: DeepSeekTranslationEngine,
+    messages: Sequence[tuple[str, str]],
+) -> RouteRequest:
+    """Freeze caller-supplied DeepSeek messages with the adapter's options."""
+    frozen = tuple((role, content) for role, content in messages)
+    options = _deepseek_options(engine)
+    return RouteRequest(
+        route_id=translation_route_id(engine), engine="deepseek",
+        model=engine.model_name, messages=frozen, retry_messages=(),
+        body=_body(frozen, options, compact=True), retry_body=None,
+        provider_options=_options(options),
+        timeout_seconds=engine.request_timeout_seconds,
+    )
+
+
 def freeze_route_request(
     engine: TranslationEngine,
     provider_source: str,
@@ -136,10 +158,7 @@ def freeze_route_request(
     selected = list(history or ())
     retry_messages: tuple[tuple[str, str], ...] = ()
     retry_body: bytes | None = None
-    if not isinstance(engine, (
-        DeepSeekTranslationEngine, GroqTranslationEngine,
-        NvidiaEngine, OllamaEngine,
-    )):
+    if not isinstance(engine, (DeepSeekTranslationEngine, GroqTranslationEngine)):
         messages = (
             build_effective_deepseek_messages(
                 provider_source, system_prompt, incomplete, selected
@@ -158,13 +177,7 @@ def freeze_route_request(
         messages = build_effective_deepseek_messages(
             provider_source, system_prompt, incomplete, selected
         )
-        options = {
-            "model": model,
-            "temperature": cfg.translation.deepseek_temperature,
-            "max_tokens": engine._max_tokens,
-            "stream": False,
-            "thinking": {"type": "disabled"},
-        }
+        options = _deepseek_options(engine)
         body = _body(messages, options, compact=True)
     elif name == "groq":
         messages = build_effective_groq_messages(
@@ -182,30 +195,6 @@ def freeze_route_request(
             retry_options = {**options, "max_tokens": engine._retry_max_tokens}
             retry_body = _body(retry_messages, retry_options)
         options["retry_max_tokens"] = engine._retry_max_tokens
-    elif name in {"nvidia", "ollama"}:
-        limited = _limited_primary_history(selected, provider_source)
-        messages = (("system", system_prompt), *(
-            pair for source, target in limited
-            for pair in (("user", f"input: {source}"), ("assistant", target))
-        ), ("user", _build_user_message(provider_source, incomplete)))
-        options = {
-            "model": model,
-            "stream": False,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": cfg.translation.max_tokens,
-        } if name == "ollama" else {
-            "model": model,
-            "temperature": cfg.translation.temperature,
-            "max_tokens": cfg.translation.max_tokens,
-        }
-        if name == "nvidia" and engine._is_qwen3:
-            options["chat_template_kwargs"] = {"enable_thinking": False}
-        body = _body(messages, options)
-        if name == "nvidia":
-            retry_messages, retry_body = messages, body
-            options["retry_transient_errors"] = bool(
-                getattr(engine, "_retry_transient_errors", True)
-            )
     else:
         raise ValueError(f"unsupported translation route: {name}")
     return RouteRequest(

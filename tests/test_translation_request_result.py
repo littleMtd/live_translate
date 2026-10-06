@@ -12,7 +12,7 @@ import urllib.error
 from config import cfg
 from modules.provisional_subtitles import provisional_fingerprint
 from modules.translation_engines import (
-    DeepSeekTranslationEngine, EngineResult, GroqTranslationEngine, NvidiaEngine,
+    DeepSeekTranslationEngine, EngineResult, GroqTranslationEngine,
     call_engine_with_deadline,
 )
 from modules.translation_request import TranslationRequest, freeze_route_request
@@ -132,32 +132,6 @@ def test_prompt_cache_identity_uses_frozen_request_cohort():
             assert translator._prompt_version_for_engine(
                 engine, prompt, route_request=route, translation_request=request,
             ) == frozen_version
-
-
-def test_nvidia_transient_retry_policy_is_frozen_with_request():
-    engine = NvidiaEngine()
-    engine._api_key = "mock-only"
-    engine._retry_transient_errors = True
-    enabled = freeze_route_request(engine, "source", "Translate.", False, [])
-    engine._retry_transient_errors = False
-    disabled = freeze_route_request(engine, "source", "Translate.", False, [])
-    assert enabled.body == disabled.body
-    assert _request(enabled).request_id != _request(disabled).request_id
-    with patch("urllib.request.urlopen", side_effect=[
-        urllib.error.URLError("synthetic network failure"), _Response("retry-ok"),
-    ]) as send, patch("modules.translation_engines.time.sleep"):
-        result = engine.translate("source", "Translate.", False, [],
-                                  route_request=enabled)
-    assert result.text
-    assert result.system_fingerprint == "retry-ok"
-    assert send.call_count == 2
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError(
-        "synthetic network failure"
-    )) as send:
-        result = engine.translate("source", "Translate.", False, [],
-                                  route_request=disabled)
-    assert result.text is None
-    assert send.call_count == 1
 
 
 def test_deadline_result_is_owned_by_timed_out_call():

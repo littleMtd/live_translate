@@ -24,8 +24,8 @@ function makeConfig(overrides: Partial<ConfigDto> = {}): ConfigDto {
                 padx: 16, pady: 8, init_offset_x: 400, init_offset_y: 160,
                 poll_interval_ms: 100, min_display_ms: 1500, ms_per_char: 80, queue_maxsize: 10 },
     database: { db_path: 'logs/live_translate.db', db_cache_max_rows: 50000 },
-    live_engine: 'nvidia',
-    clip_engine: 'nvidia',
+    live_engine: 'deepseek',
+    clip_engine: 'deepseek',
     ollama: { base_url: 'http://localhost:11434', model: 'qwen2.5:3b', timeout: 60 },
     nvidia: { model: 'qwen/qwen3.5-122b-a10b', timeout: 60 },
     ...overrides,
@@ -76,8 +76,22 @@ describe('ConfigPanel', () => {
 
   it('shows translation engine settings', () => {
     const wrapper = mount(ConfigPanel, { props: { config: makeConfig() } })
-    expect(wrapper.html()).toContain('nvidia')
     expect(wrapper.html()).toContain('DeepSeek → Groq')
+    expect(wrapper.html()).not.toContain('NVIDIA NIM')
+    expect(wrapper.html()).not.toContain('Ollama')
+  })
+
+  it('shows and saves retired persisted backends as deepseek', async () => {
+    const retired = makeConfig({
+      live_engine: 'nvidia' as unknown as ConfigDto['live_engine'],
+      clip_engine: 'ollama' as unknown as ConfigDto['clip_engine'],
+    })
+    const wrapper = mount(ConfigPanel, { props: { config: retired } })
+    expect((wrapper.find('select').element as HTMLSelectElement).value).toBe('deepseek')
+    await wrapper.find('button.primary').trigger('click')
+    const saved = wrapper.emitted('save')![0][0] as ConfigDto
+    expect(saved.live_engine).toBe('deepseek')
+    expect(saved.clip_engine).toBe('deepseek')
   })
 
   it('edits and saves explicit current activity metadata', async () => {

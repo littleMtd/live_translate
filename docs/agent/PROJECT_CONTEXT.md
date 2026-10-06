@@ -168,11 +168,11 @@ Translation:
   target corrections, deterministic publication guards, ordered emission,
   translation events, and the background recovery-probe thread.
 - `modules/translation_engines.py`: engine registry and API adapters for
-  Ollama, NVIDIA, DeepSeek, and Groq;
+  DeepSeek and the Groq fallback;
   request/history shaping, per-call diagnostics, attempt chains, and token
   usage.
 - `modules/translation_runtime.py`: pure cache helpers plus fallback/circuit
-  state transitions and NVIDIA recovery probes.
+  state transitions and primary-route recovery probes.
 - `modules/translation_policy.py`: pre-translation rejection/sanitization,
   template/garbage/song/low-value rules, duplicate state, slang lookup, and
   evidence-gated repetition exemption.
@@ -281,18 +281,18 @@ Context, display, and persistence:
 
 `cfg.live_engine` / `cfg.clip_engine` selects the backend:
 
-- `deepseek`: DeepSeek V4.1 Flash (`deepseek-flash`) followed by the fixed Groq fallback. The
-  persisted legacy value `anthropic` is accepted only as a migration alias.
-- `nvidia`: NVIDIA primary followed by the fixed Groq fallback.
-- `ollama`: local Ollama only.
+- `deepseek`: DeepSeek V4.1 Flash (`deepseek-flash`) followed by the fixed Groq
+  fallback; this is the only backend. Persisted legacy values `anthropic`,
+  `nvidia` and `ollama` are accepted only as migration aliases (the NVIDIA and
+  Ollama adapters were removed on 2026-10-06).
 
 All translation workers share one `LiveSessionSnapshot`, `ConversationHistory`,
 `TranslationPolicy`, `TranslationMemory`, and `FallbackState`; engine diagnostics
 remain thread-local per call. Cache lookup cannot write conversation context;
-only a successfully adjudicated result enters history. In live NVIDIA mode,
-primary failure opens a circuit and sends user
-traffic to fallback engines. A background probe waits for cooldown and requires
-consecutive valid responses before restoring NVIDIA. Probe calls copy recent
+only a successfully adjudicated result enters history. In live mode, primary
+(DeepSeek) failure opens a circuit and sends user traffic to the Groq fallback.
+A background probe waits for cooldown and requires consecutive valid responses
+before restoring the primary. Probe calls copy recent
 production history. Circuit/probe actions are emitted as
 `translation_fallback` events.
 

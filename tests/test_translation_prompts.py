@@ -8,7 +8,6 @@ import modules.translation_prompts as translation_prompts
 from modules.streamer_profiles import known_profile_ids
 from modules.translation_prompts import (
     _PROFILE_DATA_PATH,
-    _build_qwen_optimized_prompt,
     _load_translation_profiles,
     get_translation_profile,
     get_translation_profile_facts,
@@ -39,23 +38,6 @@ def test_translation_profile_data_matches_streamer_registry():
 def test_unknown_translation_profile_returns_empty():
     assert get_translation_profile("unknown") == ""
     assert get_translation_profile("unknown", qwen=True) == ""
-
-
-def test_qwen_prompt_does_not_teach_placeholder_outputs():
-    prompt = _build_qwen_optimized_prompt()
-
-    assert "[UNK:" not in prompt
-    assert "空字串" not in prompt
-    assert "無法理解" not in prompt
-
-
-def test_qwen_prompt_v2_is_compact_and_has_one_ordered_policy():
-    prompt = _build_qwen_optimized_prompt()
-
-    assert "[Ordered decision policy]" in prompt
-    assert "Translate coherent Korean, English, or Japanese speech" in prompt
-    assert "Unknown token inside an otherwise coherent sentence" in prompt
-    assert "Never reconstruct words or facts" in prompt
 
 
 def test_url_qwen_profile_is_compact_but_keeps_core_facts():
@@ -247,11 +229,6 @@ def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
     assert not any("only in clear fandom" in term for term in output_terms)
 
 
-def test_deepseek_live_path_is_not_classified_as_qwen():
-    assert cfg.live_engine == "deepseek"
-    assert not translation_prompts._is_qwen_model()
-
-
 def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():
     """standard/qwen are two hand-written renderings of the same facts.
 
@@ -383,25 +360,24 @@ def test_current_activity_changes_prompt_hence_cache_version():
 
 
 def test_output_rule_tail_stays_after_profile_and_activity():
-    from modules.translation_prompts import _BASE_PROMPT_TAIL, _QWEN_PROMPT_TAIL
+    from modules.translation_prompts import _BASE_PROMPT_TAIL
 
     with _activity("StarCraft"):
         prompt = _compose_system_prompt()
-    assert prompt.endswith(_BASE_PROMPT_TAIL) or prompt.endswith(_QWEN_PROMPT_TAIL)
+    assert prompt.endswith(_BASE_PROMPT_TAIL)
     # The tail must come after every appended section, never mid-prompt.
-    tail = _QWEN_PROMPT_TAIL if prompt.endswith(_QWEN_PROMPT_TAIL) else _BASE_PROMPT_TAIL
-    assert prompt.index(tail) > prompt.index("[Background] Current stream activity")
+    assert prompt.index(_BASE_PROMPT_TAIL) > prompt.index("[Background] Current stream activity")
 
 
 def test_prompts_contain_no_simplified_chinese():
     # zh-TW output prompts must not model simplified characters themselves.
-    from modules.translation_prompts import _BASE_PROMPT, _QWEN_PROMPT
+    from modules.translation_prompts import _BASE_PROMPT
 
     simplified_only = set(
         "专乱开关记欢过还发货质变电时东车书长门问间闻马气汉当体优点级农应对争众"
         "伞传倾儿卫认误说读语请谁调贝购贵费资赛选逊适释镇风飞馆惊养鱼鸟鸡黄齐"
         "识别档况隐显热处译词汇后检简乐动听爱现观视觉罗网络终结绝给统继续维缩"
     )
-    for name, prompt in (("_BASE_PROMPT", _BASE_PROMPT), ("_QWEN_PROMPT", _QWEN_PROMPT)):
+    for name, prompt in (("_BASE_PROMPT", _BASE_PROMPT),):
         leaked = sorted({c for c in prompt if c in simplified_only})
         assert not leaked, f"{name} contains simplified chars: {leaked}"

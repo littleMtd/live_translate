@@ -31,7 +31,7 @@ class TestConfig(unittest.TestCase):
     def test_translation_backends_are_fixed_routes(self):
         from config import _VALID_BACKEND_MODES
 
-        self.assertEqual(_VALID_BACKEND_MODES, {"deepseek", "ollama", "nvidia"})
+        self.assertEqual(_VALID_BACKEND_MODES, {"deepseek"})
         self.assertFalse(hasattr(cfg.translation, "engine_chain"))
 
     def test_deepseek_primary_and_emergency_off_are_explicit(self):
@@ -289,17 +289,16 @@ class TestConfig(unittest.TestCase):
         self.assertGreaterEqual(cfg.stt.groq_rate_limit_cooldown_sec, 30)
         self.assertGreaterEqual(cfg.stt.groq_daily_request_limit, 2000)
 
-    def test_nvidia_live_model_uses_benchmarked_fast_qwen(self):
-        self.assertEqual(cfg.nvidia.model, "qwen/qwen3-next-80b-a3b-instruct")
+    def test_retired_backends_in_persisted_config_migrate_to_deepseek(self):
+        from config import _Config
 
-    def test_nvidia_timeout_fails_fast_for_live_subtitles(self):
-        self.assertLessEqual(cfg.nvidia.timeout, 10)
-        self.assertEqual(cfg.nvidia.live_timeout, 5)
-
-    def test_legacy_nvidia_circuit_fields_remain_available_for_compatibility(self):
-        self.assertTrue(cfg.nvidia.circuit_breaker_enabled)
-        self.assertGreaterEqual(cfg.nvidia.recovery_cooldown_sec, 30.0)
-        self.assertGreaterEqual(cfg.nvidia.recovery_success_threshold, 2)
+        for retired in ("nvidia", "ollama", "anthropic"):
+            with self.subTest(retired=retired):
+                migrated = _Config(live_engine=retired, clip_engine=retired)
+                self.assertEqual(migrated.live_engine, "deepseek")
+                self.assertEqual(migrated.clip_engine, "deepseek")
+        self.assertFalse(hasattr(cfg, "nvidia"))
+        self.assertFalse(hasattr(cfg, "ollama"))
 
     def test_translation_stale_subtitle_fuse_is_enabled(self):
         self.assertGreater(cfg.translation.max_subtitle_output_delay_ms, 0)

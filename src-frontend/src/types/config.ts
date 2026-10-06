@@ -12,7 +12,9 @@ export interface ConfigDto {
   nvidia: NvidiaConfig
 }
 
-export type BackendEngine = 'deepseek' | 'ollama' | 'nvidia'
+// The NVIDIA and Ollama translation backends were retired on 2026-10-06; the
+// backend DTO still carries their legacy sections, which the UI ignores.
+export type BackendEngine = 'deepseek'
 
 export interface AudioConfig {
   sample_rate: number

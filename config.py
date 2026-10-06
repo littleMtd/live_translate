@@ -23,7 +23,6 @@ class _Keys:
     )
     openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
-    nvidia:           str = os.environ.get("NVIDIA_API_KEY", "")
 
 
 @dataclass(frozen=True)
@@ -173,8 +172,9 @@ _DEFAULT_SLANG: MappingProxyType = _load_default_slang()
 _VALID_STREAMER_PROFILES = known_profile_ids(include_aliases=True)
 _VALID_TRANSLATION_MODES = {"live", "clip"}
 _VALID_DEEPSEEK_ROUTES = {"primary", "off"}
-_VALID_BACKEND_MODES     = {"deepseek", "ollama", "nvidia"}
-_BACKEND_ALIASES         = {"anthropic": "deepseek"}
+_VALID_BACKEND_MODES     = {"deepseek"}
+# Retired backends found in persisted dashboard configs migrate to DeepSeek.
+_BACKEND_ALIASES         = {"anthropic": "deepseek", "nvidia": "deepseek", "ollama": "deepseek"}
 _VALID_SCENE_VISION_PROVIDERS = {"groq", "openrouter"}
 _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 
@@ -183,8 +183,7 @@ _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 class _Translation:
     # -------------------------------------------------------------------------
     # Translation routes are fixed contracts, not a dashboard-ordered provider
-    # list. DeepSeek uses Groq as its only fallback; NVIDIA also falls back to
-    # Groq; Ollama is local-only.
+    # list. DeepSeek uses Groq as its only fallback.
     # Groq fallback (uses GROQ_API_KEY_fall_back). Qwen3-32B is scheduled
     # for removal by Groq; use the production GPT-OSS model instead.
     groq_translation_model:   str = "openai/gpt-oss-120b"
@@ -192,7 +191,7 @@ class _Translation:
     # use low to avoid spending latency on hidden reasoning.
     groq_translation_reasoning_effort: str = "low"
     groq_translation_timeout: int = 12
-    # Keep Groq fallback below on-demand TPM limits. NVIDIA remains the quality path.
+    # Keep Groq fallback below on-demand TPM limits.
     groq_translation_compact_prompt: bool = True
     groq_translation_max_tokens: int = 512
     groq_translation_retry_max_tokens: int = 256
@@ -234,10 +233,8 @@ class _Translation:
     max_tokens:     int          = 200
     temperature:    float        = 0.1
     queue_maxsize:  int          = 8
-    context_window: int          = 10  # retained recent translations; adaptive windows stay <= this
-    adaptive_history_enabled: bool = True
-    adaptive_history_base_window: int = 5
-    adaptive_history_dependency_window: int = 10
+    context_window: int          = 10  # retained recent translations
+    # Discourse markers recorded as translation telemetry (dependency_marker).
     adaptive_history_dependency_markers: tuple = (
         "근데", "그런데", "그래서", "그러니까", "그리고", "아니", "맞아",
         "그러면", "그럼", "그게", "그러네", "그렇지",
@@ -380,28 +377,6 @@ class _Database:
     # (replayed segments genuinely repeat) keeps using it. Existing rows are
     # kept on disk as a ko->zh corpus.
     live_db_cache: bool = False
-
-
-@dataclass(frozen=True)
-class _Ollama:
-    base_url: str = "http://localhost:11434"
-    model:    str = "qwen2.5:3b"
-    timeout:  int = 60
-
-
-@dataclass(frozen=True)
-class _Nvidia:
-    # Model name from build.nvidia.com — click any model → "API" tab for exact name
-    model:   str = "qwen/qwen3-next-80b-a3b-instruct"
-    # Clip/offline timeout; live mode uses live_timeout below when set.
-    timeout: int = 10
-    # Live override: fail fast so fallback engines can take over when NIM is degraded.
-    live_timeout: int = 5
-    # Legacy compatibility fields. Live fallback policy is provider-neutral
-    # and is configured by cfg.translation.circuit_*.
-    circuit_breaker_enabled: bool = True
-    recovery_cooldown_sec: float = 60.0
-    recovery_success_threshold: int = 2
 
 
 @dataclass(frozen=True)
@@ -588,12 +563,10 @@ class _Config:
     translation:         _Translation = field(default_factory=_Translation)
     subtitle:            _Subtitle    = field(default_factory=_Subtitle)
     database:            _Database    = field(default_factory=_Database)
-    # Translation backend per mode — options: "deepseek" | "ollama" | "nvidia".
-    # Persisted "anthropic" values are normalized as a compatibility alias.
+    # Translation backend per mode — "deepseek" is the only route. Persisted
+    # "anthropic"/"nvidia"/"ollama" values are normalized as compatibility aliases.
     live_engine:         str          = "deepseek"
     clip_engine:         str          = "deepseek"
-    ollama:              _Ollama      = field(default_factory=_Ollama)
-    nvidia:              _Nvidia      = field(default_factory=_Nvidia)
     scene:               _Scene       = field(default_factory=_Scene)
     thread_join_timeout: int          = 5
 

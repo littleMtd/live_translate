@@ -372,39 +372,11 @@ class TestGroqRetryExceptionContract(unittest.TestCase):
         self.assertEqual(diagnostics["retry_reason"], "token_limit_without_history")
 
 
-class TestAdaptivePrimaryHistory(unittest.TestCase):
-    def test_base_and_dependency_windows(self):
-        from config import cfg
-        from modules.translation_engines import _limited_primary_history
 
-        history = [(f"source-{index}", f"target-{index}") for index in range(12)]
-        fields = (
-            "context_window", "adaptive_history_enabled",
-            "adaptive_history_base_window", "adaptive_history_dependency_window",
-        )
-        original = {name: getattr(cfg.translation, name) for name in fields}
-        object.__setattr__(cfg.translation, "context_window", 10)
-        object.__setattr__(cfg.translation, "adaptive_history_enabled", True)
-        object.__setattr__(cfg.translation, "adaptive_history_base_window", 5)
-        object.__setattr__(cfg.translation, "adaptive_history_dependency_window", 10)
-        try:
-            base = _limited_primary_history(history, "오늘 방송 재미있었어")
-            dependent = _limited_primary_history(history, "근데 그건 아니야")
-            false_prefix = _limited_primary_history(history, "근데기계가 있어")
-            object.__setattr__(cfg.translation, "adaptive_history_enabled", False)
-            disabled = _limited_primary_history(history, "오늘 방송 재미있었어")
-        finally:
-            for name, value in original.items():
-                object.__setattr__(cfg.translation, name, value)
-
-        self.assertEqual(len(base), 5)
-        self.assertEqual(len(dependent), 10)
-        self.assertEqual(len(false_prefix), 5)
-        self.assertEqual(len(disabled), 10)
-
-    def test_other_engines_keep_prompt_passthrough_semantics(self):
+class TestOtherEnginePromptPassthrough(unittest.TestCase):
+    def test_unknown_engines_keep_prompt_passthrough_semantics(self):
         self.assertEqual(
-            effective_system_prompt_for_engine("nvidia", "FULL PRIMARY PROMPT"),
+            effective_system_prompt_for_engine("custom", "FULL PRIMARY PROMPT"),
             "FULL PRIMARY PROMPT",
         )
 
@@ -416,7 +388,6 @@ class TestEngineRegistry(unittest.TestCase):
         original_keys = cfg.keys
         empty_keys = replace(
             original_keys,
-            nvidia="",
             openrouter="",
             groq_fallback="",
         )

@@ -47,13 +47,12 @@ Downstream compatibility paths may consume the current typed snapshot when an ol
 
 ### Provider routing
 
-The ordinary live backend is `deepseek`. Persisted dashboard values using the old
-`anthropic` backend name are normalized to `deepseek` when loaded.
+The only translation backend is `deepseek`. Persisted dashboard values using the
+retired `anthropic`, `nvidia` or `ollama` backend names are normalized to
+`deepseek` when loaded; those adapters were removed on 2026-10-06.
 
 - `deepseek_route="primary"` (default): DeepSeek `deepseek-flash` -> Groq `openai/gpt-oss-120b`.
 - `LIVE_TRANSLATE_DEEPSEEK_ROUTE=off`: Groq only. This is the operational emergency rollback.
-- `nvidia`: NVIDIA primary plus the fixed Groq fallback.
-- `ollama`: local Ollama only.
 
 The dashboard no longer exposes provider ordering. Provider failure and content rejection are distinct: retryable provider failures may advance persistent circuit state; content rejection falls back only for the current sentence and must not damage provider health. Routes have stable `provider:model` identities, per-adapter timeouts, a shared live deadline, circuit breaker, and bounded recovery probe.
 

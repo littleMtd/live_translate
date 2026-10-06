@@ -15,8 +15,6 @@ from config import cfg
 from modules.translation_engines import (
     DeepSeekTranslationEngine,
     GroqTranslationEngine,
-    NvidiaEngine,
-    OllamaEngine,
 )
 from modules.translation_request import freeze_route_request
 
@@ -71,8 +69,6 @@ def _capture(engine, *, incomplete: bool, history, retry: str = "") -> list[str]
             raise urllib.error.HTTPError(
                 request.full_url, 413, "token limit", {}, io.BytesIO(b"token limit")
             )
-        if retry == "nvidia_empty" and len(requests) == 1:
-            return _Response("")
         return _Response()
 
     with patch("urllib.request.urlopen", side_effect=urlopen), patch(
@@ -91,18 +87,12 @@ def test_provider_request_bytes_match_pre_refactor_baseline():
     for name, cls in (
         ("deepseek", DeepSeekTranslationEngine),
         ("groq", GroqTranslationEngine),
-        ("nvidia", NvidiaEngine),
-        ("ollama", OllamaEngine),
     ):
         actual[f"{name}_history"] = _capture(cls(), incomplete=False, history=history)
         actual[f"{name}_incomplete"] = _capture(cls(), incomplete=True, history=[])
     actual["groq_token_limit_retry"] = _capture(
         GroqTranslationEngine(), incomplete=False, history=history,
         retry="groq_token_limit",
-    )
-    actual["nvidia_empty_retry"] = _capture(
-        NvidiaEngine(), incomplete=False, history=history,
-        retry="nvidia_empty",
     )
     assert actual == _GOLDEN
 
@@ -112,8 +102,6 @@ def test_frozen_route_bodies_match_pre_refactor_baseline():
     for name, cls in (
         ("deepseek", DeepSeekTranslationEngine),
         ("groq", GroqTranslationEngine),
-        ("nvidia", NvidiaEngine),
-        ("ollama", OllamaEngine),
     ):
         for label, incomplete, selected_history in (
             ("history", False, history), ("incomplete", True, []),
@@ -126,8 +114,4 @@ def test_frozen_route_bodies_match_pre_refactor_baseline():
             if name == "groq" and label == "history":
                 assert route.retry_body.decode("utf-8") == _GOLDEN[
                     "groq_token_limit_retry"
-                ][1]
-            if name == "nvidia" and label == "history":
-                assert route.retry_body.decode("utf-8") == _GOLDEN[
-                    "nvidia_empty_retry"
                 ][1]

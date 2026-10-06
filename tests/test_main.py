@@ -36,57 +36,6 @@ def isolate_scene_vision_startup_validation(monkeypatch):
     )
 
 
-def test_validate_config_accepts_nvidia_backend_without_engine_chain(
-    monkeypatch,
-    isolate_scene_vision_startup_validation,
-):
-    import main as main_module
-
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
-    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
-
-    main_module._validate_config(stt_only=False)
-
-
-def test_validate_config_warns_for_missing_nvidia_fallback_key(
-    monkeypatch,
-    isolate_scene_vision_startup_validation,
-):
-    import main as main_module
-
-    warnings = []
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
-    monkeypatch.setattr(main_module, "engine_is_configured", lambda name: name == "nvidia")
-    monkeypatch.setattr(
-        main_module.log,
-        "warning",
-        lambda message, *args: warnings.append(message % args),
-    )
-    main_module._validate_config(stt_only=False)
-
-    assert warnings == ["Engine 'groq' skipped - API key not set"]
-
-
-def test_validate_config_rejects_nvidia_backend_without_key(
-    monkeypatch,
-    isolate_scene_vision_startup_validation,
-):
-    import main as main_module
-
-    monkeypatch.setattr(main_module, "_selected_translation_backend", lambda: "nvidia")
-    monkeypatch.setattr(main_module, "effective_engine_chain_names", lambda: ("nvidia", "groq"))
-    monkeypatch.setattr(main_module, "engine_is_configured", lambda _name: False)
-
-    try:
-        main_module._validate_config(stt_only=False)
-    except SystemExit as exc:
-        assert exc.code == 1
-    else:
-        raise AssertionError("_validate_config should exit when NVIDIA_API_KEY is missing")
-
-
 def test_protected_deepseek_route_warns_when_groq_fallback_key_is_missing(
     monkeypatch,
     isolate_scene_vision_startup_validation,

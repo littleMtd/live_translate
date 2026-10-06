@@ -32,12 +32,10 @@ def _ordered_options(engine: str, recorded: dict[str, Any]) -> dict[str, Any]:
     keys = {
         "deepseek": ("model", "temperature", "max_tokens", "stream", "thinking"),
         "groq": ("model", "temperature", "max_tokens", "reasoning_effort"),
-        "nvidia": ("model", "temperature", "max_tokens", "chat_template_kwargs"),
-        "ollama": ("model", "stream", "temperature", "max_tokens"),
     }.get(engine)
     if keys is None:
         raise ValueError(f"unknown engine: {engine}")
-    expected = set(keys) - {"reasoning_effort", "chat_template_kwargs"}
+    expected = set(keys) - {"reasoning_effort"}
     if not expected.issubset(recorded):
         raise ValueError(f"missing required provider options for {engine}")
     return {key: recorded[key] for key in keys if key in recorded}
