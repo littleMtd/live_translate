@@ -222,7 +222,11 @@ Context, display, and persistence:
   is not corroboration. Cross-family markers conflict. The resolver uses JSON-mode
   output, a serialization-only bounded retry, five-second seeking/recovery and
   fifteen-second stable cadence, a rolling call-attempt cap, and bounded stale
-  profile recovery. A hidden player tab suspends observation while its locked
+  profile recovery. With a calibrated identity ROI, a confirmed window identity
+  is re-read only when the name block visibly changes, the window generation
+  changes, or `profile_identity_confirmed_refresh_sec` (300s) elapses; misreads,
+  provider errors and throttles on an unchanged block defer to that refresh
+  instead of the fast cadence. A hidden player tab suspends observation while its locked
   browser HWND/PID/class remains valid, retaining confirmed profile ownership
   and pausing profile expiry without generation churn. Provider diagnostics and
   the latest privacy-safe resolver

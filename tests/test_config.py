@@ -99,6 +99,20 @@ class TestConfig(unittest.TestCase):
                 vision_fallback_routes=(("groq", "same"),),
             )
 
+    def test_scene_confirmed_roi_refresh_is_positive_and_not_below_stable_cadence(self):
+        from config import _Scene
+
+        self.assertEqual(_Scene().profile_identity_confirmed_refresh_sec, 300.0)
+        for value in (0, -1, float("inf"), float("nan"), True):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "confirmed_refresh_sec"):
+                    _Scene(profile_identity_confirmed_refresh_sec=value)
+        with self.assertRaisesRegex(ValueError, "cannot be below the stable cadence"):
+            _Scene(
+                profile_identity_stable_call_gap_sec=15.0,
+                profile_identity_confirmed_refresh_sec=10.0,
+            )
+
     def test_scene_vision_rejects_blank_model_retry_and_invalid_timeout(self):
         from config import _Scene
 

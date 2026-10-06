@@ -1094,6 +1094,16 @@ class SceneContextUpdater:
         self._profile_stable_gap = float(
             getattr(cfg.scene, "profile_identity_stable_call_gap_sec", 15.0)
         )
+        self._profile_confirmed_refresh = max(
+            self._profile_stable_gap,
+            float(getattr(cfg.scene, "profile_identity_confirmed_refresh_sec", 300.0)),
+        )
+        # (window generation, calibration key, profile generation) whose ROI
+        # identity is confirmed; while it matches and the name block is
+        # unchanged, reads are deferred. Any profile-state change (registry
+        # reload, manual/auto switch, clear) bumps the profile generation.
+        self._identity_roi_confirmed_for: tuple[int, str, int] | None = None
+        self._identity_roi_deferred_until = 0.0
         self._profile_schema_retry_limit = int(
             getattr(cfg.scene, "profile_identity_schema_retry_limit", 1)
         )
@@ -1537,6 +1547,33 @@ class SceneContextUpdater:
             if gap is not None
             else self._profile_stable_gap if stable else self._profile_fast_gap
         )
+
+    def _identity_roi_is_confirmed(self, window_generation: int, roi_key: str) -> bool:
+        return self._identity_roi_confirmed_for == (
+            window_generation,
+            roi_key,
+            profile_state.current().generation,
+        )
+
+    def _defer_identity_roi(
+        self,
+        now: float,
+        window_generation: int,
+        roi_key: str,
+        retry_after: float | None = None,
+    ) -> None:
+        """Defer ROI re-reads while this window's identity is already confirmed.
+
+        A misread, provider error or throttle on an unchanged name block keeps
+        the confirmed profile, so retrying at the fast cadence only spends the
+        vision quota shared with activity. This is ROI-local: the shared
+        ``_profile_next_call_at`` keeps its cadence so the whole-scene resolver
+        is unaffected if calibration disappears.
+        """
+        if self._identity_roi_is_confirmed(window_generation, roi_key):
+            self._identity_roi_deferred_until = now + max(
+                self._profile_confirmed_refresh, retry_after or 0.0
+            )
 
     def _install_profile_provider_rate_limit_fence(
         self,
@@ -2094,8 +2131,18 @@ class SceneContextUpdater:
                 **profile_state.current().as_metadata(),
             )
             return
+        if roi_changed:
+            # A visibly different name block (or a new window) needs a fresh,
+            # fast identity read; confirmation no longer applies.
+            self._identity_roi_confirmed_for = None
         due = self._profile_next_call_at is None or now >= self._profile_next_call_at
         if not roi_changed and not due:
+            return
+        if (
+            not roi_changed
+            and self._identity_roi_is_confirmed(window_generation, roi_key)
+            and now < self._identity_roi_deferred_until
+        ):
             return
         self._identity_roi_fingerprint = (
             window_generation,
@@ -2113,6 +2160,7 @@ class SceneContextUpdater:
         if discard:
             self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "discarded", stable=False)
+            self._defer_identity_roi(now, window_generation, roi_key)
             self._emit_profile_resolution(
                 status="discarded",
                 reason=discard,
@@ -2138,6 +2186,7 @@ class SceneContextUpdater:
         if not self._reserve_profile_attempt(now, route_capacity):
             self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "rate_limited", stable=False)
+            self._defer_identity_roi(now, window_generation, roi_key)
             self._emit_profile_resolution(
                 status="throttled",
                 reason="profile_attempt_budget",
@@ -2181,6 +2230,9 @@ class SceneContextUpdater:
                 "identity_roi_provider_error",
                 stable=False,
                 gap=retry_after or None,
+            )
+            self._defer_identity_roi(
+                failure_now, window_generation, roi_key, retry_after
             )
             self._emit_profile_resolution(
                 status="provider_error",
@@ -2263,13 +2315,19 @@ class SceneContextUpdater:
             decision = "authoritative_identity_confirmed"
             status = "confirmed"
             reason = "exact_reviewed_member_name"
+        confirmed_read = not discard and status in {"confirmed", "confirmed_no_profile"}
+        if confirmed_read:
+            self._identity_roi_confirmed_for = (
+                window_generation,
+                roi_key,
+                profile_state.current().generation,
+            )
         self._schedule_profile_resolution(
             now,
-            "stable"
-            if not discard and status in {"confirmed", "confirmed_no_profile"}
-            else "seeking",
-            stable=not discard and status in {"confirmed", "confirmed_no_profile"},
+            "stable" if confirmed_read else "seeking",
+            stable=confirmed_read,
         )
+        self._defer_identity_roi(now, window_generation, roi_key)
         self._emit_profile_resolution(
             status=status,
             reason=reason,

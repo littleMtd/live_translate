@@ -414,6 +414,119 @@ def test_calibrated_roi_capture_failure_never_expires_confirmed_profile():
     assert profile_events[-1]["stale_profile_cleared"] is False
 
 
+def _confirmed_roi_updater(state, identity_reader, frames):
+    return make_updater(
+        frames=frames,
+        profile_resolution_enabled=True,
+        profile_vision_provider=QuerySequence([]),
+        identity_roi_provider=identity_reader,
+        identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+    )
+
+
+def test_confirmed_roi_identity_is_not_reread_until_safety_refresh():
+    # Runs 20261002/20261004 re-read an unchanged, confirmed name block every
+    # stable gap and half of those reads hit the shared vision rate limit.
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(
+            state, identity_reader, [image_frame_with_identity_block(30)]
+        )
+        updater.tick()
+        assert state.current().effective_profile_id == "url"
+        assert len(identity_reader.calls) == 1
+
+        for advance in (20, 100, 179):  # t = 20, 120, 299
+            clock.advance(advance)
+            updater.tick()
+        assert len(identity_reader.calls) == 1
+
+        clock.advance(2)  # t = 301, past the 300s safety refresh
+        updater.tick()
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "url"
+
+
+def test_confirmed_roi_provider_error_defers_retry_instead_of_fast_cadence():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence([
+        '{"identity":"솜망"}',
+        RuntimeError("rate limited"),
+        '{"identity":"솜망"}',
+    ])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(
+            state, identity_reader, [image_frame_with_identity_block(30)]
+        )
+        updater.tick()
+        clock.advance(301)
+        updater.tick()  # safety refresh fails; the confirmed profile is kept
+        assert len(identity_reader.calls) == 2
+        assert state.current().effective_profile_id == "url"
+
+        clock.advance(20)  # the old fast cadence would retry here
+        updater.tick()
+        assert len(identity_reader.calls) == 2
+
+        clock.advance(290)
+        updater.tick()
+    assert len(identity_reader.calls) == 3
+
+
+@pytest.mark.parametrize(
+    "reset",
+    (
+        lambda state: state.clear_content("profile_registry_changed"),
+        lambda state: (
+            state.configure_source("isegye_lilpa", mode="manual"),
+            state.configure_source("isegye_lilpa", mode="auto"),
+        ),
+    ),
+    ids=("cleared_content", "manual_auto_roundtrip"),
+)
+def test_profile_state_reset_rereads_confirmed_roi_on_next_tick(reset):
+    # The deferral must not keep a cleared/neutral profile for up to 300s when
+    # the profile state itself changed under an unchanged name block.
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(
+            state, identity_reader, [image_frame_with_identity_block(30)]
+        )
+        updater.tick()
+        assert state.current().effective_profile_id == "url"
+
+        reset(state)
+        assert state.current().effective_profile_id != "url"
+        clock.advance(20)
+        updater.tick()
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "url"
+
+
+def test_changed_roi_block_after_confirmation_is_read_immediately():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(
+            state,
+            identity_reader,
+            [
+                image_frame_with_identity_block(30),
+                image_frame_with_identity_block(30),
+                image_frame_with_identity_block(220),
+            ],
+        )
+        updater.tick()
+        clock.advance(20)
+        updater.tick()
+        assert len(identity_reader.calls) == 1
+        clock.advance(20)
+        updater.tick()  # visibly different name block
+    assert len(identity_reader.calls) == 2
+
+
 def test_changed_identity_roi_cannot_bypass_profile_attempt_budget():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     identity_reader = QuerySequence(['{"identity":"Ranko"}', '{"identity":"Ranko"}'])

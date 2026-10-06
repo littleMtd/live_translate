@@ -471,6 +471,11 @@ class _Scene:
     # before auto profile ownership transitions to confirmed no-profile.
     profile_identity_recovery_clear_sec: float = 15.0
     profile_identity_expiry_sec: float = 300.0
+    # Calibrated channel-name ROI: once a window's identity is confirmed, re-read
+    # only when the name block or window changes, plus this slow safety refresh.
+    # Periodic re-reads of an unchanged block shared the vision quota with
+    # activity and hit Groq rate limits in runs 20261002/20261004.
+    profile_identity_confirmed_refresh_sec: float = 300.0
 
     def __post_init__(self):
         routes: list[tuple[str, str]] = [
@@ -541,6 +546,7 @@ class _Scene:
             "profile_identity_stable_call_gap_sec",
             "profile_identity_expiry_sec",
             "profile_identity_recovery_clear_sec",
+            "profile_identity_confirmed_refresh_sec",
         ):
             value = getattr(self, field_name)
             if (
@@ -552,6 +558,10 @@ class _Scene:
                 raise ValueError(f"cfg.scene.{field_name} must be positive and finite")
         if self.profile_identity_fast_call_gap_sec > self.profile_identity_stable_call_gap_sec:
             raise ValueError("cfg.scene profile fast cadence cannot exceed stable cadence")
+        if self.profile_identity_confirmed_refresh_sec < self.profile_identity_stable_call_gap_sec:
+            raise ValueError(
+                "cfg.scene.profile_identity_confirmed_refresh_sec cannot be below the stable cadence"
+            )
         if self.profile_identity_schema_retry_limit not in {0, 1}:
             raise ValueError("cfg.scene.profile_identity_schema_retry_limit must be 0 or 1")
         if (
