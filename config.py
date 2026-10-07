@@ -21,7 +21,6 @@ class _Keys:
         os.environ.get("ELEVENLABS_API_KEY", "")
         or os.environ.get("ElevenLabs_API_KEY", "")
     )
-    openrouter:       str = os.environ.get("OPENROUTER_API_KEY", "")
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
 
 
@@ -63,9 +62,7 @@ class _Audio:
 
 @dataclass(frozen=True)
 class _STT:
-    primary_engine:    str = "elevenlabs"      # "elevenlabs", "groq", or "sensevoice"
-    sensevoice_model:  str = "iic/SenseVoiceSmall"
-    sensevoice_device: str = "cuda"
+    primary_engine:    str = "elevenlabs"      # "elevenlabs" or "groq"
     groq_model:        str = "whisper-large-v3"
     elevenlabs_model:  str = "scribe_v2"
     elevenlabs_timeout: float = 15.0
@@ -110,6 +107,10 @@ class _STT:
     # Post-transcription sanity checks
     max_japanese_chars:     int   = 2      # reject if Japanese kana chars exceed this
     max_repeat_ratio:       float = 0.7    # reject if a repeated phrase fills > this fraction
+
+    def __post_init__(self):
+        if self.primary_engine not in {"elevenlabs", "groq"}:
+            raise ValueError(f"cfg.stt.primary_engine invalid: {self.primary_engine!r}")
 
 
 _VALID_SEMANTIC_EARLY_CUT_MODES = {"off", "shadow"}
@@ -175,7 +176,7 @@ _VALID_DEEPSEEK_ROUTES = {"primary", "off"}
 _VALID_BACKEND_MODES     = {"deepseek"}
 # Retired backends found in persisted dashboard configs migrate to DeepSeek.
 _BACKEND_ALIASES         = {"anthropic": "deepseek", "nvidia": "deepseek", "ollama": "deepseek"}
-_VALID_SCENE_VISION_PROVIDERS = {"groq", "openrouter"}
+_VALID_SCENE_VISION_PROVIDERS = {"groq"}
 _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 
 
@@ -645,7 +646,7 @@ def _dashboard_value_is_valid(
         if name == "vad_max_speech_sec":
             return _is_finite_number(value) and base.audio.vad_min_speech_sec < float(value) <= 30.0
     if section == "stt" and name == "primary_engine":
-        return _is_typed_enum(value, {"elevenlabs", "groq", "sensevoice"})
+        return _is_typed_enum(value, {"elevenlabs", "groq"})
     if section == "translation":
         if name == "translation_mode":
             return _is_typed_enum(value, _VALID_TRANSLATION_MODES)
@@ -702,6 +703,8 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
         sub = data.get(section)
         if not isinstance(sub, dict):
             continue
+        if section == "stt" and sub.get("primary_engine") == "sensevoice":
+            sub = {**sub, "primary_engine": "elevenlabs"}
         changes = {
             name: sub[name]
             for name in fields_

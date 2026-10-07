@@ -27,7 +27,9 @@ def test_ui_rendered_fields_present():
     # Fields the dashboard actually edits/displays (ConfigPanel / SystemStats /
     # CacheStats). If config.py renames or drops one, the panel breaks.
     d = _export()
-    assert d["stt"]["primary_engine"] in ("sensevoice", "groq", "elevenlabs")
+    assert d["stt"]["primary_engine"] in ("groq", "elevenlabs")
+    assert "sensevoice_model" not in d["stt"]
+    assert "sensevoice_device" not in d["stt"]
     assert d["live_engine"] == "deepseek"
     for field in ("max_tokens", "temperature", "target_lang"):
         assert field in d["translation"], f"translation.{field} missing from export"

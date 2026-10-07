@@ -9,7 +9,6 @@ from modules.stt import STTEngine
 
 def _engine(text: str = "안녕하세요") -> STTEngine:
     engine = STTEngine.__new__(STTEngine)
-    engine._sense_voice = None
     engine._elevenlabs_client = MagicMock()
     engine._elevenlabs_client.speech_to_text.convert.return_value = SimpleNamespace(
         text=text,
@@ -19,9 +18,7 @@ def _engine(text: str = "안녕하세요") -> STTEngine:
     engine._groq_client = MagicMock()
     engine._groq_fallback_client = None
     engine._use_elevenlabs = True
-    engine._use_groq = False
     engine._consecutive_none = 0
-    engine._sv_fallback_counter = 0
     engine._groq_rate_limited_until = 0.0
     engine._groq_fallback_rate_limited_until = 0.0
     engine._groq_prefer_fallback_key = False
@@ -42,7 +39,6 @@ def _engine(text: str = "안녕하세요") -> STTEngine:
     engine._current_overlap_seconds = 0.0
     engine._current_vad_cut_reason = ""
     engine._last_prompt_budget = None
-    engine._last_sensevoice_error = False
     engine._last_elevenlabs_error = False
     engine._elevenlabs_retry_after = 0.0
     engine._last_elevenlabs_keyterm_count = 0
@@ -327,7 +323,6 @@ def test_provider_failure_retries_same_chunk_with_sequential_attempt_index():
     assert event.engine == "groq"
     assert event.text == "Groq fallback"
     assert engine._use_elevenlabs is True
-    assert engine._use_groq is False
     assert engine._elevenlabs_retry_after > 0
     stt_calls = [call for call in emit.call_args_list if call.args == ("stt",)]
     assert [call.kwargs["attempt_index"] for call in stt_calls] == [1, 2]

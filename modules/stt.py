@@ -22,7 +22,6 @@ from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import runtime_events
-from utils.text_heuristics import SENSEVOICE_NOISE_TAGS, SENSEVOICE_TAG_RE
 from modules.pipeline_events import AudioChunk, SegmentInfo, TranscriptionEvent
 from modules.scene_stt_terms import terms_for_activity
 from modules.streamer_profiles import (
@@ -47,11 +46,7 @@ from modules.stt_policy import (
 
 log = get_logger("stt")
 
-_NOISE_TAGS = SENSEVOICE_NOISE_TAGS
-_TAG_RE = SENSEVOICE_TAG_RE
-
 _CONSECUTIVE_NONE_WARN = 10   # warn after this many consecutive silent results
-_SENSEVOICE_PROBE_EVERY = 50  # after this many Groq transcriptions, probe SenseVoice once
 _GROQ_CONTEXT_CHARS = 120
 _GROQ_PROMPT_MAX_CHARS = 896
 _TIMESTAMP_DEDUPE_MARGIN_SEC = 0.3
@@ -294,14 +289,11 @@ def _normalize_audio_for_stt(audio: np.ndarray) -> tuple[np.ndarray, dict[str, f
 
 class STTEngine:
     def __init__(self):
-        self._sense_voice = None
         self._groq_client = None
         self._groq_fallback_client = None
         self._elevenlabs_client = None
         self._use_elevenlabs = (cfg.stt.primary_engine == "elevenlabs")
-        self._use_groq = (cfg.stt.primary_engine == "groq")
         self._consecutive_none = 0
-        self._sv_fallback_counter = 0   # counts Groq calls since SenseVoice failure
         self._groq_rate_limited_until = 0.0
         self._groq_fallback_rate_limited_until = 0.0
         # Once the primary key hits 429, keep preferring the fallback key even
@@ -318,7 +310,6 @@ class STTEngine:
         self._last_prompt_context_gate_reason = ""
         self._last_avg_logprob: float | None = None
         self._last_no_speech_prob: float | None = None
-        self._last_sensevoice_error = False
         self._last_elevenlabs_error = False
         self._elevenlabs_retry_after = 0.0
         self._last_elevenlabs_keyterm_count = 0
@@ -353,20 +344,17 @@ class STTEngine:
             # Groq remains a same-chunk fallback for provider failures.
             self._init_groq()
             self._init_groq_fallback()
-        elif self._use_groq:
+        else:
             self._init_groq()
             self._init_groq_fallback()
-        else:
-            self._load_sense_voice()
 
         self.available = (
-            self._sense_voice is not None
-            or self._elevenlabs_client is not None
+            self._elevenlabs_client is not None
             or self._groq_client is not None
             or self._groq_fallback_client is not None
         )
         if not self.available:
-            log.error("STT unavailable: ElevenLabs, SenseVoice, and Groq all failed to initialize")
+            log.error("STT unavailable: ElevenLabs and Groq failed to initialize")
 
     def _init_elevenlabs(self):
         if not cfg.keys.elevenlabs:
@@ -381,22 +369,6 @@ class STTEngine:
             log.info("ElevenLabs %s ready as primary STT", cfg.stt.elevenlabs_model)
         except Exception as e:
             log.error("Failed to init ElevenLabs client: %s", e)
-
-    def _load_sense_voice(self):
-        try:
-            from funasr import AutoModel
-            log.info("Loading SenseVoice-Small…")
-            self._sense_voice = AutoModel(
-                model=cfg.stt.sensevoice_model,
-                trust_remote_code=True,
-                device=cfg.stt.sensevoice_device,
-            )
-            log.info("SenseVoice-Small loaded")
-        except Exception as e:
-            log.error("Failed to load SenseVoice-Small: %s — will use Groq", e)
-            self._use_groq = True
-            self._init_groq()
-            self._init_groq_fallback()
 
     def _init_groq(self):
         if not cfg.keys.groq:
@@ -490,45 +462,6 @@ class STTEngine:
                 return self._event(result, "groq")
             self._consecutive_none += 1
             return None
-        if not self._use_groq:
-            self._last_segments = ()
-            result = self._transcribe_sensevoice(audio)
-            if result is not None:
-                result = self._dedupe_current_overlap(result)
-                if not result:
-                    return None
-                self._consecutive_none = 0
-                self._last_transcript = result
-                self._update_context_transcript(result, "sensevoice")
-                self._remember_represented_audio(audio)
-                return self._event(result, "sensevoice")
-            if not self._last_sensevoice_error:
-                return None
-            # SenseVoice engine failed — fall through to Groq
-            self._use_groq = True
-            self._init_groq()
-            self._init_groq_fallback()
-        else:
-            # Periodically probe SenseVoice recovery (mirrors translator fallback logic).
-            # Only attempt if we actually loaded a SenseVoice model at some point.
-            if self._sense_voice is not None:
-                self._sv_fallback_counter += 1
-                if self._sv_fallback_counter >= _SENSEVOICE_PROBE_EVERY:
-                    self._sv_fallback_counter = 0
-                    self._last_segments = ()
-                    probe = self._transcribe_sensevoice(audio)
-                    if probe is not None:
-                        probe = self._dedupe_current_overlap(probe)
-                        if not probe:
-                            return None
-                        log.info("SenseVoice recovered — switching back from Groq")
-                        self._use_groq = False
-                        self._consecutive_none = 0
-                        self._last_transcript = probe
-                        self._update_context_transcript(probe, "sensevoice")
-                        self._remember_represented_audio(audio)
-                        return self._event(probe, "sensevoice")
-
         result = self._transcribe_groq(audio)
         if result is not None:
             self._consecutive_none = 0
@@ -572,7 +505,7 @@ class STTEngine:
             self._last_elevenlabs_keyterm_manifest = ()
             return []
         scene_terms = terms_for_activity(
-            normalize_activity(getattr(cfg.translation, "current_activity", ""))
+            normalize_activity(cfg.translation.current_activity)
         )
         registry = snapshot.registry or profile_state.registry
         candidates = (
@@ -748,7 +681,7 @@ class STTEngine:
             detected_lang = getattr(resp, "language_code", None)
             self._last_detected_language = str(detected_lang or "")
             allow_detected_japanese = (
-                bool(getattr(cfg.translation, "translate_coherent_foreign_speech", False))
+                bool(cfg.translation.translate_coherent_foreign_speech)
                 and self._last_detected_language.lower() in ("ja", "japanese")
             )
             self._last_foreign_speech_allowed = allow_detected_japanese
@@ -851,41 +784,6 @@ class STTEngine:
             transcription_id=getattr(self, "_last_transcription_id", ""),
             profile_snapshot=snapshot,
         )
-
-    def _transcribe_sensevoice(self, audio: np.ndarray) -> str | None:
-        self._last_avg_logprob = None
-        self._last_no_speech_prob = None
-        self._last_provider_raw_text = ""
-        self._last_provider_raw_segments = ()
-        self._last_request_audio_wav_sha256 = ""
-        self._last_request_audio_sample_count = 0
-        self._current_stt_request_contract_id = ""
-        self._last_language_probability = None
-        self._last_transcription_id = ""
-        self._last_sensevoice_error = False
-        try:
-            res = self._sense_voice.generate(
-                input=audio,
-                cache={},
-                language=cfg.stt.language,
-                use_itn=True,
-                batch_size_s=cfg.stt.batch_size_s,
-            )
-            text = res[0]["text"] if res else ""
-            # Reject pure noise chunks (no speech tag present)
-            if not any(tag in text for tag in ("<|Speech|>", "<|WITHITN|>", "<|withitn|>")):
-                if any(tag in text for tag in _NOISE_TAGS):
-                    return None
-            # Strip ALL metadata tokens: <|ko|>, <|EMO_UNKNOWN|>, <|Speech|>, etc.
-            text = _TAG_RE.sub("", text).strip()
-            if not text:
-                return None
-            log.debug("SenseVoice: %s", text)
-            return text
-        except Exception as e:
-            log.error("SenseVoice error: %s", e)
-            self._last_sensevoice_error = True
-            return None
 
     def _transcribe_groq(
         self,
@@ -1004,7 +902,7 @@ class STTEngine:
             detected_lang = getattr(resp, "language", None)
             self._last_detected_language = str(detected_lang or "")
             allow_detected_japanese = (
-                bool(getattr(cfg.translation, "translate_coherent_foreign_speech", False))
+                bool(cfg.translation.translate_coherent_foreign_speech)
                 and self._last_detected_language.lower() in ("ja", "japanese")
             )
             self._last_foreign_speech_allowed = allow_detected_japanese
@@ -1244,7 +1142,7 @@ class STTEngine:
         # what game is on screen; bias the recognizer toward its terms so
         # mishears are prevented at the source (메가태화←메가진화 class).
         scene_terms = terms_for_activity(
-            normalize_activity(getattr(cfg.translation, "current_activity", "")))
+            normalize_activity(cfg.translation.current_activity))
         glossary_builder = (
             (lambda profile_id: build_stt_glossary(
                 profile_id, extra_terms=scene_terms
@@ -1416,7 +1314,7 @@ class STTEngine:
             "request_parameters": request_parameters,
             "profile_cache_identity": profile_cache_identity,
             "activity_id": normalize_activity(
-                getattr(cfg.translation, "current_activity", "")
+                cfg.translation.current_activity
             ),
         }
         contract_id = stable_identity(payload)
@@ -1673,7 +1571,7 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
     def run_pipeline():
         engine = STTEngine()
         if not engine.available:
-            # Both SenseVoice and Groq failed to load. Don't sit and spin
+            # No STT provider initialized. Don't sit and spin
             # consuming audio chunks that we can never transcribe — signal
             # shutdown so main.py can tear down the rest of the pipeline.
             log.error("STT thread aborting: no engine available")

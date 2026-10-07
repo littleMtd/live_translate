@@ -39,8 +39,7 @@ the Tauri/Vue source before copying them.
 ```text
 Windows input endpoint / sounddevice (exact-format preflighted)
   -> audio_queue
-  -> STTEngine (ElevenLabs Scribe v2 batch primary; Groq same-chunk fallback;
-     SenseVoice optional)
+   -> STTEngine (ElevenLabs Scribe v2 batch primary; Groq same-chunk fallback)
   -> text_queue
   -> SentenceBuffer / sentence_splitter
   -> optional one-shot provisional request
@@ -72,7 +71,7 @@ Capture and STT:
   bounded actual-stream readiness, stereo-to-mono, normalization metadata,
   Silero/RMS VAD, discontinuity resets, overlap, adaptive chunking, and
   `audio` / `audio_startup` runtime events.
-- `modules/stt.py`: ElevenLabs/Groq/SenseVoice clients, provider fallback,
+- `modules/stt.py`: ElevenLabs/Groq clients, provider fallback,
   key selection/retry, timestamp
   overlap dedupe, prompt/context state, transcription events, optional WAV
   dump, and STT runtime events. The ElevenLabs adapter uses Scribe v2 batch on
@@ -154,9 +153,9 @@ Sentence assembly:
 - `utils/text_heuristics.py`: shared Korean endings, template/garbage/song
   markers, regexes, and language-character helpers.
 
-Selective secondary-ASR source replacement remains disabled. Retained evidence
-does not establish trigger precision or a safe reconciliation rule: SenseVoice
-is latency-viable only as evidence, faster-whisper is too slow for the live
+Selective secondary-ASR source replacement remains disabled. Historical evidence
+does not establish trigger precision or a safe reconciliation rule: the retired
+SenseVoice path supplied evidence only, faster-whisper is too slow for the live
 path, and majority agreement selects the wrong surface form in a known
 context-supported lexical case. Groq therefore remains a separately owned
 same-chunk provider-failure fallback, not a semantic second-opinion route.

@@ -104,8 +104,6 @@ Situational scripts:
   reviewer suspicion into regression or production rules automatically.
 - `scripts/download_audio.py`: useful only when preparing offline audio files
   from YouTube.
-- `scripts/stt_completeness_check.py`: useful only when a matching Korean VTT
-  reference exists for CER/coverage evaluation.
 
 Runtime/log analysis:
 ```powershell
@@ -217,10 +215,10 @@ The same batch has a frozen 21-case audio manifest and dual local-ASR outputs:
 `data/t25_stt_replay_manifest_20260802.json`,
 `data/t25_sensevoice_shadow_20260802.json`, and
 `data/t25_faster_whisper_shadow_20260802.json`.
-`replay_phase0_stt_candidates.py` keeps no-flag SenseVoice compatibility and
-adds `--engine faster-whisper`. Both engines emit engine-neutral
-`candidate_*` fields, while legacy SenseVoice and engine-specific aliases stay
-available. Current and evidence audio must remain separately aggregated. These
+`replay_phase0_stt_candidates.py` runs faster-whisper for new output and keeps
+the shared `verify_audio_asset` fingerprint check. Historical SenseVoice JSON
+remains available for read-only comparison. Current and evidence audio must
+remain separately aggregated. These
 outputs are secondary evidence, not reference transcripts or production
 configuration. Details are in
 `docs/agent/T25_DUAL_ASR_REPLAY_20260802.md`.
@@ -263,24 +261,22 @@ without `--no-api`, translate/all stages may call the configured translation API
 Audio/STT evaluation helpers:
 ```powershell
 .\live-subtitle-env\Scripts\python.exe scripts\download_audio.py <youtube-url> --out audio\sample.wav
-.\live-subtitle-env\Scripts\python.exe scripts\stt_completeness_check.py `
-  --audio audio\sample.wav `
-  --ref path\to\sample.ko.vtt `
-  --duration 60
 ```
 
 For retained Phase 0/T25 chunks, prefer
 `scripts/replay_phase0_stt_candidates.py` rather than adding another replay
-driver. It supports `--engine sensevoice|faster-whisper`; run each engine in a
-separate process and store new experiment output under `scratch/analysis`
+driver. It runs faster-whisper; store new experiment output under `scratch/analysis`
 until its inputs, settings, and limitations are reviewed for preservation.
 The optional ASR dependencies may live in an external disposable environment;
 do not add them to production requirements solely to run offline evidence.
 
-`download_audio.py` uses `yt_dlp` and network access. `stt_completeness_check.py`
-computes CER/coverage against a reference VTT; local SenseVoice is default,
-while `--engine groq` calls the STT provider. It may need optional audio/STT
-dependencies such as `soundfile`, `editdistance`, and `librosa`.
+`download_audio.py` uses `yt_dlp` and network access. The SenseVoice scout,
+CAM++ speaker-similarity replay, and STT completeness checker were removed;
+their historical artifacts remain available for read-only analysis.
+
+Removed in Phase 3a: `scripts/scout_sensevoice_historical.py`,
+`scripts/replay_phase0_speaker_similarity.py`, and
+`scripts/stt_completeness_check.py`. Their historical results remain intact.
 
 Removed legacy/ad-hoc scripts:
 - `scripts/check_db.py` was removed; use `scripts/analyze_cache.py`.

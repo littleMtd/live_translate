@@ -123,7 +123,6 @@
         Primary engine:
         <select v-model="local.stt.primary_engine">
           <option value="elevenlabs">ElevenLabs Scribe v2 (cloud)</option>
-          <option value="sensevoice">SenseVoice (local)</option>
           <option value="groq">Groq Whisper (cloud)</option>
         </select>
       </label>
@@ -163,6 +162,9 @@ const clone = (config: ConfigDto): ConfigDto => {
   const copy: ConfigDto = JSON.parse(JSON.stringify(config))
   copy.translation.profile_mode ??= 'auto'
   copy.stt.use_profile_glossary ??= true
+  if (copy.stt.primary_engine !== 'elevenlabs' && copy.stt.primary_engine !== 'groq') {
+    copy.stt.primary_engine = 'elevenlabs'
+  }
   // Retired backends (nvidia/ollama) may linger in a persisted config until
   // the backend restarts; config.py migrates them to deepseek, so show that.
   if (copy.live_engine !== 'deepseek') copy.live_engine = 'deepseek'

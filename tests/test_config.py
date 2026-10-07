@@ -90,8 +90,16 @@ class TestConfig(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "provider invalid"):
             _Scene(vision_provider="implicit", vision_model="model")
+        with self.assertRaisesRegex(ValueError, "provider invalid"):
+            _Scene(vision_provider="openrouter", vision_model="model")
+        with self.assertRaisesRegex(ValueError, "provider invalid"):
+            _Scene(vision_fallback_routes=(("openrouter", "fallback-model"),))
         with self.assertRaisesRegex(ValueError, "malformed route"):
-            _Scene(vision_fallback_routes=(("openrouter",),))
+            _Scene(vision_fallback_routes=(("groq",),))
+        self.assertEqual(
+            _Scene(vision_fallback_routes=(("groq", "fallback-model"),)).vision_fallback_routes,
+            (("groq", "fallback-model"),),
+        )
         with self.assertRaisesRegex(ValueError, "must be unique"):
             _Scene(
                 vision_provider="groq",
@@ -123,8 +131,8 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at most three"):
             _Scene(
                 vision_fallback_routes=(
-                    ("openrouter", "fallback-1"),
-                    ("openrouter", "fallback-2"),
+                    ("groq", "fallback-1"),
+                    ("groq", "fallback-2"),
                     ("groq", "fallback-3"),
                 )
             )

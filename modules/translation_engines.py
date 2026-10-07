@@ -538,7 +538,7 @@ def _groq_model_options(model: str) -> dict[str, str]:
     if not (model or "").lower().startswith("openai/gpt-oss-"):
         return {}
     effort = str(
-        getattr(cfg.translation, "groq_translation_reasoning_effort", "low")
+        cfg.translation.groq_translation_reasoning_effort
     ).strip().lower()
     if effort in {"low", "medium", "high"}:
         return {"reasoning_effort": effort}
@@ -730,19 +730,19 @@ def _append_live_semantic_self_check(prompt: str) -> str:
 
 
 def _groq_system_prompt(system_prompt: str) -> str:
-    if not bool(getattr(cfg.translation, "groq_translation_compact_prompt", True)):
+    if not bool(cfg.translation.groq_translation_compact_prompt):
         return _append_live_semantic_self_check(system_prompt)
     profile_id = effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
     prompt = _COMPACT_SYSTEM_PROMPT
     if cfg.translation.translation_mode == "live":
         prompt += "\n\n" + _LIVE_SUBTITLE_CONCISION
-    if profile_id and bool(getattr(cfg.translation, "use_profile", False)):
+    if profile_id and bool(cfg.translation.use_profile):
         prompt += (
             f" Active streamer profile: {profile_id}."
             f"{_compact_profile_digest(profile_id)}"
         )
     activity = activity_prompt_capsule(
-        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
+        effective_activity_value(cfg.translation.current_activity)
     )
     if activity:
         prompt += "\n\n" + activity
@@ -772,7 +772,7 @@ def _deepseek_capsule_prompt(profile_id: str) -> str:
     if cfg.translation.translation_mode == "live":
         prompt += "\n\n" + _LIVE_SUBTITLE_CONCISION
     activity = activity_prompt_capsule(
-        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
+        effective_activity_value(cfg.translation.current_activity)
     )
     if activity:
         prompt += "\n\n" + activity
@@ -782,7 +782,7 @@ def _deepseek_capsule_prompt(profile_id: str) -> str:
 def _deepseek_system_prompt(system_prompt: str) -> str:
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if bool(getattr(cfg.translation, "use_profile", False))
+        if bool(cfg.translation.use_profile)
         else ""
     )
     return _append_request_entity_capsule(
@@ -1389,11 +1389,11 @@ class GroqTranslationEngine(TranslationEngine):
         self._timeout = cfg.translation.groq_translation_timeout
         self._max_tokens = min(
             cfg.translation.max_tokens,
-            _clamp_int(getattr(cfg.translation, "groq_translation_max_tokens", 128), 128, 1),
+            _clamp_int(cfg.translation.groq_translation_max_tokens, 128, 1),
         )
         self._retry_max_tokens = min(
             self._max_tokens,
-            _clamp_int(getattr(cfg.translation, "groq_translation_retry_max_tokens", 96), 96, 1),
+            _clamp_int(cfg.translation.groq_translation_retry_max_tokens, 96, 1),
         )
         _m = self._model.lower()
         self._strip_think = "qwen3" in _m or "qwen-3" in _m
@@ -1691,26 +1691,26 @@ def engine_chain_config_key() -> tuple:
     return (
         mode,
         backend,
-        getattr(cfg.translation, "deepseek_route", "off"),
-        getattr(cfg.translation, "deepseek_model", ""),
-        getattr(cfg.translation, "deepseek_temperature", ""),
-        getattr(cfg.translation, "deepseek_timeout", ""),
-        getattr(cfg.translation, "deepseek_max_tokens", ""),
-        getattr(cfg.translation, "deepseek_context_window", ""),
-        getattr(cfg.translation, "deepseek_history_source_chars", ""),
-        getattr(cfg.translation, "deepseek_history_target_chars", ""),
-        getattr(cfg.translation, "groq_translation_model", ""),
-        getattr(cfg.translation, "groq_translation_reasoning_effort", ""),
-        getattr(cfg.translation, "groq_translation_timeout", ""),
+        cfg.translation.deepseek_route,
+        cfg.translation.deepseek_model,
+        cfg.translation.deepseek_temperature,
+        cfg.translation.deepseek_timeout,
+        cfg.translation.deepseek_max_tokens,
+        cfg.translation.deepseek_context_window,
+        cfg.translation.deepseek_history_source_chars,
+        cfg.translation.deepseek_history_target_chars,
+        cfg.translation.groq_translation_model,
+        cfg.translation.groq_translation_reasoning_effort,
+        cfg.translation.groq_translation_timeout,
     )
 
 
 def effective_engine_chain_names() -> tuple[str, ...]:
     """Return the fixed provider route for the selected backend."""
-    mode = str(getattr(cfg.translation, "translation_mode", "live") or "live")
+    mode = str(cfg.translation.translation_mode or "live")
     backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
     if backend == "deepseek":
-        if str(getattr(cfg.translation, "deepseek_route", "off")) == "primary":
+        if str(cfg.translation.deepseek_route) == "primary":
             return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
         return _PROTECTED_LIVE_BASE_CHAIN
     return ()

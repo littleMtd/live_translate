@@ -4,8 +4,6 @@ from utils.text_heuristics import (
     DIGIT_RE,
     ENGLISH_WORD_RE,
     KOREAN_CHAR_RE,
-    SENSEVOICE_NOISE_TAGS,
-    SENSEVOICE_TAG_RE,
     SENTENCE_COMPLETE_ENDINGS,
     SENTENCE_INCOMPLETE_ENDINGS,
     STT_FRAGMENTED_MARKERS,
@@ -14,13 +12,6 @@ from utils.text_heuristics import (
 
 
 class TestTextHeuristics(unittest.TestCase):
-    def test_sensevoice_tag_regex_strips_metadata(self):
-        self.assertEqual(SENSEVOICE_TAG_RE.sub("", "<|ko|><|Speech|>안녕"), "안녕")
-
-    def test_noise_tags_exclude_speech(self):
-        self.assertIn("<|BGM|>", SENSEVOICE_NOISE_TAGS)
-        self.assertNotIn("<|Speech|>", SENSEVOICE_NOISE_TAGS)
-
     def test_sentence_endings_are_longest_first(self):
         self.assertLess(
             SENTENCE_COMPLETE_ENDINGS.index("ㅋㅋ"),

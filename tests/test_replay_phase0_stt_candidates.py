@@ -11,22 +11,12 @@ import soundfile as sf
 import scripts.replay_phase0_stt_candidates as replay_module
 from scripts.replay_phase0_stt_candidates import (
     _faster_whisper_generator,
-    clean_sensevoice_text,
     main,
     parse_args,
     replay_cases,
     select_cases,
     verify_audio_asset,
 )
-
-
-def test_clean_sensevoice_text_extracts_metadata_tokens():
-    text, tags = clean_sensevoice_text(
-        "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>맞아 어 맞아"
-    )
-
-    assert text == "맞아 어 맞아"
-    assert tags == ["<|ko|>", "<|EMO_UNKNOWN|>", "<|Speech|>", "<|withitn|>"]
 
 
 def test_select_cases_limits_groups_and_ids():
@@ -77,17 +67,17 @@ def test_replay_cases_orders_audio_and_preserves_candidates(tmp_path):
     }
     outputs = iter(
         [
-            "<|ko|><|Speech|>first",
-            "<|ko|><|Speech|>second",
+            "first",
+            "second",
         ]
     )
 
     result = replay_cases([case], generate=lambda _audio: next(outputs), project_root=tmp_path)[0]
 
-    assert [row["utterance_id"] for row in result["sensevoice_chunks"]] == ["utt-1", "utt-2"]
-    assert result["sensevoice_text"] == "second"
-    assert result["sensevoice_evidence_text"] == "first"
-    assert result["sensevoice_chunks"][0]["audio_fingerprint_verified"] is True
+    assert [row["utterance_id"] for row in result["faster_whisper_chunks"]] == ["utt-1", "utt-2"]
+    assert result["faster_whisper_text"] == "second"
+    assert result["faster_whisper_evidence_text"] == "first"
+    assert result["faster_whisper_chunks"][0]["audio_fingerprint_verified"] is True
 
 
 def test_replay_cases_keeps_faster_whisper_current_and_evidence_separate(tmp_path):
@@ -175,15 +165,14 @@ def test_faster_whisper_generator_freezes_cpu_replay_parameters(monkeypatch, tmp
     }
 
 
-def test_default_cli_remains_sensevoice_compatible():
+def test_default_cli_uses_faster_whisper():
     args = parse_args([])
 
-    assert args.engine == "sensevoice"
     assert args.model is None
     assert args.device is None
 
 
-def test_default_cli_writes_legacy_sensevoice_aliases(monkeypatch, tmp_path):
+def test_default_cli_writes_faster_whisper_result(monkeypatch, tmp_path):
     audio_path = tmp_path / "audio.wav"
     sf.write(audio_path, np.zeros(1600, dtype=np.float32), 16000)
     manifest_path = tmp_path / "manifest.json"
@@ -213,20 +202,20 @@ def test_default_cli_writes_legacy_sensevoice_aliases(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         replay_module,
-        "_sensevoice_generator",
-        lambda **_kwargs: lambda _audio: "<|ko|><|Speech|>legacy",
+        "_faster_whisper_generator",
+        lambda **_kwargs: lambda _audio: "candidate",
     )
 
     assert main(["--manifest", str(manifest_path), "--output", str(output_path)]) == 0
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["phase0_stt_replay_schema"] == 2
-    assert output["engine"] == "sensevoice"
-    assert output["model"] == "iic/SenseVoiceSmall"
-    assert output["device"] == "cuda"
+    assert output["engine"] == "faster_whisper"
+    assert output["model"] == "large-v3-turbo"
+    assert output["device"] == "cpu"
     assert output["runtime_versions"]["python"]
     assert output["runtime_versions"]["engine_package"]
-    assert output["cases"][0]["sensevoice_text"] == "legacy"
-    assert output["cases"][0]["candidate_text"] == "legacy"
+    assert output["cases"][0]["faster_whisper_text"] == "candidate"
+    assert output["cases"][0]["candidate_text"] == "candidate"
 
 
 def test_main_preflights_before_model_load_and_preserves_existing_output(monkeypatch, tmp_path):
@@ -264,7 +253,7 @@ def test_main_preflights_before_model_load_and_preserves_existing_output(monkeyp
         model_loaded = True
         raise AssertionError("model must not load before audio preflight")
 
-    monkeypatch.setattr(replay_module, "_sensevoice_generator", fail_if_loaded)
+    monkeypatch.setattr(replay_module, "_faster_whisper_generator", fail_if_loaded)
 
     assert main(["--manifest", str(manifest_path), "--output", str(output_path)]) == 1
     assert model_loaded is False

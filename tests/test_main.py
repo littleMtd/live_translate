@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # Stub heavy optional modules so `import main` succeeds without a full venv.
-for _mod in ("sounddevice", "soundfile", "funasr", "groq", "anthropic"):
+for _mod in ("sounddevice", "soundfile", "groq", "anthropic"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 

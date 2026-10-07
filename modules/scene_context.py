@@ -230,7 +230,7 @@ def _window_bbox(user32, hwnd: int) -> tuple[int, int, int, int] | None:
 
 def _platform_for_title(title: str) -> str:
     folded = title.casefold()
-    for keyword in getattr(cfg.scene, "window_title_keywords", ()):
+    for keyword in cfg.scene.window_title_keywords:
         normalized = str(keyword or "").strip().casefold()
         if normalized and normalized in folded:
             return normalized
@@ -238,10 +238,10 @@ def _platform_for_title(title: str) -> str:
 
 
 def _browser_title_allowed(title: str) -> bool:
-    configured = getattr(cfg.scene, "browser_title_markers", None)
+    configured = cfg.scene.browser_title_markers
     if configured is None:
         configured = (
-            getattr(cfg.scene, "chrome_title_marker", "google chrome"),
+            cfg.scene.chrome_title_marker,
         )
     markers = tuple(
         str(marker or "").strip().casefold()
@@ -275,7 +275,7 @@ def _process_executable_name(pid: int) -> str:
 
 
 def _browser_process_allowed(pid: int) -> bool:
-    configured = getattr(cfg.scene, "browser_process_names", ())
+    configured = cfg.scene.browser_process_names
     allowed = {
         os.path.basename(str(name or "")).strip().casefold()
         for name in configured
@@ -847,7 +847,7 @@ def parse_activity_response(
     bounded_chars = (
         int(max_chars)
         if max_chars is not None
-        else int(getattr(cfg.scene, "max_activity_chars", 40) or 40)
+        else int(cfg.scene.max_activity_chars or 40)
     )
     safe_label = sanitize_activity(label, bounded_chars)
     if not safe_label:
@@ -878,7 +878,7 @@ def canonical_activity(raw: str) -> tuple[str, str]:
     """Compatibility helper for one already-extracted game label."""
     sanitized = sanitize_activity(
         raw,
-        int(getattr(cfg.scene, "max_activity_chars", 40) or 40),
+        int(cfg.scene.max_activity_chars or 40),
     )
     activity_id, display_label, _ = automatic_activity_identity(
         sanitized,
@@ -1069,7 +1069,7 @@ class SceneContextUpdater:
         self._profile_enabled = (
             bool(profile_resolution_enabled)
             if profile_resolution_enabled is not None
-            else bool(getattr(cfg.scene, "resolve_content_profile", True))
+            else bool(cfg.scene.resolve_content_profile)
             and not injected_activity_provider
         )
         self._profile_vision = profile_vision_provider
@@ -1089,14 +1089,14 @@ class SceneContextUpdater:
         self._profile_consensus = ContentProfileConsensus()
         self._profile_next_call_at: float | None = None
         self._profile_fast_gap = float(
-            getattr(cfg.scene, "profile_identity_fast_call_gap_sec", 5.0)
+            cfg.scene.profile_identity_fast_call_gap_sec
         )
         self._profile_stable_gap = float(
-            getattr(cfg.scene, "profile_identity_stable_call_gap_sec", 15.0)
+            cfg.scene.profile_identity_stable_call_gap_sec
         )
         self._profile_confirmed_refresh = max(
             self._profile_stable_gap,
-            float(getattr(cfg.scene, "profile_identity_confirmed_refresh_sec", 300.0)),
+            float(cfg.scene.profile_identity_confirmed_refresh_sec),
         )
         # (window generation, calibration key, profile generation) whose ROI
         # identity is confirmed; while it matches and the name block is
@@ -1105,23 +1105,23 @@ class SceneContextUpdater:
         self._identity_roi_confirmed_for: tuple[int, str, int] | None = None
         self._identity_roi_deferred_until = 0.0
         self._profile_schema_retry_limit = int(
-            getattr(cfg.scene, "profile_identity_schema_retry_limit", 1)
+            cfg.scene.profile_identity_schema_retry_limit
         )
         self._profile_max_attempts_per_minute = int(
-            getattr(cfg.scene, "profile_identity_max_attempts_per_minute", 12)
+            cfg.scene.profile_identity_max_attempts_per_minute
         )
         self._profile_attempt_times: deque[float] = deque()
         self._profile_provider_failure_streak = 0
         self._profile_provider_backoff_until = 0.0
         self._profile_recovery_clear_sec = float(
-            getattr(cfg.scene, "profile_identity_recovery_clear_sec", 15.0)
+            cfg.scene.profile_identity_recovery_clear_sec
         )
         self._profile_recovery_started_at: float | None = None
         self._unsupported_identity_candidate = ""
         self._unsupported_identity_started_at: float | None = None
         self._unsupported_identity_observations = 0
         self._profile_expiry = float(
-            getattr(cfg.scene, "profile_identity_expiry_sec", 300.0)
+            cfg.scene.profile_identity_expiry_sec
         )
         self._profile_confirmed_at: float | None = None
         self._profile_observation_suspended_at: float | None = None
@@ -1130,32 +1130,28 @@ class SceneContextUpdater:
         self._utc_now = utc_now or (lambda: datetime.now(timezone.utc))
         self._event_sink = event_sink
         self._manual_getter = manual_activity_getter or (
-            lambda: getattr(cfg.translation, "current_activity", "")
+            lambda: cfg.translation.current_activity
         )
         self._publication_store = publication_store
         self._publication_enabled = (
             bool(publication_enabled)
             if publication_enabled is not None
             else bool(
-                getattr(cfg.scene, "publish_translation_activity", False)
+                cfg.scene.publish_translation_activity
             )
         )
         self._open_set_publication_enabled = (
             bool(open_set_publication_enabled)
             if open_set_publication_enabled is not None
             else bool(
-                getattr(cfg.scene, "publish_open_set_activity", False)
+                cfg.scene.publish_open_set_activity
             )
         )
         self._max_open_set_identities_per_window = (
             int(max_open_set_identities_per_window)
             if max_open_set_identities_per_window is not None
             else int(
-                getattr(
-                    cfg.scene,
-                    "max_open_set_identities_per_window",
-                    8,
-                )
+                cfg.scene.max_open_set_identities_per_window
             )
         )
         self._open_set_identities: set[str] = set()
@@ -1165,17 +1161,17 @@ class SceneContextUpdater:
         self._min_call_gap = (
             float(min_call_gap_sec)
             if min_call_gap_sec is not None
-            else float(getattr(cfg.scene, "min_call_gap_sec", 180.0))
+            else float(cfg.scene.min_call_gap_sec)
         )
         self._refresh_interval = (
             float(refresh_interval_sec)
             if refresh_interval_sec is not None
-            else float(getattr(cfg.scene, "refresh_interval_sec", 600.0))
+            else float(cfg.scene.refresh_interval_sec)
         )
         self._change_threshold = (
             float(change_threshold)
             if change_threshold is not None
-            else float(getattr(cfg.scene, "change_threshold", 12.0))
+            else float(cfg.scene.change_threshold)
         )
         self._vision_unknown_ttl = max(0.0, vision_unknown_ttl_sec)
         self._invalid_window_ttl = max(0.0, invalid_window_ttl_sec)
@@ -2403,7 +2399,7 @@ class SceneContextUpdater:
         if self._stopped or self._paused:
             return None
         capture_mode = str(
-            getattr(cfg.scene, "capture_mode", "chrome_window") or ""
+            cfg.scene.capture_mode or ""
         )
         if capture_mode not in {"chrome_window", "window"}:
             self._emit(
@@ -2901,7 +2897,7 @@ def start(
                         type(exc).__name__,
                         exc,
                     )
-            stop_event.wait(float(getattr(cfg.scene, "check_interval_sec", 20.0)))
+            stop_event.wait(float(cfg.scene.check_interval_sec))
         updater.stop()
 
     thread = threading.Thread(target=run, name="activity_shadow", daemon=True)

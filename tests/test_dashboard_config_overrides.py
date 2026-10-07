@@ -38,7 +38,7 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
     assert merged.subtitle.font == ("Foo", 30, base.subtitle.font[2])
     assert merged.translation.max_tokens == 123
     assert merged.translation.target_lang == "ja"
-    assert merged.stt.primary_engine == "sensevoice"
+    assert merged.stt.primary_engine == "elevenlabs"
     assert merged.audio.vad_enabled is False
     assert merged.audio.vad_max_speech_sec == 12.0
     assert merged.scene.publish_open_set_activity is True

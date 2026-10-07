@@ -7,7 +7,5 @@ groq
 elevenlabs>=2.52,<3
 zhconv==1.4.3
 opencc==1.4.2
-funasr
-modelscope
 torch
 torchaudio

@@ -9,7 +9,7 @@ const fakeConfig = {
   audio: { sample_rate: 16000, channels: 1, chunk_seconds: 3, device_name: 'CABLE Output', volume_threshold: 0.01,
            vad_enabled: true, vad_silence_sec: 0.6, vad_min_speech_sec: 0.4,
            vad_max_speech_sec: 8.0, vad_silero_threshold: 0.5, queue_maxsize: 10 },
-  stt: { primary_engine: 'groq', sensevoice_model: 'iic/SenseVoiceSmall', sensevoice_device: 'cuda',
+  stt: { primary_engine: 'groq',
          groq_model: 'whisper-large-v3', language: 'ko', groq_prompt: '', batch_size_s: 60,
          queue_maxsize: 20, no_speech_threshold: 0.6, avg_logprob_threshold: -1.0,
          max_japanese_chars: 2, max_repeat_ratio: 0.7 },

@@ -663,7 +663,7 @@ def test_identity_rate_limit_fence_survives_fallback_success_and_roi_removal():
     diagnostics = VisionDiagnostics(
         outcome="success",
         attempt_limit=2,
-        provider="openrouter",
+        provider="groq",
         model="fallback-model",
         attempt_chain=(
             VisionAttemptDiagnostics(
@@ -676,7 +676,7 @@ def test_identity_rate_limit_fence_survives_fallback_success_and_roi_removal():
                 rate_limit_reset_tokens_sec=20.0,
             ),
             VisionAttemptDiagnostics(
-                provider="openrouter",
+                provider="groq",
                 model="fallback-model",
                 outcome="success",
                 retryable=False,
@@ -1180,7 +1180,7 @@ def test_profile_attempt_budget_bounds_schema_retries_and_future_calls():
 def test_profile_attempt_budget_preflights_multi_route_capacity():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     provider = QuerySequence([_profile_result("unknown")])
-    provider.route_identities = ("groq:model", "openrouter:model")
+    provider.route_identities = ("groq:model", "groq:fallback-model")
     with patch.object(scene_context, "profile_state", state):
         updater, _source, _capture, _provider, _manual, events, _clock = make_updater(
             profile_vision_provider=provider,

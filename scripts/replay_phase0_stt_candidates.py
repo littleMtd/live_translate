@@ -5,7 +5,6 @@ import hashlib
 import importlib.metadata
 import json
 import platform
-import re
 import sys
 import time
 from pathlib import Path
@@ -17,20 +16,11 @@ import soundfile as sf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = PROJECT_ROOT / "scratch" / "analysis" / "phase0_replay_manifest_20260624.json"
-DEFAULT_OUTPUT = PROJECT_ROOT / "scratch" / "analysis" / "phase0_sensevoice_shadow_20260624.json"
-DEFAULT_FASTER_WHISPER_OUTPUT = (
+DEFAULT_OUTPUT = (
     PROJECT_ROOT / "scratch" / "analysis" / "phase0_faster_whisper_shadow_20260624.json"
 )
 DEFAULT_GROUPS = ("clean_host_stt", "stt_unverified")
-DEFAULT_SENSEVOICE_MODEL = "iic/SenseVoiceSmall"
-DEFAULT_FASTER_WHISPER_MODEL = "large-v3-turbo"
-SENSEVOICE_TAG_RE = re.compile(r"<\|[^>]*\|>")
-
-
-def clean_sensevoice_text(raw_text: str) -> tuple[str, list[str]]:
-    tags = SENSEVOICE_TAG_RE.findall(raw_text)
-    text = SENSEVOICE_TAG_RE.sub("", raw_text).strip()
-    return text, tags
+DEFAULT_MODEL = "large-v3-turbo"
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -189,7 +179,7 @@ def replay_cases(
     *,
     generate: Callable[[np.ndarray], str],
     project_root: Path = PROJECT_ROOT,
-    engine_name: str = "sensevoice",
+    engine_name: str = "faster_whisper",
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for case in cases:
@@ -204,10 +194,7 @@ def replay_cases(
             started = time.monotonic()
             raw_text = generate(audio)
             latency_ms = round((time.monotonic() - started) * 1000, 1)
-            if engine_name == "sensevoice":
-                text, tags = clean_sensevoice_text(raw_text)
-            else:
-                text, tags = raw_text.strip(), []
+            text = raw_text.strip()
             chunk_results.append(
                 {
                     "utterance_id": str(asset.get("utterance_id") or ""),
@@ -215,7 +202,7 @@ def replay_cases(
                     "audio_path": str(asset.get("audio_path") or ""),
                     "audio_seconds": round(len(audio) / sample_rate, 3),
                     "text": text,
-                    "metadata_tags": tags,
+                    "metadata_tags": [],
                     "raw_text": raw_text,
                     "latency_ms": latency_ms,
                     "audio_fingerprint_verified": True,
@@ -245,43 +232,16 @@ def replay_cases(
             "candidate_evidence_text": evidence_text,
             "candidate_chunks": chunk_results,
         }
-        # Keep the original SenseVoice field names for downstream compatibility.
-        prefix = "sensevoice" if engine_name == "sensevoice" else "faster_whisper"
         case_output.update(
             {
-                f"{prefix}_text": current_text,
-                f"{prefix}_current_text": current_text,
-                f"{prefix}_evidence_text": evidence_text,
-                f"{prefix}_chunks": chunk_results,
+                "faster_whisper_text": current_text,
+                "faster_whisper_current_text": current_text,
+                "faster_whisper_evidence_text": evidence_text,
+                "faster_whisper_chunks": chunk_results,
             }
         )
         output.append(case_output)
     return output
-
-
-def _sensevoice_generator(*, model_name: str, device: str) -> Callable[[np.ndarray], str]:
-    from funasr import AutoModel
-
-    model = AutoModel(
-        model=model_name,
-        trust_remote_code=True,
-        device=device,
-        disable_update=True,
-    )
-
-    def generate(audio: np.ndarray) -> str:
-        result = model.generate(
-            input=audio,
-            cache={},
-            language="ko",
-            use_itn=True,
-            batch_size_s=60,
-        )
-        if not result:
-            return ""
-        return str(result[0].get("text") or "")
-
-    return generate
 
 
 def _faster_whisper_generator(
@@ -329,7 +289,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--group", action="append", dest="groups", default=None)
     parser.add_argument("--case-id", action="append", dest="case_ids", default=None)
-    parser.add_argument("--engine", choices=("sensevoice", "faster-whisper"), default="sensevoice")
     parser.add_argument("--model", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--compute-type", default="int8")
@@ -344,34 +303,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     groups = set(args.groups or DEFAULT_GROUPS)
     case_ids = set(args.case_ids) if args.case_ids else None
-    engine_name = args.engine.replace("-", "_")
-    model_name = args.model or (
-        DEFAULT_SENSEVOICE_MODEL
-        if args.engine == "sensevoice"
-        else DEFAULT_FASTER_WHISPER_MODEL
-    )
-    device = args.device or ("cuda" if args.engine == "sensevoice" else "cpu")
-    output_path = args.output or (
-        DEFAULT_OUTPUT if args.engine == "sensevoice" else DEFAULT_FASTER_WHISPER_OUTPUT
-    )
+    engine_name = "faster_whisper"
+    model_name = args.model or DEFAULT_MODEL
+    device = args.device or "cpu"
+    output_path = args.output or DEFAULT_OUTPUT
     try:
         manifest = _read_manifest(args.manifest)
         cases = select_cases(manifest, groups=groups, case_ids=case_ids)
         if not cases:
             raise ValueError("no replay cases matched the requested groups")
         preflight_cases(cases)
-        if args.engine == "sensevoice":
-            generate = _sensevoice_generator(model_name=model_name, device=device)
-        else:
-            generate = _faster_whisper_generator(
-                model_name=model_name,
-                device=device,
-                compute_type=args.compute_type,
-                cpu_threads=args.cpu_threads,
-                num_workers=args.num_workers,
-                download_root=args.download_root,
-                local_files_only=args.local_files_only,
-            )
+        generate = _faster_whisper_generator(
+            model_name=model_name,
+            device=device,
+            compute_type=args.compute_type,
+            cpu_threads=args.cpu_threads,
+            num_workers=args.num_workers,
+            download_root=args.download_root,
+            local_files_only=args.local_files_only,
+        )
 
         results = replay_cases(cases, generate=generate, engine_name=engine_name)
     except Exception as exc:
@@ -389,21 +339,10 @@ def main(argv: list[str] | None = None) -> int:
             "python": platform.python_version(),
             "numpy": _package_version("numpy"),
             "soundfile": _package_version("soundfile"),
-            "engine_package": _package_version(
-                "funasr" if args.engine == "sensevoice" else "faster-whisper"
-            ),
-            "engine_runtime": _package_version(
-                "torch" if args.engine == "sensevoice" else "ctranslate2"
-            ),
+            "engine_package": _package_version("faster-whisper"),
+            "engine_runtime": _package_version("ctranslate2"),
         },
-        "engine_parameters": (
-            {
-                "language": "ko",
-                "use_itn": True,
-                "batch_size_s": 60,
-            }
-            if args.engine == "sensevoice"
-            else {
+        "engine_parameters": {
                 "language": "ko",
                 "compute_type": args.compute_type,
                 "cpu_threads": args.cpu_threads,
@@ -415,11 +354,10 @@ def main(argv: list[str] | None = None) -> int:
                 "word_timestamps": False,
                 "download_root": str(args.download_root) if args.download_root else None,
                 "local_files_only": args.local_files_only,
-            }
-        ),
+        },
         "model_artifact_identity_limit": (
             "Model name and runtime parameters are recorded; an immutable upstream "
-            "artifact revision is not exposed uniformly by both engines."
+            "artifact revision is not exposed by this engine."
         ),
         "groups": sorted(groups),
         "case_count": len(results),

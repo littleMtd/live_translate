@@ -265,11 +265,10 @@ def build_report(paths: list[str]) -> dict:
                                        "generic-error retry. Historical rows must still be "
                                        "interpreted from their recorded utterance linkage rather "
                                        "than projected current behavior.",
-            "sensevoice_failover": "With primary_engine=groq, __init__ initializes Groq clients "
-                                   "and does not load SenseVoice. The periodic probe only runs "
-                                   "when a SenseVoice model was loaded earlier after local-primary "
-                                   "failure. Default Groq mode therefore has no already-loaded "
-                                   "SenseVoice burst fallback.",
+            "sensevoice_failover": "SenseVoice and its recovery probe were retired. "
+                                   "With primary_engine=elevenlabs, a provider failure can retry "
+                                   "the same chunk with Groq; with primary_engine=groq, Groq "
+                                   "is used directly. No local STT fallback remains.",
             "groq_max_retries": "config.stt.groq_max_retries=0, so the Groq SDK itself does not "
                                 "retry; the application only performs its existing one-shot "
                                 "cross-key retry for rate-limit failures.",
@@ -302,9 +301,10 @@ def build_report(paths: list[str]) -> dict:
                                                "two utterances",
             "lost_utterance_signal": "STTEngine._consecutive_none already increments once only "
                                      "after all Groq attempts for a chunk return None",
-            "sensevoice_burst_failover_status": "blocked: default Groq mode has no preloaded "
-                                                "SenseVoice model; lazy loading would block the "
-                                                "live STT thread and adds unmeasured GPU cost",
+            "sensevoice_burst_failover_status": "retired: no SenseVoice model or "
+                                                 "local burst fallback is available; "
+                                                 "ElevenLabs provider failure uses Groq "
+                                                 "as the same-chunk fallback",
             "diagnostic_change_status": "implemented in working tree without behavior changes",
             "safe_next_change": "collect a version-identifiable run containing "
                                 "attempt_index/key_role/will_retry before selecting a live "

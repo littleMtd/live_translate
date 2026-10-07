@@ -31,9 +31,7 @@ export interface AudioConfig {
 }
 
 export interface SttConfig {
-  primary_engine: 'sensevoice' | 'groq' | 'elevenlabs'
-  sensevoice_model: string
-  sensevoice_device: string
+  primary_engine: 'groq' | 'elevenlabs'
   groq_model: string
   language: string
   groq_prompt: string

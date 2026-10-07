@@ -53,6 +53,18 @@ def test_build_report_counts_and_distribution(tmp_path):
     assert report["error_outcome_determinability"]["generic_error_events"] == 4
 
 
+def test_current_behavior_notes_do_not_offer_retired_local_failover():
+    report = build_report([])
+
+    current = report["current_behavior_code"]["sensevoice_failover"]
+    assessment = report["policy_assessment"]["sensevoice_burst_failover_status"]
+    assert "recovery probe were retired" in current
+    assert "provider failure can retry the same chunk with Groq" in current
+    assert "No local STT fallback remains" in current
+    assert assessment.startswith("retired: no SenseVoice model")
+    assert "ElevenLabs provider failure uses Groq" in assessment
+
+
 def test_classify_attempts_distinguishes_rescued_and_lost_utterances():
     events = [
         _stt("failed", "error", utterance_id="utt-1"),

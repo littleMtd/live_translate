@@ -388,7 +388,6 @@ class TestEngineRegistry(unittest.TestCase):
         original_keys = cfg.keys
         empty_keys = replace(
             original_keys,
-            openrouter="",
             groq_fallback="",
         )
         object.__setattr__(cfg, "keys", empty_keys)

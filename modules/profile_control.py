@@ -65,7 +65,7 @@ class ProfileControlWatcher:
     def publish_status(self) -> None:
         payload = self._state.current().as_metadata()
         payload.update(profile_resolution_status.current())
-        manual_activity = normalize_activity(getattr(cfg.translation, "current_activity", ""))
+        manual_activity = normalize_activity(cfg.translation.current_activity)
         automatic_activity = activity_publication_store.current()
         payload["activity"] = (
             manual_activity

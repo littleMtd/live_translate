@@ -9,7 +9,7 @@ This document owns the current backend/runtime architecture contract. Code is au
 ```text
 capability-checked sounddevice input
   -> ElevenLabs Scribe v2 batch STT
-       -> Groq same-chunk fallback; SenseVoice only when explicitly configured
+       -> Groq same-chunk fallback
   -> SentenceBuffer / sentence_splitter
        -> optional one-shot provisional request
   -> two translation workers
@@ -61,14 +61,14 @@ Quality retry, Japanese translation shadow/active, DeepSeek record-only shadow/m
 ## STT and sentence ownership
 
 - `modules/audio_capture.py`: endpoint checks, stream readiness, normalization, VAD, overlap/adaptive chunking, discontinuity resets.
-- `modules/stt.py`: ElevenLabs/Groq/SenseVoice adapters, same-chunk fallback, context provenance, audio dump, STT events. ElevenLabs overlap removal uses Scribe word timing only when the copied audio prefix exactly matches the last successfully represented chunk; otherwise it preserves the prefix. Scribe language probability and provider-native word log-probability/type metadata are retained for measurement, but do not select or rewrite source text.
+- `modules/stt.py`: ElevenLabs/Groq adapters, same-chunk fallback, context provenance, audio dump, STT events. ElevenLabs overlap removal uses Scribe word timing only when the copied audio prefix exactly matches the last successfully represented chunk; otherwise it preserves the prefix. Scribe language probability and provider-native word log-probability/type metadata are retained for measurement, but do not select or rewrite source text.
 - `modules/stt_policy.py`: confidence/language rejection, hallucination/repetition checks, overlap dedupe, Groq prompt budget.
 - `modules/sentence_buffer.py`: completeness/cut decisions, including bounded holds for unpunctuated Korean embedded-question/subordinate tails. Safe ordinary full stops complete a sentence, while URL/version/decimal/ellipsis dots do not; the existing force-cut remains authoritative.
 - `modules/sentence_splitter.py`: queue orchestration, bounded merge, provisional submission, sentence events.
 
 `semantic_early_cut_mode` supports only `off|shadow`; the frozen T20 gate was NO-GO, so shadow cannot alter sentence timing. Provisional subtitles are a separate active feature.
 
-Selective secondary-ASR source replacement is not active. Retained replay does not yet establish a safe trigger or reconciliation rule: SenseVoice is fast enough to collect evidence but is not truth, faster-whisper is outside the live latency envelope, and ASR majority voting fails known context-supported cases. Groq remains provider-failure fallback rather than a semantic-evidence route.
+Selective secondary-ASR source replacement is not active. Historical SenseVoice and faster-whisper replay did not establish a safe trigger or reconciliation rule; faster-whisper remains outside the live latency envelope, and ASR majority voting fails known context-supported cases. Groq remains provider-failure fallback rather than a semantic-evidence route.
 
 ## State, persistence, and telemetry
 

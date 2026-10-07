@@ -9,21 +9,15 @@ never activates a paid fallback.
 from __future__ import annotations
 
 import base64
-import json
 import math
-import socket
 import time
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Callable, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from config import cfg
 
 
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_USER_AGENT = "live_translate/scene-vision"
 _MAX_DIAGNOSTIC_INT = 10_000_000
 _MAX_RATE_RESET_SEC = 7 * 24 * 60 * 60
 _VISION_MAX_COMPLETION_TOKENS = 96
@@ -336,7 +330,7 @@ class GroqVisionProvider:
         self.model_name = str(
             model_name
             if model_name is not None
-            else getattr(cfg.scene, "vision_model", "")
+            else cfg.scene.vision_model
         )
         self._prompt = str(prompt)
         self._api_key = (
@@ -347,7 +341,7 @@ class GroqVisionProvider:
         self._timeout = float(
             timeout
             if timeout is not None
-            else getattr(cfg.scene, "vision_timeout", 20.0)
+            else cfg.scene.vision_timeout
         )
 
     def classify(self, jpeg: bytes) -> VisionClassification:
@@ -517,188 +511,6 @@ class GroqVisionProvider:
         )
 
 
-class OpenRouterVisionProvider:
-    provider_name = "openrouter"
-
-    def __init__(
-        self,
-        *,
-        model_name: str,
-        prompt: str,
-        api_key: str,
-        timeout: float,
-        urlopen_fn: Callable[..., Any] = urlopen,
-    ):
-        self.model_name = str(model_name)
-        self._prompt = str(prompt)
-        self._api_key = str(api_key)
-        self._timeout = float(timeout)
-        self._urlopen = urlopen_fn
-
-    def classify(self, jpeg: bytes) -> VisionClassification:
-        route = VisionRoute(self.provider_name, self.model_name)
-        started_at = time.monotonic()
-        if not self._api_key or not self.model_name or not self._prompt:
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=False,
-                started_at=started_at,
-                error_type="configuration_error",
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt))
-        body = {
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self._prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64,"
-                                + base64.b64encode(jpeg).decode("ascii"),
-                            },
-                        },
-                    ],
-                }
-            ],
-            "temperature": 0,
-            "max_tokens": _VISION_MAX_COMPLETION_TOKENS,
-            "response_format": _VISION_RESPONSE_FORMAT,
-        }
-        request = Request(
-            _OPENROUTER_URL,
-            data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": _OPENROUTER_USER_AGENT,
-                "Authorization": f"Bearer {self._api_key}",
-                "HTTP-Referer": "http://localhost/live_translate",
-                "X-Title": "live_translate",
-            },
-        )
-        try:
-            with self._urlopen(request, timeout=self._timeout) as response:
-                payload = json.loads(response.read())
-            if not isinstance(payload, dict):
-                raise TypeError
-            usage_value = payload.get("usage")
-            if usage_value is None:
-                usage: dict[str, Any] = {}
-            elif isinstance(usage_value, dict):
-                usage = usage_value
-            else:
-                raise TypeError
-            choices = payload["choices"]
-            if not isinstance(choices, list) or not choices:
-                raise TypeError
-            choice = choices[0]
-            if not isinstance(choice, dict):
-                raise TypeError
-            message = choice["message"]
-            if not isinstance(message, dict):
-                raise TypeError
-            finish_reason = choice.get("finish_reason", "")
-            content_value = message.get("content")
-            if content_value is None:
-                content = ""
-            elif isinstance(content_value, str):
-                content = content_value.strip()
-            else:
-                raise TypeError
-        except HTTPError as exc:
-            status = _nonnegative_int(exc.code, maximum=599)
-            if status == 429:
-                error_type, retryable = "rate_limit", True
-            elif status == 408:
-                error_type, retryable = "timeout", True
-            elif status in {401, 403}:
-                error_type, retryable = "auth_error", False
-            elif status == 402:
-                error_type, retryable = "payment_required", False
-            else:
-                error_type = "http_error"
-                retryable = bool(status and status >= 500)
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=retryable,
-                started_at=started_at,
-                error_type=error_type,
-                http_status=status,
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt)) from None
-        except (TimeoutError, socket.timeout) as exc:
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=True,
-                started_at=started_at,
-                error_type="timeout",
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt)) from None
-        except URLError as exc:
-            is_timeout = isinstance(exc.reason, (TimeoutError, socket.timeout))
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=True,
-                started_at=started_at,
-                error_type="timeout" if is_timeout else "connection_error",
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt)) from None
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=True,
-                started_at=started_at,
-                error_type="parse_error",
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt)) from None
-        except Exception:
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=False,
-                started_at=started_at,
-                error_type="provider_error",
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt)) from None
-
-        if not content:
-            attempt = _attempt(
-                route,
-                outcome="error",
-                retryable=True,
-                started_at=started_at,
-                error_type="empty_response",
-                prompt_tokens=usage.get("prompt_tokens"),
-                completion_tokens=usage.get("completion_tokens"),
-                total_tokens=usage.get("total_tokens"),
-                api_cost_usd=usage.get("cost"),
-            )
-            raise VisionProviderFailure(_diagnostics_for_attempt(attempt))
-        attempt = _attempt(
-            route,
-            outcome="success",
-            retryable=False,
-            started_at=started_at,
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            api_cost_usd=usage.get("cost"),
-            finish_reason=finish_reason,
-        )
-        return VisionClassification(
-            text=content,
-            diagnostics=_diagnostics_for_attempt(attempt),
-        )
-
-
 class RoutedVisionProvider:
     """Run an immutable ordered provider list with bounded failure fallback."""
 
@@ -850,24 +662,9 @@ def _build_groq(
     )
 
 
-def _build_openrouter(
-    route: VisionRoute,
-    prompt: str,
-    keys: object,
-    timeout: float,
-) -> VisionProvider:
-    return OpenRouterVisionProvider(
-        model_name=route.model,
-        prompt=prompt,
-        api_key=str(getattr(keys, "openrouter", "") or ""),
-        timeout=timeout,
-    )
-
-
 VISION_PROVIDER_REGISTRY: MappingProxyType = MappingProxyType(
     {
         "groq": _build_groq,
-        "openrouter": _build_openrouter,
     }
 )
 
@@ -904,13 +701,10 @@ def missing_vision_route_credentials(
     key_config = keys or cfg.keys
     missing = []
     for route in configured_vision_routes(scene_config):
-        if route.provider == "groq":
-            configured = bool(
-                getattr(key_config, "groq", "")
-                or getattr(key_config, "groq_fallback", "")
-            )
-        else:
-            configured = bool(getattr(key_config, route.provider, ""))
+        configured = bool(
+            getattr(key_config, "groq", "")
+            or getattr(key_config, "groq_fallback", "")
+        )
         if not configured:
             missing.append(route.identity)
     return tuple(missing)

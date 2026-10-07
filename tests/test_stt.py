@@ -1,8 +1,8 @@
 import sys
 
-# Stub heavy optional packages so the module can be imported without a GPU venv
+# Stub the optional API package when unavailable.
 from unittest.mock import MagicMock, patch
-for _mod in ("funasr", "groq", "soundfile"):
+for _mod in ("groq",):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
@@ -23,9 +23,6 @@ except ImportError:
 from modules.stt import (
     _CONSECUTIVE_NONE_WARN,
     _ContextSource,
-    _NOISE_TAGS,
-    _SENSEVOICE_PROBE_EVERY,
-    _TAG_RE,
     _dedupe_segments_by_timestamp,
     _normalize_audio_for_stt,
     STTEngine,
@@ -35,139 +32,19 @@ from modules.profile_context import ProfileSnapshot, profile_state
 
 
 # ---------------------------------------------------------------------------
-# Regex / constant sanity checks  (no numpy needed)
 # ---------------------------------------------------------------------------
 
-class TestTagRegex(unittest.TestCase):
-
-    def test_strips_language_tag(self):
-        self.assertEqual(_TAG_RE.sub("", "<|ko|>안녕"), "안녕")
-
-    def test_strips_emotion_tag(self):
-        self.assertEqual(_TAG_RE.sub("", "<|EMO_UNKNOWN|>text"), "text")
-
-    def test_strips_speech_tag(self):
-        self.assertEqual(_TAG_RE.sub("", "<|Speech|>text"), "text")
-
-    def test_strips_multiple_tags(self):
-        raw = "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>안녕하세요"
-        self.assertEqual(_TAG_RE.sub("", raw).strip(), "안녕하세요")
-
-    def test_does_not_strip_normal_angle_brackets(self):
-        # Angle brackets without pipes should not be stripped
-        result = _TAG_RE.sub("", "a<b>c")
-        self.assertEqual(result, "a<b>c")
-
-    def test_leaves_plain_text_unchanged(self):
-        self.assertEqual(_TAG_RE.sub("", "안녕하세요"), "안녕하세요")
 
 
-class TestNoiseTags(unittest.TestCase):
-
-    def test_bgm_in_noise_tags(self):
-        self.assertIn("<|BGM|>", _NOISE_TAGS)
-
-    def test_laughter_in_noise_tags(self):
-        self.assertIn("<|Laughter|>", _NOISE_TAGS)
-
-    def test_applause_in_noise_tags(self):
-        self.assertIn("<|Applause|>", _NOISE_TAGS)
-
-    def test_speech_not_in_noise_tags(self):
-        self.assertNotIn("<|Speech|>", _NOISE_TAGS)
 
 
 # ---------------------------------------------------------------------------
-# STTEngine._transcribe_sensevoice  (mocked model, numpy required)
 # ---------------------------------------------------------------------------
 
-def _make_engine_sv() -> STTEngine:
-    """Build an STTEngine with a mocked SenseVoice model."""
-    eng = STTEngine.__new__(STTEngine)
-    eng._sense_voice = MagicMock()
-    eng._groq_client = None
-    eng._groq_fallback_client = None
-    eng._use_groq = False
-    eng._consecutive_none = 0
-    eng._sv_fallback_counter = 0
-    eng._groq_rate_limited_until = 0.0
-    eng._groq_fallback_rate_limited_until = 0.0
-    eng._groq_prefer_fallback_key = False
-    eng._last_transcript = ""
-    eng._last_context_transcript = ""
-    eng._last_context_updated_at = None
-    eng._last_context_source = None
-    eng._current_context_provenance = None
-    eng._last_context_gate_reason = ""
-    eng._last_prompt_context_gated = False
-    eng._last_prompt_context_gate_reason = ""
-    eng._utterance_seq = 0
-    eng._current_utterance_id = ""
-    eng._last_audio_seconds = 0.0
-    eng._last_segments = ()
-    eng._last_timestamp_deduped_segments = 0
-    eng._last_timestamp_deduped_chars = 0
-    eng._current_overlap_seconds = 0.0
-    eng._current_vad_cut_reason = ""
-    eng._last_prompt_budget = None
-    eng._last_sensevoice_error = False
-    return eng
 
 
-def _sv_response(text: str):
-    return [{"text": text}]
 
 
-@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
-class TestTranscribeSenseVoice(unittest.TestCase):
-
-    def _audio(self, n=1600):
-        return np.zeros(n, dtype=np.float32)
-
-    def test_returns_clean_text(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response(
-            "<|ko|><|EMO_UNKNOWN|><|Speech|><|withitn|>안녕하세요"
-        )
-        result = eng._transcribe_sensevoice(self._audio())
-        self.assertEqual(result, "안녕하세요")
-
-    def test_pure_noise_returns_none(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response("<|BGM|>")
-        self.assertIsNone(eng._transcribe_sensevoice(self._audio()))
-
-    def test_empty_text_returns_none(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response("")
-        self.assertIsNone(eng._transcribe_sensevoice(self._audio()))
-
-    def test_only_metadata_tags_returns_none(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response(
-            "<|ko|><|EMO_UNKNOWN|>"
-        )
-        self.assertIsNone(eng._transcribe_sensevoice(self._audio()))
-
-    def test_exception_returns_none(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.side_effect = RuntimeError("CUDA error")
-        self.assertIsNone(eng._transcribe_sensevoice(self._audio()))
-
-    def test_empty_generate_result_returns_none(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = []
-        self.assertIsNone(eng._transcribe_sensevoice(self._audio()))
-
-    def test_text_with_noise_and_speech_tag_is_kept(self):
-        # If both speech and noise tags are present, speech wins
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response(
-            "<|Speech|><|BGM|>음악과 함께"
-        )
-        result = eng._transcribe_sensevoice(self._audio())
-        self.assertIsNotNone(result)
-        self.assertIn("음악과 함께", result)
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +79,10 @@ def _make_groq_resp(text: str, language: str = "ko", segments: list[dict] | None
 
 def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng = STTEngine.__new__(STTEngine)
-    eng._sense_voice = None
-    eng._use_groq = True
     eng._groq_client = MagicMock()
     eng._groq_client.audio.transcriptions.create.return_value = _make_groq_resp(response_text)
     eng._groq_fallback_client = None
     eng._consecutive_none = 0
-    eng._sv_fallback_counter = 0
     eng._groq_rate_limited_until = 0.0
     eng._groq_fallback_rate_limited_until = 0.0
     eng._last_transcript = ""
@@ -228,7 +102,6 @@ def _make_engine_groq(response_text: str = "안녕하세요") -> STTEngine:
     eng._current_overlap_seconds = 0.0
     eng._current_vad_cut_reason = ""
     eng._last_prompt_budget = None
-    eng._last_sensevoice_error = False
     return eng
 
 
@@ -628,41 +501,8 @@ class TestTranscribeFallback(unittest.TestCase):
     def _audio(self):
         return np.full(1600, 0.1, dtype=np.float32)
 
-    def test_uses_sensevoice_first(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response(
-            "<|Speech|>테스트"
-        )
-        result = eng.transcribe(self._audio())
-        self.assertEqual(result, "테스트")
-        eng._sense_voice.generate.assert_called_once()
 
-    def test_sensevoice_no_speech_does_not_switch_to_groq(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.return_value = _sv_response("<|BGM|>")
-        groq_mock = MagicMock()
-        groq_mock.audio.transcriptions.create.return_value = _make_groq_resp("Groq result")
-        eng._groq_client = groq_mock
 
-        with patch.object(eng, "_init_groq"):   # prevent real Groq init
-            result = eng.transcribe(self._audio())
-
-        self.assertIsNone(result)
-        self.assertFalse(eng._use_groq)
-        groq_mock.audio.transcriptions.create.assert_not_called()
-
-    def test_falls_back_to_groq_when_sensevoice_errors(self):
-        eng = _make_engine_sv()
-        eng._sense_voice.generate.side_effect = RuntimeError("sensevoice crashed")
-        groq_mock = MagicMock()
-        groq_mock.audio.transcriptions.create.return_value = _make_groq_resp("Groq result")
-        eng._groq_client = groq_mock
-
-        with patch.object(eng, "_init_groq"):   # prevent real Groq init
-            result = eng.transcribe(self._audio())
-
-        self.assertEqual(result, "Groq result")
-        self.assertTrue(eng._use_groq)
 
     def test_transcribe_event_includes_engine_and_neutral_unconfirmed_profile(self):
         eng = _make_engine_groq("Groq result")
@@ -960,7 +800,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# STTEngine.transcribe — consecutive-None warning and SenseVoice recovery
+# STTEngine.transcribe — consecutive-None warning
 # ---------------------------------------------------------------------------
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed")
@@ -992,52 +832,6 @@ class TestTranscribeConsecutiveNone(unittest.TestCase):
         )
 
 
-@unittest.skipUnless(HAS_NUMPY, "numpy not installed")
-class TestSenseVoiceRecoveryProbe(unittest.TestCase):
-
-    def _audio(self):
-        return np.full(1600, 0.1, dtype=np.float32)
-
-    def test_recovery_probe_fires_at_interval(self):
-        """After PROBE_EVERY Groq calls, a SenseVoice probe should happen."""
-        eng = _make_engine_groq("groq result")
-        eng._sense_voice = MagicMock()
-        # SenseVoice returns valid speech on the probe
-        eng._sense_voice.generate.return_value = _sv_response(
-            "<|Speech|>복구됨"
-        )
-        eng._sv_fallback_counter = _SENSEVOICE_PROBE_EVERY - 1
-
-        result = eng.transcribe(self._audio())
-
-        # SenseVoice should have been called exactly once (the probe)
-        eng._sense_voice.generate.assert_called_once()
-        # Engine should switch back from Groq
-        self.assertFalse(eng._use_groq)
-        self.assertEqual(result, "복구됨")
-
-    def test_recovery_probe_skips_when_sense_voice_is_none(self):
-        """If SenseVoice was never loaded, no probe attempt."""
-        eng = _make_engine_groq("groq result")
-        eng._sense_voice = None
-        eng._sv_fallback_counter = _SENSEVOICE_PROBE_EVERY - 1
-
-        result = eng.transcribe(self._audio())
-
-        self.assertEqual(result, "groq result")
-        self.assertTrue(eng._use_groq)
-
-    def test_failed_probe_keeps_groq_active(self):
-        """If SenseVoice probe returns None, stay on Groq."""
-        eng = _make_engine_groq("groq result")
-        eng._sense_voice = MagicMock()
-        eng._sense_voice.generate.return_value = _sv_response("<|BGM|>")
-        eng._sv_fallback_counter = _SENSEVOICE_PROBE_EVERY - 1
-
-        result = eng.transcribe(self._audio())
-
-        self.assertTrue(eng._use_groq)
-        self.assertEqual(result, "groq result")
 
 
 # ---------------------------------------------------------------------------
@@ -1228,27 +1022,6 @@ class TestGroqPromptBuilder(unittest.TestCase):
         self.assertNotIn("context_text", kwargs)
         self.assertFalse(any("hash" in key for key in kwargs))
 
-    def test_sensevoice_context_has_source_identity_without_confidence(self):
-        eng = _make_engine_groq("ignored")
-        eng._current_utterance_id = "utt-3"
-        eng._update_context_transcript("sense voice context", "sensevoice")
-
-        with patch("modules.stt.build_stt_glossary", return_value=""), \
-                patch("modules.stt.runtime_events.emit") as emit:
-            eng._build_groq_prompt()
-            eng._emit_stt_runtime_event(
-                audio=np.full(160, 0.1, dtype=np.float32),
-                started=time.monotonic(),
-                status="success",
-                reason="",
-                request_sent=True,
-            )
-
-        kwargs = emit.call_args.kwargs
-        self.assertEqual(kwargs["context_source_utterance_id"], "utt-3")
-        self.assertEqual(kwargs["context_source_engine"], "sensevoice")
-        self.assertIsNone(kwargs["context_source_avg_logprob"])
-        self.assertIsNone(kwargs["context_source_no_speech_prob"])
 
     def test_reset_clears_context_source_and_next_attempt_snapshot(self):
         eng = _make_engine_groq("ignored")

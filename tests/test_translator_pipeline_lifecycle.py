@@ -61,6 +61,34 @@ def _translation_events(events) -> list[dict]:
     ]
 
 
+def test_final_worker_metadata_survives_ordered_publication():
+    sentence_q, subtitle_q = queue.Queue(), queue.Queue()
+    stop, upstream_done = threading.Event(), threading.Event()
+    with patch.object(translator_module, "Translator", _fake_translator()), \
+            patch.object(translator_module, "runtime_events") as events:
+        thread = translator_module.start(
+            sentence_q, subtitle_q, stop, upstream_done_event=upstream_done
+        )
+        sentence_q.put("하나")
+        stop.set()
+        upstream_done.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert _drain_subtitles(subtitle_q) == ["譯一"]
+    emitted = _translation_events(events)
+    assert len(emitted) == 1
+    event = emitted[0]
+    assert event["sequence_id"] == 0
+    assert event["status"] == "success"
+    assert event["worker_started_at_utc"]
+    assert event["worker_completed_at_utc"]
+    assert event["translation_submitted_at_utc"]
+    assert event["translation_worker_id"]
+    assert event["activity_snapshot_stage"] == "worker_fallback"
+    assert event["activity_snapshot_fallback_used"] is True
+
+
 def test_stop_drains_accepted_tail_in_sequence_order():
     sentence_q, subtitle_q = queue.Queue(), queue.Queue()
     stop, upstream_done = threading.Event(), threading.Event()

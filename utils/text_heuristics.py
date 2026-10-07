@@ -1,18 +1,6 @@
 import re
 
 
-SENSEVOICE_NOISE_TAGS = {
-    "<|BGM|>",
-    "<|Applause|>",
-    "<|Laughter|>",
-    "<|Cry|>",
-    "<|Sneeze|>",
-    "<|Breath|>",
-    "<|Cough|>",
-}
-
-SENSEVOICE_TAG_RE = re.compile(r"<\|[^|]*\|>")
-
 SENTENCE_COMPLETE_ENDINGS = tuple(
     sorted(
         [

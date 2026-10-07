@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import io
-import json
 from types import SimpleNamespace
-from urllib.error import HTTPError
 
 import pytest
 
 from config import _Scene
 from modules.scene_vision import (
     VISION_PROVIDER_REGISTRY,
-    OpenRouterVisionProvider,
     RoutedVisionProvider,
     VisionAttemptDiagnostics,
     VisionClassification,
@@ -123,7 +119,7 @@ def test_registry_is_immutable_and_config_routes_are_explicit():
         vision_provider="groq",
         vision_model="groq-model",
         vision_fallback_routes=(
-            ("openrouter", "qwen/qwen3-vl-32b-instruct"),
+            ("groq", "fallback-model"),
         ),
     )
 
@@ -131,7 +127,7 @@ def test_registry_is_immutable_and_config_routes_are_explicit():
 
     assert [(route.provider, route.model) for route in routes] == [
         ("groq", "groq-model"),
-        ("openrouter", "qwen/qwen3-vl-32b-instruct"),
+        ("groq", "fallback-model"),
     ]
 
 
@@ -139,16 +135,17 @@ def test_route_credentials_are_not_selected_opportunistically():
     scene = _Scene(
         vision_provider="groq",
         vision_model="groq-model",
-        vision_fallback_routes=(("openrouter", "openrouter-model"),),
+        vision_fallback_routes=(("groq", "fallback-model"),),
     )
     keys = SimpleNamespace(
         groq="",
         groq_fallback="",
-        openrouter="openrouter-key",
+        unrelated="unrelated-key",
     )
 
     assert missing_vision_route_credentials(scene, keys) == (
         "groq:groq-model",
+        "groq:fallback-model",
     )
 
 
@@ -156,12 +153,11 @@ def test_builder_freezes_explicit_provider_model_pairs():
     scene = _Scene(
         vision_provider="groq",
         vision_model="groq-model",
-        vision_fallback_routes=(("openrouter", "openrouter-model"),),
+        vision_fallback_routes=(("groq", "fallback-model"),),
     )
     keys = SimpleNamespace(
         groq="groq-key",
         groq_fallback="",
-        openrouter="openrouter-key",
     )
 
     provider = build_vision_provider(
@@ -172,7 +168,7 @@ def test_builder_freezes_explicit_provider_model_pairs():
 
     assert provider.route_identities == (
         "groq:groq-model",
-        "openrouter:openrouter-model",
+        "groq:fallback-model",
     )
     assert provider.provider_name == "groq"
     assert provider.model_name == "groq-model"
@@ -185,11 +181,11 @@ def test_retryable_primary_failure_reaches_only_explicit_fallback():
         failure("groq", "groq-model", "timeout", retryable=True),
     )
     fallback = FakeProvider(
-        "openrouter",
-        "openrouter-model",
+        "groq",
+        "fallback-model",
         success(
-            "openrouter",
-            "openrouter-model",
+            "groq",
+            "fallback-model",
             "League of Legends",
             prompt_tokens=900,
             total_tokens=904,
@@ -203,8 +199,8 @@ def test_retryable_primary_failure_reaches_only_explicit_fallback():
     assert result.text == "League of Legends"
     assert primary.calls == 1
     assert fallback.calls == 1
-    assert result.diagnostics.provider == "openrouter"
-    assert result.diagnostics.model == "openrouter-model"
+    assert result.diagnostics.provider == "groq"
+    assert result.diagnostics.model == "fallback-model"
     assert result.diagnostics.attempt_limit == 2
     assert [attempt.outcome for attempt in result.diagnostics.attempt_chain] == [
         "error",
@@ -223,9 +219,9 @@ def test_valid_unknown_stops_without_paid_fallback():
         success("groq", "groq-model", "unknown"),
     )
     fallback = FakeProvider(
-        "openrouter",
-        "openrouter-model",
-        success("openrouter", "openrouter-model", "Minecraft"),
+        "groq",
+        "fallback-model",
+        success("groq", "fallback-model", "Minecraft"),
     )
 
     result = RoutedVisionProvider((primary, fallback)).classify(b"jpeg")
@@ -243,9 +239,9 @@ def test_nonretryable_auth_failure_stops_without_fallback():
         failure("groq", "groq-model", "auth_error", retryable=False),
     )
     fallback = FakeProvider(
-        "openrouter",
-        "openrouter-model",
-        success("openrouter", "openrouter-model", "Minecraft"),
+        "groq",
+        "fallback-model",
+        success("groq", "fallback-model", "Minecraft"),
     )
 
     with pytest.raises(VisionProviderFailure) as captured:
@@ -264,9 +260,9 @@ def test_empty_success_is_retryable_but_noncanonical_text_is_not():
         success("groq", "groq-model", ""),
     )
     fallback = FakeProvider(
-        "openrouter",
-        "openrouter-model",
-        success("openrouter", "openrouter-model", "Hades"),
+        "groq",
+        "fallback-model",
+        success("groq", "fallback-model", "Hades"),
     )
 
     result = RoutedVisionProvider((empty, fallback)).classify(b"jpeg")
@@ -280,142 +276,12 @@ def test_empty_success_is_retryable_but_noncanonical_text_is_not():
         success("groq", "groq-model", "watching a spreadsheet"),
     )
     paid = FakeProvider(
-        "openrouter",
-        "openrouter-model",
-        success("openrouter", "openrouter-model", "Minecraft"),
+        "groq",
+        "fallback-model",
+        success("groq", "fallback-model", "Minecraft"),
     )
 
     result = RoutedVisionProvider((noncanonical, paid)).classify(b"jpeg")
 
     assert result.text == "watching a spreadsheet"
     assert paid.calls == 0
-
-
-class FakeResponse:
-    def __init__(self, payload: dict):
-        self._payload = payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
-
-
-def test_openrouter_adapter_sends_image_and_records_cost_without_raw_text():
-    captured = {}
-
-    def fake_urlopen(request, *, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
-        return FakeResponse(
-            {
-                "choices": [
-                    {"message": {"content": "League of Legends"}, "finish_reason": "stop"}
-                ],
-                "usage": {
-                    "prompt_tokens": 800,
-                    "completion_tokens": 4,
-                    "total_tokens": 804,
-                    "cost": 0.0000572,
-                },
-            }
-        )
-
-    provider = OpenRouterVisionProvider(
-        model_name="qwen/qwen3-vl-32b-instruct",
-        prompt="bounded prompt",
-        api_key="SECRET KEY",
-        timeout=7.0,
-        urlopen_fn=fake_urlopen,
-    )
-
-    result = provider.classify(b"jpeg")
-
-    body = json.loads(captured["request"].data)
-    assert captured["timeout"] == 7.0
-    assert body["model"] == "qwen/qwen3-vl-32b-instruct"
-    assert body["max_tokens"] == 96
-    assert body["response_format"] == {"type": "json_object"}
-    assert body["messages"][0]["content"][0]["text"] == "bounded prompt"
-    assert body["messages"][0]["content"][1]["image_url"]["url"].startswith(
-        "data:image/jpeg;base64,"
-    )
-    assert result.text == "League of Legends"
-    assert result.diagnostics.api_cost_usd == 0.0000572
-    assert result.diagnostics.total_tokens == 804
-    assert result.diagnostics.finish_reason == "stop"
-    assert "SECRET" not in repr(result.diagnostics.event_fields())
-
-
-def test_openrouter_malformed_usage_is_retryable_and_reaches_fallback():
-    def fake_urlopen(_request, *, timeout):
-        assert timeout == 7.0
-        return FakeResponse(
-            {
-                "choices": [{"message": {"content": "Minecraft"}}],
-                "usage": ["malformed"],
-            }
-        )
-
-    primary = OpenRouterVisionProvider(
-        model_name="primary-model",
-        prompt="bounded prompt",
-        api_key="test-key",
-        timeout=7.0,
-        urlopen_fn=fake_urlopen,
-    )
-    fallback = FakeProvider(
-        "groq",
-        "fallback-model",
-        success("groq", "fallback-model", "League of Legends"),
-    )
-
-    result = RoutedVisionProvider((primary, fallback)).classify(b"jpeg")
-
-    assert result.text == "League of Legends"
-    assert fallback.calls == 1
-    assert result.diagnostics.attempt_chain[0].provider == "openrouter"
-    assert result.diagnostics.attempt_chain[0].error_type == "parse_error"
-    assert result.diagnostics.attempt_chain[0].retryable is True
-    assert result.diagnostics.attempt_chain[1].provider == "groq"
-
-
-@pytest.mark.parametrize(
-    ("status", "error_type", "retryable"),
-    [
-        (401, "auth_error", False),
-        (402, "payment_required", False),
-        (429, "rate_limit", True),
-        (500, "http_error", True),
-    ],
-)
-def test_openrouter_http_failure_boundaries(status, error_type, retryable):
-    def fail(*_args, **_kwargs):
-        raise HTTPError(
-            "https://openrouter.ai/secret",
-            status,
-            "SECRET PROVIDER MESSAGE",
-            {},
-            io.BytesIO(b"SECRET BODY"),
-        )
-
-    provider = OpenRouterVisionProvider(
-        model_name="vision-model",
-        prompt="bounded prompt",
-        api_key="test-key",
-        timeout=7.0,
-        urlopen_fn=fail,
-    )
-
-    with pytest.raises(VisionProviderFailure) as captured:
-        provider.classify(b"jpeg")
-
-    diagnostics_value = captured.value.diagnostics
-    assert diagnostics_value.error_type == error_type
-    assert diagnostics_value.retryable is retryable
-    assert diagnostics_value.http_status == status
-    assert "SECRET" not in repr(diagnostics_value.event_fields())

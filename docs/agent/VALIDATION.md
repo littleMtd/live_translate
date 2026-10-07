@@ -276,25 +276,26 @@ without source/context/root-cause verification and matched negative controls.
   `build_phase0_replay_manifest.py`;
 - routing spans: `routing_span_annotations.py`,
   `routing_span_review_server.py`, `summarize_phase0_routing_spans.py`;
-- local dual-ASR/speaker/alert replay: `replay_phase0_stt_candidates.py`,
-  `scout_sensevoice_historical.py`, `replay_phase0_speaker_similarity.py`,
+- local faster-whisper/alert replay: `replay_phase0_stt_candidates.py`,
   `build_phase0_alert_shadow_dataset.py`,
   `evaluate_phase0_alert_shadow.py`;
 - overlap dedupe: `evaluate_short_overlap_dedupe_shadow.py`,
   `evaluate_short_overlap_surgical.py`,
   `short_overlap_dedupe_review_server.py`;
 - language-mode comparison: `compare_stt_language_modes.py`;
-- reference-audio CER/coverage: `stt_completeness_check.py`;
 - input preparation: `download_audio.py`.
+
+The SenseVoice scout, CAM++ speaker-similarity replay, and STT completeness
+checker were removed with the retired local STT provider. Their historical
+artifacts remain available for read-only analysis.
 
 The collection/sampling scripts currently hard-code target schema v2 while live
 runtime events are schema v6. Until those tools are upgraded and tested, do not
 claim a schema-v6 run is “ready for sampling” merely because the runtime analyzer can
 read it.
 
-`replay_phase0_stt_candidates.py` defaults to the legacy SenseVoice behavior
-and field aliases. `--engine faster-whisper` selects the second local engine;
-run the engines in separate processes. Engine-neutral `candidate_*` fields are
+`replay_phase0_stt_candidates.py` runs faster-whisper for new replay output.
+Historical SenseVoice JSON remains a read-only comparison input. Engine-neutral `candidate_*` fields are
 the comparison surface. Evidence assets must stay out of
 `candidate_current_text`. Model/package versions and artifact hashes identify
 an evidence run, but the owner decision does not permanently pin the external
@@ -302,8 +303,8 @@ ASR environment; after an update, write a new result instead of overwriting a
 baseline.
 
 For the T25 weak-signal cohort, build and analyze with
-`scripts/evaluate_weak_signal_dual_asr.py`; continue to run the two engines in
-separate `replay_phase0_stt_candidates.py` processes. The frozen selector uses
+`scripts/evaluate_weak_signal_dual_asr.py`; new replay runs use faster-whisper
+while the frozen SenseVoice JSON is read-only. The frozen selector uses
 the four provenance run summaries, comparison-safe single-WAV Groq alignment,
 and fail-closed 1:1 control calipers. Faster-whisper replay explicitly uses
 `temperature=0.0`; do not compare a default-temperature result with this

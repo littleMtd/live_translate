@@ -320,9 +320,9 @@ class _VadState:
             max(0.0, _cfg_float("vad_near_miss_min_speech_sec", 0.3)) * sr
         )
         self._max_speech       = int(cfg.audio.vad_max_speech_sec * sr)
-        hard_max_sec = getattr(cfg.audio, "vad_hard_max_speech_sec", cfg.audio.vad_max_speech_sec)
+        hard_max_sec = cfg.audio.vad_hard_max_speech_sec
         self._hard_max_speech  = int(max(cfg.audio.vad_max_speech_sec, hard_max_sec) * sr)
-        self._overlap_samples  = int(max(0.0, getattr(cfg.audio, "vad_overlap_sec", 0.0)) * sr)
+        self._overlap_samples  = int(max(0.0, cfg.audio.vad_overlap_sec) * sr)
         self._near_miss_overlap_samples = int(
             max(0.0, _cfg_float("vad_near_miss_overlap_sec", 1.5)) * sr
         )
@@ -841,7 +841,7 @@ def start(audio_queue: queue.Queue, stop_event: threading.Event,
                     stop_event.set()
 
             mode = "VAD" if cfg.audio.vad_enabled else f"fixed {cfg.audio.chunk_seconds}s"
-            capture_channels = getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+            capture_channels = cfg.audio.capture_channels
             capture_blocksize = (
                 _SileroDetector._WINDOW
                 if cfg.audio.vad_enabled
@@ -1027,7 +1027,7 @@ def _find_loopback_device() -> _CaptureDevice:
     except Exception:
         host_apis = []
     capture_channels = int(
-        getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+        cfg.audio.capture_channels
     )
     sample_rate = int(cfg.audio.sample_rate)
     available = [
@@ -1035,7 +1035,7 @@ def _find_loopback_device() -> _CaptureDevice:
         for index, device in enumerate(devices)
     ]
 
-    configured_name = str(getattr(cfg.audio, "device_name", "") or "").strip()
+    configured_name = str(cfg.audio.device_name or "").strip()
     if configured_name:
         name_lower = configured_name.casefold()
         configured = [
@@ -1105,7 +1105,7 @@ def _print_device_diagnostics() -> None:
     except Exception:
         host_apis = []
     capture_channels = int(
-        getattr(cfg.audio, "capture_channels", cfg.audio.channels)
+        cfg.audio.capture_channels
     )
     sample_rate = int(cfg.audio.sample_rate)
     print(

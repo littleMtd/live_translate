@@ -370,7 +370,7 @@ def _db_cache_enabled() -> bool:
     ~0.45% hit rate so it is disabled by default (cfg.database.live_db_cache)."""
     if cfg.translation.translation_mode == "clip":
         return True
-    return bool(getattr(cfg.database, "live_db_cache", False))
+    return bool(cfg.database.live_db_cache)
 
 
 # Deterministic guard for instruction-echo placeholders (audit §15.4): the
@@ -1027,7 +1027,7 @@ def _dependency_marker(text: str) -> str:
     if not stripped:
         return ""
     for marker in tuple(
-        getattr(cfg.translation, "adaptive_history_dependency_markers", ()) or ()
+        cfg.translation.adaptive_history_dependency_markers or ()
     ):
         if not stripped.startswith(marker):
             continue
@@ -1193,7 +1193,7 @@ def _adjudicate_translation_candidate(
     simplified_chinese_spans = _simplified_chinese_evidence(corrected)
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if bool(getattr(cfg.translation, "use_profile", False))
+        if bool(cfg.translation.use_profile)
         else ""
     )
     approved_terms = set(_publication_approved_terms(profile_id, obligations))
@@ -1814,7 +1814,7 @@ class _TranslatorSharedState:
 
 def _conversation_window() -> int:
     try:
-        recent_window = int(getattr(cfg.translation, "context_window", 0) or 0)
+        recent_window = int(cfg.translation.context_window or 0)
     except (TypeError, ValueError):
         recent_window = 0
     return max(recent_window, 0)
@@ -2175,9 +2175,9 @@ class Translator:
         evidence_source_utterance_ids: tuple[str, ...] = (),
     ) -> TranslationOutcome:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
-            getattr(cfg.translation, "current_activity", ""),
+            cfg.translation.current_activity,
             automatic_enabled=bool(
-                getattr(cfg.scene, "publish_translation_activity", False)
+                cfg.scene.publish_translation_activity
             ),
             source_text=text,
         )
@@ -2845,9 +2845,9 @@ class Translator:
         snapshot = bound_activity_snapshot()
         if snapshot is None:
             snapshot = capture_effective_activity_snapshot(
-                getattr(cfg.translation, "current_activity", ""),
+                cfg.translation.current_activity,
                 automatic_enabled=bool(
-                    getattr(cfg.scene, "publish_translation_activity", False)
+                    cfg.scene.publish_translation_activity
                 ),
             )
         if route_request is not None and route_request.body:
@@ -2878,7 +2878,7 @@ class Translator:
         history_context_enabled = (
             translation_request.history_context_enabled
             if translation_request is not None else
-            int(getattr(cfg.translation, "context_window", 0) or 0) > 0
+            int(cfg.translation.context_window or 0) > 0
         )
         # Cache entries can be context-shaped, so the episode boundary is part
         # of the identity even when activity is unknown. Resolver refreshes do
@@ -2965,7 +2965,7 @@ class Translator:
                 ) for engine in self._engines
             ),
             history_context_enabled=int(
-                getattr(cfg.translation, "context_window", 0) or 0
+                cfg.translation.context_window or 0
             ) > 0,
             artifact_hashes=tuple(sorted(_current_artifact_hashes().items())),
         )
@@ -3196,9 +3196,9 @@ class Translator:
 
     def _get_prompt_version_hash(self) -> str:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
-            getattr(cfg.translation, "current_activity", ""),
+            cfg.translation.current_activity,
             automatic_enabled=bool(
-                getattr(cfg.scene, "publish_translation_activity", False)
+                cfg.scene.publish_translation_activity
             ),
         )
         with bind_activity_snapshot(snapshot):
@@ -3214,7 +3214,7 @@ _STOP_DRAIN_TIMEOUT_MARGIN_SEC = 0.5
 
 
 def _translation_max_output_delay_ms() -> float:
-    value = getattr(cfg.translation, "max_subtitle_output_delay_ms", 30000)
+    value = cfg.translation.max_subtitle_output_delay_ms
     return float(value) if isinstance(value, (int, float)) else 30000.0
 
 
@@ -3244,7 +3244,7 @@ def _compose_system_prompt(entity_capsule: str = "") -> str:
     # Manual session state (orthogonal to profiles, applies even with
     # use_profile=False): one labeled background line, never source text.
     activity_capsule = activity_prompt_capsule(
-        effective_activity_value(getattr(cfg.translation, "current_activity", ""))
+        effective_activity_value(cfg.translation.current_activity)
     )
     if activity_capsule:
         system_prompt += "\n\n" + activity_capsule
@@ -3290,9 +3290,9 @@ def _start_fallback_probe_thread(
             probe_observations: list[dict[str, object]] = []
             probe_started = time.monotonic()
             activity_snapshot = capture_effective_activity_snapshot(
-                getattr(cfg.translation, "current_activity", ""),
+                cfg.translation.current_activity,
                 automatic_enabled=bool(
-                    getattr(cfg.scene, "publish_translation_activity", False)
+                    cfg.scene.publish_translation_activity
                 ),
             )
             with bind_activity_snapshot(activity_snapshot):
@@ -3429,7 +3429,7 @@ def _failed_completion(seq: int) -> _CompletedTranslation:
         {
             "sequence_id": seq,
             "translation_mode": str(
-                getattr(cfg.translation, "translation_mode", "") or ""
+                cfg.translation.translation_mode or ""
             ),
         },
         now,
@@ -3572,7 +3572,7 @@ class _ProvisionalWorker:
                         ),
                         routes=(route_request,),
                         history_context_enabled=int(
-                            getattr(cfg.translation, "context_window", 0) or 0
+                            cfg.translation.context_window or 0
                         ) > 0,
                         artifact_hashes=tuple(sorted(_current_artifact_hashes().items())),
                         phase="provisional",
@@ -3653,54 +3653,9 @@ class _ProvisionalWorker:
                             request_contract_id=request_contract_id,
                         )
                         return
-                    api_call_started = time.monotonic()
-                    api_call_outcome = "exception"
-                    engine_result = None
-                    try:
-                        if route_request.body:
-                            engine_result = engine.translate_messages_result(
-                                route_request
-                            )
-                            raw_target = engine_result.text
-                        else:
-                            raw_target = engine.translate_messages(messages)
-                        api_call_outcome = "returned" if raw_target else "empty"
-                    finally:
-                        # Record the API call before any post-call lifecycle or
-                        # content guard can discard this provisional result.
-                        api_diagnostics = (
-                            engine_result.diagnostics_dict() if engine_result
-                            else get_last_engine_api_diagnostics()
-                        )
-                        api_usage = (
-                            engine_result.usage_dict() if engine_result
-                            else get_last_token_usage()
-                        )
-                        runtime_events.emit(
-                            "provisional_translation",
-                            action="api_attempt_completed",
-                            provisional_id=request.provisional_id,
-                            request_contract_id=request_contract_id,
-                            engine=engine.engine_name,
-                            model=engine.model_name,
-                            provider_options=route_request.options_dict(),
-                            system_fingerprint=(
-                                engine_result.system_fingerprint if engine_result
-                                else ""
-                            ),
-                            call_outcome=api_call_outcome,
-                            latency_ms=round(
-                                (time.monotonic() - api_call_started) * 1000,
-                                2,
-                            ),
-                            api_cost_usd=api_diagnostics.get("api_cost_usd"),
-                            api_cost_basis=api_diagnostics.get("api_cost_basis"),
-                            api_pricing_revision=api_diagnostics.get("api_pricing_revision"),
-                            input_tokens=api_usage.get("prompt"),
-                            output_tokens=api_usage.get("output"),
-                            cache_hit_tokens=api_usage.get("cache_read"),
-                            cache_miss_tokens=api_usage.get("cache_write"),
-                        )
+                    raw_target, engine_result = self._call_provider(
+                        request, engine, route_request, messages, request_contract_id
+                    )
                     if self._stop_event.is_set() or not deepseek_provisional_eligible():
                         self._store.close(request.provisional_id)
                         return
@@ -3782,59 +3737,11 @@ class _ProvisionalWorker:
                         revision=0,
                         phase="provisional",
                     )
-                    with self._publication_lock:
-                        if (
-                            self._stop_event.is_set()
-                            or not self._publication_open
-                            or not deepseek_provisional_eligible()
-                        ):
-                            self._store.close(request.provisional_id)
-                            return
-                        if not self._store.publish_and_enqueue(
-                            candidate,
-                            lambda: put_latest(
-                                self._subtitle_queue,
-                                preview_payload,
-                                log,
-                                "subtitle_queue",
-                            ),
-                        ):
-                            runtime_events.emit(
-                                "provisional_translation",
-                                action="cancelled_late",
-                                provisional_id=request.provisional_id,
-                            )
-                            return
-                        runtime_events.emit(
-                            "provisional_translation",
-                            action="succeeded",
-                            provisional_id=request.provisional_id,
-                            target_text=display_target,
-                            latency_ms=round((completed - started) * 1000, 2),
-                            stt_ready_to_subtitle_ms=round(
-                                max(
-                                    0.0,
-                                    completed
-                                    - request.first_stt_ready_at_monotonic,
-                                )
-                                * 1000,
-                                2,
-                            ),
-                            engine=engine.engine_name,
-                            model=engine.model_name,
-                            request_contract_id=request_contract_id,
-                            input_tokens=usage.get("prompt"),
-                            provider_options=route_request.options_dict(),
-                            system_fingerprint=(
-                                engine_result.system_fingerprint if engine_result else ""
-                            ),
-                            output_tokens=usage.get("output"),
-                            cache_hit_tokens=usage.get("cache_read"),
-                            cache_miss_tokens=usage.get("cache_write"),
-                            cost_usd=diagnostics.get("api_cost_usd"),
-                            api_cost_basis=diagnostics.get("api_cost_basis"),
-                            api_pricing_revision=diagnostics.get("api_pricing_revision"),
-                        )
+                    self._publish_candidate(
+                        request, candidate, preview_payload, engine, route_request,
+                        engine_result, display_target, started, completed, usage,
+                        diagnostics, request_contract_id,
+                    )
         except Exception:
             if self._stop_event.is_set():
                 self._store.close(request.provisional_id)
@@ -3847,6 +3754,117 @@ class _ProvisionalWorker:
                 request_contract_id=request_contract_id,
                 latency_ms=round((time.monotonic() - started) * 1000, 2),
             )
+
+    def _publish_candidate(
+        self, request, candidate, preview_payload, engine, route_request,
+        engine_result, display_target, started, completed, usage, diagnostics,
+        request_contract_id,
+    ) -> None:
+        with self._publication_lock:
+            if (
+                self._stop_event.is_set()
+                or not self._publication_open
+                or not deepseek_provisional_eligible()
+            ):
+                self._store.close(request.provisional_id)
+                return
+            if not self._store.publish_and_enqueue(
+                candidate,
+                lambda: put_latest(
+                    self._subtitle_queue,
+                    preview_payload,
+                    log,
+                    "subtitle_queue",
+                ),
+            ):
+                runtime_events.emit(
+                    "provisional_translation",
+                    action="cancelled_late",
+                    provisional_id=request.provisional_id,
+                )
+                return
+            runtime_events.emit(
+                "provisional_translation",
+                action="succeeded",
+                provisional_id=request.provisional_id,
+                target_text=display_target,
+                latency_ms=round((completed - started) * 1000, 2),
+                stt_ready_to_subtitle_ms=round(
+                    max(
+                        0.0,
+                        completed
+                        - request.first_stt_ready_at_monotonic,
+                    )
+                    * 1000,
+                    2,
+                ),
+                engine=engine.engine_name,
+                model=engine.model_name,
+                request_contract_id=request_contract_id,
+                input_tokens=usage.get("prompt"),
+                provider_options=route_request.options_dict(),
+                system_fingerprint=(
+                    engine_result.system_fingerprint if engine_result else ""
+                ),
+                output_tokens=usage.get("output"),
+                cache_hit_tokens=usage.get("cache_read"),
+                cache_miss_tokens=usage.get("cache_write"),
+                cost_usd=diagnostics.get("api_cost_usd"),
+                api_cost_basis=diagnostics.get("api_cost_basis"),
+                api_pricing_revision=diagnostics.get("api_pricing_revision"),
+            )
+
+    def _call_provider(self, request, engine, route_request, messages, request_contract_id):
+        api_call_started = time.monotonic()
+        api_call_outcome = "exception"
+        engine_result = None
+        try:
+            if route_request.body:
+                engine_result = engine.translate_messages_result(
+                    route_request
+                )
+                raw_target = engine_result.text
+            else:
+                raw_target = engine.translate_messages(messages)
+            api_call_outcome = "returned" if raw_target else "empty"
+        finally:
+            # Record the API call before any post-call lifecycle or
+            # content guard can discard this provisional result.
+            api_diagnostics = (
+                engine_result.diagnostics_dict() if engine_result
+                else get_last_engine_api_diagnostics()
+            )
+            api_usage = (
+                engine_result.usage_dict() if engine_result
+                else get_last_token_usage()
+            )
+            runtime_events.emit(
+                "provisional_translation",
+                action="api_attempt_completed",
+                provisional_id=request.provisional_id,
+                request_contract_id=request_contract_id,
+                engine=engine.engine_name,
+                model=engine.model_name,
+                provider_options=route_request.options_dict(),
+                system_fingerprint=(
+                    engine_result.system_fingerprint if engine_result
+                    else ""
+                ),
+                call_outcome=api_call_outcome,
+                latency_ms=round(
+                    (time.monotonic() - api_call_started) * 1000,
+                    2,
+                ),
+                api_cost_usd=api_diagnostics.get("api_cost_usd"),
+                api_cost_basis=api_diagnostics.get("api_cost_basis"),
+                api_pricing_revision=api_diagnostics.get("api_pricing_revision"),
+                input_tokens=api_usage.get("prompt"),
+                output_tokens=api_usage.get("output"),
+                cache_hit_tokens=api_usage.get("cache_read"),
+                cache_miss_tokens=api_usage.get("cache_write"),
+            )
+        return raw_target, engine_result
+
 
 class _FinalWorker:
     """Final translation for one ordered sentence on a pool worker thread."""
@@ -3876,7 +3894,7 @@ class _FinalWorker:
         policy_input = ""
         worker_translator: Translator | None = None
         translation_mode = str(
-            getattr(cfg.translation, "translation_mode", "") or ""
+            cfg.translation.translation_mode or ""
         )
         metadata: dict = {"translation_mode": translation_mode}
         try:
@@ -3892,17 +3910,17 @@ class _FinalWorker:
                 event_snapshot
                 if isinstance(event_snapshot, ActivitySnapshot)
                 else capture_effective_activity_snapshot(
-                    getattr(cfg.translation, "current_activity", ""),
+                    cfg.translation.current_activity,
                     automatic_enabled=bool(
-                        getattr(cfg.scene, "publish_translation_activity", False)
+                        cfg.scene.publish_translation_activity
                     ),
                     source_text=text,
                 )
             )
             worker_observed_snapshot = capture_effective_activity_snapshot(
-                getattr(cfg.translation, "current_activity", ""),
+                cfg.translation.current_activity,
                 automatic_enabled=bool(
-                    getattr(cfg.scene, "publish_translation_activity", False)
+                    cfg.scene.publish_translation_activity
                 ),
             )
             profile_snapshot = (
@@ -3997,108 +4015,12 @@ class _FinalWorker:
             outcome_for_state: TranslationOutcome | None = None
             try:
                 worker_translator._current_sequence_id = seq
-                with bind_profile_snapshot(profile_snapshot):
-                  with bind_profile_id(profile_id):
-                    with bind_activity_snapshot(activity_snapshot):
-                        history_cohort = self._shared_state.session.history_cohort(
-                            activity_snapshot
-                        )
-                        with self._shared_state.lock:
-                            history_items, cross_cohort_items = (
-                                self._shared_state.history.cohort_stats(history_cohort)
-                            )
-                        metadata.update(
-                            {
-                                "history_profile_id": "",
-                                "history_session_id": history_cohort[0],
-                                "history_activity_id": history_cohort[1],
-                                "history_cohort_epoch": history_cohort[2],
-                                "history_cohort_id": (
-                                    f"{history_cohort[0]}:"
-                                    f"{history_cohort[1]}:"
-                                    f"{history_cohort[2]}"
-                                ),
-                                "history_candidate_count": history_items,
-                                "history_cross_cohort_excluded_count": (
-                                    cross_cohort_items
-                                ),
-                            }
-                        )
-                        if provisional_candidate is None:
-                            # Preserve the long-standing worker contract for
-                            # ordinary sentences and lightweight test doubles.
-                            outcome = worker_translator.translate_event(
-                                text,
-                                incomplete,
-                                repetition_evidence=repetition_evidence,
-                            )
-                        else:
-                            outcome = worker_translator.translate_event(
-                                text,
-                                incomplete,
-                                repetition_evidence=repetition_evidence,
-                                provisional_candidate=provisional_candidate,
-                                source_utterance_ids=tuple(
-                                    metadata.get("source_utterance_ids") or ()
-                                ),
-                                evidence_source_utterance_ids=tuple(
-                                    metadata.get(
-                                        "evidence_source_utterance_ids"
-                                    )
-                                    or ()
-                                ),
-                            )
-                        outcome_for_state = outcome
-                        if provisional_id:
-                            self._provisional_store.close(provisional_id)
-                            provisional_trace = {
-                                "provisional_id": provisional_id,
-                                **worker_translator._last_provisional_trace,
-                            }
-                            if provisional_not_ready and not worker_translator._last_provisional_trace:
-                                provisional_trace.update(
-                                    {
-                                        "promotion_attempted": False,
-                                        "promotion_passed": False,
-                                        "candidate_not_ready": True,
-                                        "final_retranslation": True,
-                                    }
-                                )
-                            metadata["provisional"] = provisional_trace
-                            metadata.update(
-                                {
-                                    "provisional_id": provisional_id,
-                                    "provisional_promotion_attempted": bool(
-                                        provisional_trace.get(
-                                            "promotion_attempted"
-                                        )
-                                    ),
-                                    "provisional_promotion_passed": bool(
-                                        provisional_trace.get("promotion_passed")
-                                    ),
-                                    "provisional_fingerprint_mismatch": bool(
-                                        provisional_trace.get(
-                                            "fingerprint_mismatch"
-                                        )
-                                    ),
-                                    "provisional_guard_rejection": str(
-                                        provisional_trace.get(
-                                            "guard_rejection"
-                                        )
-                                        or ""
-                                    ),
-                                    "provisional_final_retranslation": bool(
-                                        provisional_trace.get(
-                                            "final_retranslation"
-                                        )
-                                    ),
-                                    "provisional_final_revision": 1,
-                                }
-                            )
-                        policy_input = (
-                            getattr(worker_translator, "_last_input", "")
-                            or source_key
-                        )
+                outcome, policy_input = self._translate_bound(
+                    seq, text, incomplete, metadata, worker_translator,
+                    repetition_evidence, source_key, provisional_id,
+                    provisional_candidate, provisional_not_ready, profile_snapshot,
+                    profile_id, activity_snapshot,
+                )
             finally:
                 worker_translator._current_sequence_id = None
                 with self._shared_state.lock:
@@ -4126,6 +4048,126 @@ class _FinalWorker:
                 cache_status="skipped",
                 incomplete=incomplete,
             )
+        return self._complete_item(
+            seq, outcome, metadata, submitted_at, started, worker_id,
+            worker_translator, policy_input,
+        )
+
+
+    def _translate_bound(
+        self, seq, text, incomplete, metadata, worker_translator,
+        repetition_evidence, source_key, provisional_id,
+        provisional_candidate, provisional_not_ready, profile_snapshot,
+        profile_id, activity_snapshot,
+    ) -> tuple[TranslationOutcome, str]:
+        with bind_profile_snapshot(profile_snapshot):
+          with bind_profile_id(profile_id):
+            with bind_activity_snapshot(activity_snapshot):
+                history_cohort = self._shared_state.session.history_cohort(
+                    activity_snapshot
+                )
+                with self._shared_state.lock:
+                    history_items, cross_cohort_items = (
+                        self._shared_state.history.cohort_stats(history_cohort)
+                    )
+                metadata.update(
+                    {
+                        "history_profile_id": "",
+                        "history_session_id": history_cohort[0],
+                        "history_activity_id": history_cohort[1],
+                        "history_cohort_epoch": history_cohort[2],
+                        "history_cohort_id": (
+                            f"{history_cohort[0]}:"
+                            f"{history_cohort[1]}:"
+                            f"{history_cohort[2]}"
+                        ),
+                        "history_candidate_count": history_items,
+                        "history_cross_cohort_excluded_count": (
+                            cross_cohort_items
+                        ),
+                    }
+                )
+                if provisional_candidate is None:
+                    # Preserve the long-standing worker contract for
+                    # ordinary sentences and lightweight test doubles.
+                    outcome = worker_translator.translate_event(
+                        text,
+                        incomplete,
+                        repetition_evidence=repetition_evidence,
+                    )
+                else:
+                    outcome = worker_translator.translate_event(
+                        text,
+                        incomplete,
+                        repetition_evidence=repetition_evidence,
+                        provisional_candidate=provisional_candidate,
+                        source_utterance_ids=tuple(
+                            metadata.get("source_utterance_ids") or ()
+                        ),
+                        evidence_source_utterance_ids=tuple(
+                            metadata.get(
+                                "evidence_source_utterance_ids"
+                            )
+                            or ()
+                        ),
+                    )
+                outcome_for_state = outcome
+                if provisional_id:
+                    self._provisional_store.close(provisional_id)
+                    provisional_trace = {
+                        "provisional_id": provisional_id,
+                        **worker_translator._last_provisional_trace,
+                    }
+                    if provisional_not_ready and not worker_translator._last_provisional_trace:
+                        provisional_trace.update(
+                            {
+                                "promotion_attempted": False,
+                                "promotion_passed": False,
+                                "candidate_not_ready": True,
+                                "final_retranslation": True,
+                            }
+                        )
+                    metadata["provisional"] = provisional_trace
+                    metadata.update(
+                        {
+                            "provisional_id": provisional_id,
+                            "provisional_promotion_attempted": bool(
+                                provisional_trace.get(
+                                    "promotion_attempted"
+                                )
+                            ),
+                            "provisional_promotion_passed": bool(
+                                provisional_trace.get("promotion_passed")
+                            ),
+                            "provisional_fingerprint_mismatch": bool(
+                                provisional_trace.get(
+                                    "fingerprint_mismatch"
+                                )
+                            ),
+                            "provisional_guard_rejection": str(
+                                provisional_trace.get(
+                                    "guard_rejection"
+                                )
+                                or ""
+                            ),
+                            "provisional_final_retranslation": bool(
+                                provisional_trace.get(
+                                    "final_retranslation"
+                                )
+                            ),
+                            "provisional_final_revision": 1,
+                        }
+                    )
+                policy_input = (
+                    getattr(worker_translator, "_last_input", "")
+                    or source_key
+                )
+        return outcome, policy_input
+
+    def _complete_item(
+        self, seq, outcome, metadata, submitted_at, started, worker_id,
+        worker_translator, policy_input,
+    ) -> _CompletedTranslation:
         completed_at = time.monotonic()
         metadata["worker_completed_at_utc"] = datetime.now(
             timezone.utc

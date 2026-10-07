@@ -255,7 +255,7 @@ pub struct AudioConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SttConfig {
-    pub primary_engine: String,   // "sensevoice" or "groq"
+    pub primary_engine: String,   // "elevenlabs" or "groq"
     pub language:       String,   // "ko"
     pub queue_maxsize:  u32,
 }
@@ -695,7 +695,7 @@ export interface AudioConfig {
 }
 
 export interface SttConfig {
-    primary_engine: 'sensevoice' | 'groq';
+    primary_engine: 'elevenlabs' | 'groq';
 }
 
 export interface TranslationConfig {

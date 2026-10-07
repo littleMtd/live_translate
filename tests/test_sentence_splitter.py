@@ -268,6 +268,48 @@ class TestSentenceSplitterThread(unittest.TestCase):
         self.assertEqual(request.max_no_speech_prob, 0.1)
         self.assertEqual(final.provisional_id, request.provisional_id)
 
+    def test_provisional_request_event_precedes_linked_final_sentence(self):
+        tq: queue.Queue = queue.Queue()
+        sq: queue.Queue = queue.Queue()
+        pq: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        cfg = _fast_cfg(min_wait=0.6, force_cut=0.8)
+        cfg.splitter.provisional_enabled = True
+
+        with patch("modules.sentence_splitter.cfg", cfg), patch(
+            "modules.sentence_splitter.runtime_events"
+        ) as events:
+            thread = start(tq, sq, stop, provisional_queue=pq)
+            try:
+                tq.put(TranscriptionEvent(
+                    text="아직 말하는 중", engine="elevenlabs",
+                    profile_id="", utterance_id="utt-order-1",
+                ))
+                request = pq.get(timeout=2)
+            finally:
+                stop.set()
+                thread.join(timeout=2)
+            final = sq.get(timeout=1)
+
+        relevant = [
+            (call.args[0], call.kwargs)
+            for call in events.emit.call_args_list
+            if call.args and call.args[0] in {"provisional_translation", "sentence"}
+        ]
+        requested = [
+            (index, fields) for index, (kind, fields) in enumerate(relevant)
+            if kind == "provisional_translation" and fields.get("action") == "requested"
+        ]
+        sentenced = [
+            (index, fields) for index, (kind, fields) in enumerate(relevant)
+            if kind == "sentence"
+        ]
+        self.assertEqual(len(requested), 1)
+        self.assertEqual(len(sentenced), 1)
+        self.assertLess(requested[0][0], sentenced[0][0])
+        self.assertEqual(requested[0][1]["provisional_id"], request.provisional_id)
+        self.assertEqual(sentenced[0][1]["provisional_id"], final.provisional_id)
+
     def test_legacy_profile_id_cannot_retake_provisional_ownership(self):
         tq: queue.Queue = queue.Queue()
         sq: queue.Queue = queue.Queue()
