@@ -213,6 +213,10 @@ Context, display, and persistence:
   until the window generation changes. A separate default-off switch gates
   open-set publication; the resolver never writes
   `cfg.translation.current_activity` and never activates STT hot terms.
+  Since 2026-10-07 `cfg.scene.publish_translation_activity` defaults to
+  `False`: detection still runs record-only (vision calls continue), but
+  automatic activity no longer reaches translation prompts, because it showed
+  no measured benefit and encouraged game-flavoured invention on garbled STT.
 - `modules/profile_context.py`: immutable configured-source/confirmed-hint/effective profile and
   registry snapshots. Exact reviewed member-name markers are strong candidate
   evidence, but cannot independently authorize a cross-profile switch. A switch

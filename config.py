@@ -392,7 +392,10 @@ class _Scene:
     enabled:              bool  = True
     # T13-B activation switch. Manual activity remains authoritative, and a
     # fresh confirmed automatic snapshot may affect translation context only.
-    publish_translation_activity: bool = True
+    # Off since 2026-10-07: a paid ablation showed no fix for activity-sensitive
+    # errors, and run 20261007T111648Z-12404 showed game-flavoured invention on
+    # garbled STT (e.g. "핀드트" -> "以太晶蝶"). Detection keeps running record-only.
+    publish_translation_activity: bool = False
     # T15/T17 kill switch. The open-set runtime gate passed, so direct pipeline
     # runs publish by default; an explicit dashboard false still disables it.
     publish_open_set_activity: bool = True
