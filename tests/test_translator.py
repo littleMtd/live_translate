@@ -8,6 +8,35 @@ import unittest
 import unittest.mock
 import modules.translation_engines as translation_engines_module
 import modules.translator as translator_module
+
+
+def test_isegye_self_canonicals_coexist_with_entity_obligations():
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    with _active_translation_profile("isegye_lilpa"):
+        source = "아이네 언니랑 고세구가 왔어"
+        target = "아이네姐姐和Gosegu來了"
+        context = translator_module._resolve_entity_request_context(source)
+        guard = _translation_output_guard(engine, target, source, obligations=context.obligations)
+        assert guard.get("reason") is None
+        assert guard["candidate_output"] == target
+        assert any(a.entity.entity_id == "isegye_gosegu" for a in context.activations)
+        assert guard["canonical_obligations"]["passed"] is True
+        assert _apply_source_aware_corrections(source, "아이네姐姐和高世久來了") == target
+        assert translator_module._source_activated_name_canonicals(source) >= {"아이네", "Gosegu"}
+        assert "아이네" not in translator_module._source_activated_name_canonicals("고세구가 왔어")
+        assert translator_module._source_activated_name_canonicals("고세구땅 왔어") == frozenset()
+
+
+def test_isegye_fan_names_are_approved_only_when_sourced():
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    with _active_translation_profile("isegye_lilpa"):
+        for term in ("세구땅", "르르땅", "이네땅", "버거땅", "부가땅", "챠니", "릴파넴", "둘기", "박쥐단", "주폭도", "세균단", "아이네", "징버거", "비챤"):
+            guard = _translation_output_guard(engine, term + "來了", term + " 왔어")
+            assert guard.get("reason") is None, term
+            unsourced = _translation_output_guard(engine, term + "來了", "왔어")
+            assert unsourced["reason"] == "unexpected_hangul", term
 from modules.translation_engines import (
     _build_engine_chain, _build_user_message, TranslationEngine,
     GroqTranslationEngine,

@@ -21,6 +21,7 @@ from modules.translator import (
     _resolve_entity_request_context,
     _normalize_source_before_matching,
     _NAME_RENDERING_RULES,
+    _source_activated_name_canonicals,
     get_corrections,
     reset_corrections,
 )
@@ -77,7 +78,7 @@ def test_translation_correction_data_snapshot_counts():
         "url": 8,
     }
     assert len(tables.korean_name_suffixes) == 33
-    assert len(tables.name_rendering_rules) == 37
+    assert len(tables.name_rendering_rules) == 51
     assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 271
     assert sum(
         len(group.replacements)
@@ -614,6 +615,17 @@ def test_each_profile_source_aware_rule_triggers_and_is_profile_gated():
 
 def test_each_name_rendering_rule_triggers_and_is_gated():
     for rule in _NAME_RENDERING_RULES:
+        if not rule.wrong_forms:
+            assert rule.scope == "isegye_lilpa"
+            assert rule.canonical in rule.source_aliases
+            source = rule.source_aliases[0]
+            assert rule.canonical in _source_activated_name_canonicals(
+                source, profile_id="isegye_lilpa"
+            )
+            assert rule.canonical not in _source_activated_name_canonicals(
+                source, profile_id="url"
+            )
+            continue
         wrong = next(form for form in rule.wrong_forms if form != rule.canonical)
         source = rule.source_aliases[0]
         if (

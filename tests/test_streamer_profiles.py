@@ -30,6 +30,41 @@ def test_unknown_profile_falls_back_to_general():
     assert profile.label == "General"
 
 
+def test_isegye_stt_terms_include_group_vocabulary():
+    profile = get_profile("isegye_lilpa")
+    assert profile.label == "Isegye Idol"
+    glossary = build_stt_glossary("isegye_lilpa")
+    for term in ("세구땅", "부가땅", "챠니", "이파리", "맆스틱", "왁물원", "KIDDING", "Smile For You"):
+        assert term in glossary
+
+
+def test_isegye_stt_prompt_and_keyterm_budget():
+    from config import cfg
+    from modules.profile_context import profile_state
+    from modules.stt import STTEngine
+    from modules.stt_policy import build_groq_prompt
+
+    prompt = build_groq_prompt(
+        seed_prompt=cfg.stt.groq_prompt,
+        use_profile_glossary=True,
+        active_profile="isegye_lilpa",
+        last_transcript="이세돌 " * 50,
+        glossary_builder=build_stt_glossary,
+        max_context_chars=120,
+        max_prompt_chars=896,
+    )
+    assert prompt is not None
+    assert len(prompt.encode("utf-8")) <= 896
+    assert "Recent Korean transcript context:" in prompt
+
+    engine = STTEngine.__new__(STTEngine)
+    engine._current_profile_snapshot = profile_state.legacy_snapshot("isegye_lilpa")
+    keyterms = engine._elevenlabs_keyterms()
+    assert len(keyterms) <= 100
+    assert "세구땅" in keyterms
+    assert "Smile For You" in keyterms
+
+
 def test_profile_data_loader_rejects_duplicate_ids(tmp_path):
     data_file = tmp_path / "streamer_profiles.json"
     data_file.write_text(

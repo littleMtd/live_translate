@@ -43,7 +43,7 @@
     },
     {
       "profile_id": "isegye_lilpa",
-      "label": "Isegye Idol Lilpa",
+      "label": "Isegye Idol",
       "stt_terms": [],
       "aliases": [],
       "entity_refs": [
@@ -87,7 +87,22 @@
         {
           "entity_id": "isegye_viichan",
           "alias": "비챤"
-        }
+        },
+        "세구땅",
+        "르르땅",
+        "버거땅",
+        "부가땅",
+        "이네땅",
+        "챠니",
+        "이파리",
+        "맆스틱",
+        "왁물원",
+        "KIDDING",
+        "SYZYGY",
+        "Misty Rainbow",
+        "Stargazers",
+        "Be My Light",
+        "Smile For You"
       ]
     },
     {

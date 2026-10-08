@@ -5,6 +5,7 @@ import pytest
 
 from config import cfg
 import modules.translation_prompts as translation_prompts
+from modules.translation_engines import _compact_profile_digest, _deepseek_capsule_prompt
 from modules.streamer_profiles import known_profile_ids
 from modules.translation_prompts import (
     _PROFILE_DATA_PATH,
@@ -18,7 +19,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "ee55e9bb9ff4cbab3f4186141a2aafecf986308865ec7664f37d25909268b185"
+_TRANSLATION_PROFILE_DATA_HASH = "097685905c31a28d20f45696885b613a29600cc27d22c9f15fbe0311ebefde72"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -87,6 +88,7 @@ def test_profile_output_terms_are_limited_to_explicit_glossary_canonicals():
     assert {"Gosegu", "Jururu", "Lilpa", "Official髭男dism"} <= terms
     assert "고세구" not in terms
     assert "Everybody say" not in terms
+    assert "이세계아이돌" in terms
     assert not any("only when" in term for term in get_translation_profile_output_terms("url"))
 
 
@@ -157,6 +159,37 @@ def test_isegye_translation_profiles_contain_official_romanization():
         assert "Lilpa" in profile
         assert "히게단" in profile
         assert "Official髭男dism" in profile
+
+
+def test_isegye_group_profile_preserve_terms_are_source_names():
+    terms = get_translation_profile_preserve_terms("isegye_lilpa")
+    assert {"이세계아이돌", "이파리", "둘기", "박쥐단", "주폭도", "세균단"} <= terms
+    assert not {"똥강아지", "라니", "이세돌", "李世乭", "관"} & terms
+    standard = get_translation_profile("isegye_lilpa")
+    qwen = get_translation_profile("isegye_lilpa", qwen=True)
+    assert all(f"例 {n}" in standard for n in range(62, 74))
+    assert sum(f"例 {n}" in qwen for n in range(62, 74)) == 6
+
+
+def test_isegye_production_prompts_include_compact_glossary():
+    capsule = _deepseek_capsule_prompt("isegye_lilpa")
+    for term in (
+        "Official髭男dism",
+        "Parable Entertainment",
+        "李世乭",
+        "세구땅",
+        "Smile For You",
+    ):
+        assert term in capsule
+    assert "라니(" not in capsule
+    assert capsule.count("똥강아지/라니 only when clearly fans") == 1
+
+    digest = _compact_profile_digest("isegye_lilpa")
+    assert len(digest) < 600
+    assert "Official髭男dism" in digest
+    for prompt in (capsule, digest):
+        assert "with 바둑/9단 it is Go player 李世乭" in prompt
+        assert "이세계아이돌/이세돌" not in prompt
 
 
 def test_stellive_translation_profiles_contain_official_romanization():
@@ -254,6 +287,16 @@ def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():
     for profile_id, standard_text in standard_profiles.items():
         standard_terms = glossary_hangul_terms(standard_text)
         qwen_terms = glossary_hangul_terms(qwen_profiles[profile_id])
+        if profile_id == "isegye_lilpa":
+            assert "이세계아이돌/이세돌" not in qwen_profiles[profile_id].split("\n\n", 1)[0]
+            # The production Qwen capsule intentionally keeps selected titles
+            # while the full standard glossary carries the longer title list.
+            assert standard_terms - qwen_terms == {
+                "고양이가", "구한다", "넘어", "마법소녀", "세상을",
+                "아이돌", "이세계", "차원을", "페스티벌",
+            }
+            assert qwen_terms - standard_terms == {"바둑", "이세돌"}
+            continue
         assert standard_terms == qwen_terms, (
             f"{profile_id} glossary drift — only standard: "
             f"{sorted(standard_terms - qwen_terms)}, only qwen: {sorted(qwen_terms - standard_terms)}"

@@ -88,11 +88,15 @@ def test_context_required_collision_policy_survives_migration():
 
 
 def test_derived_stt_and_translation_views_keep_reviewed_behavior():
-    assert profile_stt_terms("isegye_lilpa") == (
+    assert profile_stt_terms("isegye_lilpa")[:8] == (
         "이세계아이돌", "이세돌", "릴파", "아이네", "징버거", "고세구", "주르르", "비챤"
     )
     rules = load_translation_corrections().name_rendering_rules
-    assert len(rules) == 37
+    assert profile_stt_terms("isegye_lilpa")[8:] == (
+        "세구땅", "르르땅", "버거땅", "부가땅", "이네땅", "챠니", "이파리", "맆스틱", "왁물원",
+        "KIDDING", "SYZYGY", "Misty Rainbow", "Stargazers", "Be My Light", "Smile For You",
+    )
+    assert len(rules) == 51
     lilpa = next(rule for rule in rules if rule.scope == "isegye_lilpa" and rule.canonical == "Lilpa")
     assert lilpa.publication_policy == "required"
     assert "늘파" in lilpa.source_aliases

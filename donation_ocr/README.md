@@ -29,7 +29,7 @@ live-subtitle-env\Scripts\python.exe donation_ocr\app.py --dry-run
 
 | 參數 | 預設 | 說明 |
 |---|---|---|
-| `--profile` | `isegye_lilpa` | 看誰就設誰;`--profile ""` 沿用 config 現值 |
+| `--profile` | `isegye_lilpa` | 이세계아이돌全團用語設定；`--profile ""` 沿用 config 現值 |
 | `--interval` | 2.5 | 擷取間隔秒 |
 | `--dry-run` | off | 只 OCR 不翻譯 |
 | `--max-rows` | 8 | 面板保留最近 N 則 |

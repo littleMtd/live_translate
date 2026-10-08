@@ -1459,6 +1459,118 @@
     },
     {
       "entity_id": "hades_memnon"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "세구땅"
+      ],
+      "wrong_forms": [],
+      "canonical": "세구땅"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "르르땅"
+      ],
+      "wrong_forms": [],
+      "canonical": "르르땅"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "이네땅"
+      ],
+      "wrong_forms": [],
+      "canonical": "이네땅"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "버거땅"
+      ],
+      "wrong_forms": [],
+      "canonical": "버거땅"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "부가땅"
+      ],
+      "wrong_forms": [],
+      "canonical": "부가땅"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "챠니"
+      ],
+      "wrong_forms": [],
+      "canonical": "챠니"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "릴파넴"
+      ],
+      "wrong_forms": [],
+      "canonical": "릴파넴"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "둘기"
+      ],
+      "wrong_forms": [],
+      "canonical": "둘기"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "박쥐단"
+      ],
+      "wrong_forms": [],
+      "canonical": "박쥐단"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "주폭도"
+      ],
+      "wrong_forms": [],
+      "canonical": "주폭도"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "세균단"
+      ],
+      "wrong_forms": [],
+      "canonical": "세균단"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "아이네"
+      ],
+      "wrong_forms": [],
+      "canonical": "아이네"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "징버거"
+      ],
+      "wrong_forms": [],
+      "canonical": "징버거"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "비챤"
+      ],
+      "wrong_forms": [],
+      "canonical": "비챤"
     }
   ]
 }
