@@ -90,7 +90,8 @@ def evaluate_case(source: str, shipped_target: str, profile_id: str) -> dict:
 # build
 # ---------------------------------------------------------------------------
 
-def iter_translation_events(patterns: list[str]):
+def iter_translation_events(patterns: list[str], run_kind: str = "default"):
+    from utils.run_kind_filter import matches_run_kind
     for pattern in patterns:
         for path in sorted(glob.glob(pattern)):
             day = Path(path).stem.replace("runtime_events_", "")
@@ -105,6 +106,8 @@ def iter_translation_events(patterns: list[str]):
                         continue
                     if event.get("event_type") != "translation":
                         continue
+                    if not matches_run_kind(event, run_kind):
+                        continue
                     if event.get("engine") == "mock":  # test pollution guard
                         continue
                     event["_day"] = day
@@ -116,7 +119,7 @@ def case_id(source: str, profile_id: str) -> str:
 
 
 def build(args) -> int:
-    events = list(iter_translation_events(args.events))
+    events = list(iter_translation_events(args.events, args.run_kind))
     if not events:
         print("no translation events matched — check --events globs", file=sys.stderr)
         return 1
@@ -245,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     p_build = sub.add_parser("build", help="freeze a golden set from runtime events")
     p_build.add_argument("--events", nargs="+", required=True,
                          help="glob(s) of runtime_events_*.jsonl")
+    p_build.add_argument("--run-kind", choices=("default", "live", "test", "replay", "benchmark", "cafe_clip", "all"), default="default")
     p_build.add_argument("--output", default=str(DEFAULT_SNAPSHOT))
     p_build.add_argument("--per-profile", type=int, default=150)
     p_build.add_argument("--max-chars", type=int, default=300)

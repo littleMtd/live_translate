@@ -86,7 +86,8 @@ def _validate_config(stt_only: bool):
 
 
 def _donation_ocr_command(app_path: Path) -> list[str]:
-    profile = cfg.active_streamer_profile if cfg.translation.use_profile else ""
+    snapshot = profile_state.current()
+    profile = snapshot.effective_profile_id if snapshot.translation_profile_applied else ""
     return [sys.executable, str(app_path), "--profile", profile]
 
 
@@ -110,6 +111,8 @@ def _export_chatgpt_bundle_on_shutdown(*, status: str) -> dict | None:
             action="shutdown",
             status=status,
         )
+        if runtime_events.run_kind == "cafe_clip":
+            return None
         result = export_bundle(
             run_id=runtime_events.run_id,
             log_dir=_LOG_DIR,
@@ -221,7 +224,7 @@ def _stt_printer(
     return t
 
 
-def main():
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--stt-only", action="store_true",
@@ -235,7 +238,30 @@ def main():
     parser.add_argument("--donation-ocr", action="store_true",
                         help="also launch the donation OCR translation panel "
                              "(donation_ocr/app.py) as a side process")
-    args = parser.parse_args()
+    parser.add_argument("--profile", help="lock this run to a streamer profile ID")
+    args = parser.parse_args(argv)
+    if args.profile and (args.calibrate_identity_roi or args.show_identity_roi):
+        parser.error("--profile cannot be combined with identity ROI modes")
+    if args.profile:
+        from modules.streamer_profiles import canonical_profile_id
+        requested_profile = args.profile
+        args.profile = canonical_profile_id(requested_profile)
+        if not args.profile:
+            parser.error(f"unknown profile ID: {requested_profile}")
+    return args
+
+
+def _configure_profile(args: argparse.Namespace) -> None:
+    profile_state.configure_source(
+        args.profile or cfg.active_streamer_profile,
+        mode="manual" if args.profile else str(getattr(cfg.translation, "profile_mode", "auto")),
+        translation_profile_applied=True if args.profile else bool(cfg.translation.use_profile),
+        stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
+    )
+
+
+def main():
+    args = _parse_args()
 
     if args.calibrate_identity_roi or args.show_identity_roi:
         from modules.identity_roi import run_identity_roi_ui
@@ -254,12 +280,7 @@ def main():
         if args.listen:
             _apply_listen_mode_config()
 
-        profile_state.configure_source(
-            cfg.active_streamer_profile,
-            mode=str(getattr(cfg.translation, "profile_mode", "auto")),
-            translation_profile_applied=bool(cfg.translation.use_profile),
-            stt_glossary_applied=bool(cfg.stt.use_profile_glossary),
-        )
+        _configure_profile(args)
     except (Exception, SystemExit):
         _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         raise

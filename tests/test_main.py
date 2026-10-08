@@ -125,19 +125,17 @@ def test_apply_listen_mode_config_relaxes_stt_filters():
         object.__setattr__(main_module.cfg, "stt", original_stt)
 
 
-def test_donation_ocr_command_respects_profile_enablement():
+@pytest.mark.parametrize("applied, expected", [(True, "url"), (False, "")])
+def test_donation_ocr_command_uses_effective_profile(monkeypatch, applied, expected):
     import main as main_module
+    from types import SimpleNamespace
 
-    original = main_module.cfg.translation.use_profile
     app_path = main_module.Path("donation_ocr/app.py")
-    try:
-        object.__setattr__(main_module.cfg.translation, "use_profile", False)
-        assert main_module._donation_ocr_command(app_path)[-1] == ""
-
-        object.__setattr__(main_module.cfg.translation, "use_profile", True)
-        assert main_module._donation_ocr_command(app_path)[-1] == main_module.cfg.active_streamer_profile
-    finally:
-        object.__setattr__(main_module.cfg.translation, "use_profile", original)
+    monkeypatch.setattr(main_module.profile_state, "current",
+                        lambda: SimpleNamespace(effective_profile_id="url", translation_profile_applied=applied))
+    assert main_module._donation_ocr_command(app_path) == [
+        main_module.sys.executable, str(app_path), "--profile", expected
+    ]
 
 
 def _wait_until(predicate, timeout: float, interval: float = 0.02) -> bool:

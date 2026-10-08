@@ -175,6 +175,7 @@ def build_phase0_candidates(
     events_path: Path,
     audio_root: Path = DEFAULT_AUDIO_ROOT,
     run_ids: set[str] | None = None,
+    run_kind: str = "default",
     seed: int | None = None,
     total: int = DEFAULT_TOTAL,
     random_count: int = DEFAULT_RANDOM,
@@ -199,7 +200,7 @@ def build_phase0_candidates(
     if sum(requested_counts.values()) > total:
         raise ValueError("requested bucket counts must not exceed total")
     rows = read_runtime_rows(events_path)
-    raw_population = translation_population(rows, run_ids)
+    raw_population = translation_population(rows, run_ids, run_kind)
     stt_index = build_stt_index(rows)
     sentence_index = build_event_index(rows, "sentence")
     audio_index = build_event_index(rows, "audio")
@@ -357,6 +358,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--audio-root", type=Path, default=DEFAULT_AUDIO_ROOT, help="Path to logs/audio_dump.")
     parser.add_argument("--output", type=Path, default=None, help="Output labeling_sample JSON path.")
     parser.add_argument("--run-id", action="append", default=None, help="Restrict to this exact run_id. Repeatable.")
+    parser.add_argument("--run-kind", choices=("default", "live", "test", "replay", "benchmark", "cafe_clip", "all"), default="default")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible sampling.")
     parser.add_argument("--total", type=int, default=DEFAULT_TOTAL, help="Total candidate sample count.")
     parser.add_argument("--random", type=int, default=DEFAULT_RANDOM, help="Random hold-out candidate count.")
@@ -380,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
             events_path=events_path,
             audio_root=args.audio_root,
             run_ids=set(args.run_id) if args.run_id else None,
+            run_kind=args.run_kind,
             seed=args.seed,
             total=args.total,
             random_count=args.random,

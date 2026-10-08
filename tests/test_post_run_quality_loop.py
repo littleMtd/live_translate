@@ -1,6 +1,8 @@
 from pathlib import Path
+import json
 
 from scripts import post_run_quality_loop as loop
+from scripts.analyze_runtime_events import analyze_runtime_events
 
 
 def test_post_run_quality_loop_runs_existing_tools(tmp_path, monkeypatch):
@@ -44,7 +46,7 @@ def test_post_run_quality_loop_runs_existing_tools(tmp_path, monkeypatch):
         "--events",
     ]
     combined = captured_json[0][0][3]
-    assert captured_json[0][0][4:] == ["--json"]
+    assert captured_json[0][0][4:] == ["--run-kind", "live", "--json"]
     assert combined.endswith("runtime_events_combined.jsonl")
     assert "run_id\":\"a" in Path(combined).read_text(encoding="utf-8")
     assert "run_id\":\"b" in Path(combined).read_text(encoding="utf-8")
@@ -68,3 +70,27 @@ def test_post_run_quality_loop_runs_existing_tools(tmp_path, monkeypatch):
         "data/replay_eval_snapshot.jsonl",
         "--update",
     ]
+
+
+def test_post_run_explicit_cafe_kind_reaches_analyzer(tmp_path, monkeypatch):
+    events = tmp_path / "runtime_events_20261008.jsonl"
+    events.write_text(
+        '{"event_type":"translation","run_id":"live","source_text":"one"}\n'
+        '{"event_type":"translation","run_id":"cafe","run_kind":"cafe_clip","source_text":"two"}\n',
+        encoding="utf-8",
+    )
+
+    def capture(command, output):
+        kind = command[command.index("--run-kind") + 1]
+        path = Path(command[command.index("--events") + 1])
+        output.write_text(json.dumps(analyze_runtime_events(path, run_kind=kind)), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(loop, "_run_capture_json", capture)
+    monkeypatch.setattr(loop, "_run", lambda command: 0)
+    assert loop.main(["--events", str(events), "--run-kind", "cafe_clip",
+                      "--output-dir", str(tmp_path), "--skip-replay-update"]) == 0
+    report_path = next(tmp_path.glob("*/runtime_report.json"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["run_kind_filter"] == "cafe_clip"
+    assert report["translation_events"] == 1

@@ -125,3 +125,24 @@ def test_build_phase0_candidates_rejects_invalid_bucket_totals(
             low_confidence_count=0,
             suspicious_count=0,
         )
+
+
+def test_phase0_run_kind_default_and_explicit_selection(tmp_path):
+    from scripts.build_phase0_eval_candidates import parse_args
+    events_path = tmp_path / "events.jsonl"
+    audio_root = tmp_path / "audio"
+    kinds = ("live", "test", "replay", "benchmark", "cafe_clip")
+    rows = []
+    for index, kind in enumerate(kinds):
+        rows.extend([dict(_stt(index), run_kind=kind), _translation(index, run_kind=kind)])
+    _write_jsonl(events_path, rows)
+    _touch_wavs(audio_root, [f"utt-{index}" for index in range(5)])
+    kwargs = dict(events_path=events_path, audio_root=audio_root, seed=1, total=1,
+                  random_count=1, forced_count=0, silence_count=0, multi_count=0,
+                  low_confidence_count=0, suspicious_count=0)
+    assert build_phase0_candidates(**kwargs)["sampling"]["raw_population_size"] == 4
+    cafe = build_phase0_candidates(**kwargs, run_kind="cafe_clip")
+    assert cafe["sampling"]["raw_population_size"] == 1
+    assert cafe["samples"][0]["sequence_id"] == 4
+    assert build_phase0_candidates(**kwargs, run_kind="all")["sampling"]["raw_population_size"] == 5
+    assert parse_args(["--run-kind", "cafe_clip"]).run_kind == "cafe_clip"

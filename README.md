@@ -37,7 +37,14 @@ Copy-Item .env.example .env
 # STT diagnostics
 .\live-subtitle-env\Scripts\python.exe main.py --stt-only
 .\live-subtitle-env\Scripts\python.exe main.py --listen
+
+# 咖啡廳剪輯來源：手動鎖定 reviewed profile，並標記這次 run
+$env:LIVE_TRANSLATE_RUN_KIND="cafe_clip"
+.\live-subtitle-env\Scripts\python.exe main.py --profile url
+Remove-Item Env:LIVE_TRANSLATE_RUN_KIND
 ```
+
+`--profile <id>` 可與 `--stt-only` 或 `--listen` 合用，不能與 identity ROI 模式合用。`cafe_clip` 事件與直播事件可寫在同一天的 JSONL；analyzer 預設只取 `live`；其他分析、重播與標註工具預設只排除 `cafe_clip`，保留其他 kind 的既有行為，需要剪輯事件時明確指定 `--run-kind cafe_clip`。`cafe_fansite` 的停止方式為強制結束行程；`cafe_clip` 不屬於 production 證據。此模式不會在結束時自動匯出 ChatGPT bundle；需要時可用 `scripts/export_chatgpt_bundle.py --list-runs` 查詢 run，再手動匯出。
 
 自然 production 證據必須由使用者執行 `python main.py`，並在自己的 SOOP/CHZZK 直播觀看流程中產生。分析工具不得自行搜尋、播放或下載外部直播代替 production evidence。
 

@@ -5,6 +5,10 @@ The font tuple is flattened into scalar fields for JSON/Rust compatibility.
 Called by main.py on startup so Tauri can read live_translate_config.json.
 """
 import json
+import os
+import tempfile
+import re
+import time
 from pathlib import Path
 from dataclasses import fields, is_dataclass
 from types import MappingProxyType
@@ -42,13 +46,41 @@ def _to_dict() -> dict:
     return d
 
 
+_STALE_TEMP_SECONDS = 24 * 60 * 60
+
+
+def _cleanup_stale_temps() -> None:
+    """Remove only this export's old crash leftovers; leave recent writers alone.
+
+    NamedTemporaryFile uses an eight-character random token. Windows refuses
+    deletion of an open writer's file; cleanup failures must not block export.
+    """
+    pattern = re.compile(re.escape(_EXPORT_PATH.name) + r"\.[a-z0-9_]{8}\.tmp")
+    cutoff = time.time() - _STALE_TEMP_SECONDS
+    for candidate in _EXPORT_PATH.parent.glob(f"{_EXPORT_PATH.name}.*.tmp"):
+        try:
+            if (pattern.fullmatch(candidate.name) and not candidate.is_symlink()
+                    and candidate.is_file() and candidate.stat().st_mtime < cutoff):
+                candidate.unlink()
+        except OSError:
+            pass
+
+
 def write() -> None:
     """Write non-secret config to JSON for Tauri dashboard."""
     _EXPORT_PATH.parent.mkdir(exist_ok=True)
-    _EXPORT_PATH.write_text(
-        json.dumps(_to_dict(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _cleanup_stale_temps()
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=_EXPORT_PATH.parent,
+                                         prefix=f"{_EXPORT_PATH.name}.", suffix=".tmp",
+                                         delete=False) as handle:
+            temp_path = Path(handle.name)
+            handle.write(json.dumps(_to_dict(), indent=2, ensure_ascii=False))
+        os.replace(temp_path, _EXPORT_PATH)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def read() -> dict:

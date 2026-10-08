@@ -72,6 +72,29 @@ read-only by default. Review the changed implementation surfaces and the
 cross-module paths needed to establish their behavior; a backend-only request
 excludes frontend code. Keep plan review and code review verdicts separate.
 
+### Codex agent settings
+
+When an agent runs the Codex CLI (`codex exec`) for this repository, pass these
+as command-line flags instead of editing `~/.codex/config.toml`:
+
+- Use the newest installed `codex.exe` (compare `codex --version` across the
+  Codex app's `%LOCALAPPDATA%\OpenAI\Codex\bin\*\` copies and the VS Code
+  extension's `bin\windows-x86_64\`). Older CLIs do not know newer models and
+  the API rejects them ("not supported when using Codex with a ChatGPT
+  account"); on 2026-10-08 `gpt-6.1-sol` worked with 0.162 but not 0.155.
+- Plan cross-review, re-review, and post-implementation review:
+  `-m gpt-6.1-sol -c model_reasoning_effort="high" -s read-only`.
+  Reviews are the backstop for implementation mistakes; low-effort reviews
+  missed a truncated production prompt and a contradictory profile instruction
+  (2026-10-08, `docs/agent/ISEGYE_GROUP_PROFILE_PLAN_20261008.md` §8).
+- Implementation: `-m gpt-6.1-sol -s workspace-write`, keeping the user's
+  configured default reasoning effort.
+- The `workspace-write` sandbox cannot write `.git`, so the invoking agent
+  commits only after its own validation and the user's authorization. Point
+  pytest temporary and cache paths at the system temp directory
+  (`--basetemp`, `-o cache_dir`); sandbox-created directories in the project
+  root can end up locked to the sandbox account.
+
 ## Implementation Completion Reports
 
 For application, configuration, or data behavior changes, start a separate

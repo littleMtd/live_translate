@@ -86,8 +86,8 @@ def analyze_runtime_events(
 
     all_events = [event for event_path in event_paths for event in _read_events(event_path)]
     normalized_run_kind = str(run_kind or "live").strip().lower()
-    if normalized_run_kind not in {"live", "test", "replay", "benchmark", "all"}:
-        raise ValueError("run_kind must be live, test, replay, benchmark, or all")
+    if normalized_run_kind not in {"live", "test", "replay", "benchmark", "cafe_clip", "all"}:
+        raise ValueError("run_kind must be live, test, replay, benchmark, cafe_clip, or all")
     events = [
         event
         for event in all_events
@@ -281,17 +281,19 @@ def _effective_run_kind(event: Mapping[str, Any]) -> str:
     value = str(event.get("run_kind") or "").strip().lower()
     if value:
         return value
-    return "live" if int(event.get("schema_version") or 0) < 3 else "unknown"
+    return "live"
 
 
 def _read_events(path: Path):
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             line = line.strip()
-            if not line:
+            if not line or "\ufffd" in line:
                 continue
             try:
-                yield json.loads(line)
+                event = json.loads(line)
+                if isinstance(event, dict):
+                    yield event
             except json.JSONDecodeError:
                 continue
 
@@ -2899,7 +2901,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--run-kind",
-        choices=("live", "test", "replay", "benchmark", "all"),
+        choices=("live", "test", "replay", "benchmark", "cafe_clip", "all"),
         default="live",
         help="Analyze only this run kind (pre-v3 records are treated as legacy live).",
     )

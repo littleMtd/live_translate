@@ -10,6 +10,8 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_AUDIO_ROOT = DEFAULT_LOG_DIR / "audio_dump"
 TARGET_SCHEMA_VERSION = 2
@@ -44,10 +46,10 @@ def latest_event_file(log_dir: Path = DEFAULT_LOG_DIR) -> Path | None:
 
 def read_runtime_rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line_no, line in enumerate(handle, start=1):
             line = line.strip()
-            if not line:
+            if not line or "\ufffd" in line:
                 continue
             try:
                 event = json.loads(line)
@@ -61,12 +63,15 @@ def read_runtime_rows(path: Path) -> list[dict[str, Any]]:
 def translation_population(
     rows: list[dict[str, Any]],
     run_ids: set[str] | None = None,
+    run_kind: str = "default",
 ) -> list[dict[str, Any]]:
+    from utils.run_kind_filter import matches_run_kind
     return [
         row for row in rows
         if row["event"].get("schema_version") == TARGET_SCHEMA_VERSION
         and row["event"].get("event_type") == "translation"
         and (run_ids is None or str(row["event"].get("run_id") or "") in run_ids)
+        and matches_run_kind(row["event"], run_kind)
     ]
 
 
@@ -515,6 +520,7 @@ def build_labeling_sample(
     min_population: int = DEFAULT_MIN_POPULATION,
     allow_missing_audio: bool = False,
     run_ids: set[str] | None = None,
+    run_kind: str = "default",
 ) -> dict[str, Any]:
     if sample_size < 1:
         raise ValueError("sample_size must be positive")
@@ -522,7 +528,7 @@ def build_labeling_sample(
         raise ValueError("min_population must be non-negative")
 
     rows = read_runtime_rows(events_path)
-    raw_population = translation_population(rows, run_ids)
+    raw_population = translation_population(rows, run_ids, run_kind)
     excluded_missing_source_id_population = 0
     if allow_missing_audio:
         population = raw_population
@@ -646,6 +652,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--events", type=Path, default=None, help="Path to runtime_events_YYYYMMDD.jsonl.")
     parser.add_argument("--audio-root", type=Path, default=DEFAULT_AUDIO_ROOT, help="Path to logs/audio_dump.")
+    parser.add_argument("--run-kind", choices=("default", "live", "test", "replay", "benchmark", "cafe_clip", "all"), default="default")
     parser.add_argument("--output", type=Path, default=None, help="Output JSON path.")
     parser.add_argument(
         "--run-id",
@@ -686,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
             min_population=args.min_population,
             allow_missing_audio=args.allow_missing_audio,
             run_ids=set(args.run_id) if args.run_id else None,
+            run_kind=args.run_kind,
         )
     except ValueError as exc:
         print(f"Sampling failed: {exc}", file=sys.stderr)

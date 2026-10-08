@@ -22,7 +22,7 @@ _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 # Version 6 adds request-contract and stage-level adjudication provenance.
 # Fields remain additive; analyzers continue accepting older JSONL records.
 _SCHEMA_VERSION = 6
-_RUN_KINDS = frozenset({"live", "test", "replay", "benchmark"})
+_RUN_KINDS = frozenset({"live", "test", "replay", "benchmark", "cafe_clip"})
 
 # Types that are safe to pass straight to json.dumps without coercion.
 _JSON_NATIVE_TYPES = (str, bool, int, float, type(None))
@@ -156,6 +156,7 @@ class RuntimeEventWriter:
         self._once_lock = threading.Lock()
         self._emitted_once: set[tuple[str, str]] = set()
         self._warned = False
+        self._terminated_paths: set[Path] = set()
 
     @property
     def path(self) -> Path:
@@ -202,12 +203,30 @@ class RuntimeEventWriter:
         try:
             with self._lock:
                 self._log_dir.mkdir(parents=True, exist_ok=True)
-                with self._path_for_timestamp(created_at).open("a", encoding="utf-8") as handle:
-                    handle.write(line + "\n")
+                path = self._path_for_timestamp(created_at)
+                prefix = "" if path in self._terminated_paths else self._missing_newline(path)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(prefix + line + "\n")
+                self._terminated_paths.add(path)
         except Exception as exc:
             if not self._warned:
                 log.warning("Runtime event write failed: %s", exc)
                 self._warned = True
+
+    @staticmethod
+    def _missing_newline(path: Path) -> str:
+        """A force-stopped run (e.g. a cafe_clip session) can leave a partial last
+        line; without a newline the next run's first event would be fused into it
+        and lost to readers that skip invalid lines."""
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, 2)
+                if handle.tell() == 0:
+                    return ""
+                handle.seek(-1, 2)
+                return "" if handle.read(1) == b"\n" else "\n"
+        except FileNotFoundError:
+            return ""
 
     def emit_once(self, event_type: str, identity: str, **fields: Any) -> bool:
         """Emit one immutable manifest once per writer/run identity."""

@@ -1193,7 +1193,7 @@ def _adjudicate_translation_candidate(
     simplified_chinese_spans = _simplified_chinese_evidence(corrected)
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if bool(cfg.translation.use_profile)
+        if effective_profile_applied(cfg.translation.use_profile)
         else ""
     )
     approved_terms = set(_publication_approved_terms(profile_id, obligations))
@@ -3295,7 +3295,7 @@ def _start_fallback_probe_thread(
                     cfg.scene.publish_translation_activity
                 ),
             )
-            with bind_activity_snapshot(activity_snapshot):
+            with bind_activity_snapshot(activity_snapshot), bind_profile_snapshot(profile_state.current()):
                 system_prompt = _build_probe_system_prompt(shared_state)
                 try:
                     probe_primary_recovery(

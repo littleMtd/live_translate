@@ -18,6 +18,7 @@ from modules.activity_context import (
     effective_profile_id,
     normalize_activity,
 )
+from modules.profile_context import effective_profile_applied
 from modules.translation_corrections import SHARED_NAME_SCOPE, load_translation_corrections
 from modules.translation_prompts import get_translation_profile_facts
 from utils.api_retry import classify_error
@@ -736,7 +737,7 @@ def _groq_system_prompt(system_prompt: str) -> str:
     prompt = _COMPACT_SYSTEM_PROMPT
     if cfg.translation.translation_mode == "live":
         prompt += "\n\n" + _LIVE_SUBTITLE_CONCISION
-    if profile_id and bool(cfg.translation.use_profile):
+    if profile_id and effective_profile_applied(cfg.translation.use_profile):
         prompt += (
             f" Active streamer profile: {profile_id}."
             f"{_compact_profile_digest(profile_id)}"
@@ -782,7 +783,7 @@ def _deepseek_capsule_prompt(profile_id: str) -> str:
 def _deepseek_system_prompt(system_prompt: str) -> str:
     profile_id = (
         effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
-        if bool(cfg.translation.use_profile)
+        if effective_profile_applied(cfg.translation.use_profile)
         else ""
     )
     return _append_request_entity_capsule(

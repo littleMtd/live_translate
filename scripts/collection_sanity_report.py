@@ -12,6 +12,8 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_AUDIO_ROOT = DEFAULT_LOG_DIR / "audio_dump"
 TARGET_SCHEMA_VERSION = 2
@@ -30,10 +32,10 @@ def latest_event_file(log_dir: Path = DEFAULT_LOG_DIR) -> Path | None:
 
 def read_runtime_rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line_no, line in enumerate(handle, start=1):
             line = line.strip()
-            if not line:
+            if not line or "\ufffd" in line:
                 continue
             try:
                 event = json.loads(line)
@@ -49,6 +51,7 @@ def build_collection_sanity_report(
     events_path: Path,
     audio_root: Path = DEFAULT_AUDIO_ROOT,
     run_ids: set[str] | None = None,
+    run_kind: str = "default",
     min_population: int = DEFAULT_MIN_POPULATION,
     top_n: int = DEFAULT_TOP_N,
     long_text_chars: int = DEFAULT_LONG_TEXT_CHARS,
@@ -70,7 +73,10 @@ def build_collection_sanity_report(
 
     rows = read_runtime_rows(events_path)
     schema2_rows = [row for row in rows if row["event"].get("schema_version") == TARGET_SCHEMA_VERSION]
-    scoped_schema2_rows = _filter_rows_by_run(schema2_rows, run_ids)
+    from utils.run_kind_filter import matches_run_kind
+    scoped_schema2_rows = _filter_rows_by_run(
+        [row for row in schema2_rows if matches_run_kind(row["event"], run_kind)], run_ids
+    )
     translations = [
         row for row in scoped_schema2_rows
         if row["event"].get("event_type") == "translation"
@@ -787,6 +793,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate a collected runtime-events/audio-dump batch before labeling.")
     parser.add_argument("--events", type=Path, default=None, help="Path to runtime_events_YYYYMMDD.jsonl.")
     parser.add_argument("--audio-root", type=Path, default=DEFAULT_AUDIO_ROOT, help="Path to logs/audio_dump.")
+    parser.add_argument("--run-kind", choices=("default", "live", "test", "replay", "benchmark", "cafe_clip", "all"), default="default")
     parser.add_argument(
         "--run-id",
         action="append",
@@ -821,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
         events_path=events_path,
         audio_root=args.audio_root,
         run_ids=set(args.run_id) if args.run_id else None,
+        run_kind=args.run_kind,
         min_population=args.min_population,
         top_n=args.top,
         long_text_chars=args.long_text_chars,

@@ -15,12 +15,15 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import glob
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "scratch" / "analysis" / "post_run_quality"
 DEFAULT_REPLAY_SNAPSHOT = PROJECT_ROOT / "data" / "replay_eval_snapshot.jsonl"
 
@@ -56,20 +59,23 @@ def _resolve_event_inputs(event_args: list[str]) -> list[Path]:
     return paths
 
 
-def _prepare_event_input(event_args: list[str], output_dir: Path) -> Path:
+def _prepare_event_input(event_args: list[str], output_dir: Path, run_kind: str = "default") -> Path:
+    from utils.run_kind_filter import matches_run_kind
     paths = _resolve_event_inputs(event_args)
-    if len(paths) == 1:
-        return paths[0]
-
     combined = output_dir / "runtime_events_combined.jsonl"
     with combined.open("w", encoding="utf-8") as handle:
         for path in paths:
             try:
-                with path.open("r", encoding="utf-8") as source:
+                with path.open("r", encoding="utf-8", errors="replace") as source:
                     for line in source:
-                        handle.write(line)
-                        if line and not line.endswith("\n"):
-                            handle.write("\n")
+                        if "\ufffd" in line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        if isinstance(event, dict) and matches_run_kind(event, run_kind):
+                            handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
             except OSError:
                 print(f"warning: event file unavailable: {path}", file=sys.stderr)
     return combined
@@ -84,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         help="runtime event JSONL file(s) or glob(s)",
     )
     parser.add_argument("--run-id", action="append", help="limit suggestions to run_id")
+    parser.add_argument("--run-kind", choices=("default", "live", "test", "replay", "benchmark", "cafe_clip", "all"), default="default")
     parser.add_argument("--min-count", type=int, default=2)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--snapshot", default=str(DEFAULT_REPLAY_SNAPSHOT))
@@ -99,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     python = sys.executable
-    event_input = _prepare_event_input(args.events, output_dir)
+    event_input = _prepare_event_input(args.events, output_dir, args.run_kind)
     analyze_out = output_dir / "runtime_report.json"
     suggest_out = output_dir / "suggestions.md"
     candidate_out = output_dir / "glossary_candidates.json"
@@ -110,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             "scripts/analyze_runtime_events.py",
             "--events",
             str(event_input),
+            "--run-kind",
+            "live" if args.run_kind == "default" else args.run_kind,
             "--json",
         ],
         analyze_out,
