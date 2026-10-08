@@ -2,7 +2,6 @@
   "common_stt_terms": [
     "스타레일",
     "붕괴 스타레일",
-    "CHZZK",
     "SOOP",
     "VVIP"
   ],
@@ -121,7 +120,6 @@
         "hades_group",
         "hades_kim_bongjun",
         "hades_kim_sungtae",
-        "platform_chzzk",
         "hades_memnon"
       ],
       "stt_sequence": [
@@ -130,10 +128,6 @@
           "alias": "하데스"
         },
         "치즈",
-        {
-          "entity_id": "platform_chzzk",
-          "alias": "치지직"
-        },
         "발로란트",
         "Valorant",
         {
