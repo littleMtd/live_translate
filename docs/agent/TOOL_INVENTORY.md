@@ -313,3 +313,10 @@ Repo hygiene:
 - Keep `AGENTS.md` as the short global workflow/router. Long-term project
   context, validation detail, tool inventory, and optimization history belong
   in their owning `docs/agent/*.md` routed file.
+
+## Offline subtitle delivery
+
+- `scripts/make_subtitles.py`: thin subprocess CLI (`translate` / `transcribe`, `--estimate`, `--profile`, `--out-dir`, `--ffmpeg`). Parsing, rolling-caption cleanup, timestamp ownership slicing, bounded Groq retry, DeepSeek cue-ID batches and fallback, delivery rollback, and report live in `modules/offline_subtitles.py`.
+- `--estimate` is local-only; actual translation calls paid DeepSeek, and transcription additionally calls paid Groq. Do not run paid jobs without user authorization. Provider tests are mocked; optional local ffmpeg integration skips if unavailable.
+- Must run in a fresh subprocess. Sets `LIVE_TRANSLATE_RUN_KIND=cafe_clip` before project imports, binds a manually locked profile and empty activity, and never instantiates the live STT/translator, SQLite cache, translation/conversation memory, history, or shared breaker. No resume/checkpoint support. stdout is JSONL with job IDs; logging goes to stderr.
+- Writes `.ko.vtt`, `.zh-TW.vtt`, `.zh-TW.srt`, `.report.json` to the explicit output directory, staging all files before delivery and rolling back rename failures. Existing outputs are protected. Quality flags and untranslated cue IDs are advisory, not proof of translation quality.

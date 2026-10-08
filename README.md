@@ -129,3 +129,9 @@ Runtime JSONL 使用 schema v6，位於 `logs/runtime_events_YYYYMMDD.jsonl`。
 - Detailed runtime map：[`docs/agent/PROJECT_CONTEXT.md`](docs/agent/PROJECT_CONTEXT.md)
 - Validation workflows：[`docs/agent/VALIDATION.md`](docs/agent/VALIDATION.md)
 - Maintained tool inventory：[`docs/agent/TOOL_INVENTORY.md`](docs/agent/TOOL_INVENTORY.md)
+
+### 離線字幕工具
+
+以獨立程序執行 `live-subtitle-env\Scripts\python.exe scripts\make_subtitles.py translate --input ko.vtt --profile isegye_lilpa --out-dir <目錄>`；音訊／影片則使用 `transcribe --input audio.m4a`。支援 VTT／SRT、YouTube 滾動字幕清理，輸出韓文 VTT、繁中 VTT／SRT 及品質報告；stdout 為含 job ID 的 JSONL，診斷在 stderr。
+
+`--estimate` 僅作本機估算，不呼叫 API。實際 `translate` 會呼叫 DeepSeek；`transcribe` 另呼叫 Groq，均可能收費，請先確認授權。轉錄需 ffmpeg／ffprobe，可用 `--ffmpeg <ffmpeg.exe 路徑>` 指定同目錄的工具。費用為估算，重試不包含在內；未知費率以 null 表示。工作標記為 `cafe_clip`，鎖定指定 profile、空 activity，不使用即時 cache／history／memory／breaker。輸出目錄有同名成品時拒絕覆寫；失敗會撤回本次交付，單句翻譯失敗則標示 `【未翻譯】`。目前不提供續跑 checkpoint。
