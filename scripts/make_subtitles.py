@@ -58,6 +58,8 @@ def main(argv=None):
         parser.add_argument("--translator", choices=("gemini", "deepseek"), default="gemini",
                             help="translation provider; no automatic fallback between them")
         parser.add_argument("--gemini-model", help="override the Gemini model (default gemini-3.8-flash)")
+        parser.add_argument("--stt", choices=("elevenlabs", "groq"), default="elevenlabs",
+                            help="transcription provider; no automatic fallback between them")
         parser.add_argument("--duration", type=float,
                             help="transcribe --estimate only: media length in seconds, no input file needed")
         args = parser.parse_args(argv)
@@ -92,35 +94,51 @@ def main(argv=None):
             encoder, probe = offline.media_tools(args.ffmpeg)
             duration = offline.media_duration(args.input, probe)
             cues = []
+        stt_model = cfg.stt.elevenlabs_model if args.stt == "elevenlabs" else cfg.stt.groq_model
         if args.estimate:
             from modules.translation_prompts import get_translation_profile_facts
+            scope = offline.profile_scope(args.profile)
             # Same profile normalization as the real job, so the Gemini request cap is not underestimated.
-            sources = offline.normalized_sources(cues, offline.profile_scope(args.profile)) if cues else None
+            sources = offline.normalized_sources(cues, scope) if cues else None
+            keyterms = len(offline.offline_keyterms(scope)) if args.stt == "elevenlabs" and duration else 0
             progress("estimate", **offline.estimate(
-                cues, duration, cfg.stt.groq_model,
+                cues, duration, stt_model,
                 facts=get_translation_profile_facts(args.profile), translator=args.translator,
                 translation_model=args.gemini_model if args.translator == "gemini" else None,
-                sources=sources))
+                sources=sources, stt=args.stt, stt_keyterms=keyterms))
             return 0
         snapshot = offline.profile_scope(args.profile)
         engine = build_translator(args.translator, cfg, offline, progress, args.gemini_model)
+        stt_report = {}
         if args.mode == "transcribe":
-            if not cfg.keys.groq:
-                raise offline.OfflineSubtitleError("Groq API key is missing")
-            from groq import Groq
+            # Both keys (translator above, STT here) are checked before the first paid request.
+            if args.stt == "elevenlabs" and not cfg.keys.elevenlabs:
+                raise Error("ElevenLabs API key is missing")
+            if args.stt == "groq" and not cfg.keys.groq:
+                raise Error("Groq API key is missing")
             from modules.profile_context import bind_profile_snapshot
             from modules.activity_context import bind_activity_snapshot, capture_activity_snapshot
-            with bind_profile_snapshot(snapshot), bind_activity_snapshot(capture_activity_snapshot("")):
-                prompt = offline.stt_prompt(snapshot)
-            client = Groq(api_key=cfg.keys.groq, max_retries=0, timeout=offline.OFFLINE_STT_TIMEOUT_SECONDS)
-            try:
-                cues = offline.transcribe(args.input, duration, encoder, client, prompt,
-                                          cfg.stt.groq_model, progress)
-            finally:
-                client.close()
+            if args.stt == "elevenlabs":
+                from elevenlabs.client import ElevenLabs
+                keyterms = offline.offline_keyterms(snapshot)
+                client = ElevenLabs(api_key=cfg.keys.elevenlabs, timeout=offline.OFFLINE_STT_TIMEOUT_SECONDS)
+                cues = offline.transcribe_elevenlabs(args.input, duration, encoder, client, keyterms,
+                                                     stt_model, progress)
+                stt_report = {"stt_provider": "elevenlabs", "stt_model": stt_model, "stt_keyterms": len(keyterms)}
+            else:
+                from groq import Groq
+                with bind_profile_snapshot(snapshot), bind_activity_snapshot(capture_activity_snapshot("")):
+                    prompt = offline.stt_prompt(snapshot)
+                client = Groq(api_key=cfg.keys.groq, max_retries=0, timeout=offline.OFFLINE_STT_TIMEOUT_SECONDS)
+                try:
+                    cues = offline.transcribe(args.input, duration, encoder, client, prompt, stt_model, progress)
+                finally:
+                    client.close()
+                stt_report = {"stt_provider": "groq", "stt_model": stt_model}
             if not cues:
                 raise Error("no usable transcription segments")
         targets, report = offline.translate(cues, snapshot, engine, progress)
+        report.update(stt_report)
         report["job"] = job
         files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report)
         progress("done", files=files, report=report)

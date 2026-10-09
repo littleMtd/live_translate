@@ -650,7 +650,7 @@ def test_gemini_estimate_cap_is_sum_of_request_limits():
 @pytest.fixture
 def keys():
     from config import cfg
-    original = {name: getattr(cfg.keys, name) for name in ("gemini", "groq", "deepseek")}
+    original = {name: getattr(cfg.keys, name) for name in ("gemini", "groq", "deepseek", "elevenlabs")}
     def set_keys(**values):
         for name, value in values.items():
             object.__setattr__(cfg.keys, name, value)
@@ -839,3 +839,318 @@ def test_gemini_model_flag_is_validated_before_estimate(extra):
     run, values = _cli("translate", "--estimate", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt", *extra)
     assert run.returncode == 1
     assert values[-1]["message"] == "--gemini-model must be a Gemini model name and needs --translator gemini"
+
+
+# --- 2026-10-09: ElevenLabs Scribe transcription (plan OFFLINE_ELEVENLABS_STT_PLAN_20261009, round 3) ---
+
+from elevenlabs.core.api_error import ApiError
+
+EL_KEY = "sk_FAKE-ELEVEN-SECRET-0123456789"
+
+
+def tok(text, start, end, kind="word"):
+    return SimpleNamespace(text=text, start=start, end=end, type=kind)
+
+
+def scribe(words, text=None):
+    return SimpleNamespace(text=" ".join(w.text for w in words if w.type == "word") if text is None else text,
+                           words=words)
+
+
+def stream(n=400, step=3.0):
+    """A synthetic absolute word stream: one word every `step` seconds, some sentence ends."""
+    return [(f"w{i}{'.' if i % 7 == 6 else ''}", i * step + 0.1, i * step + 0.9) for i in range(n)]
+
+
+class FakeScribe:
+    """Serves each slice the words of an absolute stream that fall inside it (slice-relative times)."""
+    def __init__(self, words, parts, script=None):
+        self.words, self.parts, self.script, self.calls, self.index = words, parts, list(script or []), [], 0
+        self.speech_to_text = SimpleNamespace(convert=self.convert)
+
+    def convert(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.script:
+            item = self.script.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            if item is not None:
+                self.index += 1
+                return item
+        part = self.parts[self.index]
+        self.index += 1
+        inside = [tok(t, s - part.start, e - part.start) for t, s, e in self.words if part.start <= s and e <= part.end]
+        return scribe([x for w in inside for x in (w, tok(" ", w.end, w.end, "spacing"))])
+
+
+def run_scribe(monkeypatch, words, duration, length=600, overlap=5, script=None, **kwargs):
+    mock_audio(monkeypatch)
+    parts = off.slices(duration, length, overlap)
+    client = FakeScribe(words, parts, script)
+    kwargs.setdefault("sleep", Mock())
+    cues = off.transcribe_elevenlabs(Path("in.mp4"), duration, "ffmpeg", client, ["고세구"], "scribe_v2", Mock(),
+                                     length=length, overlap=overlap, **kwargs)
+    return cues, client
+
+
+def test_group_words_rules_and_no_word_dropped():
+    words = [("가", 0.0, 0.5), ("나.", 0.6, 1.2), ("다", 1.3, 1.6),        # sentence end after >= 1 s
+             ("라", 3.0, 3.4),                                            # 1.4 s gap
+             ("long" * 12, 4.0, 4.5),                                     # 48 chars: own cue
+             ("x", 10.0, 10.2)] + [(f"y{i}", 12 + i, 12.5 + i) for i in range(8)]  # 6 s cap
+    cues = off.group_words([(start, end, text) for text, start, end in words], 100)
+    texts = [c.text for c in cues]
+    assert texts[:4] == ["가 나.", "다", "라", "long" * 12]
+    assert all(c.end - c.start <= 6.0 or " " not in c.text for c in cues)
+    assert sorted(" ".join(texts).split()) == sorted(w[0] for w in words)
+
+
+def test_word_ownership_is_identical_across_slice_layouts(monkeypatch):
+    words = stream()  # 1200 s of speech, words straddling 600 s etc.
+    words.append(("edge", 599.6, 600.6))  # midpoint 600.1: owned by exactly one slice
+    words.sort(key=lambda w: w[1])
+    results = []
+    for length, overlap in ((600, 5), (300, 20), (500, 0.5), (2000, 5)):
+        cues, _client = run_scribe(monkeypatch, words, 1201.0, length, overlap)
+        results.append([(c.start, c.end, c.text) for c in cues])
+        assert sorted(" ".join(c.text for c in cues).split()) == sorted(w[0] for w in words)
+    assert all(result == results[0] for result in results)
+
+
+def test_silent_slice_ok_but_malformed_middle_slice_aborts(monkeypatch):
+    words = [w for w in stream(600) if not 590 <= w[1] <= 1210]  # middle slice (595-1205) truly silent
+    cues, client = run_scribe(monkeypatch, words, 1799.0)
+    assert len(client.calls) == 3
+    assert any(c.start < 590 for c in cues) and any(c.start > 1210 for c in cues)  # normal / silent / normal
+    assert not any(590 <= c.start <= 1210 for c in cues)
+    for broken in (SimpleNamespace(text="말", words=None), SimpleNamespace(text=None, words=[]),
+                   scribe([], text="말은 있는데 시간이 없음"), scribe([SimpleNamespace(text="x", start=1, end=2)], text="x"),
+                   scribe([tok("a", float("nan"), 1), tok("b", 2, 1), tok("c", 1, 2)])):
+        with pytest.raises(off.OfflineJobError, match="ElevenLabs"):
+            run_scribe(monkeypatch, stream(), 1801.0, script=[None, broken])
+
+
+def test_request_contract(monkeypatch):
+    _cues, client = run_scribe(monkeypatch, stream(10), 40.0)
+    call = client.calls[0]
+    assert call["model_id"] == "scribe_v2" and call["language_code"] == "ko"
+    assert call["timestamps_granularity"] == "word" and call["tag_audio_events"] is False and call["diarize"] is False
+    assert call["request_options"] == {"max_retries": 0} and call["keyterms"] == ["고세구"]
+
+
+def api_error(status, code=None, legacy=None, retry_after=None):
+    detail = {}
+    if code:
+        detail["code"] = code
+    if legacy:
+        detail["status"] = legacy
+    headers = {"retry-after": retry_after} if retry_after else {}
+    return ApiError(status_code=status, headers={**headers, "x-key": EL_KEY},
+                    body={"detail": {**detail, "message": f"key {EL_KEY}"}})
+
+
+@pytest.mark.parametrize("error,message", [
+    (api_error(401, "invalid_api_key"), "金鑰無效"), (api_error(403), "金鑰無效"),
+    (api_error(401, legacy="quota_exceeded"), "額度不足"), (api_error(402, "insufficient_credits"), "額度不足"),
+    (api_error(400, "insufficient_credits"), "額度不足"), (api_error(400), "請求失敗（HTTP 400）"),
+    (api_error(404), "請求失敗（HTTP 404）"), (api_error(422), "請求失敗（HTTP 422）"),
+    (ValueError(f"bug {EL_KEY}"), "請求失敗（連線錯誤）")])
+def test_elevenlabs_errors_abort_once_without_leaking(monkeypatch, error, message):
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_scribe(monkeypatch, stream(), 1201.0, script=[error])
+    assert message in str(caught.value) and EL_KEY not in str(caught.value)
+    assert caught.value.__context__ is None and caught.value.__cause__ is None
+
+
+def test_elevenlabs_retry_budget_is_shared_across_slices(monkeypatch):
+    import httpx
+    sleep = Mock()
+    cues, client = run_scribe(monkeypatch, stream(), 1201.0, sleep=sleep, script=[
+        api_error(429, "rate_limit_exceeded", retry_after="2"), None,
+        api_error(503), httpx.ConnectError("down"), None, api_error(429, "concurrent_limit_exceeded", retry_after="3")])
+    assert cues and [c.args[0] for c in sleep.call_args_list] == [2, 1, 2, 3]
+    with pytest.raises(off.OfflineJobError, match="重試後仍失敗"):
+        run_scribe(monkeypatch, stream(), 1201.0, max_wait=150,
+                   script=[api_error(429, retry_after="100"), None, api_error(429, retry_after="100")])
+    with pytest.raises(off.OfflineJobError, match="重試後仍失敗"):
+        run_scribe(monkeypatch, stream(), 1201.0, script=[api_error(500)] * 5)
+
+
+def test_keyterms_filtered_capped_and_match_live_rules():
+    from modules import stt
+    assert off._KEYTERM_UNSUPPORTED_CHARS == stt._ELEVENLABS_UNSUPPORTED_KEYTERM_CHARS
+    registry = SimpleNamespace(common_stt_terms=("고세구", "고세구", "a<b", "x" * 50, "one two three four five six", ""),
+                               terms_for=lambda profile: tuple(f"t{i}" for i in range(200)))
+    terms = off.offline_keyterms(SimpleNamespace(registry=registry, effective_profile_id="p"))
+    assert terms[0] == "고세구" and len(terms) == 100 and "a<b" not in terms and "x" * 50 not in terms
+    real = off.offline_keyterms(off.profile_scope("isegye_lilpa"))
+    assert real and len(real) == len(set(real)) <= 100
+
+
+def test_estimate_elevenlabs_pricing():
+    result = off.estimate([], 1201, model="scribe_v2", stt="elevenlabs", stt_keyterms=27)
+    assert result["stt_seconds"] == 605 + 606 + 6  # no 10 s minimum per slice
+    assert result["stt_cost_usd"] == pytest.approx(1217 / 3600 * 0.27)
+    assert off.estimate([], 1201, model="scribe_v2", stt="elevenlabs")["stt_cost_usd"] == pytest.approx(1217 / 3600 * 0.22)
+    assert off.estimate([], 1201, model="scribe_v9", stt="elevenlabs")["stt_cost_usd"] is None
+    groq = off.estimate([], 1201)
+    assert groq["stt_seconds"] == 605 + 606 + 10 and groq["stt_provider"] == "groq"
+
+
+def test_cli_estimate_defaults_to_elevenlabs_without_keys():
+    run, values = _cli("transcribe", "--estimate", "--duration", "600", "--profile", "isegye_lilpa",
+                       extra_env={"GEMINI_API_KEY": "", "ELEVENLABS_API_KEY": "", "ElevenLabs_API_KEY": ""})
+    assert run.returncode == 0, run.stderr
+    assert values[-1]["stt_provider"] == "elevenlabs" and values[-1]["stt_model"] == "scribe_v2"
+    assert values[-1]["stt_keyterms"] > 0 and values[-1]["stt_cost_usd"] > 0
+
+
+@pytest.mark.parametrize("stt,missing,message", [("elevenlabs", "elevenlabs", "ElevenLabs API key is missing"),
+                                                 ("groq", "groq", "Groq API key is missing")])
+def test_missing_stt_key_fails_before_any_request(monkeypatch, capsys, keys, tmp_path, stt, missing, message):
+    keys(**{"gemini": "g-test", "groq": "groq-test", "elevenlabs": "el-test", missing: ""})
+    module = load_cli(monkeypatch, f"make_subtitles_stt_{stt}")
+    monkeypatch.setattr(off, "media_tools", lambda ffmpeg=None: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(off, "media_duration", lambda path, probe: 30.0)
+    for name in ("transcribe", "transcribe_elevenlabs"):
+        monkeypatch.setattr(off, name, Mock(side_effect=AssertionError("transcribed")))
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    assert module.main(["transcribe", "--stt", stt, "--input", str(media), "--out-dir", str(tmp_path / "o")]) == 1
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["message"] == message
+
+
+@pytest.mark.parametrize("failure", ["auth", "credit", "server", "bug"])
+def test_elevenlabs_key_never_leaks_through_cli(monkeypatch, capsys, caplog, keys, tmp_path, failure):
+    keys(gemini="g-test", elevenlabs=EL_KEY)
+    module = load_cli(monkeypatch, f"make_subtitles_el_leak_{failure}")
+    monkeypatch.setattr(off, "media_tools", lambda ffmpeg=None: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(off, "media_duration", lambda path, probe: 30.0)
+    mock_audio(monkeypatch)
+    monkeypatch.setattr(off.time, "sleep", lambda s: None)
+    error = {"auth": api_error(401, "invalid_api_key"), "credit": api_error(402, "insufficient_credits"),
+             "server": api_error(500), "bug": RuntimeError(f"boom {EL_KEY}")}[failure]
+    class Client:
+        def __init__(self, api_key, timeout):
+            assert api_key == EL_KEY
+            self.speech_to_text = SimpleNamespace(convert=Mock(side_effect=error))
+    import elevenlabs.client
+    monkeypatch.setattr(elevenlabs.client, "ElevenLabs", Client)
+    caplog.set_level(logging.DEBUG)
+    log_file = tmp_path / "run.log"
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    logging.getLogger().addHandler(handler)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    try:
+        assert module.main(["transcribe", "--input", str(media), "--out-dir", str(tmp_path / "o"),
+                            "--profile", "isegye_lilpa"]) == 1
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+    captured = capsys.readouterr()
+    for text in (captured.out, captured.err, caplog.text, log_file.read_text(encoding="utf-8")):
+        assert EL_KEY not in text and "FAKE-ELEVEN" not in text
+    assert not list((tmp_path / "o").glob("*")) if (tmp_path / "o").exists() else True
+
+
+def test_elevenlabs_cli_job_done_reports_provider(monkeypatch, capsys, keys, tmp_path):
+    keys(gemini="g-test", elevenlabs="el-test")
+    module = load_cli(monkeypatch, "make_subtitles_el_done")
+    monkeypatch.setattr(off, "media_tools", lambda ffmpeg=None: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(off, "media_duration", lambda path, probe: 30.0)
+    mock_audio(monkeypatch)
+    parts = off.slices(30.0)
+    class Client:
+        def __init__(self, api_key, timeout):
+            self.speech_to_text = FakeScribe([("안녕.", 1.0, 1.5), ("친구", 3.0, 3.4)], parts).speech_to_text
+    import elevenlabs.client
+    monkeypatch.setattr(elevenlabs.client, "ElevenLabs", Client)
+    import urllib.request
+    def send(request, timeout):
+        rows = json.loads(json.loads(request.data)["contents"][-1]["parts"][0]["text"])["cues"]
+        return FakeResponse(reply(rows))
+    monkeypatch.setattr(urllib.request, "urlopen", send)
+    assert module.main(["transcribe", "--input", str(tmp_path / "clip.mp4") if (tmp_path / "clip.mp4").write_bytes(b"x")
+                        else "", "--out-dir", str(tmp_path / "o"), "--profile", "isegye_lilpa"]) == 0
+    done = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert done["report"]["stt_provider"] == "elevenlabs" and done["report"]["stt_model"] == "scribe_v2"
+    assert done["report"]["stt_keyterms"] > 0 and done["report"]["cue_count"] == 2
+
+
+def test_retries_are_capped_across_the_whole_job(monkeypatch):
+    # 2 retries in each of 4 slices = 8 > 6 job-wide, although no single request exceeds 3.
+    script = []
+    for _ in range(4):
+        script += [api_error(503), api_error(503), None]
+    with pytest.raises(off.OfflineJobError, match="重試後仍失敗"):
+        run_scribe(monkeypatch, stream(), 2401.0, script=script)
+
+
+def test_zero_width_word_at_media_end_stays_inside_duration():
+    cues = off.group_words([(0.2, 0.5, "가"), (0.99, 0.99, "끝")], 1.0)
+    assert all(0 <= c.start < c.end <= 1.0 for c in cues)
+    assert cues[-1].text.endswith("끝")
+    single = off.group_words([(0.99, 0.99, "끝")], 1.0)[0]
+    assert (round(single.start, 2), round(single.end, 2)) == (0.95, 1.0)
+    lone = off.group_words([(5.0, 5.0, "x")], 3.0)
+    assert 0 <= lone[0].start < lone[0].end <= 3.0
+
+
+def _transcribe_cli(monkeypatch, keys, tmp_path, name, scribe_script=None, groq_segments=None, stt="elevenlabs"):
+    keys(gemini="g-test", groq="groq-test", elevenlabs="el-test")
+    module = load_cli(monkeypatch, name)
+    monkeypatch.setattr(off, "media_tools", lambda ffmpeg=None: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(off, "media_duration", lambda path, probe: 1799.0)  # three slices
+    mock_audio(monkeypatch)
+    parts = off.slices(1799.0)
+    words = [w for w in stream(600) if not 590 <= w[1] <= 1210]
+    class Scribe:
+        def __init__(self, api_key, timeout):
+            self.speech_to_text = FakeScribe(words, parts, scribe_script).speech_to_text
+    import elevenlabs.client
+    monkeypatch.setattr(elevenlabs.client, "ElevenLabs", Scribe)
+    class Groq:
+        def __init__(self, **kwargs):
+            self.audio = SimpleNamespace(transcriptions=SimpleNamespace(
+                create=Mock(side_effect=[{"segments": seg} for seg in groq_segments or []])))
+        def close(self):
+            pass
+    import groq
+    monkeypatch.setattr(groq, "Groq", Groq)
+    import urllib.request
+    def send(request, timeout):
+        rows = json.loads(json.loads(request.data)["contents"][-1]["parts"][0]["text"])["cues"]
+        return FakeResponse(reply(rows))
+    monkeypatch.setattr(urllib.request, "urlopen", send)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    out = tmp_path / "o"
+    code = module.main(["transcribe", "--stt", stt, "--input", str(media), "--out-dir", str(out),
+                        "--profile", "isegye_lilpa"])
+    return code, out
+
+
+def test_cli_silent_middle_slice_delivers(monkeypatch, capsys, keys, tmp_path):
+    code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_el_silent")
+    assert code == 0 and len(list(out.glob("*"))) == 4
+    done = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert done["stage"] == "done" and done["report"]["stt_provider"] == "elevenlabs"
+
+
+def test_cli_malformed_middle_slice_delivers_nothing(monkeypatch, capsys, keys, tmp_path):
+    code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_el_broken",
+                                scribe_script=[None, SimpleNamespace(text="말", words=None)])
+    assert code == 1 and not (out.exists() and list(out.glob("*")))
+    assert "ElevenLabs" in json.loads(capsys.readouterr().out.splitlines()[-1])["message"]
+
+
+def test_cli_groq_path_still_delivers(monkeypatch, capsys, keys, tmp_path):
+    segments = [[{"start": 1, "end": 2, "text": "안녕"}], [{"start": 10, "end": 11, "text": "중간"}],
+                [{"start": 20, "end": 21, "text": "끝"}]]
+    code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_groq_ok", groq_segments=segments, stt="groq")
+    assert code == 0 and len(list(out.glob("*"))) == 4
+    done = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert done["report"]["stt_provider"] == "groq" and done["report"]["stt_model"] == "whisper-large-v3"
+    assert done["report"]["cue_count"] == 3

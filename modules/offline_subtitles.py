@@ -155,9 +155,15 @@ def segment_cues(segments, part, duration):
     return cues
 
 def _retry_after(exc, attempt):
-    # urllib HTTPError carries .headers (case-insensitive Message); Groq errors carry .response.headers.
-    headers = (getattr(exc, "headers", None) if isinstance(exc, urllib.error.HTTPError)
-               else getattr(getattr(exc, "response", None), "headers", None)) or {}
+    # urllib HTTPError carries .headers (case-insensitive Message); Groq errors carry .response.headers;
+    # the ElevenLabs SDK ApiError carries a plain .headers dict.
+    if isinstance(exc, urllib.error.HTTPError):
+        headers = exc.headers
+    else:
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+        if headers is None and isinstance(getattr(exc, "headers", None), dict):
+            headers = exc.headers
+    headers = headers or {}
     value = headers.get("retry-after", headers.get("Retry-After", "")) or ""
     try:
         seconds = float(value)
@@ -203,6 +209,157 @@ def transcribe(path, duration, encoder, client, prompt, model, progress,
             progress("transcribe", done=i + 1, total=len(parts))
     cues.sort(key=lambda cue: (cue.start, cue.end))
     return [replace(cue, id=f"c{i}") for i, cue in enumerate(cues, 1)]
+
+# --- ElevenLabs Scribe (plan OFFLINE_ELEVENLABS_STT_PLAN_20261009, round-3 revision) ---
+
+ELEVENLABS_STT_USD_PER_HOUR = {"scribe_v2": 0.22}  # batch API price, checked 2026-10-09
+ELEVENLABS_KEYTERMS_USD_PER_HOUR = 0.05
+ELEVENLABS_PRICING_REVISION = "2026-10-09"
+ELEVENLABS_CREDIT_MESSAGE = "ElevenLabs 額度不足，請到 ElevenLabs 加值或升級方案"
+# Mirrors modules.stt._ELEVENLABS_UNSUPPORTED_KEYTERM_CHARS (a test keeps them equal; importing modules.stt
+# here would pull the live audio stack into the offline job).
+_KEYTERM_UNSUPPORTED_CHARS = frozenset("<>{}[]\\")
+_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！")
+
+
+def offline_keyterms(snapshot, limit=100):
+    """Registry common + profile STT terms, filtered like the live path; offline jobs have no activity terms."""
+    registry = snapshot.registry
+    terms, seen = [], set()
+    for term in (*registry.common_stt_terms, *registry.terms_for(snapshot.effective_profile_id)):
+        term = str(term or "").strip()
+        if (not term or term in seen or len(term) >= 50 or len(term.split()) > 5
+                or any(char in term for char in _KEYTERM_UNSUPPORTED_CHARS)):
+            continue
+        seen.add(term)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def scribe_words(response, part):
+    """Owned words of one slice as (abs_start, abs_end, text). Raises OfflineJobError for unusable responses."""
+    text, words = getattr(response, "text", None), getattr(response, "words", None)
+    if not isinstance(text, str) or not isinstance(words, (list, tuple)):
+        raise OfflineJobError("ElevenLabs 回應格式異常，已停止以免字幕出現空白段")
+    tokens = []
+    for item in words:
+        kind = getattr(item, "type", None)
+        if not isinstance(kind, str):
+            raise OfflineJobError("ElevenLabs 回應格式異常，已停止以免字幕出現空白段")
+        if kind == "word":
+            tokens.append(item)
+    if not tokens:
+        if text.strip():
+            raise OfflineJobError("ElevenLabs 回應缺少時間資訊，已停止以免字幕出現空白段")
+        return []  # a genuinely silent slice
+    valid = []
+    for item in tokens:
+        start, end, value = getattr(item, "start", None), getattr(item, "end", None), getattr(item, "text", None)
+        if _finite(start) and _finite(end) and 0 <= start <= end and isinstance(value, str) and value.strip():
+            valid.append((part.start + start, part.start + end, value.strip()))
+    if not valid or len(tokens) - len(valid) > 0.2 * len(tokens):
+        raise OfflineJobError("ElevenLabs 回應缺少時間資訊，已停止以免字幕出現空白段")
+    # Ownership per word (same midpoint rule as segment_cues), so overlap words are kept exactly once.
+    return [w for w in valid if part.owner_start <= (w[0] + w[1]) / 2 < part.owner_end]
+
+
+def group_words(words, duration, *, gap=0.8, max_seconds=6.0, max_chars=42, min_sentence=1.0):
+    """Group the whole job's owned words into cues once; no word is ever dropped (over-long words stand alone)."""
+    groups, current = [], []
+    for word in sorted(words, key=lambda w: (w[0], w[1])):
+        if current:
+            first, last = current[0], current[-1]
+            joined = " ".join(w[2] for w in current)
+            if (word[0] - last[1] >= gap
+                    or (last[2].endswith(_SENTENCE_END) and last[1] - first[0] >= min_sentence)
+                    or word[1] - first[0] > max_seconds
+                    or len(joined) + 1 + len(word[2]) > max_chars):
+                groups.append(current)
+                current = []
+        current.append(word)
+    if current:
+        groups.append(current)
+    cues = []
+    for group in groups:
+        start, end = max(0.0, group[0][0]), group[-1][1]
+        if duration > 0:
+            end = min(duration, end)
+            start = min(start, max(0.0, duration - 0.05))
+        if end - start < 0.05:  # keep zero-width words visible, still inside [0, duration]
+            end = start + 0.05 if duration <= 0 else min(duration, start + 0.05)
+        cues.append(Cue("", start, end, " ".join(w[2] for w in group)))
+    return cues
+
+
+def _elevenlabs_error(exc):
+    """('credit'|'auth'|'retry'|'abort', status) from status code and documented error codes only."""
+    status = getattr(exc, "status_code", None)
+    status = status if isinstance(status, int) else None
+    body = getattr(exc, "body", None)
+    detail = body.get("detail") if isinstance(body, dict) else None
+    codes = {detail.get(key) for key in ("code", "status")} if isinstance(detail, dict) else set()
+    if status == 402 or codes & {"insufficient_credits", "quota_exceeded"}:
+        return "credit", status
+    if status in (401, 403):
+        return "auth", status
+    if status == 429 or (status is not None and 500 <= status < 600):
+        return "retry", status
+    if status is None and (isinstance(exc, (OSError, TimeoutError)) or type(exc).__module__.startswith("httpx")):
+        return "retry", None  # network failure before any HTTP status
+    return "abort", status
+
+
+def transcribe_elevenlabs(path, duration, encoder, client, keyterms, model, progress,
+                          *, length=600, overlap=5, sleep=None, max_retries=3, max_job_retries=6, max_wait=300):
+    sleep = sleep or time.sleep
+    parts = slices(duration, length, overlap)
+    words = []
+    waited, retried = 0.0, 0  # job-wide: total wait seconds and total retries across all slices
+    with tempfile.TemporaryDirectory(prefix="offline-subtitles-") as tmp:
+        for i, part in enumerate(parts):
+            wav = Path(tmp) / f"part-{i}.wav"
+            subprocess.run([encoder, "-nostdin", "-v", "error", "-y", "-ss", str(part.start),
+                            "-i", str(path), "-t", str(part.end - part.start), "-vn",
+                            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)],
+                           capture_output=True, check=True, timeout=180)
+            for attempt in range(max_retries + 1):
+                kind = status = None
+                try:
+                    with wav.open("rb") as audio:
+                        request = dict(file=audio, model_id=model, language_code="ko", timestamps_granularity="word",
+                                       tag_audio_events=False, diarize=False, request_options={"max_retries": 0})
+                        if keyterms:
+                            request["keyterms"] = list(keyterms)
+                        response = client.speech_to_text.convert(**request)
+                    break
+                except Exception as exc:  # noqa: BLE001 - classified below; provider text is never shown
+                    kind, status = _elevenlabs_error(exc)
+                    delay = _retry_after(exc, attempt) if kind == "retry" else 0
+                # Decided outside the except block so no provider exception is chained.
+                label = f"HTTP {status}" if status else "連線錯誤"
+                if kind == "credit":
+                    raise OfflineJobError(ELEVENLABS_CREDIT_MESSAGE)
+                if kind == "auth":
+                    raise OfflineJobError(f"ElevenLabs 金鑰無效或沒有權限（{label}）")
+                if kind == "abort":
+                    raise OfflineJobError(f"ElevenLabs 請求失敗（{label}）")
+                if attempt >= max_retries or retried >= max_job_retries or waited + delay > max_wait:
+                    raise OfflineJobError(f"ElevenLabs 速率限制或暫時無法使用，重試後仍失敗（{label}）")
+                progress("retry", slice=i + 1, attempt=attempt + 1, wait_seconds=delay)
+                sleep(delay)
+                waited += delay
+                retried += 1
+            words.extend(scribe_words(response, part))
+            progress("transcribe", done=i + 1, total=len(parts))
+    cues = group_words(words, duration)
+    return [replace(cue, id=f"c{i}") for i, cue in enumerate(cues, 1)]
+
 
 def profile_scope(profile):
     from modules.profile_context import profile_state
@@ -547,9 +704,19 @@ def normalized_sources(cues, snapshot):
     return sources
 
 def estimate(cues, duration=0, model="whisper-large-v3", translation_model=None, facts="",
-             translator="deepseek", today=None, sources=None):
+             translator="deepseek", today=None, sources=None, stt="groq", stt_keyterms=0):
     from config import cfg
-    billed = sum(max(10, p.end - p.start) for p in slices(duration)) if duration else 0
+    if stt == "elevenlabs":
+        # Billed on audio length; no per-request minimum is documented (Groq's 10 s minimum does not apply).
+        billed = sum(p.end - p.start for p in slices(duration)) if duration else 0
+        rate = ELEVENLABS_STT_USD_PER_HOUR.get(model)
+        stt_cost = (billed / 3600 * (rate + (ELEVENLABS_KEYTERMS_USD_PER_HOUR if stt_keyterms else 0))
+                    if rate is not None else None)
+        stt_revision = ELEVENLABS_PRICING_REVISION
+    else:
+        billed = sum(max(10, p.end - p.start) for p in slices(duration)) if duration else 0
+        stt_cost = billed * 0.111 / 3600 if model == "whisper-large-v3" else None
+        stt_revision = "2026-10-09"
     chars = sum(len(c.text) for c in cues)
     count_low = len(cues) if not duration else math.ceil(duration / 8)
     count_high = len(cues) if not duration else math.ceil(duration / 2)
@@ -562,8 +729,9 @@ def estimate(cues, duration=0, model="whisper-large-v3", translation_model=None,
     result = {"estimated": True, "cue_count": len(cues) if not duration else None,
               "estimated_cue_count": [count_low, count_high],
               "stt_seconds": billed,
-              "stt_cost_usd": billed * 0.111 / 3600 if model == "whisper-large-v3" else None,
-              "stt_pricing_revision": "2026-10-09",
+              "stt_provider": stt if duration else None, "stt_model": model if duration else None,
+              "stt_keyterms": stt_keyterms if duration else None,
+              "stt_cost_usd": stt_cost, "stt_pricing_revision": stt_revision,
               "translator": translator,
               "translation_input_tokens": [input_low, input_high],
               "translation_output_tokens": [output_low, output_high]}
