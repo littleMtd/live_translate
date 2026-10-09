@@ -102,12 +102,16 @@ def render(cues, srt=False):
         blocks.append(f"{i}\n{timestamp(cue.start, srt)} --> {timestamp(cue.end, srt)}\n{value}\n")
     return ("" if srt else "WEBVTT\n\n") + "\n".join(blocks)
 
+class OfflineSubtitleError(ValueError):
+    """Local validation failures whose message is safe to show (no provider data)."""
+
+
 def media_tools(ffmpeg=None):
     encoder = str(Path(ffmpeg).resolve()) if ffmpeg else shutil.which("ffmpeg")
     probe = (str(Path(encoder).with_name("ffprobe" + Path(encoder).suffix))
              if ffmpeg and encoder else shutil.which("ffprobe"))
     if not encoder or not probe or not Path(encoder).is_file() or not Path(probe).is_file():
-        raise ValueError("ffmpeg/ffprobe not found; use --ffmpeg with the executable path")
+        raise OfflineSubtitleError("ffmpeg/ffprobe not found; use --ffmpeg with the executable path")
     for tool in (encoder, probe):
         subprocess.run([tool, "-version"], capture_output=True, check=True, timeout=15)
     return encoder, probe

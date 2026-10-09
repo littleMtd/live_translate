@@ -240,3 +240,15 @@ Claude Code 已於 2026-10-09 以 yt-dlp 下載고세구 MV（`https://youtu.be/
 - 最終驗證：全套 1588 passed、2 skipped、451 subtests passed；`tests/test_offline_subtitles.py` 38 passed、1 skipped。
 - 真實執行（使用者已同意付費）：經 cafe_fansite 對 SOOP 31 秒片段執行 `transcribe` 兩次，19 句、時間軸正確，
   report `profile=url`、`run_kind=cafe_clip`、失敗 0、品質旗標 0。
+
+### 後續修正（2026-10-09）
+
+- 起因：使用者的 cafe_fansite 在 winget 安裝 ffmpeg 之前啟動，「下載＋字幕」只顯示 `offline job failed`（原因只在 stderr）；
+  估價還會先產生與影片等長的靜音 WAV（3 小時約 180 MB）。
+- 修正：新增 `OfflineSubtitleError`（本地驗證、訊息為固定字串，才放進 JSON 錯誤行；provider 例外仍為通用訊息）；
+  `transcribe --estimate --duration SECONDS`（不需輸入檔與 ffmpeg；需為正有限值且不超過 72 小時）。
+- 審查：Claude Code 另開的唯讀審查 agent，round 3 **APPROVE**；採納其 non-blocking 建議中的 `--duration` 上限。
+  未採納（列為之後處理）：argparse 錯誤改為可顯示訊息、`CalledProcessError`／`OSError` 的 stderr 原因、except 區塊內的 import、
+  一個測試依賴目前目錄。
+- 驗證：全套 1595 passed、2 skipped、451 subtests passed；經 cafe_fansite（PATH 不含 ffmpeg）實測：3 小時 VOD 顯示確認頁與估價，
+  20 秒 SOOP 片段完整轉錄翻譯成功。

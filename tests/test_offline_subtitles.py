@@ -388,3 +388,45 @@ def test_report_run_kind_comes_from_runtime_writer(monkeypatch):
     _targets, report = off.translate([off.Cue("c1", 0, 1, "안녕")],
                                      off.profile_scope("isegye_lilpa"), fake_engine(), Mock())
     assert report["run_kind"] == "test"
+
+
+# --- 2026-10-09: estimate by duration and user-visible local errors (Claude Code) ---
+
+def _cli(*args, extra_env=None):
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", GROQ_API_KEY="", DEEPSEEK_API_KEY="",
+               PATH="", **(extra_env or {}))  # empty PATH: ffmpeg must not be needed for --duration
+    run = subprocess.run([sys.executable, str(ROOT / "scripts" / "make_subtitles.py"), *args],
+                         cwd=ROOT, capture_output=True, text=True, encoding="utf8", env=env)
+    return run, [json.loads(line) for line in run.stdout.splitlines()]
+
+def test_transcribe_estimate_by_duration_needs_no_input_or_ffmpeg():
+    run, values = _cli("transcribe", "--estimate", "--duration", "11244", "--profile", "isegye_lilpa")
+    assert run.returncode == 0, run.stderr
+    assert values[-1]["stage"] == "estimate"
+    assert values[-1]["stt_seconds"] >= 11244
+    assert values[-1]["stt_cost_usd"] > 0
+
+@pytest.mark.parametrize("args,message", [
+    (("transcribe", "--estimate", "--duration", "0"), "--duration must be a positive number of seconds"),
+    (("transcribe", "--estimate", "--duration", "1e12"), "--duration must not exceed 72 hours"),
+    (("transcribe", "--duration", "60", "--out-dir", "x"), "--duration is only valid with transcribe --estimate"),
+    (("translate", "--estimate", "--duration", "60", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt"),
+     "--duration is only valid with transcribe --estimate"),
+    (("transcribe", "--estimate", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt"),
+     "ffmpeg/ffprobe not found; use --ffmpeg with the executable path"),
+])
+def test_local_validation_errors_are_shown(args, message):
+    run, values = _cli(*args)
+    assert run.returncode == 1
+    assert values[-1] == {**values[-1], "stage": "error", "message": message}
+
+def test_provider_style_errors_stay_generic(monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location("make_subtitles_generic", ROOT / "scripts" / "make_subtitles.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setenv("LIVE_TRANSLATE_RUN_KIND", "natural")
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "configure_logging", lambda: None)  # keep pytest's captured stdout
+    monkeypatch.setattr(off, "parse_subtitles", lambda _text: (_ for _ in ()).throw(RuntimeError("secret sk-123")))
+    assert module.main(["translate", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt", "--estimate"]) == 1
+    out = capsys.readouterr().out
+    assert "offline job failed" in out and "sk-123" not in out
