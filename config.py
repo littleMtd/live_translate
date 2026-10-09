@@ -22,6 +22,7 @@ class _Keys:
         or os.environ.get("ElevenLabs_API_KEY", "")
     )
     deepseek:         str = os.environ.get("DEEPSEEK_API_KEY", "")
+    gemini:           str = os.environ.get("GEMINI_API_KEY", "")  # offline subtitles only
 
 
 @dataclass(frozen=True)

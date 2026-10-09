@@ -313,7 +313,7 @@ def send(self, messages, *, route_request):
 DeepSeekTranslationEngine.translate_messages=send
 DeepSeekTranslationEngine.available=property(lambda self: True)
 sys.argv=['scripts/make_subtitles.py','translate','--input',sys.argv[1],
-          '--out-dir',sys.argv[2],'--profile','isegye_lilpa']
+          '--out-dir',sys.argv[2],'--profile','isegye_lilpa','--translator','deepseek']
 runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
 """
     run = subprocess.run([sys.executable,"-X","utf8","-c",harness,
@@ -430,3 +430,412 @@ def test_provider_style_errors_stay_generic(monkeypatch, capsys):
     assert module.main(["translate", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt", "--estimate"]) == 1
     out = capsys.readouterr().out
     assert "offline job failed" in out and "sk-123" not in out
+
+
+# --- 2026-10-09: Gemini offline translator (plan OFFLINE_GEMINI_PLAN_20261009, R1'/R2'/R3) ---
+
+import email.message
+import email.utils
+import io
+import logging
+import urllib.error
+from datetime import date, datetime, timedelta, timezone
+
+FAKE_KEY = "AIzaFAKE-SECRET-KEY-0123456789"
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def read(self, *a):
+        return self.payload
+
+
+def http_error(code, status="RESOURCE_EXHAUSTED", retry_after=None, body=None):
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    raw = body if body is not None else json.dumps({"error": {"code": code, "status": status,
+        "message": f"quota billing details key={FAKE_KEY}"}}).encode()
+    return urllib.error.HTTPError(f"https://x/?key={FAKE_KEY}", code, f"err {FAKE_KEY}", headers, io.BytesIO(raw))
+
+
+def reply(rows, *, finish="STOP", usage=None, text=None, thought=None):
+    parts = [{"text": thought, "thought": True}] if thought else []
+    parts.append({"text": text if text is not None else json.dumps([{"id": r["id"], "zh": "你好"} for r in rows])})
+    data = {"candidates": [{"content": {"parts": parts}, "finishReason": finish}]}
+    if usage is not False:
+        data["usageMetadata"] = usage or {"promptTokenCount": 10, "candidatesTokenCount": 5}
+    return data
+
+
+class FakeSend:
+    """Scripted urlopen: each item is an exception, a reply payload, or a callable(rows)."""
+    def __init__(self, *script):
+        self.script, self.requests = list(script), []
+    def __call__(self, request, timeout):
+        self.requests.append((request, timeout))
+        body = json.loads(request.data)
+        rows = json.loads(body["contents"][-1]["parts"][0]["text"])["cues"]
+        item = self.script.pop(0) if self.script else reply
+        if isinstance(item, BaseException):
+            raise item
+        return FakeResponse(item(rows) if callable(item) else item)
+
+
+def gemini(*script, **kwargs):
+    send = FakeSend(*script)
+    kwargs.setdefault("sleep", Mock())
+    return off.GeminiTranslator(FAKE_KEY, send=send, **kwargs), send
+
+
+CUES = [off.Cue("c1", 0, 1, "안녕"), off.Cue("c2", 1, 2, "친구")]
+
+
+def run_translate(engine, cues=CUES, **kwargs):
+    return off.translate(cues, off.profile_scope("isegye_lilpa"), engine, Mock(), **kwargs)
+
+
+def test_gemini_wire_body_and_headers():
+    engine, send = gemini()
+    assert off.request_batch(engine, [{"id": "c1", "ko": "안녕"}], "PROFILE FACT", []) == {"c1": "你好"}
+    request, timeout = send.requests[0]
+    body = json.loads(request.data)
+    assert request.full_url.endswith("/models/gemini-3.8-flash:generateContent")
+    assert FAKE_KEY not in request.full_url
+    assert request.get_header("X-goog-api-key") == FAKE_KEY
+    assert "PROFILE FACT" in body["systemInstruction"]["parts"][0]["text"]
+    config = body["generationConfig"]
+    assert config["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert config["responseMimeType"] == "application/json"
+    assert config["maxOutputTokens"] == 512 + off.GEMINI_THINKING_RESERVE
+    assert timeout == 90
+    assert FAKE_KEY not in repr(engine)
+
+
+def test_gemini_402_aborts_job_without_retry_or_per_cue():
+    engine, send = gemini(http_error(402))
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_translate(engine)
+    assert str(caught.value) == off.GEMINI_CREDIT_MESSAGE
+    assert len(send.requests) == 1
+    engine._sleep.assert_not_called()
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("code,status,hint", [
+    (400, "INVALID_ARGUMENT", "GEMINI_API_KEY"), (401, "UNAUTHENTICATED", "金鑰無效"),
+    (403, "PERMISSION_DENIED", "沒有權限"), (404, "NOT_FOUND", "模型不存在"),
+    (403, "<script>" + FAKE_KEY, "沒有權限")])
+def test_gemini_client_errors_abort_with_fixed_enum(code, status, hint):
+    engine, send = gemini(http_error(code, status))
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_translate(engine)
+    message = str(caught.value)
+    assert hint in message and f"HTTP {code}" in message
+    assert (status if status in off._GOOGLE_STATUSES else "UNKNOWN") in message
+    assert FAKE_KEY not in message and len(send.requests) == 1
+
+
+def test_gemini_429_is_bounded_retry_not_credit_message():
+    engine, send = gemini(*[http_error(429, retry_after="100")] * 10, max_wait=300)
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_translate(engine)
+    assert "速率或配額限制" in str(caught.value) and "餘額" not in str(caught.value)
+    assert [c.args[0] for c in engine._sleep.call_args_list] == [100, 100, 100]
+    assert len(send.requests) == 4  # never re-sent cue by cue
+
+
+def test_gemini_retry_budget_is_shared_across_batches():
+    engine, send = gemini(http_error(503, "UNAVAILABLE", "100"), reply, http_error(503, "UNAVAILABLE", "100"),
+                          max_wait=150)
+    with pytest.raises(off.OfflineJobError, match="暫時無法使用"):
+        run_translate(engine, batch_size=1)
+    assert engine.waited == 100 and len(send.requests) == 3
+
+
+def test_gemini_network_error_retries_then_succeeds():
+    engine, send = gemini(urllib.error.URLError(f"dns {FAKE_KEY}"), TimeoutError(), reply)
+    targets, report = run_translate(engine)
+    assert [c.text for c in targets] == ["你好", "你好"]
+    assert [c.args[0] for c in engine._sleep.call_args_list] == [1, 2]
+    assert report["translation_usage"]["requests"] == 1
+
+
+@pytest.mark.parametrize("value,expected", [("7", 7), ("2.5", 2.5), (None, 2), ("soon", 2), ("-5", 0)])
+def test_retry_after_on_urllib_http_error(value, expected):
+    assert off._retry_after(http_error(429, retry_after=value), 1) == expected
+
+
+def test_retry_after_http_date_on_urllib_http_error():
+    value = email.utils.format_datetime(datetime.now(timezone.utc) + timedelta(hours=1), usegmt=True)
+    assert 3500 <= off._retry_after(http_error(429, retry_after=value), 1) <= 3600
+
+
+def test_max_tokens_batch_then_cue_fallback_and_usage_counted_once():
+    usage = {"promptTokenCount": 100, "candidatesTokenCount": 7, "thoughtsTokenCount": 3}
+    truncated = lambda rows: reply(rows, finish="MAX_TOKENS", usage=usage, text="[")
+    engine, send = gemini(truncated, truncated, reply)
+    targets, report = run_translate(engine)
+    assert [c.text for c in targets] == ["【未翻譯】안녕", "你好"]
+    assert report["failed_cues"] == ["c1"]
+    assert report["translation_usage"] == {"requests": 3, "input_tokens": 210, "output_tokens": 19,
+                                           "thinking_tokens": 6, "usage_missing_requests": 0}
+    assert report["usage_complete"] is True
+
+
+@pytest.mark.parametrize("bad", [
+    lambda rows: reply(rows, finish="SAFETY"), lambda rows: reply(rows, text=""),
+    lambda rows: {"promptFeedback": {"blockReason": "SAFETY"}, "usageMetadata": {"promptTokenCount": 4}},
+    lambda rows: reply(rows, text='[{"id":"zz","zh":"x"}]'), b"not json", ["list"]])
+def test_rejected_replies_fall_back_and_still_count_usage(bad):
+    engine, send = gemini(bad, reply, reply)
+    targets, report = run_translate(engine)
+    assert [c.text for c in targets] == ["你好", "你好"]
+    assert report["translation_usage"]["requests"] == 3
+
+
+def test_thinking_above_reserve_is_metered_and_thought_parts_ignored():
+    # Thinking above the 1024 reserve while answer + thinking (1200) stays under the 1536 request cap.
+    usage = {"promptTokenCount": 1000, "candidatesTokenCount": 100, "thoughtsTokenCount": 1100}
+    engine, send = gemini(lambda rows: reply(rows, usage=usage, thought='思考 [{"id":"c1"}]'))
+    targets, report = run_translate(engine)
+    assert [c.text for c in targets] == ["你好", "你好"]
+    assert json.loads(send.requests[0][0].data)["generationConfig"]["maxOutputTokens"] == 1536
+    assert report["translation_usage"]["thinking_tokens"] == 1100
+    rates = off.gemini_rates(off.GEMINI_MODEL)
+    assert report["translation_cost_usd"] == pytest.approx((1000 * rates[0] + 1200 * rates[1]) / 1e6)
+
+
+def test_only_thought_parts_is_rejected():
+    engine, send = gemini(lambda rows: {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+        {"text": "[]", "thought": True}]}}]}, reply, reply)
+    _targets, report = run_translate(engine)
+    assert report["translation_usage"]["requests"] == 3 and not report["failed_cues"]
+
+
+def test_missing_usage_metadata_is_reported_incomplete():
+    engine, send = gemini(lambda rows: reply(rows, usage=False))
+    _targets, report = run_translate(engine)
+    assert report["usage_complete"] is False
+    assert report["translation_usage"]["usage_missing_requests"] == 1
+    assert report["translation_usage"]["requests"] == 1
+
+
+def test_gemini_rates_switch_on_utc_date():
+    assert off.gemini_rates(off.GEMINI_MODEL, date(2026, 12, 31)) == (0.75, 3.75)
+    assert off.gemini_rates(off.GEMINI_MODEL, date(2027, 1, 1)) == (1.50, 7.50)
+    assert off.gemini_rates("unknown-model", date(2026, 12, 31)) is None
+    before = off.estimate([], 600, translator="gemini", today=date(2026, 12, 31))
+    after = off.estimate([], 600, translator="gemini", today=date(2027, 1, 1))
+    assert after["translation_cost_usd"][1] == pytest.approx(2 * before["translation_cost_usd"][1])
+    assert before["translation_rate_date_utc"] == "2026-12-31"
+    assert off.estimate([], 600, translator="gemini", translation_model="x")["translation_cost_usd"] is None
+
+
+def test_gemini_estimate_cap_is_sum_of_request_limits():
+    cues = [off.Cue(f"c{i}", i, i + 1, "가" * 10) for i in range(1, 46)]
+    result = off.estimate(cues, translator="gemini")
+    # 45 cues -> batches of 20, 20, 5; each request caps answer + thinking together.
+    expected = sum(min(off.GEMINI_MAX_OUTPUT, min(8192, max(512, chars * 4 + 80 * n))
+                       + off.GEMINI_THINKING_RESERVE) for chars, n in ((200, 20), (200, 20), (50, 5)))
+    assert result["translation_output_cap_tokens"] == expected
+    assert result["translation_output_cap_tokens"] >= result["translation_output_tokens"][1]
+
+
+@pytest.fixture
+def keys():
+    from config import cfg
+    original = {name: getattr(cfg.keys, name) for name in ("gemini", "groq", "deepseek")}
+    def set_keys(**values):
+        for name, value in values.items():
+            object.__setattr__(cfg.keys, name, value)
+    yield set_keys
+    set_keys(**original)
+
+
+def load_cli(monkeypatch, name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "make_subtitles.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setenv("LIVE_TRANSLATE_RUN_KIND", "natural")
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "configure_logging", lambda: None)
+    return module
+
+
+def test_missing_translator_key_fails_before_any_transcription(monkeypatch, capsys, keys, tmp_path):
+    keys(gemini="", groq="groq-test")
+    module = load_cli(monkeypatch, "make_subtitles_keycheck")
+    monkeypatch.setattr(off, "media_tools", lambda ffmpeg=None: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(off, "media_duration", lambda path, probe: 30.0)
+    import groq
+    monkeypatch.setattr(groq, "Groq", Mock(side_effect=AssertionError("Groq constructed")))
+    transcribe = Mock(side_effect=AssertionError("transcribed"))
+    monkeypatch.setattr(off, "transcribe", transcribe)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    assert module.main(["transcribe", "--input", str(media), "--out-dir", str(tmp_path / "out")]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out.splitlines()[-1])["message"] == "Gemini API key is missing"
+    transcribe.assert_not_called()
+
+
+def test_estimate_with_gemini_needs_no_key():
+    run, values = _cli("transcribe", "--estimate", "--duration", "600", extra_env={"GEMINI_API_KEY": ""})
+    assert run.returncode == 0, run.stderr
+    assert values[-1]["translator"] == "gemini"
+    assert values[-1]["translation_cost_usd"][1] > values[-1]["translation_cost_usd"][0] > 0
+
+
+@pytest.mark.parametrize("failure", [
+    "http500", "http403", "http402", "network", "value", "runtime"])
+def test_key_never_leaks_to_stdout_stderr_logs_or_report(monkeypatch, capsys, caplog, keys, tmp_path, failure):
+    keys(gemini=FAKE_KEY)
+    module = load_cli(monkeypatch, "make_subtitles_leak")
+    make = {"http500": lambda: http_error(500, "INTERNAL"), "http403": lambda: http_error(403, "PERMISSION_DENIED"),
+            "http402": lambda: http_error(402), "network": lambda: urllib.error.URLError(f"host {FAKE_KEY}"),
+            "value": lambda: ValueError(f"bad value {FAKE_KEY}"),
+            "runtime": lambda: RuntimeError(f"boom {FAKE_KEY}")}[failure]
+    import urllib.request
+    calls = []
+    def send(request, timeout):
+        calls.append(request)
+        raise make()
+    monkeypatch.setattr(urllib.request, "urlopen", send)
+    monkeypatch.setattr(off.time, "sleep", lambda s: None)
+    caplog.set_level(logging.DEBUG)
+    code = module.main(["translate", "--input", str(FIXTURES / "youtube_official_ko.vtt"),
+                        "--out-dir", str(tmp_path), "--profile", "isegye_lilpa"])
+    captured = capsys.readouterr()
+    reports = [p.read_text(encoding="utf-8") for p in tmp_path.glob("*.report.json")]
+    assert code == 1 and calls
+    for text in (captured.out, captured.err, caplog.text, *reports):
+        assert FAKE_KEY not in text and "FAKE-SECRET" not in text
+    if failure == "http402":
+        assert off.GEMINI_CREDIT_MESSAGE in captured.out
+
+
+def test_cli_gemini_job_done_in_subprocess(tmp_path):
+    harness = """
+import runpy, sys, json, io
+import urllib.request
+class Response(io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+def send(request, timeout):
+    rows = json.loads(json.loads(request.data)['contents'][-1]['parts'][0]['text'])['cues']
+    text = json.dumps([{'id': r['id'], 'zh': '你好'} for r in rows])
+    return Response(json.dumps({'candidates': [{'finishReason': 'STOP', 'content': {'parts': [{'text': text}]}}],
+        'usageMetadata': {'promptTokenCount': 100, 'candidatesTokenCount': 20}}).encode())
+urllib.request.urlopen = send
+sys.argv=['scripts/make_subtitles.py','translate','--input',sys.argv[1],'--out-dir',sys.argv[2],'--profile','isegye_lilpa']
+runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
+"""
+    env = dict(os.environ, GEMINI_API_KEY=FAKE_KEY)
+    run = subprocess.run([sys.executable, "-X", "utf8", "-c", harness, str(FIXTURES / "youtube_auto_ko.vtt"),
+                          str(tmp_path)], cwd=ROOT, capture_output=True, text=True, encoding="utf8", env=env)
+    assert run.returncode == 0, run.stderr
+    values = [json.loads(line) for line in run.stdout.splitlines()]
+    assert [v["stage"] for v in values] == ["translate", "done"]
+    report = values[-1]["report"]
+    assert report["translator"] == "gemini" and report["usage_complete"] is True
+    assert report["translation_usage"]["requests"] == 1 and report["translation_cost_usd"] > 0
+    assert FAKE_KEY not in run.stdout + run.stderr
+
+
+def test_live_entry_never_imports_offline_gemini_client():
+    code = ("import sys, main; "
+            "assert 'modules.offline_subtitles' not in sys.modules, 'offline module imported by live path'")
+    run = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True,
+                         encoding="utf8", env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    assert run.returncode == 0, run.stderr
+
+
+# --- Post-implementation review fixes (Codex round, 2026-10-09) ---
+
+def _chain(exc):
+    seen = []
+    while exc is not None and exc not in seen:
+        seen.append(exc)
+        exc = exc.__cause__ or exc.__context__
+    return seen
+
+
+def test_local_send_error_aborts_once_without_key_or_chain():
+    engine, send = gemini(ValueError(f"Invalid header value b'{FAKE_KEY}\n'"))
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_translate(engine)
+    assert len(send.requests) == 1  # not re-sent cue by cue
+    assert FAKE_KEY not in str(caught.value) and FAKE_KEY not in repr(caught.value)
+    assert _chain(caught.value) == [caught.value]
+
+
+def test_real_newline_key_never_leaks():
+    # Real urllib/http.client stack: header validation rejects the key before any socket opens.
+    opener = urllib.request.build_opener()
+    engine = off.GeminiTranslator(FAKE_KEY + "\n", send=lambda request, timeout: opener.open(request, timeout=timeout))
+    with pytest.raises(off.OfflineJobError) as caught:
+        engine.complete((("system", "s"), ("user", json.dumps({"context": [], "cues": []}))), 512)
+    assert FAKE_KEY not in str(caught.value) and _chain(caught.value) == [caught.value]
+
+
+def test_per_cue_abort_does_not_chain_batch_reply():
+    secret_reply = "not json " + FAKE_KEY
+    engine, send = gemini(lambda rows: reply(rows, text=secret_reply), http_error(402))
+    with pytest.raises(off.OfflineJobError) as caught:
+        run_translate(engine)
+    assert str(caught.value) == off.GEMINI_CREDIT_MESSAGE
+    assert _chain(caught.value) == [caught.value]
+    assert len(send.requests) == 2
+
+
+def test_gemini_estimate_cap_uses_actual_uneven_batches():
+    cues = [off.Cue(f"c{i}", i, i + 1, "가") for i in range(1, 21)] + [off.Cue("c21", 21, 22, "가" * 2000)]
+    result = off.estimate(cues, translator="gemini")
+    assert result["translation_output_cap_tokens"] == (20 * 4 + 80 * 20 + 1024) + (2000 * 4 + 80 + 1024) == 11808
+
+
+def test_gemini_model_flag(monkeypatch, capsys, keys, tmp_path):
+    keys(gemini=FAKE_KEY)
+    module = load_cli(monkeypatch, "make_subtitles_model")
+    seen = []
+    def send(request, timeout):
+        seen.append(request.full_url)
+        rows = json.loads(json.loads(request.data)["contents"][-1]["parts"][0]["text"])["cues"]
+        return FakeResponse(reply(rows))
+    monkeypatch.setattr(urllib.request, "urlopen", send)
+    assert module.main(["translate", "--input", str(FIXTURES / "youtube_auto_ko.vtt"), "--out-dir", str(tmp_path),
+                        "--gemini-model", "gemini-9-test"]) == 0
+    assert seen and all("/models/gemini-9-test:" in url for url in seen)
+    done = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert done["report"]["translation_model"] == "gemini-9-test"
+    assert done["report"]["translation_cost_usd"] is None  # unknown model price
+    assert done["report"]["prompt_version"] == "offline-subtitles-v2"
+    assert module.main(["translate", "--input", str(FIXTURES / "youtube_auto_ko.vtt"), "--out-dir", str(tmp_path),
+                        "--translator", "deepseek", "--gemini-model", "x"]) == 1
+    assert module.main(["translate", "--input", str(FIXTURES / "youtube_auto_ko.vtt"), "--out-dir", str(tmp_path),
+                        "--gemini-model", "../evil?key=1"]) == 1
+
+
+# --- Post-implementation re-review fixes (Codex round 2, 2026-10-09) ---
+
+@pytest.mark.parametrize("profile,text", [("isegye_lilpa", "소울라인"), ("isegye_lilpa", "늘파"), ("", "안녕")])
+def test_estimate_cap_matches_real_request_caps_after_normalization(profile, text):
+    cues = [off.Cue(f"c{i}", i, i + 1, text) for i in range(1, 46)]
+    snapshot = off.profile_scope(profile)
+    engine, send = gemini()
+    off.translate(cues, snapshot, engine, Mock())
+    actual = sum(json.loads(r.data)["generationConfig"]["maxOutputTokens"] for r, _t in send.requests)
+    result = off.estimate(cues, translator="gemini", sources=off.normalized_sources(cues, snapshot))
+    assert result["translation_output_cap_tokens"] == actual
+
+
+@pytest.mark.parametrize("extra", [["--gemini-model", "../evil?key=1"], ["--translator", "deepseek", "--gemini-model", "x"]])
+def test_gemini_model_flag_is_validated_before_estimate(extra):
+    run, values = _cli("translate", "--estimate", "--input", "tests/fixtures/subtitles/youtube_official_ko.vtt", *extra)
+    assert run.returncode == 1
+    assert values[-1]["message"] == "--gemini-model must be a Gemini model name and needs --translator gemini"

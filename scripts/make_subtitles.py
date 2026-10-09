@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import math
+import re
 from pathlib import Path
 import sys
 import uuid
@@ -25,6 +26,18 @@ def configure_logging():
             if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
                 handler.setStream(sys.stderr)
 
+def build_translator(name, cfg, offline, progress, gemini_model=None):
+    """Checked before any paid call, so a missing key never wastes a transcription."""
+    if name == "gemini":
+        if not cfg.keys.gemini:
+            raise offline.OfflineSubtitleError("Gemini API key is missing")
+        return offline.GeminiTranslator(cfg.keys.gemini, gemini_model or offline.GEMINI_MODEL, progress=progress)
+    from modules.translation_engines import DeepSeekTranslationEngine
+    engine = DeepSeekTranslationEngine()
+    if not engine.available:
+        raise offline.OfflineSubtitleError("DeepSeek API key is missing")
+    return engine
+
 class JsonParser(argparse.ArgumentParser):
     def error(self, message):
         raise ValueError(message)
@@ -42,6 +55,9 @@ def main(argv=None):
         parser.add_argument("--out-dir", type=Path)
         parser.add_argument("--estimate", action="store_true")
         parser.add_argument("--ffmpeg")
+        parser.add_argument("--translator", choices=("gemini", "deepseek"), default="gemini",
+                            help="translation provider; no automatic fallback between them")
+        parser.add_argument("--gemini-model", help="override the Gemini model (default gemini-3.8-flash)")
         parser.add_argument("--duration", type=float,
                             help="transcribe --estimate only: media length in seconds, no input file needed")
         args = parser.parse_args(argv)
@@ -57,14 +73,17 @@ def main(argv=None):
             raise Error("--duration must not exceed 72 hours")
         if not duration_only and (args.input is None or not args.input.is_file()):
             raise Error("input file not found")
+        if args.gemini_model is not None and (args.translator != "gemini"
+                                              or not re.fullmatch(r"[a-z0-9][a-z0-9.\-]{0,63}", args.gemini_model)):
+            raise Error("--gemini-model must be a Gemini model name and needs --translator gemini")
         if not args.estimate and args.out_dir is None:
             raise Error("--out-dir is required for output")
         if args.mode == "translate":
             if args.input.suffix.lower() not in (".vtt", ".srt"):
-                raise ValueError("translate input must be .vtt or .srt")
+                raise Error("translate input must be .vtt or .srt")
             cues = offline.parse_subtitles(args.input.read_text(encoding="utf-8-sig"))
             if not cues:
-                raise ValueError("no usable subtitle cues")
+                raise Error("no usable subtitle cues")
             duration = 0
         elif duration_only:
             # Estimating needs only the length; avoids building a media-length file just to probe it.
@@ -75,11 +94,16 @@ def main(argv=None):
             cues = []
         if args.estimate:
             from modules.translation_prompts import get_translation_profile_facts
+            # Same profile normalization as the real job, so the Gemini request cap is not underestimated.
+            sources = offline.normalized_sources(cues, offline.profile_scope(args.profile)) if cues else None
             progress("estimate", **offline.estimate(
                 cues, duration, cfg.stt.groq_model,
-                facts=get_translation_profile_facts(args.profile)))
+                facts=get_translation_profile_facts(args.profile), translator=args.translator,
+                translation_model=args.gemini_model if args.translator == "gemini" else None,
+                sources=sources))
             return 0
         snapshot = offline.profile_scope(args.profile)
+        engine = build_translator(args.translator, cfg, offline, progress, args.gemini_model)
         if args.mode == "transcribe":
             if not cfg.keys.groq:
                 raise offline.OfflineSubtitleError("Groq API key is missing")
@@ -95,11 +119,7 @@ def main(argv=None):
             finally:
                 client.close()
             if not cues:
-                raise ValueError("no usable transcription segments")
-        from modules.translation_engines import DeepSeekTranslationEngine
-        engine = DeepSeekTranslationEngine()
-        if not engine.available:
-            raise offline.OfflineSubtitleError("DeepSeek API key is missing")
+                raise Error("no usable transcription segments")
         targets, report = offline.translate(cues, snapshot, engine, progress)
         report["job"] = job
         files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report)
@@ -114,7 +134,8 @@ def main(argv=None):
         from modules.offline_subtitles import OfflineSubtitleError
         message = str(exc) if isinstance(exc, OfflineSubtitleError) else "offline job failed"
         progress("error", message=message, error_type=type(exc).__name__)
-        if isinstance(exc, (ValueError, FileExistsError)):
+        # Only our own fixed messages reach stderr; a generic ValueError may carry provider data.
+        if isinstance(exc, (OfflineSubtitleError, FileExistsError)):
             print(str(exc), file=sys.stderr)
         return 1
 
