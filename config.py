@@ -399,6 +399,11 @@ class _Scene:
     # errors, and run 20261007T111648Z-12404 showed game-flavoured invention on
     # garbled STT (e.g. "핀드트" -> "以太晶蝶"). Detection keeps running record-only.
     publish_translation_activity: bool = False
+    # Off since 2026-10-11: with publication off, the record-only activity call
+    # (full player crop) only consumed Groq vision TPM (8000/min); 147 of 150
+    # identity-read failures in October live runs were 429 rate limits. The
+    # scene thread still runs for profile identity; no activity vision call.
+    activity_detection_enabled: bool = False
     # T15/T17 kill switch. The open-set runtime gate passed, so direct pipeline
     # runs publish by default; an explicit dashboard false still disables it.
     publish_open_set_activity: bool = True

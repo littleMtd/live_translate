@@ -2180,6 +2180,21 @@ Ordered cards:
       pre-cutover live run and emitted the additive DeepSeek output-guard
       section. No paid API request was made during implementation validation.
 
+- [ ] **T26 - Post-stream unknown-name review (long-term, owner decision 2026-10-11)**
+  - Problem: whole subtitles are still lost when DeepSeek keeps an unregistered
+    viewer/streamer nickname in Hangul (뢴트님, 버건니, …) and the output guard
+    rejects the sentence. In the 2026-10-10 replay of a 10-minute 주르르 talk clip
+    15–18 of 67–69 sentences published nothing, mostly for this reason; across
+    October live runs 91 lost sentences remained after the 이세돌 name fix
+    (`LIVE_ISEGYE_NAME_GUARD_PLAN_20261010.md`), 31 of them covered by the
+    existing copied-name rescue going forward.
+  - Idea: after each live run, list the Hangul spans that caused
+    `unexpected_hangul` rejections (count, example source/candidate, profile);
+    the owner approves names, which become approval-only, profile-scoped
+    `name_rendering_rules` (no wrong_forms). Mishearings must stay rejectable,
+    so nothing is auto-approved.
+  - Not started; needs a plan and cross review before implementation.
+
 Explicit non-priorities unless new runtime evidence changes the decision:
 - A text-normalization LLM on every sentence.
 - Replacing the primary/fallback path with an expensive GPT/Claude model.

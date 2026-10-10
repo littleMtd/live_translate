@@ -1051,6 +1051,7 @@ class SceneContextUpdater:
         min_call_gap_sec: float | None = None,
         refresh_interval_sec: float | None = None,
         change_threshold: float | None = None,
+        activity_detection_enabled: bool | None = None,
         min_frame_diff: float = 1.0,
         consensus_window_sec: float | None = None,
         vision_unknown_ttl_sec: float = 600.0,
@@ -1139,6 +1140,11 @@ class SceneContextUpdater:
             else bool(
                 cfg.scene.publish_translation_activity
             )
+        )
+        self._activity_detection_enabled = (
+            bool(activity_detection_enabled)
+            if activity_detection_enabled is not None
+            else bool(getattr(cfg.scene, "activity_detection_enabled", True))
         )
         self._open_set_publication_enabled = (
             bool(open_set_publication_enabled)
@@ -2525,6 +2531,14 @@ class SceneContextUpdater:
             resolver_generation=capture_resolver_generation,
             window_generation=capture_window_generation,
         )
+        if not self._activity_detection_enabled:
+            # Profile identity only: no activity consensus and no activity
+            # vision call, so the shared Groq vision quota goes to identity.
+            # Same end-of-tick sync as the activity path, so a pause/stop or
+            # manual change during the identity call applies this tick.
+            self._sync_lifecycle()
+            self._sync_manual_activity()
+            return self._confirmed
         if (
             self._last_distinct_evidence_at is not None
             and now - self._last_distinct_evidence_at > self._consensus_window

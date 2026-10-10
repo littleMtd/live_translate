@@ -238,6 +238,8 @@ def make_updater(
         min_call_gap_sec=kwargs.pop("min_call_gap_sec", 0),
         refresh_interval_sec=kwargs.pop("refresh_interval_sec", 0),
         change_threshold=kwargs.pop("change_threshold", 1),
+        # Activity tests exercise the detector; production defaults it off.
+        activity_detection_enabled=kwargs.pop("activity_detection_enabled", True),
         min_frame_diff=kwargs.pop("min_frame_diff", 1),
         identity_roi_store=kwargs.pop(
             "identity_roi_store",
@@ -2929,3 +2931,49 @@ def test_automatic_shadow_cannot_change_translation_capsule_or_stt_terms():
         assert terms_for_activity(cfg.translation.current_activity) == terms_before
     finally:
         object.__setattr__(cfg.translation, "current_activity", original)
+
+
+def test_activity_detection_off_skips_the_activity_vision_call():
+    updater, _source, _capture, provider, _manual, events, _clock = make_updater(
+        activity_detection_enabled=False
+    )
+    updater.tick()
+    assert provider.calls == []
+    assert not any(e.get("vision_attempt_count") for e in events if e["event_type"] == "activity_shadow")
+
+
+def test_activity_detection_off_still_confirms_profile_identity():
+    # 2026-10-11: activity is off in production so the Groq vision quota
+    # (8000 TPM, 429s on identity reads) goes to profile identity alone.
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, provider, *_rest = make_updater(
+            frames=[image_frame_with_identity_block(30)],
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
+            activity_detection_enabled=False,
+        )
+        updater.tick()
+    assert state.current().effective_profile_id == "url"
+    assert len(identity_reader.calls) == 1
+    assert provider.calls == []
+
+
+def test_production_default_turns_activity_detection_off():
+    from config import cfg
+
+    assert cfg.scene.activity_detection_enabled is False
+    assert cfg.scene.publish_translation_activity is False
+
+
+def test_activity_detection_off_still_syncs_lifecycle_at_end_of_tick():
+    updater, *_rest = make_updater(activity_detection_enabled=False)
+    calls = []
+    original_lifecycle, original_manual = updater._sync_lifecycle, updater._sync_manual_activity
+    updater._sync_lifecycle = lambda: (calls.append("lifecycle"), original_lifecycle())[1]
+    updater._sync_manual_activity = lambda: (calls.append("manual"), original_manual())[1]
+    updater.tick()
+    assert calls[-2:] == ["lifecycle", "manual"]
