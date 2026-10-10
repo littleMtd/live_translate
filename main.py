@@ -262,6 +262,16 @@ def _configure_profile(args: argparse.Namespace) -> None:
 
 def main():
     args = _parse_args()
+    from utils.logger import enable_file_logging
+    from utils.runtime_events import runtime_events
+
+    if runtime_events.run_kind != "test":
+        keys = cfg.keys
+        enable_file_logging(
+            _LOG_DIR,
+            runtime_events.run_id,
+            secrets=(keys.groq, keys.groq_fallback, keys.elevenlabs, keys.deepseek, keys.gemini),
+        )
 
     if args.calibrate_identity_roi or args.show_identity_roi:
         from modules.identity_roi import run_identity_roi_ui

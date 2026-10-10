@@ -56,7 +56,7 @@ def _cfg() -> MagicMock:
     config.translation.current_activity = ""
     config.translation.translate_coherent_foreign_speech = False
     config.stt.elevenlabs_model = "scribe_v2"
-    config.stt.elevenlabs_timeout = 15.0
+    config.stt.elevenlabs_timeout = 6.0
     config.stt.elevenlabs_max_keyterms = 100
     config.stt.elevenlabs_failure_cooldown_sec = 30.0
     config.stt.use_profile_glossary = True
@@ -109,6 +109,7 @@ def test_scribe_v2_success_returns_elevenlabs_event_and_observability():
     assert request["model_id"] == "scribe_v2"
     assert request["language_code"] == "ko"
     assert request["keyterms"] == ["공통어", "아이리즈", "하트 크러쉬"]
+    assert request["request_options"] == {"max_retries": 0}
     assert emit.call_args.kwargs["engine"] == "elevenlabs"
     assert emit.call_args.kwargs["status"] == "success"
     assert emit.call_args.kwargs["keyterm_count"] == 3
@@ -458,3 +459,40 @@ def test_missing_or_nonfinite_scribe_confidence_is_safe_and_not_stale():
     assert emit.call_args.kwargs["language_probability"] is None
     assert emit.call_args.kwargs["min_word_logprob"] is None
     assert emit.call_args.kwargs["mean_word_logprob"] is None
+
+
+def test_provider_failure_records_error_type_and_http_status(caplog):
+    class ProviderError(Exception):
+        status_code = 503
+
+    engine = _engine()
+    engine._elevenlabs_client.speech_to_text.convert.side_effect = ProviderError("busy")
+    engine._groq_client.audio.transcriptions.create.return_value = SimpleNamespace(
+        text="Groq fallback", language="ko", segments=[],
+    )
+    config = _cfg()
+    config.stt.use_profile_glossary = False
+    with patch("modules.stt.cfg", config),             patch("modules.stt.common_stt_terms", return_value=()),             patch("modules.stt.profile_stt_terms", return_value=()),             patch("modules.stt.runtime_events.emit") as emit:
+        engine.transcribe_event(_audio())
+
+    failed = next(call.kwargs for call in emit.call_args_list
+                  if call.args == ("stt",) and call.kwargs["engine"] == "elevenlabs")
+    assert "busy" not in caplog.text  # provider text (ApiError carries headers/body) is not logged
+    assert "ProviderError (status=503)" in caplog.text
+    assert failed["status"] == "failed"
+    assert failed["error_type"] == "ProviderError"
+    assert failed["error_status"] == 503
+
+
+def test_timeout_failure_has_no_http_status():
+    from modules.stt import _http_status_code
+
+    assert _http_status_code(TimeoutError("read timed out")) is None
+    assert _http_status_code(SimpleNamespace(response=SimpleNamespace(status_code=502))) == 502
+    assert _http_status_code(SimpleNamespace(status_code=True)) is None
+
+
+def test_production_elevenlabs_timeout_bounds_a_hung_request():
+    from config import cfg
+
+    assert cfg.stt.elevenlabs_timeout == 6.0

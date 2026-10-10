@@ -66,7 +66,9 @@ class _STT:
     primary_engine:    str = "elevenlabs"      # "elevenlabs" or "groq"
     groq_model:        str = "whisper-large-v3"
     elevenlabs_model:  str = "scribe_v2"
-    elevenlabs_timeout: float = 15.0
+    # p99.9 of 9642 live successes was 6.0 s; a hung request used to block the
+    # sequential STT worker for the full 15 s before Groq took the chunk.
+    elevenlabs_timeout: float = 6.0
     elevenlabs_failure_cooldown_sec: float = 30.0
     # Keep this at or below 100: ElevenLabs applies a 20-second minimum
     # billable duration to requests containing more than 100 keyterms.

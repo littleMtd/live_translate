@@ -88,6 +88,14 @@ def _is_groq_rate_limit_error(exc: Exception) -> bool:
     return "rate_limit_exceeded" in message
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    """Provider HTTP status for telemetry; None for timeouts and transport errors."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
 def _is_hallucinated(text: str, *, allow_japanese: bool = False) -> bool:
     return is_hallucinated(
         text,
@@ -614,6 +622,10 @@ class STTEngine:
             }
             if keyterms:
                 request_kwargs["keyterms"] = keyterms
+            # The SDK otherwise retries 5xx/429/408/409 up to twice with backoff
+            # (a candidate cause of the 12-26 s live stalls) while the
+            # sequential STT worker blocks; Groq is the same-chunk fallback.
+            request_kwargs["request_options"] = {"max_retries": 0}
             request_sent = True
             self._current_stt_request_contract_id = self._emit_stt_request_contract(
                 "elevenlabs", cfg.stt.elevenlabs_model
@@ -738,7 +750,12 @@ class STTEngine:
                 0.0,
                 _cfg_stt_float("elevenlabs_failure_cooldown_sec", 30.0),
             )
-            log.error("ElevenLabs STT error: %s", e)
+            # Class and status only: ApiError's text carries response headers/body.
+            log.error(
+                "ElevenLabs STT error: %s (status=%s)",
+                type(e).__name__,
+                _http_status_code(e),
+            )
             self._emit_elevenlabs_runtime_event(
                 audio=audio,
                 started=started,
@@ -747,6 +764,8 @@ class STTEngine:
                 request_sent=request_sent,
                 audio_stats=audio_stats,
                 will_retry=self._groq_client is not None or self._groq_fallback_client is not None,
+                error_type=type(e).__name__,
+                error_status=_http_status_code(e),
             )
             return None
 
@@ -1469,6 +1488,8 @@ class STTEngine:
         text: str = "",
         audio_stats: dict[str, float | bool] | None = None,
         will_retry: bool = False,
+        error_type: str = "",
+        error_status: int | None = None,
     ) -> None:
         audio_stats = audio_stats or {}
         word_logprobs = [
@@ -1494,6 +1515,8 @@ class STTEngine:
             model=cfg.stt.elevenlabs_model,
             status=status,
             reason=reason,
+            error_type=error_type,
+            error_status=error_status,
             request_sent=request_sent,
             stt_request_contract_id=contract_id,
             attempt_index=1,
