@@ -78,7 +78,7 @@ def test_translation_correction_data_snapshot_counts():
         "url": 8,
     }
     assert len(tables.korean_name_suffixes) == 33
-    assert len(tables.name_rendering_rules) == 51
+    assert len(tables.name_rendering_rules) == 54
     assert sum(len(rule.wrong_forms) for rule in tables.name_rendering_rules) == 271
     assert sum(
         len(group.replacements)

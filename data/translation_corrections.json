@@ -1571,6 +1571,30 @@
       ],
       "wrong_forms": [],
       "canonical": "비챤"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "세구"
+      ],
+      "wrong_forms": [],
+      "canonical": "세구"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "이세돌"
+      ],
+      "wrong_forms": [],
+      "canonical": "이세돌"
+    },
+    {
+      "scope": "isegye_lilpa",
+      "source_aliases": [
+        "이세계아이돌"
+      ],
+      "wrong_forms": [],
+      "canonical": "이세계아이돌"
     }
   ]
 }

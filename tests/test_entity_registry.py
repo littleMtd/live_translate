@@ -98,7 +98,7 @@ def test_derived_stt_and_translation_views_keep_reviewed_behavior():
         "세구땅", "르르땅", "버거땅", "부가땅", "이네땅", "챠니", "이파리", "맆스틱", "왁물원",
         "KIDDING", "SYZYGY", "Misty Rainbow", "Stargazers", "Be My Light", "Smile For You",
     )
-    assert len(rules) == 51
+    assert len(rules) == 54
     lilpa = next(rule for rule in rules if rule.scope == "isegye_lilpa" and rule.canonical == "Lilpa")
     assert lilpa.publication_policy == "required"
     assert "늘파" in lilpa.source_aliases

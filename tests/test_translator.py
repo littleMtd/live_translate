@@ -28,11 +28,53 @@ def test_isegye_self_canonicals_coexist_with_entity_obligations():
         assert translator_module._source_activated_name_canonicals("고세구땅 왔어") == frozenset()
 
 
+def test_isegye_names_followed_by_copula_endings_stay_approved():
+    # live run 20261010T090328Z-2704 lost whole subtitles for these: the name was
+    # sourced, but "이라는/이라고/이야" endings did not count as a name boundary.
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    cases = (
+        ("내가 비챤이라는 것도 몰라", "我也不知道我是비챤"),
+        ("진짜 이세돌이라고 하면 바둑 얘기", "說到이세돌就會講圍棋"),
+        ("그룹 이름이 뭔데? 이세계아이돌이야.", "團名是什麼？是이세계아이돌。"),
+        ("챠니 친구 세구. 웃겼다.", "챠니的朋友세구，很好笑。"),
+    )
+    with _active_translation_profile("isegye_lilpa"):
+        for source, target in cases:
+            assert _translation_output_guard(engine, target, source).get("reason") is None, source
+        for ending in ("이라고", "이라는", "라고", "라는", "이야", "이지", "이고", "이라서", "이니까"):
+            source = f"그건 비챤{ending} 했어"
+            assert _translation_output_guard(engine, "那是비챤說的", source).get("reason") is None, ending
+    with _active_translation_profile("url"):
+        for ending in ("이라고", "이라는", "이야"):
+            guard = _translation_output_guard(engine, "那是비챤說的", f"그건 비챤{ending} 했어")
+            assert guard["reason"] == "unexpected_hangul", ending
+        guard = _translation_output_guard(engine, "說到이세돌就會講圍棋", "진짜 이세돌이라고 하면 바둑 얘기")
+        assert guard["reason"] == "unexpected_hangul"
+    with _active_translation_profile("isegye_lilpa"):
+        # "고세구" must not activate the standalone nickname "세구"
+        guard = _translation_output_guard(engine, "세구來了", "고세구 왔어")
+        assert guard["reason"] == "unexpected_hangul"
+
+
+def test_copula_endings_do_not_activate_registry_aliases_on_ordinary_words():
+    # Codex review 2026-10-10: copula endings must stay out of the shared suffix
+    # table, or ordinary words activate registry names and their repairs.
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    with _active_translation_profile("isegye_lilpa"):
+        guard = _translation_output_guard(engine, "用棉花這種植物做衣服。", "목화라는 식물로 옷을 만들어")
+        assert guard.get("reason") is None
+    with _active_translation_profile("url"):
+        assert _apply_source_aware_corrections("이 커피는 모카라고 불러", "這種咖啡叫摩卡。") == "這種咖啡叫摩卡。"
+
+
 def test_isegye_fan_names_are_approved_only_when_sourced():
     engine = MagicMock()
     engine.engine_name = "deepseek"
     with _active_translation_profile("isegye_lilpa"):
-        for term in ("세구땅", "르르땅", "이네땅", "버거땅", "부가땅", "챠니", "릴파넴", "둘기", "박쥐단", "주폭도", "세균단", "아이네", "징버거", "비챤"):
+        for term in ("세구땅", "르르땅", "이네땅", "버거땅", "부가땅", "챠니", "릴파넴", "둘기", "박쥐단", "주폭도", "세균단", "아이네", "징버거", "비챤",
+                     "세구", "이세돌", "이세계아이돌"):
             guard = _translation_output_guard(engine, term + "來了", term + " 왔어")
             assert guard.get("reason") is None, term
             unsourced = _translation_output_guard(engine, term + "來了", "왔어")

@@ -285,6 +285,13 @@ _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS = {
 }
 _KOREAN_NAME_SUFFIXES = _CORRECTION_TABLES.korean_name_suffixes
 _NAME_RENDERING_RULES = _CORRECTION_TABLES.name_rendering_rules
+# Approval-only rules (no wrong_forms: never repair, never an obligation) may
+# also match a sourced name before a copula ending ("비챤이라는", "이세돌이라고").
+# Kept out of the shared suffix table: there it would activate registry aliases
+# and repairs on ordinary words ("목화라는", "모카라고").
+_APPROVAL_ONLY_NAME_SUFFIXES = _KOREAN_NAME_SUFFIXES | frozenset({
+    "이라고", "이라는", "라고", "라는", "이야", "이지", "이고", "이라서", "이니까",
+})
 _CANONICAL_PUBLICATION_POLICY_VERSION = "canonical-obligations-v1"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _FORENSIC_ARTIFACT_PATHS = (
@@ -477,13 +484,14 @@ def _source_has_name_alias(
     aliases: tuple[str, ...],
     *,
     activation_policy: str = "exact_alias",
+    korean_name_suffixes: frozenset[str] = _KOREAN_NAME_SUFFIXES,
 ) -> bool:
     for alias in aliases:
         if alias and source_alias_matches(
             source,
             alias,
             activation_policy=activation_policy,
-            korean_name_suffixes=_KOREAN_NAME_SUFFIXES,
+            korean_name_suffixes=korean_name_suffixes,
         ):
             return True
     return False
@@ -721,6 +729,11 @@ def _source_activated_name_canonicals(
                 "name_context_required"
                 if rule.repair_requires_name_context
                 else "exact_alias"
+            ),
+            korean_name_suffixes=(
+                _KOREAN_NAME_SUFFIXES
+                if rule.wrong_forms
+                else _APPROVAL_ONLY_NAME_SUFFIXES
             ),
         )
     )
