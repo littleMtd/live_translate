@@ -310,12 +310,14 @@ def call_with_fallback(
     route_requests_by_engine: Mapping[str, object] | None = None,
     output_guard: OutputGuard | None = None,
     return_details: bool = False,
+    output_rescue: Callable[[tuple[dict[str, object], ...]], dict[str, object] | None] | None = None,
 ) -> tuple[str | None, int]:
     """Returns (result, engine_idx) where engine_idx is the engine that
     actually produced the result. On a soft fallback state.active_idx is NOT
     advanced, so callers must use the returned index — not the active engine —
     to attribute the result (engine label, diagnostics, DB cache rows)."""
     local_attempts: list[dict[str, object]] = []
+    engine_index_by_attempt: dict[int, int] = {}
 
     def finish(text: str | None, index: int):
         if not return_details:
@@ -376,6 +378,7 @@ def call_with_fallback(
         engine_result=primary_engine_result,
     )
     local_attempts.append(primary_attempt)
+    engine_index_by_attempt[id(primary_attempt)] = primary_idx
     primary_attempt["request_contract_id"] = str(
         (request_contract_ids or {}).get(
             f"{primary.engine_name}:{primary.model_name}", ""
@@ -490,6 +493,7 @@ def call_with_fallback(
             engine_result=fallback_engine_result,
         )
         local_attempts.append(fallback_attempt)
+        engine_index_by_attempt[id(fallback_attempt)] = index
         fallback_attempt["request_contract_id"] = str(
             (request_contract_ids or {}).get(
                 f"{fallback.engine_name}:{fallback.model_name}", ""
@@ -550,6 +554,23 @@ def call_with_fallback(
             and index + 1 < len(engines)
         ):
             persistent_switch_idx = index + 1
+
+    # Last resort (no route produced a usable result): the hook may pick one rejected candidate whose only
+    # problem is source names copied in Hangul. The finalizer re-adjudicates it; nothing here bypasses that.
+    if output_rescue is not None:
+        decision = output_rescue(tuple(local_attempts))
+        chosen = decision.get("attempt_index") if isinstance(decision, dict) else None
+        if isinstance(chosen, int) and 0 <= chosen < len(local_attempts):
+            attempt = local_attempts[chosen]
+            guard = attempt.get("output_guard")
+            candidate = guard.get("candidate_raw_output") if isinstance(guard, dict) else None
+            if isinstance(candidate, str) and candidate and id(attempt) in engine_index_by_attempt:
+                attempt["guard_rescue"] = dict(decision)
+                select_translation_attempt(attempt)
+                attempt["selected_for_output"] = True
+                metrics.increment("translation.guard_rescue.selected")
+                log.warning("All engines rejected; rescuing copied-name candidate for: %.40s", text)
+                return finish(candidate, engine_index_by_attempt[id(attempt)])
 
     log.error("All engines failed for: %.40s", text)
     return finish(None, primary_idx)

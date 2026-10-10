@@ -1455,11 +1455,124 @@ def _quality_telemetry_approved_terms(
     return frozenset(term for term in terms if term)
 
 
+# --- Last-resort "copied source name" rescue (docs/agent/LIVE_DROPPED_SUBTITLES_PLAN_20261010.md) ---
+# When every route was rejected, a candidate whose only problem is Hangul copied from the source as a
+# name-like token is published instead of losing the whole subtitle (user decision 2026-10-10).
+GUARD_RESCUE_POLICY = "copied_source_name_v1"
+_GUARD_RESCUE_REASONS = frozenset({"unexpected_hangul", "raw_unexpected_hangul"})
+_GUARD_RESCUE_PARTICLES = tuple(sorted(
+    ("야", "아", "이", "가", "은", "는", "을", "를", "의", "도", "랑", "이랑", "한테", "에게", "이다", "다"),
+    key=len, reverse=True,
+))
+# A run ending like a predicate is a copied clause, not a name (round-3 contract). Checked on the run itself
+# and on the run minus one trailing particle. Short names that happen to end the same way (민지, 은서) are
+# simply not rescued — the safe direction.
+_GUARD_RESCUE_PREDICATE_ENDINGS = tuple(sorted(
+    ("요", "다", "니다", "니", "까", "죠", "네", "지", "고", "서", "면", "는데", "어서", "아서",
+     "었", "았", "했", "됐", "해", "돼", "세요", "습니다"),
+    key=len, reverse=True,
+))
+_GUARD_RESCUE_HANGUL_RUN = re.compile(r"[\uac00-\ud7a3]+")
+_GUARD_RESCUE_HAN = re.compile(r"[\u4e00-\u9fff]")
+_GUARD_RESCUE_IGNORED = re.compile(r"[\s\W_]+")
+
+
+def _guard_rescue_name_tokens(source: str) -> frozenset[str]:
+    tokens: set[str] = set()
+    for raw in (source or "").split():
+        token = re.sub(r"^[^\w]+|[^\w]+$", "", raw)  # edge punctuation only; letters/digits/Han stay
+        if not token:
+            continue
+        tokens.add(token)
+        for particle in _GUARD_RESCUE_PARTICLES:
+            if token.endswith(particle) and len(token) > len(particle):
+                tokens.add(token[: -len(particle)])
+                break
+    return frozenset(tokens)
+
+
+def _guard_rescue_predicate_like(run: str) -> bool:
+    forms = {run}
+    for particle in _GUARD_RESCUE_PARTICLES:
+        if run.endswith(particle) and len(run) > len(particle):
+            forms.add(run[: -len(particle)])
+            break
+    return any(form.endswith(_GUARD_RESCUE_PREDICATE_ENDINGS) for form in forms)
+
+
+def _guard_rescue_hangul_ratio(text: str) -> float:
+    body = _GUARD_RESCUE_IGNORED.sub("", text or "")
+    return len("".join(_GUARD_RESCUE_HANGUL_RUN.findall(text or ""))) / len(body) if body else 1.0
+
+
+def _guard_rescue_text_ok(text: str | None, source: str) -> bool:
+    """Every Hangul run is a name-like token of this source; the text is mostly Han and not a copy."""
+    if not text or re.sub(r"\s+", "", text) == re.sub(r"\s+", "", source or ""):
+        return False
+    runs = _GUARD_RESCUE_HANGUL_RUN.findall(text)
+    body = _GUARD_RESCUE_IGNORED.sub("", text)
+    if not body:
+        return False
+    if runs:
+        tokens = _guard_rescue_name_tokens(source)
+        distinct = set(runs)
+        if len(distinct) > 2 or any(
+            len(run) > 8 or run not in tokens or _guard_rescue_predicate_like(run) for run in distinct
+        ):
+            return False
+        if sum(len(run) for run in runs) / len(body) > 0.30:
+            return False
+    return len(_GUARD_RESCUE_HAN.findall(text)) / len(body) >= 0.50
+
+
+def _guard_rescue_eligible(evidence: object, source: str) -> bool:
+    """Adjudication evidence whose only failures are Hangul script checks, with both stages copied-name-only."""
+    if not isinstance(evidence, dict) or evidence.get("disposition") != "rejected":
+        return False
+    failed = evidence.get("failed_invariants") or []
+    if not failed or any(
+        not isinstance(row, dict) or row.get("owner") != "script_safety"
+        or row.get("reason") not in _GUARD_RESCUE_REASONS
+        for row in failed
+    ):
+        return False
+    stages = evidence.get("candidate_stages") if isinstance(evidence.get("candidate_stages"), dict) else {}
+    restored = (stages.get("protection_restored") or {}).get("text") if isinstance(stages.get("protection_restored"), dict) else None
+    corrected = evidence.get("candidate_output")
+    if not isinstance(restored, str) or not isinstance(corrected, str):
+        return False  # without both stages there is no proof; never rescue
+    return _guard_rescue_text_ok(restored, source) and _guard_rescue_text_ok(corrected, source)
+
+
+def _choose_guard_rescue(attempts: tuple[dict[str, object], ...], source: str) -> dict[str, object] | None:
+    """Pick the eligible rejected attempt with the least Hangul (ties: earliest); None when none qualifies."""
+    best: tuple[float, int] | None = None
+    for index, attempt in enumerate(attempts):
+        if attempt.get("status") != "rejected_output":
+            continue
+        evidence = attempt.get("output_guard")
+        if not _guard_rescue_eligible(evidence, source):
+            continue
+        ratio = _guard_rescue_hangul_ratio(str(evidence.get("candidate_output") or ""))
+        if best is None or ratio < best[0]:
+            best = (ratio, index)
+    if best is None:
+        return None
+    return {"policy": GUARD_RESCUE_POLICY, "attempt_index": best[1]}
+
+
 def _final_script_rejection_reason(event_fields: dict[str, object]) -> str:
     """Return the authoritative publication-time script violation, if any."""
     classifications = set(event_fields.get("quality_classifications") or ())
     flags = set(event_fields.get("quality_flags") or ())
-    if "target_has_unexpected_hangul" in classifications:
+    rescued_names_only = (
+        event_fields.get("result_source") == "guard_rescue"
+        and _guard_rescue_text_ok(
+            str(event_fields.get("target_text") or ""),
+            str(event_fields.get("prepared_source_text") or event_fields.get("source_text") or ""),
+        )
+    )
+    if "target_has_unexpected_hangul" in classifications and not rescued_names_only:
         return "unexpected_hangul"
     if "target_has_japanese" in flags:
         return "unexpected_japanese"
@@ -1695,6 +1808,7 @@ class TranslationOutcome:
     corrections: tuple[dict, ...] = ()
     provider_options: tuple[tuple[str, str], ...] = ()
     system_fingerprint: str = ""
+    guard_rescue: dict | None = None
     deferred_success: Callable[[], None] | None = field(
         default=None,
         repr=False,
@@ -1734,6 +1848,9 @@ class TranslationOutcome:
             self.target_text,
             approved_terms=approved_terms,
         )
+        if self.guard_rescue:
+            quality = {**quality, "quality_flags": [
+                *(quality.get("quality_flags") or []), "published_with_source_hangul"]}
         profile_qa = _profile_translation_qa(
             source_text=self.source_text,
             target_text=self.target_text,
@@ -1783,6 +1900,7 @@ class TranslationOutcome:
             "target_unknown_name_escrow_terms": list(
                 self.unknown_name_approved_terms
             ),
+            "guard_rescue": dict(self.guard_rescue) if self.guard_rescue else None,
             "latency_ms": round(latency_ms, 2),
             **metadata,
             **quality,
@@ -1952,7 +2070,7 @@ def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: F
 
 
 def _outcome_used_api(outcome: TranslationOutcome) -> bool:
-    if outcome.result_source == "api":
+    if outcome.result_source in ("api", "guard_rescue"):
         return True
     if outcome.status == "failed" and outcome.result_source == "none":
         return True
@@ -2550,6 +2668,11 @@ class Translator:
                 if promoted and provisional_candidate is not None
                 else str(selected_attempt.get("system_fingerprint") or "")
             ),
+            guard_rescue=(
+                None if promoted
+                else selected_attempt.get("guard_rescue") if isinstance(selected_attempt.get("guard_rescue"), dict)
+                else None
+            ),
         )
 
     def _reset_failed_input(self) -> None:
@@ -2577,6 +2700,7 @@ class Translator:
         request_contract_id: str = "",
         provider_options: tuple[tuple[str, str], ...] = (),
         system_fingerprint: str = "",
+        guard_rescue: dict | None = None,
     ) -> TranslationOutcome:
         """Sole finalizer for primary, fallback, and provisional candidates."""
         if not provider_result:
@@ -2625,7 +2749,14 @@ class Translator:
             "provider_options": provider_options,
             "system_fingerprint": system_fingerprint,
         }
-        if adjudication.reason:
+        # A rescue hint is never trusted: the publication-time adjudication must itself fail only on the
+        # copied-name Hangul checks, with both stages passing the same rule.
+        rescued = bool(
+            guard_rescue
+            and adjudication.reason
+            and _guard_rescue_eligible(adjudication.evidence, prepared_text)
+        )
+        if adjudication.reason and not rescued:
             reason = adjudication.reason
             status = "filtered" if reason == "meta_garbage_output" else "failed"
             log.debug(
@@ -2660,14 +2791,19 @@ class Translator:
                 canonical_obligation_evaluation=final_obligation_evaluation,
             )
 
-        success_commit = lambda: self._record_success(
-            prepared_text,
-            result,
-            incomplete,
-            prompt_version,
-            engine,
-            history_cohort,
-        )
+        if rescued:
+            # Viewers saw it, so it stays in history/context, but it is never cached: an identical later
+            # sentence takes the normal path again.
+            success_commit = lambda: self._record_rescue(prepared_text, result, incomplete, history_cohort)
+        else:
+            success_commit = lambda: self._record_success(
+                prepared_text,
+                result,
+                incomplete,
+                prompt_version,
+                engine,
+                history_cohort,
+            )
         if not getattr(self, "_defer_success_record", False):
             success_commit()
             success_commit = None
@@ -2676,7 +2812,9 @@ class Translator:
             prepared_source_text=prepared_text,
             target_text=result,
             status="success",
-            result_source="provisional_promotion" if promoted else "api",
+            result_source=(
+                "guard_rescue" if rescued else "provisional_promotion" if promoted else "api"
+            ),
             cache_status=cache_status,
             incomplete=incomplete,
             engine=engine.engine_name if engine else "",
@@ -2687,6 +2825,10 @@ class Translator:
             system_fingerprint=system_fingerprint,
             canonical_obligation_evaluation=final_obligation_evaluation,
             unknown_name_approved_terms=request_protection.approved_hangul_terms,
+            guard_rescue=(
+                {**guard_rescue, "kept_hangul": sorted(set(_GUARD_RESCUE_HANGUL_RUN.findall(result or "")))}
+                if rescued else None
+            ),
             deferred_success=success_commit,
         )
 
@@ -2796,6 +2938,14 @@ class Translator:
         self._memory_state().write_history(text, result)
         if not incomplete and engine is not None and _db_cache_enabled():
             self._memory_state().db_store(text, result, engine, prompt_ver)
+
+    def _record_rescue(self, text: str, result: str, incomplete: bool,
+                       cohort: HistoryCohort | None = None) -> None:
+        """History and transcript only; a rescued subtitle is never cached (memory or DB)."""
+        metrics.increment("translation.guard_rescue.published")
+        with self._state_guard():
+            self._history_state().remember(text, result, incomplete, cohort)
+        self._memory_state().write_history(text, result)
 
     def _invalidate_cached_translation(
         self,
@@ -3110,6 +3260,7 @@ class Translator:
             request_contract_ids=request_contract_ids,
             route_requests_by_engine=route_requests_by_engine,
             return_details=True,
+            output_rescue=lambda attempts: _choose_guard_rescue(attempts, source_text),
             output_guard=lambda candidate_engine, candidate, _provider_source: (
                 _translation_output_guard(
                     candidate_engine,
