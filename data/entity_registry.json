@@ -355,6 +355,15 @@
             "identity_visible": 0,
             "stt": 0
           }
+        },
+        {
+          "value": "비찬",
+          "scopes": [
+            "identity_ocr"
+          ],
+          "order": {
+            "identity_ocr": 0
+          }
         }
       ],
       "provenance": "migrated_reviewed_production_data",
