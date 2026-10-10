@@ -748,7 +748,10 @@ runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
 
 
 def test_live_entry_never_imports_offline_gemini_client():
-    code = ("import sys, main; "
+    # Stub the PortAudio binding (absent on CI runners), as the other main-importing tests do;
+    # this test only checks which modules the live entry imports.
+    code = ("import sys, types; sys.modules.setdefault('sounddevice', types.ModuleType('sounddevice')); "
+            "import main; "
             "assert 'modules.offline_subtitles' not in sys.modules, 'offline module imported by live path'")
     run = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True,
                          encoding="utf8", env=dict(os.environ, PYTHONIOENCODING="utf-8"))

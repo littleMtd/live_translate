@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -177,7 +178,11 @@ def test_config_export_cleans_only_old_owned_temps(tmp_path, monkeypatch):
             os.utime(path, (old, old))
     with active.open("a", encoding="utf-8"):
         config_export.write()
-        assert active.exists()
+        if sys.platform == "win32":
+            # Windows refuses to delete a file another handle has open; cleanup
+            # must swallow that and still export. POSIX unlinks open files, so
+            # there is no refusal to exercise there.
+            assert active.exists()
     assert not stale.exists()
     assert all(p.exists() for p in (fresh, other, unrelated))
     assert json.loads(target.read_text(encoding="utf-8")) == config_export._to_dict()
