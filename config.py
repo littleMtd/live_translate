@@ -463,6 +463,12 @@ class _Scene:
     # Periodic re-reads of an unchanged block shared the vision quota with
     # activity and hit Groq rate limits in runs 20261002/20261004.
     profile_identity_confirmed_refresh_sec: float = 300.0
+    # A name block that keeps "changing" while re-reads return the same confirmed
+    # identity is animated (avatar ring, badges): run 20261011T141844Z-31580 re-read
+    # 랑코_ every ~6 s until Groq 429 (14 times in 29 min). After one such
+    # same-identity re-read, further pixel-only changes in the same window wait
+    # this long. Title/window changes and the first change still read at once.
+    profile_identity_noisy_reread_gap_sec: float = 60.0
 
     def __post_init__(self):
         routes: list[tuple[str, str]] = [
@@ -543,6 +549,16 @@ class _Scene:
                 or value <= 0
             ):
                 raise ValueError(f"cfg.scene.{field_name} must be positive and finite")
+        gap = self.profile_identity_noisy_reread_gap_sec
+        if (
+            isinstance(gap, bool)
+            or not isinstance(gap, (int, float))
+            or not math.isfinite(gap)
+            or gap < 0
+        ):
+            raise ValueError(
+                "cfg.scene.profile_identity_noisy_reread_gap_sec must be finite and >= 0 (0 disables)"
+            )
         if self.profile_identity_fast_call_gap_sec > self.profile_identity_stable_call_gap_sec:
             raise ValueError("cfg.scene profile fast cadence cannot exceed stable cadence")
         if self.profile_identity_confirmed_refresh_sec < self.profile_identity_stable_call_gap_sec:

@@ -2977,3 +2977,55 @@ def test_activity_detection_off_still_syncs_lifecycle_at_end_of_tick():
     updater._sync_manual_activity = lambda: (calls.append("manual"), original_manual())[1]
     updater.tick()
     assert calls[-2:] == ["lifecycle", "manual"]
+
+
+def test_animated_name_block_is_not_reread_at_fast_cadence():
+    # Run 20261011T141844Z-31580: the confirmed 랑코_ block kept "changing" and was
+    # re-read every ~6 s until Groq 429. One same-identity re-read marks it noisy.
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}'])
+    frames = [image_frame_with_identity_block(v) for v in (30, 90, 150, 210, 30, 90)]
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(state, identity_reader, frames)
+        updater.tick()  # t=0 initial read
+        assert len(identity_reader.calls) == 1
+        clock.advance(20)
+        updater.tick()  # t=20 first pixel-only change: read at once, same identity
+        assert len(identity_reader.calls) == 2
+        clock.advance(20)
+        updater.tick()  # t=40 changes again within the noisy gap: no read
+        clock.advance(20)
+        updater.tick()  # t=60 still within 60 s of the t=20 re-read
+        assert len(identity_reader.calls) == 2
+        clock.advance(25)
+        updater.tick()  # t=85 gap elapsed: read again
+    assert len(identity_reader.calls) == 3
+    assert state.current().effective_profile_id == "url"
+
+
+def test_real_name_change_on_a_noisy_block_is_read_after_the_gap():
+    # The trade-off: on a block already shown to be animated, a genuine name change
+    # without a title/window change is read when the 60 s gap ends.
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    identity_reader = QuerySequence(['{"identity":"솜망"}', '{"identity":"솜망"}', '{"identity":"숨주먹"}'])
+    frames = [image_frame_with_identity_block(v) for v in (30, 90, 220, 220)]
+    with patch.object(scene_context, "profile_state", state):
+        updater, *_rest, clock = _confirmed_roi_updater(state, identity_reader, frames)
+        updater.tick()
+        clock.advance(20)
+        updater.tick()  # noisy re-read, still 솜망 (url)
+        clock.advance(20)
+        updater.tick()  # name actually changed, but within the noisy gap
+        assert state.current().effective_profile_id == "url"
+        clock.advance(45)
+        updater.tick()  # gap elapsed
+    assert state.current().effective_profile_id == "hades_chxxnnx"
+
+
+def test_noisy_reread_gap_config_must_be_finite_and_non_negative():
+    from config import _Scene
+
+    assert _Scene(profile_identity_noisy_reread_gap_sec=0).profile_identity_noisy_reread_gap_sec == 0
+    for bad in (float("inf"), float("nan"), -1.0, True):
+        with pytest.raises(ValueError, match="noisy_reread_gap_sec"):
+            _Scene(profile_identity_noisy_reread_gap_sec=bad)

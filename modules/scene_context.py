@@ -1105,6 +1105,13 @@ class SceneContextUpdater:
         # reload, manual/auto switch, clear) bumps the profile generation.
         self._identity_roi_confirmed_for: tuple[int, str, int] | None = None
         self._identity_roi_deferred_until = 0.0
+        # (window generation, calibration key, monotonic time) of the last read that
+        # a pixel-only change triggered and that re-confirmed the same profile.
+        self._identity_roi_noisy_reconfirm: tuple[int, str, float] | None = None
+        self._identity_roi_noisy_gap = max(
+            0.0,
+            float(getattr(cfg.scene, "profile_identity_noisy_reread_gap_sec", 0.0)),
+        )
         self._profile_schema_retry_limit = int(
             cfg.scene.profile_identity_schema_retry_limit
         )
@@ -2133,6 +2140,22 @@ class SceneContextUpdater:
                 **profile_state.current().as_metadata(),
             )
             return
+        pixel_only_change = bool(
+            roi_changed
+            and previous is not None
+            and previous[:2] == (window_generation, roi_key)
+        )
+        noisy = self._identity_roi_noisy_reconfirm
+        if (
+            pixel_only_change
+            and noisy is not None
+            and noisy[:2] == (window_generation, roi_key)
+            and now - noisy[2] < self._identity_roi_noisy_gap
+            and self._identity_roi_is_confirmed(window_generation, roi_key)
+        ):
+            # This block already "changed" without changing identity; keep the
+            # confirmed profile and wait instead of reading at the fast cadence.
+            return
         if roi_changed:
             # A visibly different name block (or a new window) needs a fresh,
             # fast identity read; confirmation no longer applies.
@@ -2324,6 +2347,14 @@ class SceneContextUpdater:
                 roi_key,
                 profile_state.current().generation,
             )
+            if (
+                pixel_only_change
+                and profile_state.current().effective_profile_id
+                == starting_snapshot.effective_profile_id
+            ):
+                self._identity_roi_noisy_reconfirm = (window_generation, roi_key, now)
+            else:
+                self._identity_roi_noisy_reconfirm = None
         self._schedule_profile_resolution(
             now,
             "stable" if confirmed_read else "seeking",
