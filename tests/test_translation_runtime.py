@@ -905,6 +905,31 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
                     "provider",
                 )
 
+    def test_billing_error_opens_circuit(self):
+        reset_translation_call_trace()
+        engines = [
+            _failed_engine("primary", error_type="api_error", message_class="billing_error"),
+            _engine("fallback", "ok"),
+        ]
+        state = FallbackState()
+
+        result, used_idx = call_with_fallback(
+            engines,
+            state,
+            "source",
+            "prompt",
+            False,
+            [],
+            1,
+            lambda result, source: False,
+            logging.getLogger("test"),
+            circuit_breaker_enabled=True,
+        )
+
+        self.assertEqual((result, used_idx), ("ok", 1))
+        self.assertEqual(state.active_idx, 1)
+        self.assertEqual(get_translation_attempts()[0]["failure_scope"], "provider")
+
     def test_auth_and_other_http_4xx_do_not_open_circuit(self):
         for message_class in ("auth_error", "http_4xx"):
             with self.subTest(message_class=message_class):

@@ -32,6 +32,7 @@ _PROVIDER_FAILURE_MESSAGE_CLASSES = frozenset({
     "empty_response",
     "http_5xx",
     "rate_limit",
+    "billing_error",
 })
 
 
@@ -41,6 +42,11 @@ class FallbackState:
     consecutive_primary_failures: int = 0
     primary_cooldown_until: float = 0.0
     consecutive_probe_successes: int = 0
+    # Engine-chain config key this state belongs to (None until the first worker syncs) and a
+    # counter bumped on every chain change, so results from an older chain (even one with the
+    # same key after an A -> B -> A switch) are never merged into it.
+    chain_key: object = None
+    chain_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -174,7 +180,7 @@ def _attempt_failure_scope(attempt: dict[str, object]) -> str:
     soft-fallback the current sentence but do not affect circuit state.
     """
     status = str(attempt.get("status") or "")
-    if status == "rejected_output":
+    if status == "rejected_output" or attempt.get("api_error_message_class") == "content_rejection":
         return "content"
     if status not in {"empty", "exception"}:
         return "none"
@@ -616,9 +622,9 @@ def probe_primary_recovery(
     reset_last_token_usage()
     probe_route = None
     from modules.translation_engines import (
-        DeepSeekTranslationEngine, GroqTranslationEngine,
+        DeepSeekTranslationEngine, GeminiTranslationEngine, GroqTranslationEngine,
     )
-    if isinstance(engines[0], (DeepSeekTranslationEngine, GroqTranslationEngine)):
+    if isinstance(engines[0], (DeepSeekTranslationEngine, GeminiTranslationEngine, GroqTranslationEngine)):
         from modules.translation_request import freeze_route_request
         probe_route = freeze_route_request(
             engines[0], probe_text, system_prompt, False, history or [],
@@ -704,7 +710,8 @@ def probe_primary_recovery(
             **probe_diagnostics,
         )
         return True
-    rejected_output = bool(probe)
+    rejected_output = bool(probe) or (probe_result is not None
+        and probe_result.error_message_class == "content_rejection")
     if rejected_output:
         metrics.increment("translation.bad_output")
         # A responsive provider with an unsafe candidate has not supplied new

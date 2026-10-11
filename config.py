@@ -208,6 +208,18 @@ class _Translation:
     deepseek_route: str = os.environ.get(
         "LIVE_TRANSLATE_DEEPSEEK_ROUTE", "primary"
     ).strip().lower()
+    # "gemini" won the blind re-translation A/B (docs/agent/LIVE_GEMINI_PRIMARY_PLAN_20261012.md)
+    # but has not passed a real-pipeline replay yet (prepaid credits ran out); keep DeepSeek
+    # until it does.
+    primary_provider: str = "deepseek"
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_thinking_level: str = "low"
+    gemini_timeout: float = 3.0
+    gemini_temperature: float = 0.1
+    gemini_output_reserve_tokens: int = 512
+    gemini_input_usd_per_million: float = 0.75
+    gemini_output_usd_per_million: float = 3.75
+    gemini_pricing_revision: str = "2026-10-12"
     deepseek_model: str = "deepseek-flash"
     # Keep DeepSeek sampling low during reproducible translation investigation;
     # other providers retain the shared temperature setting.
@@ -276,6 +288,15 @@ class _Translation:
     slang:          MappingProxyType = field(default_factory=lambda: _DEFAULT_SLANG)
 
     def __post_init__(self):
+        if self.primary_provider not in {"gemini", "deepseek"}:
+            raise ValueError("cfg.translation.primary_provider must be gemini or deepseek")
+        if not self.gemini_model or self.gemini_thinking_level not in {"low", "medium", "high"}:
+            raise ValueError("invalid Gemini model or thinking level")
+        if (isinstance(self.gemini_temperature, bool)
+            or not isinstance(self.gemini_temperature, (int, float))
+            or not math.isfinite(self.gemini_temperature)
+            or not 0 <= self.gemini_temperature <= 2):
+            raise ValueError("cfg.translation.gemini_temperature must be between 0 and 2")
         if self.translation_mode not in _VALID_TRANSLATION_MODES:
             raise ValueError(
                 f"cfg.translation.translation_mode invalid: {self.translation_mode!r} "
@@ -306,6 +327,9 @@ class _Translation:
             "circuit_recovery_cooldown_sec",
             "live_total_deadline_sec",
             "deepseek_timeout",
+            "gemini_timeout",
+            "gemini_input_usd_per_million",
+            "gemini_output_usd_per_million",
             "deepseek_cache_hit_usd_per_million",
             "deepseek_cache_miss_usd_per_million",
             "deepseek_output_usd_per_million",
@@ -322,6 +346,7 @@ class _Translation:
                 )
         for field_name in (
             "deepseek_max_tokens",
+            "gemini_output_reserve_tokens",
         ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:

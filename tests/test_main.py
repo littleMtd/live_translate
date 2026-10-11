@@ -51,7 +51,17 @@ def test_protected_deepseek_route_warns_when_groq_fallback_key_is_missing(
         "warning",
         lambda message, *args: warnings.append(message % args),
     )
-    main_module._validate_config(stt_only=False)
+    original_translation = main_module.cfg.translation
+    # Pin the DeepSeek primary so a missing GEMINI_API_KEY (CI) adds no degrade warning.
+    object.__setattr__(
+        main_module.cfg,
+        "translation",
+        replace(original_translation, primary_provider="deepseek"),
+    )
+    try:
+        main_module._validate_config(stt_only=False)
+    finally:
+        object.__setattr__(main_module.cfg, "translation", original_translation)
     assert warnings == ["Engine 'groq' skipped - API key not set"]
 
 

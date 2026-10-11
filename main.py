@@ -45,6 +45,8 @@ def _selected_translation_backend() -> str:
 
 
 def _warn_missing_route_keys() -> list[str]:
+    if cfg.translation.primary_provider == "gemini" and not cfg.keys.gemini:
+        log.warning("GEMINI_API_KEY missing; effective primary provider is deepseek")
     chain = effective_engine_chain_names()
     available = [name for name in chain
                  if engine_is_configured(name)]

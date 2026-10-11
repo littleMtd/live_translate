@@ -30,7 +30,7 @@ _GOLDEN = json.loads(
 def _historical_temperature_for_byte_baseline():
     # This fixture records the Phase 1 pre-refactor wire bytes at 1.3.
     historical_cfg = replace(
-        cfg, translation=replace(cfg.translation, deepseek_temperature=1.3)
+        cfg, translation=replace(cfg.translation, primary_provider="deepseek", deepseek_temperature=1.3)
     )
     with patch("modules.translation_engines.cfg", historical_cfg), patch(
         "modules.translation_request.cfg", historical_cfg

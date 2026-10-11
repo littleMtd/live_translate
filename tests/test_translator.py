@@ -1124,6 +1124,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
 def _mock_engine(name: str, return_value: str = "你好") -> MagicMock:
     """Create a mock TranslationEngine with a given name and default return value."""
     engine = MagicMock(spec=TranslationEngine)
+    engine.protected_primary_route = False
     engine.engine_name = name
     engine.model_name = f"{name}-test-model"
     engine.available = True
@@ -5419,7 +5420,7 @@ class TestProvisionalPromotion(unittest.TestCase):
         )
 
         with _live_backend("deepseek"), patch.object(
-            translator_module, "DeepSeekTranslationEngine", _FakeDeepSeek
+            translator_module, "make_primary_engine", _FakeDeepSeek
         ), patch.object(
             ProvisionalStore, "admit_call", close_before_admission
         ), patch.object(translator_module, "runtime_events") as events:
@@ -5486,7 +5487,7 @@ class TestProvisionalPromotion(unittest.TestCase):
                 )
 
                 with _live_backend("deepseek"), patch.object(
-                    translator_module, "DeepSeekTranslationEngine", _FakeDeepSeek
+                    translator_module, "make_primary_engine", _FakeDeepSeek
                 ), patch.object(translator_module, "runtime_events") as events, patch.object(
                     translator_module,
                     "get_last_engine_api_diagnostics",
@@ -5565,7 +5566,7 @@ class TestProvisionalPromotion(unittest.TestCase):
 
         with _live_backend("deepseek"), patch.object(
             translator_module,
-            "DeepSeekTranslationEngine",
+            "make_primary_engine",
             _BlockingDeepSeek,
         ), patch.object(translator_module, "runtime_events") as events:
             completion_seen = threading.Event()
@@ -5626,7 +5627,7 @@ class TestProvisionalPromotion(unittest.TestCase):
 
         with _live_backend("deepseek"), patch.object(
             translator_module,
-            "DeepSeekTranslationEngine",
+            "make_primary_engine",
             _BlockingDeepSeek,
         ), patch.object(translator_module, "runtime_events") as events:
             completion_seen = threading.Event()
@@ -5680,7 +5681,7 @@ class TestProvisionalPromotion(unittest.TestCase):
         )
         deepseek_cls = MagicMock()
         with _live_backend("nvidia"), patch.object(
-            translator_module, "DeepSeekTranslationEngine", deepseek_cls
+            translator_module, "make_primary_engine", deepseek_cls
         ):
             thread = translator_module.start(
                 sentence_q,
@@ -5719,7 +5720,7 @@ class TestProvisionalPromotion(unittest.TestCase):
         object.__setattr__(translator_module.cfg.translation, "deepseek_route", "off")
         deepseek_cls = MagicMock()
         try:
-            with patch.object(translator_module, "DeepSeekTranslationEngine", deepseek_cls):
+            with patch.object(translator_module, "make_primary_engine", deepseek_cls):
                 thread = translator_module.start(
                     sentence_q,
                     subtitle_q,
@@ -5796,7 +5797,7 @@ class TestProvisionalPromotion(unittest.TestCase):
                 timeout_seconds=route_request.timeout_seconds,
             ),
             engine="deepseek",
-            model="deepseek-v4-flash",
+            model=route_request.model,
             requested_at_monotonic=1.0,
             completed_at_monotonic=2.0,
             usage={},
@@ -6114,3 +6115,19 @@ class TestDaemonWorkerPool(unittest.TestCase):
             release.set()
             for thread in pool._threads:
                 thread.join(timeout=1.0)
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _historical_deepseek_primary():
+    # These existing regressions exercise the legacy provider setting. Gemini
+    # behavior is covered independently in test_gemini_primary.py.
+    from config import cfg
+    original = cfg.translation.primary_provider
+    object.__setattr__(cfg.translation, "primary_provider", "deepseek")
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg.translation, "primary_provider", original)

@@ -83,3 +83,15 @@ def _isolate_runtime_logs(tmp_path):
     finally:
         runtime_events._log_dir = original_events_dir
         _translator_module._LOG_DIR = original_history_dir
+
+
+@pytest.fixture(autouse=True)
+def _mock_provider_transport(monkeypatch):
+    """Require an explicit HTTP mock; tests must never spend provider credits."""
+    import urllib.request
+
+    def blocked(*_args, **_kwargs):
+        # pytest.fail is a BaseException, so provider adapters cannot swallow it.
+        pytest.fail("HTTP transport requires a test mock")
+
+    monkeypatch.setattr(urllib.request, "urlopen", blocked)

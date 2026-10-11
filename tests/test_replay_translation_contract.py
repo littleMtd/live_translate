@@ -244,8 +244,8 @@ def test_provisional_v2_contract_replays_and_emits_result_fingerprint():
         requested_at_monotonic=time.monotonic(),
         first_stt_ready_at_monotonic=time.monotonic(),
     )
-    with patch.object(translator_module, "deepseek_provisional_eligible", return_value=True), patch.object(
-        translator_module, "DeepSeekTranslationEngine", return_value=engine
+    with patch.object(translator_module, "primary_provisional_eligible", return_value=True), patch.object(
+        translator_module, "make_primary_engine", return_value=engine
     ), patch.object(translator_module.runtime_events, "emit_once", side_effect=emit_once), patch.object(
         translator_module.runtime_events, "emit", side_effect=emit
     ), patch("urllib.request.urlopen", return_value=Response()):
@@ -262,3 +262,19 @@ def test_provisional_v2_contract_replays_and_emits_result_fingerprint():
     assert reconstruct(contracts, contracts[0]["translation_request_id"])["differences"] == []
     assert completions[0]["provider_options"] == contracts[0]["provider_options"]
     assert completions[0]["system_fingerprint"] == "provisional-fingerprint"
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _historical_deepseek_primary():
+    # These existing regressions exercise the legacy provider setting. Gemini
+    # behavior is covered independently in test_gemini_primary.py.
+    from config import cfg
+    original = cfg.translation.primary_provider
+    object.__setattr__(cfg.translation, "primary_provider", "deepseek")
+    try:
+        yield
+    finally:
+        object.__setattr__(cfg.translation, "primary_provider", original)
