@@ -40,6 +40,7 @@ from modules.profile_context import (
 )
 from modules.session_context import HistoryCohort, LiveSessionSnapshot
 from utils.logger import get_logger
+from modules.live_status import live_status
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
@@ -4522,6 +4523,13 @@ class _OrderedEmitter:
         final_script_rejection = (
             _final_script_rejection_reason(event_fields) if result else ""
         )
+        # Status indicator. Only real failures count: policy skips (laughter,
+        # filtered noise) record nothing, and stale/duplicate suppression is a
+        # display decision after a successful translation.
+        if result and not final_script_rejection:
+            live_status.record_translation(True)
+        elif final_script_rejection or outcome.status == "failed":
+            live_status.record_translation(False)
         if final_script_rejection:
             metrics.increment("translation.final_script_rejected")
             with self._shared_state.lock:
@@ -4621,6 +4629,7 @@ class _OrderedEmitter:
                 log,
                 "subtitle_queue",
             )
+            live_status.record_subtitle(outcome.source_text, result)
             runtime_events.emit(
                 "translation",
                 **event_fields,

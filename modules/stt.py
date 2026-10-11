@@ -18,6 +18,7 @@ from modules.forensics_contract import (
 )
 from utils.audio import rms as _rms, write_wav
 from utils.logger import get_logger
+from modules.live_status import live_status
 from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
@@ -1640,6 +1641,7 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
             metrics.observe_latency("stt", time.monotonic() - started)
             if event:
                 metrics.increment("stt.success")
+                live_status.record_stt_engine(event.engine)
                 if dump_dir is not None and event.utterance_id:
                     try:
                         write_wav(dump_dir / f"{event.utterance_id}.wav", audio, cfg.audio.sample_rate)

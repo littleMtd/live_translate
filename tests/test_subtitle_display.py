@@ -135,3 +135,105 @@ def test_newer_revision_still_replaces_pending_older_revision():
     assert window._pending_text == SubtitlePayload(
         "final", subtitle_id, revision=1, phase="final"
     )
+
+
+def _overlay_window(monkeypatch, labels=None, records=()):
+    from types import SimpleNamespace
+    from modules import subtitle_display
+    from modules.live_status import SubtitleRecord
+
+    window = SubtitleWindow(queue.Queue(), threading.Event(), threading.Event())
+    window._root = _FakeRoot()
+    drawn = []
+    window._draw_lines = lambda lines, justify: drawn.append((justify, [text for text, _f, _c in lines]))
+    box = {"labels": list(labels or [])}
+    monkeypatch.setattr(subtitle_display.live_status, "flags", lambda profile_unresolved: list(box["labels"]))
+    monkeypatch.setattr(subtitle_display.live_status, "recent_subtitles",
+                        lambda limit: [SubtitleRecord(0.0, s, t) for s, t in records][-limit:])
+    monkeypatch.setattr(subtitle_display.profile_state, "current",
+                        lambda: SimpleNamespace(mode="auto", effective_profile_id="url"))
+    return window, drawn, box
+
+
+def test_status_line_appears_above_the_subtitle_and_disappears(monkeypatch):
+    window, drawn, box = _overlay_window(monkeypatch)
+    window._show("今天要玩什麼")
+    assert drawn[-1] == ("center", ["今天要玩什麼"])
+    box["labels"] = ["Groq 辨識"]
+    window._refresh_overlay(10.0)
+    assert drawn[-1] == ("center", ["● Groq 辨識", "今天要玩什麼"])
+    box["labels"] = []
+    window._refresh_overlay(11.5)
+    assert drawn[-1] == ("center", ["今天要玩什麼"])
+
+
+def test_status_line_stays_when_the_subtitle_hides(monkeypatch):
+    window, drawn, box = _overlay_window(monkeypatch, labels=["general"])
+    window._refresh_overlay(10.0)
+    window._show("你好")
+    window._hide()
+    assert drawn[-1] == ("center", ["● general"])
+
+
+def test_right_click_history_shows_source_and_translation_and_closes(monkeypatch):
+    window, drawn, _box = _overlay_window(monkeypatch, records=[("안녕", "你好"), ("", "只有中文")])
+    window._show("現在的字幕")
+    window._toggle_history()
+    assert drawn[-1] == ("left", ["안녕", "你好", "只有中文"])
+    window._toggle_history()  # right-click again
+    assert drawn[-1] == ("center", ["現在的字幕"])
+
+
+def test_subtitles_wait_in_the_queue_while_history_is_open(monkeypatch):
+    from modules import subtitle_display
+
+    window, drawn, _box = _overlay_window(monkeypatch, records=[("안녕", "你好")])
+    events = []
+    monkeypatch.setattr(subtitle_display.runtime_events, "emit", lambda *a, **k: events.append((a, k)))
+    window._toggle_history()
+    window._queue.put(SubtitlePayload(text="新字幕", subtitle_id="provisional:utt-9", phase="provisional"))
+    window._poll()
+    assert window._queue.qsize() == 1          # not drained, not "displayed"
+    assert drawn[-1][0] == "left" and events == []
+    window._history_until = time.monotonic() - 1  # timer expired
+    window._poll()
+    assert drawn[-1] == ("center", ["新字幕"])  # drawn only now, so its minimum display starts now
+    assert [k["action"] for _a, k in events] == ["displayed"]
+    assert window._show_time >= time.monotonic() - 1
+
+
+def test_pause_during_history_closes_it_and_clears_the_status_line(monkeypatch):
+    window, drawn, box = _overlay_window(monkeypatch, labels=["general"], records=[("안녕", "你好")])
+    window._refresh_overlay(10.0)
+    window._show("字幕")
+    window._toggle_history()
+    window._toggle_translation()  # pause
+    assert window._history_until == 0.0
+    window._refresh_overlay(12.0)  # paused: labels turn off
+    assert drawn[-1] == ("center", ["⏸"])
+    window._toggle_translation()  # resume
+    assert drawn[-1] == ("center", ["▶"])
+    box["labels"] = []
+    window._refresh_overlay(14.0)
+    cleared = []
+    window._clear_canvas = lambda: cleared.append(True)
+    window._hide()  # the resume flash timer
+    assert cleared == [True] and window._visible_text == ""
+
+
+def test_history_cannot_open_while_paused(monkeypatch):
+    window, drawn, _box = _overlay_window(monkeypatch, records=[("안녕", "你好")])
+    window._toggle_translation()  # pause
+    window._toggle_history()
+    assert window._history_until == 0.0
+    assert drawn[-1] == ("center", ["⏸"])
+
+
+def test_pause_symbol_survives_a_status_change(monkeypatch):
+    window, drawn, box = _overlay_window(monkeypatch, labels=["general"])
+    window._refresh_overlay(10.0)
+    window._show("暫停前的字幕")
+    window._flash("⏸", ms=None)
+    window._translating = False  # paused: the indicator turns off
+    window._refresh_overlay(12.0)
+    assert drawn[-1] == ("center", ["⏸"])

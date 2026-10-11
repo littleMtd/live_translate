@@ -369,6 +369,19 @@ class _Subtitle:
     min_display_ms:   int   = 1500  # minimum ms a subtitle stays before being replaced
     ms_per_char:      int   = 80    # additional ms per character (reading speed guard)
     queue_maxsize:    int   = 10
+    # Status indicator: a small line above the subtitle, shown only while
+    # something needs attention (auto profile unresolved, STT on Groq fallback,
+    # several sentences in a row failed). Hidden when all is well.
+    status_indicator_enabled: bool = True
+    status_font:      tuple = ("Microsoft JhengHei", 11, "bold")
+    status_color:     str   = "#FFD54F"
+    # Right-click the subtitle text to show the last few subtitles with their
+    # Korean source; right-click again or wait to close.
+    history_lines:    int   = 6
+    history_display_ms: int = 15000
+    history_font:     tuple = ("Microsoft JhengHei", 14, "bold")
+    history_source_font: tuple = ("Malgun Gothic", 11, "normal")
+    history_source_color: str = "#BBBBBB"
 
 
 @dataclass(frozen=True)

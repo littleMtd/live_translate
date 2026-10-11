@@ -9,6 +9,8 @@ from utils.logger import get_logger
 from utils.metrics import metrics
 from modules.provisional_subtitles import SubtitlePayload
 from utils.runtime_events import runtime_events
+from modules.live_status import live_status
+from modules.profile_context import profile_state
 
 log = get_logger("subtitle_display")
 
@@ -35,6 +37,12 @@ class SubtitleWindow:
         self._accepted_revisions: dict[str, tuple[int, bool]] = {}
         self._show_time: float = 0.0
         self._show_min_ms: int = 0
+        # Status indicator / history overlay state.
+        self._visible_text = ""          # wrapped subtitle currently on screen ("" = hidden)
+        self._status_labels: list[str] = []
+        self._status_checked_at = 0.0
+        self._history_until = 0.0        # monotonic deadline while the history view is open
+        self._history_home: tuple[int, int] | None = None  # window position to restore on close
 
     def run(self):
         """Must be called from the main thread."""
@@ -68,6 +76,8 @@ class SubtitleWindow:
         # Drag via text pixels — canvas bg is click-through but text pixels are not
         canvas.bind("<ButtonPress-1>", self._on_drag_start)
         canvas.bind("<B1-Motion>", self._on_drag_motion)
+        # Right-click the text: recent subtitles with their Korean source.
+        canvas.bind("<ButtonPress-3>", lambda e: self._toggle_history())
 
         root.bind("<Escape>", lambda e: self._quit())
         root.bind("<Double-Button-1>", lambda e: self._quit())
@@ -85,6 +95,7 @@ class SubtitleWindow:
                     break
 
     def _toggle_translation(self):
+        self._close_history()
         self._translating = not self._translating
         # Queue draining does not remove a line already held for the
         # reading-speed guard. It is stale after any pause-state change.
@@ -135,6 +146,8 @@ class SubtitleWindow:
         if self._root is None:
             return
         try:
+            # Track it as the visible text so a status redraw keeps the symbol.
+            self._visible_text = symbol
             self._draw_outlined_text(symbol)
             self._cancel_hide()
             if ms is not None:
@@ -148,6 +161,17 @@ class SubtitleWindow:
                 self._root.destroy()
                 self._root = None
             return
+
+        now = time.monotonic()
+        if self._history_until:
+            if now < self._history_until:
+                # History is on screen: leave subtitles queued so their display
+                # timing and telemetry start only once they are actually drawn.
+                self._refresh_overlay(now)
+                if self._root:
+                    self._root.after(cfg.subtitle.poll_interval_ms, self._poll)
+                return
+            self._close_history()
 
         # Drain queue — always keep the latest subtitle
         try:
@@ -211,60 +235,163 @@ class SubtitleWindow:
                         revision=payload.revision,
                     )
 
+        self._refresh_overlay(now)
+
         if self._root:
             self._root.after(cfg.subtitle.poll_interval_ms, self._poll)
 
+    # --- status indicator and history -------------------------------------------------
+
+    def _current_status_labels(self) -> list[str]:
+        if not cfg.subtitle.status_indicator_enabled or not self._translating:
+            return []
+        snapshot = profile_state.current()
+        unresolved = snapshot.mode == "auto" and not snapshot.effective_profile_id
+        return live_status.flags(profile_unresolved=unresolved)
+
+    def _refresh_overlay(self, now: float) -> None:
+        """Once a second: redraw when the status labels change."""
+        if now - self._status_checked_at < 1.0:
+            return
+        self._status_checked_at = now
+        labels = self._current_status_labels()
+        if labels != self._status_labels:
+            self._status_labels = labels
+            if not self._history_until:
+                self._redraw()
+
+    def _redraw(self) -> None:
+        if self._history_until:
+            self._draw_history()
+        elif self._visible_text or self._status_labels:
+            self._draw_outlined_text(self._visible_text)
+        else:
+            self._clear_canvas()
+
+    def _toggle_history(self) -> None:
+        if self._history_until:
+            self._close_history()
+            return
+        if not self._translating:
+            return  # paused: the pause symbol owns the window
+        self._history_until = time.monotonic() + cfg.subtitle.history_display_ms / 1000
+        self._history_home = self._window_position()
+        self._redraw()
+        self._keep_on_screen()
+
+    def _close_history(self) -> None:
+        if not self._history_until:
+            return
+        self._history_until = 0.0
+        self._redraw()
+        if self._history_home is not None:
+            self._move_window(*self._history_home)
+            self._history_home = None
+
+    def _window_position(self) -> tuple[int, int] | None:
+        try:
+            return int(self._root.winfo_x()), int(self._root.winfo_y())
+        except (AttributeError, tk.TclError):
+            return None
+
+    def _move_window(self, x: int, y: int) -> None:
+        try:
+            self._root.geometry(f"+{x}+{y}")
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _keep_on_screen(self) -> None:
+        """Lift the window while a tall history view would run past the screen bottom."""
+        home = self._history_home
+        if home is None or self._canvas is None:
+            return
+        try:
+            self._root.update_idletasks()
+            height = int(self._root.winfo_reqheight())
+            screen = int(self._root.winfo_screenheight())
+        except (AttributeError, tk.TclError):
+            return
+        limit = screen - height - 48  # leave room for the taskbar
+        if home[1] > limit:
+            self._move_window(home[0], max(0, limit))
+
+    def _draw_history(self) -> None:
+        records = live_status.recent_subtitles(cfg.subtitle.history_lines)
+        lines: list[tuple[str, tuple, str]] = []
+        if not records:
+            lines.append(("（還沒有字幕）", cfg.subtitle.history_font, cfg.subtitle.fg))
+        for record in records:
+            if record.source:
+                lines.append((record.source, cfg.subtitle.history_source_font, cfg.subtitle.history_source_color))
+            lines.append((record.target, cfg.subtitle.history_font, cfg.subtitle.fg))
+        self._draw_lines(lines, justify="left")
+
+    def _clear_canvas(self) -> None:
+        try:
+            if self._canvas:
+                self._canvas.delete("all")
+                self._canvas.config(width=1, height=1)
+        except tk.TclError:
+            pass
+
     def _draw_outlined_text(self, text: str):
+        """The subtitle, with the status line above it while something needs attention."""
+        lines: list[tuple[str, tuple, str]] = []
+        if self._status_labels:
+            lines.append(("● " + " · ".join(self._status_labels), cfg.subtitle.status_font, cfg.subtitle.status_color))
+        if text:
+            lines.append((text, cfg.subtitle.font, cfg.subtitle.fg))
+        self._draw_lines(lines, justify="center")
+
+    def _draw_lines(self, lines: list[tuple[str, tuple, str]], *, justify: str) -> None:
+        """Stack outlined text lines (text, font, colour) and size the canvas to fit."""
         canvas = self._canvas
+        if canvas is None:
+            return
         canvas.delete("all")
+        lines = [line for line in lines if line[0]]
+        if not lines:
+            canvas.config(width=1, height=1)
+            return
 
         ow = cfg.subtitle.outline_width
         pad = ow + cfg.subtitle.padx
+        gap = 4
 
-        # Measure rendered text size with a temporary probe item
-        probe = canvas.create_text(
-            pad, pad,
-            text=text,
-            font=cfg.subtitle.font,
-            anchor="nw",
-            width=cfg.subtitle.wraplength,
-            justify="center",
-        )
-        bbox = canvas.bbox(probe)
-        canvas.delete(probe)
-        if not bbox:
-            return
+        # Measure each line with a temporary probe item
+        sizes = []
+        for text, font, _colour in lines:
+            probe = canvas.create_text(
+                0, 0, text=text, font=font, anchor="nw",
+                width=cfg.subtitle.wraplength, justify=justify,
+            )
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
+            sizes.append((bbox[2] - bbox[0], bbox[3] - bbox[1]) if bbox else (0, 0))
 
-        cw = (bbox[2] - bbox[0]) + pad * 2
-        ch = (bbox[3] - bbox[1]) + pad * 2
+        cw = max(w for w, _h in sizes) + pad * 2
+        ch = sum(h for _w, h in sizes) + gap * (len(sizes) - 1) + pad * 2
         canvas.config(width=cw, height=ch)
-        cx, cy = cw // 2, ch // 2
 
-        # Outline: draw at 8 surrounding positions
-        for dx in (-ow, 0, ow):
-            for dy in (-ow, 0, ow):
-                if dx == 0 and dy == 0:
-                    continue
-                canvas.create_text(
-                    cx + dx, cy + dy,
-                    text=text,
-                    font=cfg.subtitle.font,
-                    fill=cfg.subtitle.outline_color,
-                    anchor="center",
-                    width=cfg.subtitle.wraplength,
-                    justify="center",
-                )
-
-        # Main text on top
-        canvas.create_text(
-            cx, cy,
-            text=text,
-            font=cfg.subtitle.font,
-            fill=cfg.subtitle.fg,
-            anchor="center",
-            width=cfg.subtitle.wraplength,
-            justify="center",
-        )
+        anchor = "n" if justify == "center" else "nw"
+        x = cw // 2 if justify == "center" else pad
+        y = pad
+        for (text, font, colour), (_w, h) in zip(lines, sizes):
+            # Outline: draw at 8 surrounding positions, then the text on top
+            for dx in (-ow, 0, ow):
+                for dy in (-ow, 0, ow):
+                    if dx == 0 and dy == 0:
+                        continue
+                    canvas.create_text(
+                        x + dx, y + dy, text=text, font=font,
+                        fill=cfg.subtitle.outline_color, anchor=anchor,
+                        width=cfg.subtitle.wraplength, justify=justify,
+                    )
+            canvas.create_text(
+                x, y, text=text, font=font, fill=colour, anchor=anchor,
+                width=cfg.subtitle.wraplength, justify=justify,
+            )
+            y += h + gap
 
     def _show(self, text: str):
         if self._root is None:
@@ -274,6 +401,7 @@ class SubtitleWindow:
             return
         try:
             wrapped = "\n".join(textwrap.wrap(text, width=cfg.subtitle.max_width_chars)) or text
+            self._visible_text = wrapped
             self._draw_outlined_text(wrapped)
             log.debug("Subtitle: %s", wrapped)
             self._show_time = time.monotonic()
@@ -287,10 +415,14 @@ class SubtitleWindow:
             pass
 
     def _hide(self):
+        self._visible_text = ""
         try:
-            if self._canvas:
-                self._canvas.delete("all")
-                self._canvas.config(width=1, height=1)
+            if self._history_until:
+                pass  # an earlier subtitle's hide timer: leave the history view alone
+            elif self._status_labels:
+                self._draw_outlined_text("")  # keep the status line visible
+            else:
+                self._clear_canvas()
         except tk.TclError:
             pass
         self._hide_job = None
