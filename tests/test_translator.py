@@ -1689,6 +1689,9 @@ class TestTranslationFallbackChain(unittest.TestCase):
         translator._lookup_existing_translation_event.assert_not_called()
 
     def test_excluded_common_member_noun_keeps_unexpected_hangul_guard(self):
+        # The guard still rejects the copied common noun. Since rescue v2
+        # (owner decision 2026-10-11) the last-resort rescue publishes it
+        # instead of dropping the whole subtitle: one Hangul word beats none.
         translator = _make_translator()
         translator._engines = [
             _route_engine("deepseek", "有個叫사람的成員加入了。")
@@ -1698,9 +1701,10 @@ class TestTranslationFallbackChain(unittest.TestCase):
             "사람이라는 멤버가 새로 들어왔어요", False
         )
 
-        self.assertEqual(outcome.status, "failed")
         attempt = translation_engines_module.get_translation_attempts()[-1]
         self.assertEqual(attempt["output_guard"]["reason"], "unexpected_hangul")
+        self.assertEqual(outcome.status, "success")
+        self.assertEqual(outcome.result_source, "guard_rescue")
 
     def test_mixed_known_canonical_and_unknown_escrow_both_remain_required(self):
         translator = _make_translator()
@@ -1813,6 +1817,8 @@ class TestTranslationFallbackChain(unittest.TestCase):
         self.assertNotIn("__LT_UNK_", current_message)
 
     def test_unactivated_common_noun_does_not_weaken_hangul_guard(self):
+        # Guard unchanged (unexpected_hangul). Rescue v2 does not take pieces of a
+        # predicate-like source word, so 학생 from 학생이에요 is still not published.
         translator = _make_translator()
         translator._engines = [_route_engine("deepseek", "我的名字是학생。")]
 

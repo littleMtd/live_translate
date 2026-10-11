@@ -7,6 +7,7 @@ import modules.translation_engines as translation_engines_module
 import tests.test_translator as tt
 from modules.translation_runtime import FallbackState, call_with_fallback
 from modules.translator import (
+    GUARD_RESCUE_POLICY,
     _choose_guard_rescue,
     _final_script_rejection_reason,
     _guard_rescue_eligible,
@@ -50,6 +51,37 @@ class RuleTests(unittest.TestCase):
         for text, source in refused:
             with self.subTest(text=text):
                 self.assertFalse(_guard_rescue_text_ok(text, source))
+
+    def test_v2_accepts_word_pieces_and_up_to_four_names(self):
+        # 2026-10-11 replay of October lost sentences (docs/agent/LIVE_RESCUE_V2_PLAN_20261011.md).
+        self.assertTrue(_guard_rescue_text_ok("牛奶，유천來了，鯽魚。", "우유 유천이 와우 붕어"))  # piece of 유천이
+        self.assertTrue(_guard_rescue_text_ok("為了慶祝징버기生日想畫圖，看了징버기的翻唱曲後馬上照著畫了。",
+                                              "징버기 생축 기념 그림 그리려다가 징버기 커버곡 보고 바로 따라 그렸습니다."))
+        self.assertTrue(_guard_rescue_text_ok(
+            "Happy 부가Day！生日快樂。啊，好可愛！像똥깡이抱枕一樣。버거直接寫就好，這裡寫得很清楚很清楚。",
+            "해피 부가데이! 생일 축하합니다. 아 귀여워! 똥깡이 쿠션같이. 버거 그냥 적어"))  # three runs
+        refused = (
+            ("치說了，今天大家一起吃飯然後回家很開心。", "치치 소리가 들려서"),  # 1-syllable piece
+            ("가유說了，今天大家一起吃飯然後回家很開心。", "나가 유천이 왔어"),  # spans two words
+            ("가나，다라，마바，사아，자차，今天大家一起吃飯然後回家很開心很開心很開心。",
+             "가나 다라 마바 사아 자차"),  # five runs
+            ("유천이었說了，今天大家一起吃飯然後回家很開心。", "유천이었어 왔다"),  # piece ending like a predicate
+            ("我先먹었습，今天大家一起吃飯然後回家很開心很開心。", "저는 먹었습니다 그리고"),  # piece of a predicate word
+            ("畫得예쁘，今天大家一起吃飯然後回家很開心很開心。", "엄청 예쁘게 그려줬다"),  # adverbial -게 stem
+            ("我좋아，今天大家一起吃飯然後回家很開心很開心。", "내가 좋아하는 음식"),  # adnominal 하는 stem
+        )
+        for text, source in refused:
+            with self.subTest(text=text):
+                self.assertFalse(_guard_rescue_text_ok(text, source))
+        # exactly four distinct runs (each a source token or word piece) still qualify
+        self.assertTrue(_guard_rescue_text_ok(
+            "가나、다라、마바、사아這四位今天都來了，大家一起吃飯然後回家很開心很開心很開心很開心。",
+            "가나 다라 마바 사아 왔어"))
+        # a 2+ syllable piece of a mixed token qualifies; the token boundary is the whitespace word
+        self.assertTrue(_guard_rescue_text_ok("뽀뿌說要一起去吃飯，大家都很開心很開心。", "abc뽀뿌123 같이 가자"))
+        self.assertEqual(GUARD_RESCUE_POLICY, "copied_source_name_v2")
+        # the piece restriction does not touch whole tokens: 징부기 (from 징부기가) still qualifies
+        self.assertTrue(_guard_rescue_text_ok("只要징부기喜歡就好，今天大家一起吃飯然後回家很開心。", "그냥 징부기가 좋으면"))
 
     def test_short_names_that_look_like_endings_are_not_rescued(self):
         # The contract checks endings on every run; a name such as 민지 is simply not rescued (safe direction).
@@ -107,7 +139,7 @@ class RuntimeHookTests(unittest.TestCase):
         result, idx, details = self.call(engines, lambda attempts: _choose_guard_rescue(attempts, SOURCE))
         self.assertEqual((result, idx), (RESCUABLE, 0))
         self.assertEqual(details.selected_attempt["status"], "rejected_output")
-        self.assertEqual(details.selected_attempt["guard_rescue"]["policy"], "copied_source_name_v1")
+        self.assertEqual(details.selected_attempt["guard_rescue"]["policy"], GUARD_RESCUE_POLICY)
         self.assertTrue(details.selected_attempt["selected_for_output"])
 
     def test_provider_exception_still_raises_without_rescue(self):
@@ -137,7 +169,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(_outcome_used_api(outcome))
         fields = outcome.as_event_fields(12.0, {})
         self.assertIn("published_with_source_hangul", fields["quality_flags"])
-        self.assertEqual(fields["guard_rescue"]["policy"], "copied_source_name_v1")
+        self.assertEqual(fields["guard_rescue"]["policy"], GUARD_RESCUE_POLICY)
         self.assertEqual(_final_script_rejection_reason(fields), "")
         self.assertEqual(_final_script_rejection_reason({**fields, "target_text": "公演 공연 취소됐어요"}), "unexpected_hangul")
 
@@ -188,6 +220,6 @@ class FinalizerTrustTests(unittest.TestCase):
                 promoted=False, engine=engine, prompt_version="v", cache_status="miss", incomplete=False,
                 canonical_obligations=(), request_protection=resolve_request_protection(SOURCE),
                 history_cohort=translator._history_cohort(),
-                guard_rescue={"policy": "copied_source_name_v1", "attempt_index": 0})
+                guard_rescue={"policy": GUARD_RESCUE_POLICY, "attempt_index": 0})
         self.assertEqual(outcome.status, "failed")
         self.assertNotEqual(outcome.result_source, "guard_rescue")

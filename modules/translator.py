@@ -1471,7 +1471,14 @@ def _quality_telemetry_approved_terms(
 # --- Last-resort "copied source name" rescue (docs/agent/LIVE_DROPPED_SUBTITLES_PLAN_20261010.md) ---
 # When every route was rejected, a candidate whose only problem is Hangul copied from the source as a
 # name-like token is published instead of losing the whole subtitle (user decision 2026-10-10).
-GUARD_RESCUE_POLICY = "copied_source_name_v1"
+GUARD_RESCUE_POLICY = "copied_source_name_v2"
+# v2 (docs/agent/LIVE_RESCUE_V2_PLAN_20261011.md): up to four distinct runs, and a run may be part of one
+# source word (유천 from 유천이) when it has at least two syllables. Ratio and ending checks unchanged.
+_GUARD_RESCUE_MAX_RUNS = 4
+_GUARD_RESCUE_MIN_SUBSTRING = 2
+# Pieces only: a source word in a connective/adnominal verb form (예쁘게, 좋아하는 -> 좋아하) is a
+# predicate even though the final-ending list misses it, so its stem is not a copied name.
+_GUARD_RESCUE_PIECE_WORD_ENDINGS = ("게", "하", "던", "기")
 _GUARD_RESCUE_REASONS = frozenset({"unexpected_hangul", "raw_unexpected_hangul"})
 _GUARD_RESCUE_PARTICLES = tuple(sorted(
     ("야", "아", "이", "가", "은", "는", "을", "를", "의", "도", "랑", "이랑", "한테", "에게", "이다", "다"),
@@ -1504,6 +1511,32 @@ def _guard_rescue_name_tokens(source: str) -> frozenset[str]:
     return frozenset(tokens)
 
 
+def _guard_rescue_run_from_source(run: str, source: str, tokens: frozenset[str]) -> bool:
+    """A whole source token (one particle stripped), or a 2+ syllable piece of one source word.
+
+    A piece only counts when its source word is not itself predicate-like, so 유천 from 유천이
+    qualifies but 먹었습 from 먹었습니다, 예쁘 from 예쁘게 and 좋아 from 좋아하는 do not.
+    """
+    if run in tokens:
+        return True
+    if len(run) < _GUARD_RESCUE_MIN_SUBSTRING:
+        return False
+    for raw in (source or "").split():
+        word = re.sub(r"^[^\w]+|[^\w]+$", "", raw)
+        if run in word and not _guard_rescue_predicate_like(word) and not _guard_rescue_verb_form_word(word):
+            return True
+    return False
+
+
+def _guard_rescue_verb_form_word(word: str) -> bool:
+    forms = {word}
+    for particle in _GUARD_RESCUE_PARTICLES:
+        if word.endswith(particle) and len(word) > len(particle):
+            forms.add(word[: -len(particle)])
+            break
+    return any(form.endswith(_GUARD_RESCUE_PIECE_WORD_ENDINGS) for form in forms)
+
+
 def _guard_rescue_predicate_like(run: str) -> bool:
     forms = {run}
     for particle in _GUARD_RESCUE_PARTICLES:
@@ -1519,7 +1552,7 @@ def _guard_rescue_hangul_ratio(text: str) -> float:
 
 
 def _guard_rescue_text_ok(text: str | None, source: str) -> bool:
-    """Every Hangul run is a name-like token of this source; the text is mostly Han and not a copy."""
+    """Every Hangul run is a name-like token or word piece of this source; the text is mostly Han and not a copy."""
     if not text or re.sub(r"\s+", "", text) == re.sub(r"\s+", "", source or ""):
         return False
     runs = _GUARD_RESCUE_HANGUL_RUN.findall(text)
@@ -1529,8 +1562,11 @@ def _guard_rescue_text_ok(text: str | None, source: str) -> bool:
     if runs:
         tokens = _guard_rescue_name_tokens(source)
         distinct = set(runs)
-        if len(distinct) > 2 or any(
-            len(run) > 8 or run not in tokens or _guard_rescue_predicate_like(run) for run in distinct
+        if len(distinct) > _GUARD_RESCUE_MAX_RUNS or any(
+            len(run) > 8
+            or not _guard_rescue_run_from_source(run, source, tokens)
+            or _guard_rescue_predicate_like(run)
+            for run in distinct
         ):
             return False
         if sum(len(run) for run in runs) / len(body) > 0.30:
