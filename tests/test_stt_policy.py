@@ -9,6 +9,7 @@ from modules.stt_policy import (
     normalize_prompt_text,
     segment_stats,
     should_reject_language,
+    is_japanese_code,
     should_reject_segments,
 )
 
@@ -244,3 +245,15 @@ class TestSttPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_scribe_iso639_3_codes_are_recognized(caplog):
+    # ElevenLabs Scribe reports "kor"/"jpn"; run 20261011T083802Z-31880 logged
+    # 160 "unexpected lang=kor" warnings and "jpn" never matched Japanese.
+    logger = logging.getLogger("test-scribe-lang")
+    with caplog.at_level(logging.WARNING, logger="test-scribe-lang"):
+        assert should_reject_language("kor", "안녕", logger) is False
+    assert "unexpected lang" not in caplog.text
+    assert should_reject_language("jpn", "こんにちは", logger) is True
+    assert should_reject_language("jpn", "こんにちは", logger, allow_japanese=True) is False
+    assert is_japanese_code("JPN") and is_japanese_code("ja") and not is_japanese_code("kor")

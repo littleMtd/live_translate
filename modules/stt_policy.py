@@ -106,6 +106,17 @@ def is_hallucinated(
     return False
 
 
+# Groq Whisper reports ISO 639-1 ("ko"); ElevenLabs Scribe reports ISO 639-3
+# ("kor"). Before 2026-10-11 only the former was recognized, so every Scribe
+# chunk logged an "unexpected" language and "jpn" never matched Japanese.
+_KOREAN_CODES = frozenset({"ko", "kor", "korean"})
+_JAPANESE_CODES = frozenset({"ja", "jpn", "japanese"})
+
+
+def is_japanese_code(detected_lang: str | None) -> bool:
+    return str(detected_lang or "").lower() in _JAPANESE_CODES
+
+
 def should_reject_language(
     detected_lang: str | None,
     text: str,
@@ -117,15 +128,15 @@ def should_reject_language(
         return False
 
     lang_lower = detected_lang.lower()
-    if lang_lower in ("ja", "japanese"):
+    if lang_lower in _JAPANESE_CODES:
         if allow_japanese:
-            logger.info("Groq STT accepted coherent foreign speech (lang=%s)", detected_lang)
+            logger.info("STT accepted coherent foreign speech (lang=%s)", detected_lang)
             return False
-        logger.warning("Groq STT rejected (lang=%s)", detected_lang)
+        logger.warning("STT rejected (lang=%s)", detected_lang)
         return True
 
-    if lang_lower not in ("ko", "korean"):
-        logger.warning("Groq STT unexpected lang=%s (passing through)", detected_lang)
+    if lang_lower not in _KOREAN_CODES:
+        logger.warning("STT unexpected lang=%s (passing through)", detected_lang)
 
     return False
 

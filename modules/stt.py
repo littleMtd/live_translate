@@ -42,6 +42,7 @@ from modules.stt_policy import (
     segment_rejection_reason,
     segment_stats,
     should_reject_language,
+    is_japanese_code,
 )
 
 log = get_logger("stt")
@@ -694,7 +695,7 @@ class STTEngine:
             self._last_detected_language = str(detected_lang or "")
             allow_detected_japanese = (
                 bool(cfg.translation.translate_coherent_foreign_speech)
-                and self._last_detected_language.lower() in ("ja", "japanese")
+                and is_japanese_code(self._last_detected_language)
             )
             self._last_foreign_speech_allowed = allow_detected_japanese
             if should_reject_language(
@@ -922,7 +923,7 @@ class STTEngine:
             self._last_detected_language = str(detected_lang or "")
             allow_detected_japanese = (
                 bool(cfg.translation.translate_coherent_foreign_speech)
-                and self._last_detected_language.lower() in ("ja", "japanese")
+                and is_japanese_code(self._last_detected_language)
             )
             self._last_foreign_speech_allowed = allow_detected_japanese
             text = (getattr(resp, "text", "") or "").strip()
