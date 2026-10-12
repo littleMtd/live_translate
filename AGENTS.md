@@ -74,6 +74,12 @@ excludes frontend code. Keep plan review and code review verdicts separate.
 
 ### Codex agent settings
 
+Codex is unavailable since 2026-10-12 (the owner cancelled the subscription and asked that it not
+be used). Until that changes, do not run the Codex CLI: wherever a workflow names Codex as plan
+reviewer, post-implementation reviewer, or third-party judge, use a separate read-only agent with
+fresh context instead and record who actually reviewed. The settings below apply only if the owner
+re-enables Codex.
+
 When an agent runs the Codex CLI (`codex exec`) for this repository, pass these
 as command-line flags instead of editing `~/.codex/config.toml`:
 
