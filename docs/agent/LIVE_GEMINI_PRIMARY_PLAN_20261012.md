@@ -211,3 +211,20 @@ provisional 154; plus sentence_splitter 26/472 and translation_runtime 619/621 p
   and key from one immutable config snapshot).
 - Known limitation carried over: provisional requests call the primary directly and are not
   gated by the circuit, so with an unhealthy Gemini every provisional still pays one failed call.
+
+### Third-party blind re-judge and owner decision (2026-10-12)
+
+The A/B above was judged by Gemini, which also wrote variant C. Re-judged blind with Codex
+`gpt-6-luna` (high reasoning; calibration on 50 items: luna–sol 78%, luna–Gemini 84%,
+sol–Gemini 86% ok/not-ok agreement; all three ranked C above A):
+
+| Judge | Flagged 225: A → C ok | Flagged sev≥2 | C better / worse | Controls 200: A → C ok |
+|---|---|---|---|---|
+| Gemini (self) | 39.1% → 82.7% | 90 → 13 | 121 / 15 | 91.0% → 94.0% |
+| Codex luna | 51.1% → 71.6% | 87 → 44 | 84 / 30 | 88.5% → 89.0% (16 / 16) |
+
+The Gemini judge roughly doubled the gain (self-preference plus the flagged set being chosen by
+the same judge). The real gain is about one extra correct line in thirty, with Gemini worse on 30
+of the 225 flagged lines, for ~+0.9 s p50 latency and an estimated US$4–5 per 3-hour stream.
+**Owner decision: stay on DeepSeek; do not switch.** The provider switch stays in the code at
+`primary_provider="deepseek"`.
