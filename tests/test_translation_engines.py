@@ -500,19 +500,3 @@ class TestDeepSeekTranslationAdapter(unittest.TestCase):
         finally:
             object.__setattr__(cfg.translation, "deepseek_route", original_route)
             object.__setattr__(cfg.translation, "translation_mode", original_mode)
-
-
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _historical_deepseek_primary():
-    # These existing regressions exercise the legacy provider setting. Gemini
-    # behavior is covered independently in test_gemini_primary.py.
-    from config import cfg
-    original = cfg.translation.primary_provider
-    object.__setattr__(cfg.translation, "primary_provider", "deepseek")
-    try:
-        yield
-    finally:
-        object.__setattr__(cfg.translation, "primary_provider", original)

@@ -151,8 +151,8 @@ class ProvisionalStore:
             return provisional_id in self._closed
 
 
-def primary_provisional_eligible(config=None) -> bool:
-    """Return whether the selected backend owns protected primary provisional work."""
+def deepseek_provisional_eligible(config=None) -> bool:
+    """Return whether the selected backend owns DeepSeek provisional work."""
     config = config or cfg
     mode = str(getattr(config.translation, "translation_mode", "live") or "live")
     backend = config.clip_engine if mode == "clip" else config.live_engine
@@ -160,7 +160,3 @@ def primary_provisional_eligible(config=None) -> bool:
         backend == "deepseek"
         and str(getattr(config.translation, "deepseek_route", "off")) == "primary"
     )
-
-
-# Compatibility for callers using the historical route-switch name.
-deepseek_provisional_eligible = primary_provisional_eligible

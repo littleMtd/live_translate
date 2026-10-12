@@ -56,14 +56,7 @@ def test_dropped_translation_fields_absent():
     # them. Their reappearance would signal an accidental revert.
     d = _export()
     for stale in (
-        "evolve_enabled", "evolve_every", "engine_chain",
+        "gemini_model", "evolve_enabled", "evolve_every", "engine_chain",
         "model", "google_translate_lang", "openrouter_model", "deepl_target_lang",
     ):
         assert stale not in d["translation"], f"unexpected stale field: {stale}"
-
-
-def test_primary_provider_adapter_settings_exported_without_keys():
-    translation = _export()["translation"]
-    assert translation["primary_provider"] == "deepseek"
-    assert translation["gemini_model"] == "gemini-3.8-flash"
-    assert translation["gemini_thinking_level"] == "low"

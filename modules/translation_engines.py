@@ -801,7 +801,7 @@ def effective_system_prompt_for_engine(
     engine_name = getattr(engine, "engine_name", engine) or ""
     if engine_name == "groq":
         return _groq_system_prompt(system_prompt)
-    if engine_name in {"deepseek", "gemini"}:
+    if engine_name == "deepseek":
         return _deepseek_system_prompt(system_prompt)
     return system_prompt
 
@@ -1197,8 +1197,6 @@ def call_engine_with_deadline(
 class DeepSeekTranslationEngine(TranslationEngine):
     """Direct DeepSeek adapter for the protected primary route."""
 
-    protected_primary_route = True
-
     def __init__(self):
         self._api_key = cfg.keys.deepseek
         self._model = cfg.translation.deepseek_model
@@ -1383,211 +1381,6 @@ class DeepSeekTranslationEngine(TranslationEngine):
                 "pricing_basis": "peak_upper_bound",
             }
             log.warning("DeepSeek request failed (%s/%s)", error_type, message_class)
-            return None
-
-
-class GeminiTranslationEngine(TranslationEngine):
-    """Gemini generateContent adapter for the protected primary route."""
-
-    protected_primary_route = True
-
-    def __init__(self):
-        self._api_key = cfg.keys.gemini
-        self._model = cfg.translation.gemini_model
-        self._timeout = cfg.translation.gemini_timeout
-        self._max_tokens = min(
-            cfg.translation.max_tokens,
-            _clamp_int(cfg.translation.deepseek_max_tokens, 160, 1),
-        )
-        self.last_response_metadata: dict[str, Any] = {}
-
-    @property
-    def engine_name(self) -> str:
-        return "gemini"
-
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    @property
-    def available(self) -> bool:
-        return bool(self._api_key)
-
-    def translate(
-        self,
-        text: str,
-        system_prompt: str,
-        incomplete: bool,
-        history: list[tuple[str, str]] | None = None,
-    ) -> str | None:
-        return self.translate_messages(
-            build_effective_deepseek_messages(
-                text, system_prompt, incomplete, history
-            )
-        )
-
-    def translate_messages_result(self, route_request) -> EngineResult:
-        return self.translate_messages(
-            route_request.messages, route_request=route_request
-        )
-
-    def translate_result(
-        self, text: str, system_prompt: str, incomplete: bool,
-        history: list[tuple[str, str]] | None = None, *, route_request,
-    ) -> EngineResult:
-        return self.translate_messages_result(route_request)
-
-    def _cost_usd(self, usage: dict[str, Any]) -> float | None:
-        prompt = _optional_int_diagnostic(usage.get("prompt_tokens"))
-        output = _optional_int_diagnostic(usage.get("completion_tokens"))
-        if prompt is None or output is None:
-            return None
-        return (prompt * cfg.translation.gemini_input_usd_per_million
-                + output * cfg.translation.gemini_output_usd_per_million) / 1_000_000
-
-    def translate_messages(
-        self,
-        messages: tuple[tuple[str, str], ...],
-        *,
-        route_request=None,
-    ) -> str | EngineResult | None:
-        if route_request is not None:
-            return _run_with_engine_result(
-                self,
-                lambda: self._translate_messages_text(
-                    messages, route_request=route_request
-                ),
-            )
-        from dataclasses import replace
-        from modules.translation_request import primary_route_for_messages
-
-        # Legacy callers keep the raw adapter timeout (see _legacy_route_request).
-        return self._translate_messages_text(
-            messages,
-            route_request=replace(
-                primary_route_for_messages(self, messages),
-                timeout_seconds=self._timeout,
-            ),
-        )
-
-    def _translate_messages_text(
-        self,
-        messages: tuple[tuple[str, str], ...],
-        *,
-        route_request,
-    ) -> str | None:
-        import json as _json
-        import urllib.error
-        import urllib.request
-
-        self.last_response_metadata = {}
-        reset_last_engine_diagnostics()
-        reset_last_token_usage()
-        timeout_config_ms = _timeout_config_ms(route_request.timeout_seconds)
-        if not self._api_key:
-            return None
-
-        messages = route_request.messages
-        payload = route_request.body
-        payload_text = payload.decode("utf-8")
-        request = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{route_request.model}:generateContent",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self._api_key,
-            },
-        )
-        started_at = time.monotonic()
-        try:
-            with urllib.request.urlopen(
-                request,
-                timeout=route_request.timeout_seconds,
-            ) as response:
-                data = _json.loads(response.read())
-            if not isinstance(data, dict):
-                raise ValueError("invalid Gemini response")
-            candidates = data.get("candidates", [])
-            if not isinstance(candidates, list):
-                raise ValueError("invalid Gemini candidates")
-            choice = candidates[0] if candidates else {}
-            if not isinstance(choice, dict):
-                raise ValueError("invalid Gemini candidate")
-            reason = str(choice.get("finishReason") or "")
-            parts = choice.get("content", {}).get("parts", [])
-            if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
-                raise ValueError("invalid Gemini parts")
-            content = "".join(part.get("text", "") for part in parts
-                              if not part.get("thought")).strip()
-            raw_usage = data.get("usageMetadata") or {}
-            usage = {}
-            if "promptTokenCount" in raw_usage:
-                usage["prompt_tokens"] = int(raw_usage["promptTokenCount"])
-            if "candidatesTokenCount" in raw_usage or "thoughtsTokenCount" in raw_usage:
-                usage["completion_tokens"] = (int(raw_usage.get("candidatesTokenCount", 0))
-                                              + int(raw_usage.get("thoughtsTokenCount", 0)))
-                usage["completion_tokens_details"] = {
-                    "reasoning_tokens": int(raw_usage.get("thoughtsTokenCount", 0))}
-            if "totalTokenCount" in raw_usage:
-                usage["total_tokens"] = int(raw_usage["totalTokenCount"])
-            elif "prompt_tokens" in usage and "completion_tokens" in usage:
-                usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-            _log_token_usage("Gemini", usage)
-            _capture_response_metadata({}, {"finish_reason": reason})
-            cost = self._cost_usd(usage)
-            self.last_response_metadata = {
-                "finish_reason": reason,
-                "system_fingerprint": str(data.get("system_fingerprint") or ""),
-                "pricing_revision": cfg.translation.gemini_pricing_revision,
-                "pricing_basis": "published_rates",
-            }
-            _set_last_engine_diagnostics(
-                "gemini",
-                api_attempt_count=1,
-                api_error_message_class=("content_rejection" if reason != "STOP" or not content else ""),
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=timeout_config_ms,
-                api_attempt_timeout_ms=timeout_config_ms,
-                api_attempt_index=1,
-                prompt_char_count=len(messages[0][1]) if messages else 0,
-                request_body_char_count=len(payload_text),
-                message_count=len(messages),
-                context_item_count=max(0, (len(messages) - 2) // 2),
-                api_cost_usd=cost,
-                api_cost_basis="published_rates" if cost is not None else "",
-                api_pricing_revision=cfg.translation.gemini_pricing_revision,
-            )
-            return content if reason == "STOP" and content else None
-        except Exception as exc:
-            # Structurally malformed JSON is unparseable provider evidence,
-            # just like a missing field in the OpenAI-compatible adapters.
-            if isinstance(exc, (TypeError, ValueError, AttributeError)) and not isinstance(exc, _json.JSONDecodeError):
-                exc = KeyError("invalid Gemini response shape")
-            error_type, message_class = _classify_api_error(exc)
-            _set_last_engine_diagnostics(
-                "gemini",
-                api_attempt_count=1,
-                api_timeout_count=1 if error_type == "timeout" else 0,
-                api_total_wall_ms=_elapsed_ms(started_at),
-                api_final_attempt_ms=_elapsed_ms(started_at),
-                timeout_config_ms=timeout_config_ms,
-                api_attempt_timeout_ms=timeout_config_ms,
-                api_attempt_index=1,
-                prompt_char_count=len(messages[0][1]) if messages else 0,
-                request_body_char_count=len(payload_text),
-                message_count=len(messages),
-                context_item_count=max(0, (len(messages) - 2) // 2),
-                api_error_type=error_type,
-                api_error_message_class=message_class,
-            )
-            self.last_response_metadata = {
-                "finish_reason": "",
-                "system_fingerprint": "",
-                "pricing_revision": cfg.translation.gemini_pricing_revision,
-                "pricing_basis": "published_rates",
-            }
-            log.warning("Gemini request failed (%s/%s)", error_type, message_class)
             return None
 
 
@@ -1867,7 +1660,6 @@ class EngineSpec:
 
 
 _ENGINE_REGISTRY = MappingProxyType({
-    "gemini": EngineSpec(GeminiTranslationEngine, lambda: bool(cfg.keys.gemini)),
     "deepseek": EngineSpec(
         DeepSeekTranslationEngine, lambda: bool(cfg.keys.deepseek)
     ),
@@ -1903,16 +1695,6 @@ def engine_chain_config_key() -> tuple:
     return (
         mode,
         backend,
-        cfg.translation.primary_provider,
-        bool(cfg.keys.gemini),
-        cfg.translation.gemini_model,
-        cfg.translation.gemini_thinking_level,
-        cfg.translation.gemini_timeout,
-        cfg.translation.gemini_temperature,
-        cfg.translation.gemini_output_reserve_tokens,
-        cfg.translation.gemini_input_usd_per_million,
-        cfg.translation.gemini_output_usd_per_million,
-        cfg.translation.gemini_pricing_revision,
         cfg.translation.deepseek_route,
         cfg.translation.deepseek_model,
         cfg.translation.deepseek_temperature,
@@ -1927,34 +1709,12 @@ def engine_chain_config_key() -> tuple:
     )
 
 
-def effective_primary_provider() -> str:
-    if cfg.translation.primary_provider == "gemini" and not cfg.keys.gemini:
-        return "deepseek"
-    return cfg.translation.primary_provider
-
-
-def make_primary_engine() -> TranslationEngine:
-    factory = GeminiTranslationEngine if effective_primary_provider() == "gemini" else DeepSeekTranslationEngine
-    return factory()
-
-
-def is_protected_primary_route(engine: TranslationEngine) -> bool:
-    # Provider identity is explicit: a DeepSeek fallback still owns the capsule
-    # and raw boundary even when it is not route zero.
-    flag = getattr(engine, "protected_primary_route", None)
-    if isinstance(flag, bool):
-        return flag
-    return str(getattr(engine, "engine_name", "")) in {"deepseek", "gemini"}
-
-
 def effective_engine_chain_names() -> tuple[str, ...]:
     """Return the fixed provider route for the selected backend."""
     mode = str(cfg.translation.translation_mode or "live")
     backend = cfg.clip_engine if mode == "clip" else cfg.live_engine
     if backend == "deepseek":
         if str(cfg.translation.deepseek_route) == "primary":
-            if effective_primary_provider() == "gemini":
-                return ("gemini", "deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
             return ("deepseek", *_PROTECTED_LIVE_BASE_CHAIN)
         return _PROTECTED_LIVE_BASE_CHAIN
     return ()
@@ -1966,8 +1726,6 @@ def _build_engine_chain() -> "list[TranslationEngine]":
     Picks cfg.live_engine or cfg.clip_engine based on current translation_mode.
     "deepseek" uses DeepSeek followed by Groq, or Groq-only emergency mode.
     """
-    if cfg.translation.primary_provider == "gemini" and not cfg.keys.gemini:
-        log.warning("GEMINI_API_KEY missing; effective primary provider is deepseek")
     mode = cfg.translation.translation_mode
     engine_name = cfg.clip_engine if mode == "clip" else cfg.live_engine
     log.info("Engine selection: mode=%s → engine=%s", mode, engine_name)

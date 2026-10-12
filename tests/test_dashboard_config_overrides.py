@@ -144,7 +144,7 @@ def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
 
     import modules.translation_engines as translation_engines
 
-    base = config_mod._Config(translation=config_mod._Translation(primary_provider="deepseek"))
+    base = config_mod._Config()
     json_path = tmp_path / "protected-deepseek.json"
     _write(
         json_path,

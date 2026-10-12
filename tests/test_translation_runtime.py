@@ -930,6 +930,16 @@ class TestTranslationRuntimeFallback(unittest.TestCase):
         self.assertEqual(state.active_idx, 1)
         self.assertEqual(get_translation_attempts()[0]["failure_scope"], "provider")
 
+    def test_http_402_is_classified_as_billing_error(self):
+        import io
+        from urllib.error import HTTPError
+
+        from modules.translation_engines import _classify_api_error
+
+        for status, expected in ((402, "billing_error"), (400, "http_4xx"), (429, "rate_limit")):
+            error = HTTPError("https://example.invalid", status, "x", {}, io.BytesIO(b""))
+            self.assertEqual(_classify_api_error(error), ("api_error", expected))
+
     def test_auth_and_other_http_4xx_do_not_open_circuit(self):
         for message_class in ("auth_error", "http_4xx"):
             with self.subTest(message_class=message_class):

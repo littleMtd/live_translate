@@ -55,7 +55,7 @@ from modules.provisional_subtitles import (
     ProvisionalRequest,
     ProvisionalStore,
     SubtitlePayload,
-    primary_provisional_eligible,
+    deepseek_provisional_eligible,
     provisional_fingerprint,
 )
 from modules.db import _get_db
@@ -70,10 +70,6 @@ from modules.streamer_profiles import common_stt_terms
 from modules.translation_engines import (
     TranslationEngine,
     DeepSeekTranslationEngine,
-    GeminiTranslationEngine,
-    make_primary_engine,
-    effective_primary_provider,
-    is_protected_primary_route,
     GroqTranslationEngine,
     _build_engine_chain,
     build_effective_deepseek_messages,
@@ -1174,7 +1170,8 @@ def _adjudicate_translation_candidate(
         request_protection = _request_protection_for(
             source, entity_context, obligations
         )
-    is_primary_route = is_protected_primary_route(engine)
+    engine_name = str(getattr(engine, "engine_name", "") or "")
+    is_deepseek = engine_name == "deepseek"
     protection_evaluation = request_protection.evaluate_provider_candidate(result)
     terminology_passed = protection_evaluation.semantic_passed
     terminology_reason = protection_evaluation.semantic_reason
@@ -1188,7 +1185,7 @@ def _adjudicate_translation_candidate(
             source, restored_result
         )
     source_corrected = corrected
-    if is_primary_route:
+    if is_deepseek:
         if record_corrections:
             corrected = _normalize_deepseek_taiwan_script(corrected)
             corrections = get_corrections()
@@ -1316,26 +1313,26 @@ def _adjudicate_translation_candidate(
     elif "unexpected_hangul" in corrected_script_violations:
         reason = "unexpected_hangul"
         rejection_owner = "script_safety"
-    elif is_primary_route and "unexpected_japanese" in (
+    elif is_deepseek and "unexpected_japanese" in (
         raw_script_violations - name_render_rescued
     ):
         reason = "unexpected_japanese"
         rejection_owner = "script_safety"
-    elif is_primary_route and "unexpected_hangul" in (
+    elif is_deepseek and "unexpected_hangul" in (
         raw_script_violations - name_render_rescued
     ):
         reason = "unexpected_hangul"
         rejection_owner = "script_safety"
-    elif is_primary_route and _looks_like_meta_garbage_output(corrected):
+    elif is_deepseek and _looks_like_meta_garbage_output(corrected):
         reason = "meta_garbage_output"
         rejection_owner = "model_output"
-    elif is_primary_route and _looks_like_model_refusal(corrected):
+    elif is_deepseek and _looks_like_model_refusal(corrected):
         reason = "model_refusal"
         rejection_owner = "model_output"
-    elif is_primary_route and "target_meta_leak" in flags:
+    elif is_deepseek and "target_meta_leak" in flags:
         reason = "target_meta_leak"
         rejection_owner = "model_output"
-    elif is_primary_route and "repetitive_target" in flags:
+    elif is_deepseek and "repetitive_target" in flags:
         reason = "repetitive_target"
         rejection_owner = "model_output"
     failed_invariants: list[dict[str, str]] = []
@@ -1355,12 +1352,12 @@ def _adjudicate_translation_candidate(
     add_failure(not obligation_evaluation.passed, "canonical_obligation_missing", "canonical_obligation")
     add_failure("unexpected_japanese" in corrected_script_violations, "unexpected_japanese", "script_safety")
     add_failure("unexpected_hangul" in corrected_script_violations, "unexpected_hangul", "script_safety")
-    add_failure(is_primary_route and "unexpected_japanese" in (raw_script_violations - name_render_rescued), "raw_unexpected_japanese", "script_safety")
-    add_failure(is_primary_route and "unexpected_hangul" in (raw_script_violations - name_render_rescued), "raw_unexpected_hangul", "script_safety")
-    add_failure(is_primary_route and _looks_like_meta_garbage_output(corrected), "meta_garbage_output", "model_output")
-    add_failure(is_primary_route and _looks_like_model_refusal(corrected), "model_refusal", "model_output")
-    add_failure(is_primary_route and "target_meta_leak" in flags, "target_meta_leak", "model_output")
-    add_failure(is_primary_route and "repetitive_target" in flags, "repetitive_target", "model_output")
+    add_failure(is_deepseek and "unexpected_japanese" in (raw_script_violations - name_render_rescued), "raw_unexpected_japanese", "script_safety")
+    add_failure(is_deepseek and "unexpected_hangul" in (raw_script_violations - name_render_rescued), "raw_unexpected_hangul", "script_safety")
+    add_failure(is_deepseek and _looks_like_meta_garbage_output(corrected), "meta_garbage_output", "model_output")
+    add_failure(is_deepseek and _looks_like_model_refusal(corrected), "model_refusal", "model_output")
+    add_failure(is_deepseek and "target_meta_leak" in flags, "target_meta_leak", "model_output")
+    add_failure(is_deepseek and "repetitive_target" in flags, "repetitive_target", "model_output")
     evidence = {
         "version": 2,
         "policy_version": ADJUDICATION_POLICY_VERSION,
@@ -1441,7 +1438,7 @@ def _translation_output_guard(
     if (
         not adjudication.reason
         and not adjudication.accepted_after_name_render
-        and not is_protected_primary_route(engine)
+        and str(getattr(engine, "engine_name", "") or "") != "deepseek"
     ):
         return {}
     return adjudication.evidence
@@ -2041,8 +2038,6 @@ def _copy_fallback_state(state: FallbackState) -> FallbackState:
         state.consecutive_primary_failures,
         state.primary_cooldown_until,
         state.consecutive_probe_successes,
-        state.chain_key,
-        state.chain_generation,
     )
 
 
@@ -2051,19 +2046,6 @@ def _replace_fallback_state(target: FallbackState, source: FallbackState) -> Non
     target.consecutive_primary_failures = source.consecutive_primary_failures
     target.primary_cooldown_until = source.primary_cooldown_until
     target.consecutive_probe_successes = source.consecutive_probe_successes
-    target.chain_key = source.chain_key
-    target.chain_generation = source.chain_generation
-
-
-def _consistent_engine_chain() -> tuple[list[TranslationEngine], object]:
-    """Build the engine chain and its config key from one settled config read."""
-    for _ in range(5):
-        key = engine_chain_config_key()
-        engines = _build_engine_chain()
-        if engine_chain_config_key() == key:
-            return engines, key
-    # Config kept changing under us: a key no other chain shares forces a rebuild next time.
-    return engines, object()
 
 
 def _send_fallback_event(
@@ -2084,10 +2066,6 @@ def _send_fallback_event(
 
 
 def _merge_fallback_state(shared: FallbackState, before: FallbackState, after: FallbackState) -> None:
-    if shared.chain_generation != before.chain_generation:
-        # The engine chain changed while this request or probe was in flight;
-        # its indices belong to the old chain and must not reach the new one.
-        return
     if (
         shared.active_idx == before.active_idx
         and shared.consecutive_primary_failures == before.consecutive_primary_failures
@@ -2299,10 +2277,8 @@ class Translator:
         self._shared_state = shared_state or _new_translator_shared_state()
         self._state_lock = self._shared_state.lock
         self._fallback_state_obj = self._shared_state.fallback
-        self._engines: list[TranslationEngine]
-        self._engines, self._engines_key = _consistent_engine_chain()
-        self._engines_generation = 0
-        self._sync_shared_chain()
+        self._engines: list[TranslationEngine] = _build_engine_chain()
+        self._engines_key = engine_chain_config_key()
         self._memory = self._shared_state.memory
         self._policy = self._shared_state.policy
         self._last_input: str = ""
@@ -2320,38 +2296,22 @@ class Translator:
             self._fallback_state_obj = state
         return state
 
-    def _sync_shared_chain(self) -> None:
-        """Make this worker's chain and the shared fallback state agree on one generation."""
-        with self._state_guard():
-            state = self._fallback_state()
-            if state.chain_key is None:
-                # Not bound to any chain yet: its indices already refer to this one.
-                state.chain_key = self._engines_key
-            elif state.chain_key != self._engines_key:
-                # First worker on a new chain: indices from the old chain are meaningless.
-                state.active_idx = 0
-                state.consecutive_primary_failures = 0
-                state.primary_cooldown_until = 0.0
-                state.consecutive_probe_successes = 0
-                state.chain_key = self._engines_key
-                state.chain_generation += 1
-            self._engines_generation = state.chain_generation
-
     def _refresh_engines_if_needed(self) -> None:
-        if not hasattr(self, "_engines_key"):
-            self._engines_key = engine_chain_config_key()
-            self._sync_shared_chain()
+        current_key = engine_chain_config_key()
+        previous_key = getattr(self, "_engines_key", current_key)
+        if previous_key == current_key:
+            self._engines_key = current_key
             return
-        if (
-            engine_chain_config_key() == self._engines_key
-            and getattr(self, "_engines_generation", None)
-            == self._fallback_state().chain_generation
-        ):
-            return
-        engines, key = _consistent_engine_chain()
-        if key != self._engines_key:
-            self._engines, self._engines_key = engines, key
-        self._sync_shared_chain()
+        with self._state_guard():
+            if getattr(self, "_engines_key", previous_key) == current_key:
+                return
+            self._engines = _build_engine_chain()
+            self._engines_key = current_key
+            state = self._fallback_state()
+            state.active_idx = 0
+            state.consecutive_primary_failures = 0
+            state.primary_cooldown_until = 0.0
+            state.consecutive_probe_successes = 0
 
     @property
     def _active_idx(self) -> int:
@@ -2619,25 +2579,25 @@ class Translator:
                 deferred_success=success_commit,
             )
 
-        primary_route_request = next(
-            (route for route in translation_request.routes if route.engine == effective_primary_provider()),
+        deepseek_route_request = next(
+            (route for route in translation_request.routes if route.engine == "deepseek"),
             None,
         )
         deadline_at = _translation_deadline_at()
         promoted = False
         result = None
         used_engine = None
-        if provisional_candidate is not None and primary_provisional_eligible():
+        if provisional_candidate is not None and deepseek_provisional_eligible():
             snapshot = bound_activity_snapshot()
             profile_snapshot = bound_profile_snapshot()
             if profile_snapshot is None:
                 profile_snapshot = profile_state.current()
             assert snapshot is not None
             fingerprint_route = (
-                primary_route_request if primary_route_request is not None
-                and primary_route_request.body else None
+                deepseek_route_request if deepseek_route_request is not None
+                and deepseek_route_request.body else None
             ) or freeze_route_request(
-                make_primary_engine(), provider_text, system_prompt,
+                DeepSeekTranslationEngine(), provider_text, system_prompt,
                 incomplete, history,
             )
             fingerprint = provisional_fingerprint(
@@ -2654,10 +2614,8 @@ class Translator:
                 provider_options=fingerprint_route.options_dict(),
                 timeout_seconds=fingerprint_route.timeout_seconds,
             )
-            if (fingerprint == provisional_candidate.fingerprint
-                and provisional_candidate.engine == fingerprint_route.engine
-                and provisional_candidate.model == fingerprint_route.model):
-                provisional_engine = make_primary_engine()
+            if fingerprint == provisional_candidate.fingerprint:
+                provisional_engine = DeepSeekTranslationEngine()
                 guard = _translation_output_guard(
                     provisional_engine,
                     provisional_candidate.raw_target,
@@ -3242,12 +3200,12 @@ class Translator:
         frozen_messages_by_engine = {
             route.engine: route.messages for engine, route in zip(
                 self._engines, translation_request.routes
-            ) if route.engine in {"deepseek", "gemini", "groq"}
+            ) if route.engine in {"deepseek", "groq"}
         }
         route_requests_by_engine = {
             route.engine: route for engine, route in zip(
                 self._engines, translation_request.routes
-            ) if isinstance(engine, (DeepSeekTranslationEngine, GeminiTranslationEngine, GroqTranslationEngine))
+            ) if isinstance(engine, (DeepSeekTranslationEngine, GroqTranslationEngine))
         }
         request_contract_ids: dict[str, str] = {}
         for route_index, candidate_engine in enumerate(self._engines):
@@ -3272,7 +3230,7 @@ class Translator:
                 route_index=route_index,
                 route_count=len(translation_request.routes),
                 route_body_json_style=(
-                    "compact_utf8" if engine_name in {"deepseek", "gemini"} else "python_default"
+                    "compact_utf8" if engine_name == "deepseek" else "python_default"
                 ),
                 route_id=route_id,
                 engine=engine_name,
@@ -3332,13 +3290,6 @@ class Translator:
             with lock:
                 before_state = _copy_fallback_state(fallback_state)
                 state = _copy_fallback_state(before_state)
-            if before_state.chain_generation != getattr(
-                self, "_engines_generation", before_state.chain_generation
-            ):
-                # The shared state moved to another chain after this worker's refresh:
-                # run this sentence on its own chain from the top; the merge drops it.
-                state = FallbackState(chain_key=self._engines_key, chain_generation=-1)
-                before_state = FallbackState(chain_generation=-1)
         result, used_idx, fallback_details = call_with_fallback(
             self._engines,
             state,
@@ -3520,7 +3471,7 @@ def _start_fallback_probe_thread(
 ) -> threading.Thread:
     def run() -> None:
         engines: list[TranslationEngine] | None = None
-        engines_key: object = None
+        engines_key: tuple | None = None
         while not stop_event.wait(interval_seconds):
             with shared_state.lock:
                 if shared_state.fallback.active_idx <= 0:
@@ -3533,15 +3484,10 @@ def _start_fallback_probe_thread(
                 probe_history: list[tuple[str, str]] = []
             # L7: rebuild the probe chain when the engine selection changes
             # mid-run instead of caching the first build forever.
-            # An unbound shared state (no worker synced yet) follows the live config.
-            wanted_key = before_state.chain_key
-            if wanted_key is None:
-                wanted_key = engine_chain_config_key()
-            if engines is None or engines_key != wanted_key:
-                engines, engines_key = _consistent_engine_chain()
-            if engines_key != wanted_key:
-                # Config moved past the shared chain; a worker resyncs it on its next sentence.
-                continue
+            chain_key = engine_chain_config_key()
+            if engines is None or chain_key != engines_key:
+                engines = _build_engine_chain()
+                engines_key = chain_key
             probe_observations: list[dict[str, object]] = []
             probe_started = time.monotonic()
             activity_snapshot = capture_effective_activity_snapshot(
@@ -3698,7 +3644,7 @@ def _failed_completion(seq: int) -> _CompletedTranslation:
 
 
 class _ProvisionalWorker:
-    """One-shot effective-primary provisional previews (formerly start()'s closure).
+    """One-shot DeepSeek provisional previews (formerly start()'s closure).
 
     Owns the publication gate that shutdown closes before draining finals.
     """
@@ -3718,7 +3664,7 @@ class _ProvisionalWorker:
     def translate(self, request: ProvisionalRequest) -> None:
         started = time.monotonic()
         request_contract_id = ""
-        if not primary_provisional_eligible():
+        if not deepseek_provisional_eligible():
             return
         if (
             request.profile_snapshot is not None
@@ -3733,7 +3679,7 @@ class _ProvisionalWorker:
                 **request.profile_snapshot.as_metadata(),
             )
             return
-        engine = make_primary_engine()
+        engine = DeepSeekTranslationEngine()
         if not engine.available or self._store.is_closed(
             request.provisional_id
         ):
@@ -3884,10 +3830,8 @@ class _ProvisionalWorker:
                         },
                     )
                     # Re-check at the actual call boundary so stale queued work
-                    # cannot reach the primary after the emergency route is disabled.
-                    if (not primary_provisional_eligible()
-                        or engine.engine_name != effective_primary_provider()
-                        or engine.model_name != make_primary_engine().model_name):
+                    # cannot reach DeepSeek after the emergency route is disabled.
+                    if not deepseek_provisional_eligible():
                         return
                     if (
                         request.profile_snapshot is not None
@@ -3913,9 +3857,7 @@ class _ProvisionalWorker:
                     raw_target, engine_result = self._call_provider(
                         request, engine, route_request, messages, request_contract_id
                     )
-                    if (self._stop_event.is_set() or not primary_provisional_eligible()
-                        or engine.engine_name != effective_primary_provider()
-                        or engine.model_name != make_primary_engine().model_name):
+                    if self._stop_event.is_set() or not deepseek_provisional_eligible():
                         self._store.close(request.provisional_id)
                         return
                     if (
@@ -4023,9 +3965,7 @@ class _ProvisionalWorker:
             if (
                 self._stop_event.is_set()
                 or not self._publication_open
-                or not primary_provisional_eligible()
-                or engine.engine_name != effective_primary_provider()
-                or engine.model_name != make_primary_engine().model_name
+                or not deepseek_provisional_eligible()
             ):
                 self._store.close(request.provisional_id)
                 return

@@ -228,3 +228,6 @@ the same judge). The real gain is about one extra correct line in thirty, with G
 of the 225 flagged lines, for ~+0.9 s p50 latency and an estimated US$4–5 per 3-hour stream.
 **Owner decision: stay on DeepSeek; do not switch.** The provider switch stays in the code at
 `primary_provider="deepseek"`.
+- Follow-up (owner, 2026-10-12): remove the unused live Gemini path. 39fbb29 reverted; kept only
+  the provider-agnostic pieces: HTTP 402 → `billing_error` opens the circuit, and the autouse
+  test fixture that fails any unmocked `urllib.request.urlopen`.

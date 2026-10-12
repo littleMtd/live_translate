@@ -17,7 +17,6 @@ from modules.forensics_contract import (
 from modules.translation_engines import (
     TranslationEngine,
     DeepSeekTranslationEngine,
-    GeminiTranslationEngine,
     GroqTranslationEngine,
     _groq_model_options,
     build_effective_deepseek_messages,
@@ -146,39 +145,6 @@ def deepseek_route_for_messages(
     )
 
 
-def gemini_body(messages: Sequence[tuple[str, str]], options: dict[str, Any]) -> bytes:
-    payload = {
-        "systemInstruction": {"parts": [{"text": "\n\n".join(
-            content for role, content in messages if role == "system")}]},
-        "contents": [{"role": "model" if role == "assistant" else "user",
-                      "parts": [{"text": content}]}
-                     for role, content in messages if role != "system"],
-        "generationConfig": {"temperature": options["temperature"],
-                             "maxOutputTokens": options["maxOutputTokens"],
-                             "thinkingConfig": {"thinkingLevel": options["thinkingLevel"]}},
-    }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
-
-def primary_route_for_messages(engine: TranslationEngine,
-                               messages: Sequence[tuple[str, str]]) -> RouteRequest:
-    if engine.engine_name == "deepseek":
-        return deepseek_route_for_messages(engine, messages)
-    if engine.engine_name != "gemini":
-        raise ValueError("unsupported primary provider")
-    frozen = tuple(messages)
-    options = {"model": engine.model_name,
-               "temperature": cfg.translation.gemini_temperature,
-               "maxOutputTokens": engine._max_tokens + cfg.translation.gemini_output_reserve_tokens,
-               "thinkingLevel": cfg.translation.gemini_thinking_level}
-    return RouteRequest(
-        route_id=translation_route_id(engine), engine="gemini", model=engine.model_name,
-        messages=frozen, retry_messages=(), body=gemini_body(frozen, options),
-        retry_body=None, provider_options=_options(options),
-        timeout_seconds=engine.request_timeout_seconds,
-    )
-
-
 def freeze_route_request(
     engine: TranslationEngine,
     provider_source: str,
@@ -192,11 +158,11 @@ def freeze_route_request(
     selected = list(history or ())
     retry_messages: tuple[tuple[str, str], ...] = ()
     retry_body: bytes | None = None
-    if not isinstance(engine, (DeepSeekTranslationEngine, GeminiTranslationEngine, GroqTranslationEngine)):
+    if not isinstance(engine, (DeepSeekTranslationEngine, GroqTranslationEngine)):
         messages = (
             build_effective_deepseek_messages(
                 provider_source, system_prompt, incomplete, selected
-            ) if name in {"deepseek", "gemini"} else
+            ) if name == "deepseek" else
             build_effective_groq_messages(
                 provider_source, system_prompt, incomplete, selected
             ) if name == "groq" else
@@ -207,9 +173,6 @@ def freeze_route_request(
             messages=messages, retry_messages=(), body=b"", retry_body=None,
             provider_options=(), timeout_seconds=None,
         )
-    if name == "gemini":
-        return primary_route_for_messages(engine, build_effective_deepseek_messages(
-            provider_source, system_prompt, incomplete, selected))
     if name == "deepseek":
         messages = build_effective_deepseek_messages(
             provider_source, system_prompt, incomplete, selected

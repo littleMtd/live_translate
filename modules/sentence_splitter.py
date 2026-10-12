@@ -23,7 +23,7 @@ from modules.pipeline_events import (
 )
 from modules.provisional_subtitles import (
     ProvisionalRequest,
-    primary_provisional_eligible,
+    deepseek_provisional_eligible,
 )
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete, profile_sources_differ
 from modules.sentence_hold_shadow import (
@@ -469,7 +469,7 @@ class _SentenceSplitterCoordinator:
             cut is None
             and self.provisional_queue is not None
             and bool(cfg.splitter.provisional_enabled)
-            and primary_provisional_eligible(cfg)
+            and deepseek_provisional_eligible(cfg)
             and not self.active_provisional_id
         ):
             provisional = self.buffer.provisional_snapshot(now)

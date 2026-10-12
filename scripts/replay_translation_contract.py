@@ -30,7 +30,6 @@ def _messages(rows: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
 
 def _ordered_options(engine: str, recorded: dict[str, Any]) -> dict[str, Any]:
     keys = {
-        "gemini": ("model", "temperature", "maxOutputTokens", "thinkingLevel"),
         "deepseek": ("model", "temperature", "max_tokens", "stream", "thinking"),
         "groq": ("model", "temperature", "max_tokens", "reasoning_effort"),
     }.get(engine)
@@ -44,11 +43,6 @@ def _ordered_options(engine: str, recorded: dict[str, Any]) -> dict[str, Any]:
 
 def _body(messages: tuple[tuple[str, str], ...], options: dict[str, Any],
           style: str) -> bytes:
-    if "thinkingLevel" in options:
-        from modules.translation_request import gemini_body
-        if style != "compact_utf8":
-            raise ValueError("invalid Gemini body style")
-        return gemini_body(messages, options)
     payload = {
         "model": options["model"],
         "messages": [{"role": role, "content": content} for role, content in messages],
