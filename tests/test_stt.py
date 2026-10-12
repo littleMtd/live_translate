@@ -1365,7 +1365,9 @@ class TestStreamerSttGlossary(unittest.TestCase):
         glossary = build_stt_glossary("unknown")
 
         self.assertIn("\uc2a4\ud0c0\ub808\uc77c", glossary)
-        self.assertNotIn("\ub9b4\ud30c", glossary)
+        # Unknown ids fall back to General, which carries community names but no profile extras.
+        self.assertIn("\ub9b4\ud30c", glossary)
+        self.assertNotIn("\ub9c6\uc2a4\ud2f1", glossary)
 
     def test_extra_stt_terms_are_prioritized_before_static_terms(self):
         from modules.streamer_profiles import build_stt_glossary

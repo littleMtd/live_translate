@@ -220,11 +220,21 @@ def test_stellive_hina_stt_glossary_contains_current_profile_terms():
 
 
 def test_stt_glossary_keeps_hades_terms_profile_bound():
-    general_glossary = build_stt_glossary("")
     isegye_glossary = build_stt_glossary("isegye_lilpa")
 
-    assert "챈나" not in general_glossary
     assert "챈나" not in isegye_glossary
+    assert "챈나" in build_stt_glossary("hades_chxxnnx")
+
+
+def test_general_stt_glossary_carries_community_names_but_not_confusable_words():
+    # 2026-10-12 replay: K-VTuber names on General raised correct name hits 21 -> 32 of 39.
+    # 이제들 turned 이세돌 into 이제들 and 모카 turned 목 안에 into 모카는, so both stay profile-bound.
+    general_glossary = build_stt_glossary("")
+
+    for term in ("이세돌", "릴파", "챈나", "랑코", "아이리제"):
+        assert term in general_glossary
+    for term in ("이제들", "모카", "마냥", "오아"):
+        assert term not in general_glossary
 
 
 def test_url_stt_glossary_contains_official_group_terms():
