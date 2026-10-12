@@ -12,7 +12,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-_HISTORY_MAX = 20
+# Enough for a bookmark's follow-up window even when short lines arrive quickly.
+_HISTORY_MAX = 100
 _OUTCOME_MAX = 10
 # The indicator says "translation failing" when the last N finished sentences all failed
 # within this window, so one rejected line never lights it.

@@ -73,16 +73,20 @@ def _isolate_runtime_logs(tmp_path):
     """
     from utils.runtime_events import runtime_events
     import modules.translator as _translator_module
+    import modules.bookmarks as _bookmarks_module
 
     original_events_dir = runtime_events._log_dir
     original_history_dir = _translator_module._LOG_DIR
+    original_bookmarks_dir = _bookmarks_module._DIR
     runtime_events._log_dir = tmp_path
     _translator_module._LOG_DIR = tmp_path
+    _bookmarks_module._DIR = tmp_path
     try:
         yield
     finally:
         runtime_events._log_dir = original_events_dir
         _translator_module._LOG_DIR = original_history_dir
+        _bookmarks_module._DIR = original_bookmarks_dir
 
 
 @pytest.fixture(autouse=True)

@@ -382,6 +382,12 @@ class _Subtitle:
     history_font:     tuple = ("Microsoft JhengHei", 14, "bold")
     history_source_font: tuple = ("Malgun Gothic", 11, "normal")
     history_source_color: str = "#BBBBBB"
+    # Middle-click the subtitle text (or press M) to bookmark a moment: the
+    # subtitles just before and after it go to logs/bookmarks_YYYYMMDD.md.
+    bookmark_before_lines: int = 4
+    bookmark_after_ms: int = 20000
+    # Short notices (bookmark saved, "press Esc again") on the status line.
+    notice_ms:        int   = 2000
 
 
 @dataclass(frozen=True)

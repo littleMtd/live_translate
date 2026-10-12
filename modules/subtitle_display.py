@@ -3,6 +3,7 @@ import threading
 import time
 import tkinter as tk
 import textwrap
+from datetime import datetime
 
 from config import cfg
 from utils.logger import get_logger
@@ -11,6 +12,7 @@ from modules.provisional_subtitles import SubtitlePayload
 from utils.runtime_events import runtime_events
 from modules.live_status import live_status
 from modules.profile_context import profile_state
+from modules import bookmarks
 
 log = get_logger("subtitle_display")
 
@@ -43,6 +45,12 @@ class SubtitleWindow:
         self._status_checked_at = 0.0
         self._history_until = 0.0        # monotonic deadline while the history view is open
         self._history_home: tuple[int, int] | None = None  # window position to restore on close
+        self._opened_at = time.monotonic()
+        self._notice = ""                # short status-line notice ("★ 已標記", Esc prompt)
+        self._notice_until = 0.0
+        self._quit_armed_until = 0.0     # Esc must be pressed twice within notice_ms to close
+        # (bookmark, after() job, formatted text once a write has been attempted)
+        self._pending_marks: list[tuple[bookmarks.Bookmark, object, str | None]] = []
 
     def run(self):
         """Must be called from the main thread."""
@@ -79,9 +87,16 @@ class SubtitleWindow:
         # Right-click the text: recent subtitles with their Korean source.
         canvas.bind("<ButtonPress-3>", lambda e: self._toggle_history())
 
-        root.bind("<Escape>", lambda e: self._quit())
-        root.bind("<Double-Button-1>", lambda e: self._quit())
+        # Middle-click the text (or press M): bookmark this moment.
+        canvas.bind("<ButtonPress-2>", lambda e: self._mark())
+        root.bind("<m>", lambda e: self._mark())
+        root.bind("<M>", lambda e: self._mark())
+
+        # Esc twice closes the window; a single stray key or a double-click while
+        # dragging no longer ends the stream.
+        root.bind("<Escape>", lambda e: self._request_quit())
         root.bind("<space>", lambda e: self._toggle_translation())
+        self._opened_at = time.monotonic()
 
         self._poll()
         root.mainloop()
@@ -157,6 +172,7 @@ class SubtitleWindow:
 
     def _poll(self):
         if self._stop.is_set():
+            self._flush_marks()
             if self._root:
                 self._root.destroy()
                 self._root = None
@@ -243,11 +259,89 @@ class SubtitleWindow:
     # --- status indicator and history -------------------------------------------------
 
     def _current_status_labels(self) -> list[str]:
-        if not cfg.subtitle.status_indicator_enabled or not self._translating:
-            return []
-        snapshot = profile_state.current()
-        unresolved = snapshot.mode == "auto" and not snapshot.effective_profile_id
-        return live_status.flags(profile_unresolved=unresolved)
+        labels: list[str] = []
+        if cfg.subtitle.status_indicator_enabled and self._translating:
+            snapshot = profile_state.current()
+            unresolved = snapshot.mode == "auto" and not snapshot.effective_profile_id
+            labels = live_status.flags(profile_unresolved=unresolved)
+        if self._active_notice():
+            labels = [*labels, self._notice]
+        return labels
+
+    def _show_notice(self, text: str) -> None:
+        self._notice = text
+        self._notice_until = time.monotonic() + cfg.subtitle.notice_ms / 1000
+        self._status_checked_at = 0.0  # redraw now, not at the next once-a-second check
+        self._refresh_overlay(time.monotonic())
+
+    def _active_notice(self) -> str:
+        return self._notice if self._notice and time.monotonic() < self._notice_until else ""
+
+    # --- bookmarks and closing ---------------------------------------------------------
+
+    def _mark(self) -> None:
+        now = time.monotonic()
+        before = cfg.subtitle.bookmark_before_lines
+        mark = bookmarks.Bookmark(
+            marked_at=now,
+            wall_time=datetime.now(),
+            elapsed_sec=now - self._opened_at,
+            profile_id=profile_state.current().effective_profile_id or "",
+            before=tuple(live_status.recent_subtitles(before)) if before > 0 else (),
+            after_sec=cfg.subtitle.bookmark_after_ms / 1000,
+        )
+        job = None
+        if self._root is not None:
+            try:
+                job = self._root.after(cfg.subtitle.bookmark_after_ms, lambda: self._write_mark(mark))
+            except tk.TclError:
+                job = None
+        self._pending_marks.append((mark, job, None))
+        if job is None:
+            self._write_mark(mark)
+        self._show_notice("★ 已標記")
+        log.info("Bookmark marked")
+
+    def _render_mark(self, mark: bookmarks.Bookmark) -> str:
+        return bookmarks.format_bookmark(mark, live_status.recent_subtitles(100))
+
+    def _write_mark(self, mark: bookmarks.Bookmark) -> bool:
+        """Write one bookmark; on failure its text stays pending so closing retries it once."""
+        text = None
+        try:
+            text = self._render_mark(mark)
+            path = bookmarks.write_text(mark, text)
+        except Exception:  # never let a file problem break the Tk loop or the close path
+            log.exception("Failed to save bookmark")
+            self._pending_marks = [(m, None, text) if m is mark else (m, j, t)
+                                   for m, j, t in self._pending_marks]
+            self._show_notice("標記儲存失敗")
+            return False
+        self._pending_marks = [(m, j, t) for m, j, t in self._pending_marks if m is not mark]
+        log.info("Bookmark saved to %s", path.name)
+        return True
+
+    def _flush_marks(self) -> None:
+        """Write every pending bookmark now (the window is closing); give up on failures."""
+        pending, self._pending_marks = list(self._pending_marks), []
+        for mark, job, text in pending:
+            if job is not None and self._root is not None:
+                try:
+                    self._root.after_cancel(job)
+                except tk.TclError:
+                    pass
+            try:
+                bookmarks.write_text(mark, text if text is not None else self._render_mark(mark))
+            except Exception:
+                log.exception("Failed to save bookmark while closing")
+
+    def _request_quit(self) -> None:
+        now = time.monotonic()
+        if now < self._quit_armed_until:
+            self._quit()
+            return
+        self._quit_armed_until = now + cfg.subtitle.notice_ms / 1000
+        self._show_notice("再按一次 Esc 關閉")
 
     def _refresh_overlay(self, now: float) -> None:
         """Once a second: redraw when the status labels change."""
@@ -257,8 +351,7 @@ class SubtitleWindow:
         labels = self._current_status_labels()
         if labels != self._status_labels:
             self._status_labels = labels
-            if not self._history_until:
-                self._redraw()
+            self._redraw()  # the history view shows notices too
 
     def _redraw(self) -> None:
         if self._history_until:
@@ -318,6 +411,8 @@ class SubtitleWindow:
     def _draw_history(self) -> None:
         records = live_status.recent_subtitles(cfg.subtitle.history_lines)
         lines: list[tuple[str, tuple, str]] = []
+        if self._active_notice():
+            lines.append(("● " + self._notice, cfg.subtitle.status_font, cfg.subtitle.status_color))
         if not records:
             lines.append(("（還沒有字幕）", cfg.subtitle.history_font, cfg.subtitle.fg))
         for record in records:
@@ -428,6 +523,7 @@ class SubtitleWindow:
         self._hide_job = None
 
     def _quit(self):
+        self._flush_marks()
         self._stop.set()
         if self._root:
             self._root.destroy()

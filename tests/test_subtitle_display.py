@@ -237,3 +237,134 @@ def test_pause_symbol_survives_a_status_change(monkeypatch):
     window._translating = False  # paused: the indicator turns off
     window._refresh_overlay(12.0)
     assert drawn[-1] == ("center", ["⏸"])
+
+
+def test_middle_click_bookmark_writes_subtitles_before_and_after(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from modules import subtitle_display
+    from modules.live_status import SubtitleRecord
+
+    window, drawn, _box = _overlay_window(monkeypatch)
+    root = window._root
+    clock = {"now": 100.0}
+    monkeypatch.setattr(subtitle_display.time, "monotonic", lambda: clock["now"])
+    records = [SubtitleRecord(t, f"src{t:.0f}", f"zh{t:.0f}") for t in (90.0, 95.0, 99.0)]
+    monkeypatch.setattr(subtitle_display.live_status, "recent_subtitles", lambda limit: list(records)[-limit:])
+    monkeypatch.setattr(subtitle_display.profile_state, "current",
+                        lambda: SimpleNamespace(mode="manual", effective_profile_id="isegye_lilpa"))
+
+    window._mark()
+    assert drawn[-1] == ("center", ["● ★ 已標記"])
+    job, ms, write = root.after_calls[-1]
+    assert ms == 20000 and not list(tmp_path.glob("bookmarks_*.md"))  # waits for what follows
+
+    records.append(SubtitleRecord(105.0, "src105", "zh105"))
+    del records[:3]  # the lines before the mark have scrolled out of the history
+    write()
+    text = next(tmp_path.glob("bookmarks_*.md")).read_text(encoding="utf-8")
+    before, after = text.split("標記後：")
+    assert "isegye_lilpa" in before and "src95" in before and "zh99" in before
+    assert "src105" in after and "zh105" in after and "zh99" not in after
+    assert window._pending_marks == []
+
+
+def test_closing_writes_pending_bookmarks_immediately(monkeypatch, tmp_path):
+    window, _drawn, _box = _overlay_window(monkeypatch)
+    root = window._root
+    root.destroy = lambda: None
+    window._mark()
+    job = root.after_calls[-1][0]
+    window._quit()
+    assert job in root.cancelled
+    assert len(list(tmp_path.glob("bookmarks_*.md"))) == 1
+
+
+def test_escape_must_be_pressed_twice_to_close(monkeypatch):
+    from modules import subtitle_display
+
+    window, drawn, _box = _overlay_window(monkeypatch)
+    clock = {"now": 50.0}
+    monkeypatch.setattr(subtitle_display.time, "monotonic", lambda: clock["now"])
+    window._root.destroy = lambda: None
+
+    window._request_quit()
+    assert not window._stop.is_set()
+    assert drawn[-1] == ("center", ["● 再按一次 Esc 關閉"])
+    clock["now"] += 5.0  # too late: the prompt expired
+    window._request_quit()
+    assert not window._stop.is_set()
+    clock["now"] += 0.5
+    window._request_quit()
+    assert window._stop.is_set()
+
+
+def test_notice_expires_from_the_status_line(monkeypatch):
+    from modules import subtitle_display
+
+    window, drawn, _box = _overlay_window(monkeypatch)
+    clock = {"now": 10.0}
+    monkeypatch.setattr(subtitle_display.time, "monotonic", lambda: clock["now"])
+    window._show("字幕")
+    window._show_notice("★ 已標記")
+    assert drawn[-1] == ("center", ["● ★ 已標記", "字幕"])
+    clock["now"] += 3.0
+    window._refresh_overlay(clock["now"])
+    assert drawn[-1] == ("center", ["字幕"])
+
+
+def test_failed_bookmark_write_is_kept_and_retried_on_close(monkeypatch, tmp_path):
+    from modules import bookmarks, subtitle_display
+
+    window, drawn, _box = _overlay_window(monkeypatch)
+    root = window._root
+    root.destroy = lambda: None
+    from modules.live_status import SubtitleRecord
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(subtitle_display.time, "monotonic", lambda: clock["now"])
+    records = [SubtitleRecord(99.0, "before", "前")]
+    monkeypatch.setattr(subtitle_display.live_status, "recent_subtitles", lambda limit: list(records)[-limit:])
+    real_write = bookmarks.write_text
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("file is open elsewhere")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_display.bookmarks, "write_text", flaky)
+    window._mark()
+    records.append(SubtitleRecord(110.0, "follow", "後"))
+    clock["now"] = 120.0
+    root.after_calls[-1][2]()  # the 20 s timer fires and the write fails
+    assert len(window._pending_marks) == 1
+    assert "● 標記儲存失敗" in drawn[-1][1]
+    records[:] = [SubtitleRecord(200.0, "much later", "很久以後")]  # history moved on before closing
+    window._quit()
+    text = next(tmp_path.glob("bookmarks_*.md")).read_text(encoding="utf-8")
+    assert calls["n"] == 2 and "follow" in text and "much later" not in text
+    assert window._stop.is_set()
+
+
+def test_closing_survives_a_bookmark_that_cannot_be_written(monkeypatch):
+    from modules import subtitle_display
+
+    window, _drawn, _box = _overlay_window(monkeypatch)
+    window._root.destroy = lambda: None
+    monkeypatch.setattr(subtitle_display.bookmarks, "write_text",
+                        lambda *a, **k: (_ for _ in ()).throw(UnicodeEncodeError("utf-8", "x", 0, 1, "bad")))
+    window._mark()
+    window._quit()
+    assert window._stop.is_set() and window._pending_marks == []
+
+
+def test_notices_show_while_history_is_open(monkeypatch):
+    window, drawn, _box = _overlay_window(monkeypatch, records=[("안녕", "你好")])
+    window._toggle_history()
+    window._mark()
+    assert drawn[-1] == ("left", ["● ★ 已標記", "안녕", "你好"])
+    window._close_history()
+    window._toggle_history()
+    window._request_quit()
+    assert drawn[-1][0] == "left" and drawn[-1][1][0] == "● 再按一次 Esc 關閉"
