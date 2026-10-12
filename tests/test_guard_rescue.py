@@ -1,4 +1,5 @@
-"""Last-resort publication of copied-source-name candidates (docs/agent/LIVE_DROPPED_SUBTITLES_PLAN_20261010.md)."""
+"""Publication of copied-source-name candidates (docs/agent/LIVE_DROPPED_SUBTITLES_PLAN_20261010.md,
+first-route stage: docs/agent/LIVE_PRIMARY_RESCUE_PLAN_20261012.md)."""
 
 import unittest
 from unittest.mock import MagicMock
@@ -126,7 +127,7 @@ class RuntimeHookTests(unittest.TestCase):
                                       evidence(candidate, candidate) if "뽀뿌" in candidate else {}),
                                   output_rescue=rescue)
 
-    def test_hook_not_called_on_success_and_used_only_at_terminal_failure(self):
+    def test_hook_not_called_on_success(self):
         translation_engines_module.reset_translation_call_trace()
         hook = MagicMock(return_value=None)
         result, _idx, _details = self.call([tt._route_engine("deepseek", "什麼？就這程度？")], hook)
@@ -141,6 +142,27 @@ class RuntimeHookTests(unittest.TestCase):
         self.assertEqual(details.selected_attempt["status"], "rejected_output")
         self.assertEqual(details.selected_attempt["guard_rescue"]["policy"], GUARD_RESCUE_POLICY)
         self.assertTrue(details.selected_attempt["selected_for_output"])
+
+    def test_first_route_copied_name_is_published_without_asking_the_fallback(self):
+        # docs/agent/LIVE_PRIMARY_RESCUE_PLAN_20261012.md
+        translation_engines_module.reset_translation_call_trace()
+        groq = tt._route_engine("groq", "什麼？就這程度？喂，波布！")
+        engines = [tt._route_engine("deepseek", RESCUABLE), groq]
+        result, idx, details = self.call(engines, lambda attempts: _choose_guard_rescue(attempts, SOURCE))
+        self.assertEqual((result, idx), (RESCUABLE, 0))
+        self.assertEqual(details.selected_attempt["guard_rescue"]["stage"], "first_route")
+        self.assertEqual(len(details.attempts), 1)
+        groq.translate.assert_not_called()
+        groq.translate_messages.assert_not_called()
+
+    def test_ineligible_first_route_still_falls_back_then_rescues_last(self):
+        translation_engines_module.reset_translation_call_trace()
+        copied_clause = "뭐 이 정도? 야，뽀뿌就這樣。"
+        engines = [tt._route_engine("deepseek", copied_clause), tt._route_engine("groq", RESCUABLE)]
+        result, idx, details = self.call(engines, lambda attempts: _choose_guard_rescue(attempts, SOURCE))
+        self.assertEqual((result, idx), (RESCUABLE, 1))
+        self.assertEqual(details.selected_attempt["guard_rescue"]["stage"], "last_resort")
+        self.assertEqual(len(details.attempts), 2)
 
     def test_provider_exception_still_raises_without_rescue(self):
         engine = tt._route_engine("deepseek", RESCUABLE)
@@ -191,8 +213,14 @@ class EndToEndTests(unittest.TestCase):
         remember.assert_called_once()
         transcript.assert_called_once_with(SOURCE, RESCUABLE)
 
-    def test_rejected_then_clean_fallback_keeps_normal_path(self):
+    def test_copied_name_from_primary_wins_over_a_clean_fallback(self):
         _translator, outcome = self.translate(RESCUABLE, "什麼？就這程度？喂，你啊！")
+        self.assertEqual((outcome.status, outcome.result_source, outcome.engine), ("success", "guard_rescue", "deepseek"))
+        self.assertEqual(outcome.target_text, RESCUABLE)
+        self.assertEqual(outcome.guard_rescue["stage"], "first_route")
+
+    def test_ineligible_primary_then_clean_fallback_keeps_normal_path(self):
+        _translator, outcome = self.translate("뭐 이 정도? 야，就這樣。", "什麼？就這程度？喂，你啊！")
         self.assertEqual((outcome.status, outcome.result_source, outcome.engine), ("success", "api", "groq"))
 
     def test_ineligible_candidates_still_fail(self):
@@ -203,6 +231,45 @@ class EndToEndTests(unittest.TestCase):
             outcome = translator.translate_event(SOURCE, False)
         self.assertEqual(outcome.status, "failed")
         self.assertNotEqual(outcome.result_source, "guard_rescue")
+
+
+class RepetitionTests(unittest.TestCase):
+    def reason(self, source, target):
+        from modules.translator import _adjudicate_translation_candidate
+        with tt._active_translation_profile("isegye_lilpa"):
+            return _adjudicate_translation_candidate(tt._route_engine("deepseek", target), target, source).reason
+
+    def test_repetition_that_mirrors_the_source_is_not_degenerate(self):
+        self.assertEqual(self.reason("괜찮아, 괜찮아, 괜찮아", "沒關係，沒關係，沒關係"), "")
+        self.assertEqual(self.reason("오 마이 갓! 오 마이 갓! 오 마이 갓! 안 돼. 안 돼. 올라와야 돼. 올라와야 돼. 올라와야 돼.",
+                                     "我的天！我的天！我的天！不行。不行。得爬上來。得爬上來。得爬上來。"), "")
+
+    def test_looping_output_for_an_ordinary_or_much_shorter_source_is_still_rejected(self):
+        self.assertEqual(self.reason("오늘 방송은 여기까지 하겠습니다", "今天今天今天今天今天今天今天今天"), "repetitive_target")
+        self.assertEqual(self.reason("괜찮아, 괜찮아, 괜찮아", "沒關係，" * 8), "repetitive_target")
+        # punctuation runs do not make a source repetitive; a longer loop than the source is not faithful
+        self.assertEqual(self.reason("와!!!!!!!!!! 대박!!!!!!!!!!", "哇！" + "太棒了" * 6), "repetitive_target")
+        self.assertEqual(self.reason("아니 아니 아니 아니", "不" * 16), "repetitive_target")
+        self.assertEqual(self.reason("lalalalalalala", "啦" * 19), "repetitive_target")
+
+    def test_first_route_rescue_leaves_fallback_state_alone(self):
+        for active_idx in (0, 1):
+            with self.subTest(active_idx=active_idx):
+                translation_engines_module.reset_translation_call_trace()
+                state = FallbackState()
+                state.active_idx = active_idx
+                state.consecutive_primary_failures = 1
+                state.primary_cooldown_until = 123.0
+                engines = [tt._route_engine("deepseek", RESCUABLE), tt._route_engine("groq", RESCUABLE)]
+                result, idx, details = call_with_fallback(
+                    engines, state, SOURCE, "system", False, None, 3, lambda *_a: False, MagicMock(),
+                    return_details=True, circuit_breaker_enabled=True,
+                    output_guard=lambda _engine, candidate, _src: evidence(candidate, candidate),
+                    output_rescue=lambda attempts: _choose_guard_rescue(attempts, SOURCE))
+                self.assertEqual((result, idx), (RESCUABLE, active_idx))
+                self.assertEqual(details.selected_attempt["guard_rescue"]["stage"], "first_route")
+                self.assertEqual((state.active_idx, state.consecutive_primary_failures, state.primary_cooldown_until),
+                                 (active_idx, 1, 123.0))
 
 
 if __name__ == "__main__":

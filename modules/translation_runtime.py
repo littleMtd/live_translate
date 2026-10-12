@@ -330,6 +330,29 @@ def call_with_fallback(
         )
         return text, index, FallbackResult(text, index, attempts, selected)
 
+    def rescue(candidates: Sequence[dict[str, object]], stage: str):
+        """Publish one rejected candidate picked by the hook (source names copied in Hangul only).
+
+        The finalizer re-adjudicates it; nothing here bypasses that. Returns None when nothing qualifies.
+        """
+        if output_rescue is None:
+            return None
+        decision = output_rescue(tuple(candidates))
+        chosen = decision.get("attempt_index") if isinstance(decision, dict) else None
+        if not isinstance(chosen, int) or not 0 <= chosen < len(candidates):
+            return None
+        attempt = candidates[chosen]
+        guard = attempt.get("output_guard")
+        candidate = guard.get("candidate_raw_output") if isinstance(guard, dict) else None
+        if not isinstance(candidate, str) or not candidate or id(attempt) not in engine_index_by_attempt:
+            return None
+        attempt["guard_rescue"] = {**decision, "stage": stage}
+        select_translation_attempt(attempt)
+        attempt["selected_for_output"] = True
+        metrics.increment("translation.guard_rescue.selected")
+        metrics.increment(f"translation.guard_rescue.selected.{stage}")
+        return finish(candidate, engine_index_by_attempt[id(attempt)])
+
     if not engines:
         metrics.increment("translation.fallback.no_engines")
         return finish(None, -1)
@@ -435,6 +458,15 @@ def call_with_fallback(
         if hard_switch and primary_idx + 1 < len(engines)
         else primary_idx
     )
+
+    # A first candidate rejected only for source names copied in Hangul is published as it is. Asking the
+    # next route instead cost about a second and mostly returned an invented transliteration or dropped
+    # the name (docs/agent/LIVE_PRIMARY_RESCUE_PLAN_20261012.md).
+    if primary_failure_scope == "content":
+        rescued = rescue((primary_attempt,), "first_route")
+        if rescued is not None:
+            log.info("Publishing copied-name candidate from %s for: %.40s", primary.engine_name, text)
+            return rescued
 
     # Try later routes first. If the active route is already a fallback, retry
     # earlier fallback routes too (excluding route 0, which has its dedicated
@@ -558,20 +590,10 @@ def call_with_fallback(
 
     # Last resort (no route produced a usable result): the hook may pick one rejected candidate whose only
     # problem is source names copied in Hangul. The finalizer re-adjudicates it; nothing here bypasses that.
-    if output_rescue is not None:
-        decision = output_rescue(tuple(local_attempts))
-        chosen = decision.get("attempt_index") if isinstance(decision, dict) else None
-        if isinstance(chosen, int) and 0 <= chosen < len(local_attempts):
-            attempt = local_attempts[chosen]
-            guard = attempt.get("output_guard")
-            candidate = guard.get("candidate_raw_output") if isinstance(guard, dict) else None
-            if isinstance(candidate, str) and candidate and id(attempt) in engine_index_by_attempt:
-                attempt["guard_rescue"] = dict(decision)
-                select_translation_attempt(attempt)
-                attempt["selected_for_output"] = True
-                metrics.increment("translation.guard_rescue.selected")
-                log.warning("All engines rejected; rescuing copied-name candidate for: %.40s", text)
-                return finish(candidate, engine_index_by_attempt[id(attempt)])
+    rescued = rescue(local_attempts, "last_resort")
+    if rescued is not None:
+        log.warning("All engines rejected; rescuing copied-name candidate for: %.40s", text)
+        return rescued
 
     log.error("All engines failed for: %.40s", text)
     return finish(None, primary_idx)

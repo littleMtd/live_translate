@@ -45,6 +45,7 @@ from utils.metrics import metrics
 from utils.pipeline import poll_queue, start_daemon_thread
 from utils.queue_utils import put_latest
 from utils.runtime_events import (
+    _distinct_bigram_ratio,
     runtime_events,
     source_proven_quality_terms,
     translation_quality,
@@ -1145,6 +1146,23 @@ class _CandidateAdjudication:
         return not self.reason
 
 
+def _repetition_mirrors_source(source: str, target: str) -> bool:
+    """The speaker repeated themselves (안 돼 안 돼 안 돼), so a looping target is faithful, not degenerate.
+
+    All 15 ``repetitive_target`` rejections in the October live runs had a source that loops by the same
+    measure; the fallback then published the same repetition about a second later, or the line was lost
+    (docs/agent/LIVE_PRIMARY_RESCUE_PLAN_20261012.md). Measured on letters only, so a run of "!!!" does
+    not make a source repetitive, and a target noticeably longer than its source still fails.
+    """
+    source_body = _GUARD_RESCUE_IGNORED.sub("", source or "")
+    target_body = _GUARD_RESCUE_IGNORED.sub("", target or "")
+    return (
+        len(source_body) >= 2
+        and _distinct_bigram_ratio(source_body) < 0.5
+        and len(target_body) <= 1.25 * len(source_body)
+    )
+
+
 def _adjudicate_translation_candidate(
     engine: TranslationEngine | None,
     result: str,
@@ -1278,6 +1296,11 @@ def _adjudicate_translation_candidate(
                 - name_render_violations
             )
 
+    degenerate_repetition = (
+        is_deepseek
+        and "repetitive_target" in flags
+        and not _repetition_mirrors_source(source, corrected)
+    )
     reason = ""
     rejection_owner = ""
     publication_meta_rejection = publication and (
@@ -1332,7 +1355,7 @@ def _adjudicate_translation_candidate(
     elif is_deepseek and "target_meta_leak" in flags:
         reason = "target_meta_leak"
         rejection_owner = "model_output"
-    elif is_deepseek and "repetitive_target" in flags:
+    elif degenerate_repetition:
         reason = "repetitive_target"
         rejection_owner = "model_output"
     failed_invariants: list[dict[str, str]] = []
@@ -1357,7 +1380,7 @@ def _adjudicate_translation_candidate(
     add_failure(is_deepseek and _looks_like_meta_garbage_output(corrected), "meta_garbage_output", "model_output")
     add_failure(is_deepseek and _looks_like_model_refusal(corrected), "model_refusal", "model_output")
     add_failure(is_deepseek and "target_meta_leak" in flags, "target_meta_leak", "model_output")
-    add_failure(is_deepseek and "repetitive_target" in flags, "repetitive_target", "model_output")
+    add_failure(degenerate_repetition, "repetitive_target", "model_output")
     evidence = {
         "version": 2,
         "policy_version": ADJUDICATION_POLICY_VERSION,
