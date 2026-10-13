@@ -13,6 +13,7 @@ from utils.runtime_events import runtime_events
 from modules.live_status import live_status
 from modules.profile_context import profile_state
 from modules import bookmarks
+from modules.global_hotkeys import GlobalHotkeys
 
 log = get_logger("subtitle_display")
 
@@ -51,6 +52,7 @@ class SubtitleWindow:
         self._quit_armed_until = 0.0     # Esc must be pressed twice within notice_ms to close
         # (bookmark, after() job, formatted text once a write has been attempted)
         self._pending_marks: list[tuple[bookmarks.Bookmark, object, str | None]] = []
+        self._hotkeys: GlobalHotkeys | None = None
 
     def run(self):
         """Must be called from the main thread."""
@@ -98,8 +100,37 @@ class SubtitleWindow:
         root.bind("<space>", lambda e: self._toggle_translation())
         self._opened_at = time.monotonic()
 
+        # The bindings above need keyboard focus; these work while the player has it.
+        if cfg.subtitle.global_hotkeys_enabled:
+            self._hotkeys = GlobalHotkeys({
+                "bookmark": cfg.subtitle.hotkey_bookmark,
+                "pause": cfg.subtitle.hotkey_pause,
+                "history": cfg.subtitle.hotkey_history,
+            })
+            self._hotkeys.start()
+
         self._poll()
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            if self._hotkeys is not None:
+                self._hotkeys.stop()
+
+    def _run_hotkey_actions(self) -> None:
+        if self._hotkeys is None:
+            return
+        handlers = {"bookmark": self._mark, "pause": self._toggle_translation, "history": self._toggle_history}
+        unavailable = self._hotkeys.unavailable()
+        if unavailable:
+            try:
+                self._show_notice("快捷鍵無法使用：" + "、".join(unavailable))
+            except Exception:
+                log.exception("Could not show the unavailable-hotkey notice")
+        for action in self._hotkeys.poll():
+            try:
+                handlers[action]()
+            except Exception:  # an error here must not stop _poll from rescheduling itself
+                log.exception("Global hotkey action %s failed", action)
 
     def _drain_all_queues(self):
         for q in self._all_queues:
@@ -178,6 +209,7 @@ class SubtitleWindow:
                 self._root = None
             return
 
+        self._run_hotkey_actions()
         now = time.monotonic()
         if self._history_until:
             if now < self._history_until:
@@ -281,6 +313,10 @@ class SubtitleWindow:
 
     def _mark(self) -> None:
         now = time.monotonic()
+        # A second press right after the first (click plus key, or a bounce) marks the same moment.
+        if self._pending_marks and now - self._pending_marks[-1][0].marked_at < 2.0:
+            self._show_notice("★ 已標記")
+            return
         before = cfg.subtitle.bookmark_before_lines
         mark = bookmarks.Bookmark(
             marked_at=now,

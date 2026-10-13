@@ -382,12 +382,21 @@ class _Subtitle:
     history_font:     tuple = ("Microsoft JhengHei", 14, "bold")
     history_source_font: tuple = ("Malgun Gothic", 11, "normal")
     history_source_color: str = "#BBBBBB"
-    # Middle-click the subtitle text (or press M) to bookmark a moment: the
+    # Middle-click the subtitle text (or press M, or the global hotkey) to bookmark a moment: the
     # subtitles just before and after it go to logs/bookmarks_YYYYMMDD.md.
     bookmark_before_lines: int = 4
     bookmark_after_ms: int = 20000
     # Short notices (bookmark saved, "press Esc again") on the status line.
     notice_ms:        int   = 2000
+    # System-wide hotkeys: they work while the player, not the subtitle window, has
+    # focus. Each needs a modifier (ctrl/alt/shift/win) plus a letter, digit, space or
+    # F1-F12; "" turns one off. Closing stays on Esc inside the window on purpose.
+    # A combination another program already holds is reported on the status line
+    # (ctrl+alt+m belongs to the NVIDIA overlay, ctrl+alt+space to Claude desktop).
+    global_hotkeys_enabled: bool = True
+    hotkey_bookmark:  str   = "ctrl+alt+b"
+    hotkey_pause:     str   = "ctrl+alt+p"
+    hotkey_history:   str   = "ctrl+alt+h"
 
 
 @dataclass(frozen=True)

@@ -268,6 +268,21 @@ def test_middle_click_bookmark_writes_subtitles_before_and_after(monkeypatch, tm
     assert window._pending_marks == []
 
 
+def test_second_mark_within_two_seconds_is_the_same_bookmark(monkeypatch):
+    from modules import subtitle_display
+
+    window, _drawn, _box = _overlay_window(monkeypatch)
+    clock = {"now": 100.0}
+    monkeypatch.setattr(subtitle_display.time, "monotonic", lambda: clock["now"])
+    window._mark()
+    clock["now"] = 101.0   # middle-click followed by M
+    window._mark()
+    assert len(window._pending_marks) == 1
+    clock["now"] = 105.0   # a deliberate second bookmark
+    window._mark()
+    assert len(window._pending_marks) == 2
+
+
 def test_closing_writes_pending_bookmarks_immediately(monkeypatch, tmp_path):
     window, _drawn, _box = _overlay_window(monkeypatch)
     root = window._root
