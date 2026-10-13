@@ -8,7 +8,11 @@ eligibility, the finalizer re-adjudication, history/cache handling, the circuit 
 
 ## 1. Evidence (October live runs, `logs/runtime_events_202610*.jsonl`, no API calls)
 
-Of 3,311 translated sentences, 111 published nothing and 79 were published by the Groq fallback.
+Whole-month counts include failures that earlier fixes (2026-10-10, 10-11) already removed, so the
+size of the problem is taken from the two latest days (2026-10-11 and 10-12, 522 sentences): 6
+copied-name sentences went to Groq (blind judge on those six: DeepSeek better 5, tie 1), 4 were
+rejected as repetitive, 10 published nothing (not addressed here). The month-wide figures below are
+the regression set, not the current rate: 3,311 sentences, 111 published nothing, 79 from Groq.
 
 - **Copied names.** In 28 sentences DeepSeek's candidate was rejected only for Hangul that the
   current rescue rule accepts (source names copied verbatim), and Groq's output was then published.
