@@ -1121,13 +1121,14 @@ class SceneContextUpdater:
         self._profile_attempt_times: deque[float] = deque()
         self._profile_provider_failure_streak = 0
         self._profile_provider_backoff_until = 0.0
-        self._profile_recovery_clear_sec = float(
-            cfg.scene.profile_identity_recovery_clear_sec
-        )
         self._profile_recovery_started_at: float | None = None
-        self._unsupported_identity_candidate = ""
-        self._unsupported_identity_started_at: float | None = None
-        self._unsupported_identity_observations = 0
+        # An unchanged name block that last read as nobody reviewed waits until
+        # this time before it is read again; any visible change reads at once.
+        self._identity_roi_unresolved_gap = float(
+            cfg.scene.profile_identity_unresolved_reread_sec
+        )
+        self._identity_roi_unresolved_until = 0.0
+        self._identity_roi_unresolved_reads = 0
         self._profile_expiry = float(
             cfg.scene.profile_identity_expiry_sec
         )
@@ -1659,29 +1660,6 @@ class SceneContextUpdater:
         self._profile_recovery_started_at = None
         self._profile_provider_failure_streak = 0
 
-    def _reset_unsupported_identity_evidence(self) -> None:
-        self._unsupported_identity_candidate = ""
-        self._unsupported_identity_started_at = None
-        self._unsupported_identity_observations = 0
-
-    def _observe_unsupported_identity(self, normalized: str, now: float) -> bool:
-        """Require repeated, time-stable positive evidence before going neutral."""
-        if not normalized:
-            self._reset_unsupported_identity_evidence()
-            return False
-        if normalized != self._unsupported_identity_candidate:
-            self._unsupported_identity_candidate = normalized
-            self._unsupported_identity_started_at = now
-            self._unsupported_identity_observations = 1
-            return False
-        self._unsupported_identity_observations += 1
-        started_at = self._unsupported_identity_started_at
-        return (
-            self._unsupported_identity_observations >= 2
-            and started_at is not None
-            and now - started_at >= self._profile_recovery_clear_sec
-        )
-
     def _expire_profile_if_needed(self, now: float) -> None:
         if (
             not self._profile_enabled
@@ -2123,7 +2101,6 @@ class SceneContextUpdater:
             )
         )
         if observation is None:
-            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "identity_roi_unavailable", stable=False)
             self._emit_profile_resolution(
                 status="unavailable",
@@ -2160,6 +2137,12 @@ class SceneContextUpdater:
             # A visibly different name block (or a new window) needs a fresh,
             # fast identity read; confirmation no longer applies.
             self._identity_roi_confirmed_for = None
+            self._identity_roi_unresolved_until = 0.0
+            self._identity_roi_unresolved_reads = 0
+        elif now < self._identity_roi_unresolved_until:
+            # The same unrecognized block again: reading it every few seconds only
+            # spent the vision quota that the next real stream switch needs.
+            return
         due = self._profile_next_call_at is None or now >= self._profile_next_call_at
         if not roi_changed and not due:
             return
@@ -2183,7 +2166,6 @@ class SceneContextUpdater:
             window_generation=window_generation,
         )
         if discard:
-            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "discarded", stable=False)
             self._defer_identity_roi(now, window_generation, roi_key)
             self._emit_profile_resolution(
@@ -2209,7 +2191,6 @@ class SceneContextUpdater:
             1, len(getattr(self._identity_roi_vision, "route_identities", ()))
         )
         if not self._reserve_profile_attempt(now, route_capacity):
-            self._reset_unsupported_identity_evidence()
             self._schedule_profile_resolution(now, "rate_limited", stable=False)
             self._defer_identity_roi(now, window_generation, roi_key)
             self._emit_profile_resolution(
@@ -2234,7 +2215,6 @@ class SceneContextUpdater:
             raw = result.text if isinstance(result, VisionClassification) else result
         except Exception as exc:
             failure_now = self._clock()
-            self._reset_unsupported_identity_evidence()
             diagnostics = exc.diagnostics if isinstance(exc, VisionProviderFailure) else None
             diagnostic_fields = (
                 diagnostics.event_fields()
@@ -2314,23 +2294,17 @@ class SceneContextUpdater:
         if discard:
             normalized = ""
         if discard:
-            self._reset_unsupported_identity_evidence()
             decision = "discard_stale_identity_read"
             status = "discarded"
             reason = discard
         elif marker is None:
-            if self._observe_unsupported_identity(normalized, now):
-                profile_state.confirm_no_profile()
-                self._profile_confirmed_at = now
-                decision = "unsupported_identity_confirmed_no_profile"
-                status = "confirmed_no_profile"
-                reason = "stable_identity_not_reviewed"
-            else:
-                decision = "retain_confirmed_profile"
-                status = "unknown"
-                reason = "identity_blank_or_not_reviewed"
+            # Nobody reviewed: keep the current profile (owner decision 2026-10-16). A
+            # misread or page overlay ("orts" during a 마냥 stream, run 20261013) must not
+            # drop it; an unlisted streamer keeps the previous one until a listed name shows.
+            decision = "retain_confirmed_profile"
+            status = "unknown"
+            reason = "identity_blank_or_not_reviewed"
         else:
-            self._reset_unsupported_identity_evidence()
             profile_state.confirm_content(
                 marker.profile_id,
                 confidence=1.0,
@@ -2340,7 +2314,18 @@ class SceneContextUpdater:
             decision = "authoritative_identity_confirmed"
             status = "confirmed"
             reason = "exact_reviewed_member_name"
-        confirmed_read = not discard and status in {"confirmed", "confirmed_no_profile"}
+        if status == "unknown":
+            # 30 s, then 60, 120, 300 s while the same block stays unrecognized, so an
+            # unlisted streamer or a lasting overlay does not hold half the quota for good.
+            self._identity_roi_unresolved_reads += 1
+            self._identity_roi_unresolved_until = now + min(
+                300.0,
+                self._identity_roi_unresolved_gap * 2 ** (self._identity_roi_unresolved_reads - 1),
+            )
+        else:
+            self._identity_roi_unresolved_until = 0.0
+            self._identity_roi_unresolved_reads = 0
+        confirmed_read = status == "confirmed"
         if confirmed_read:
             self._identity_roi_confirmed_for = (
                 window_generation,

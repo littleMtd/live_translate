@@ -482,9 +482,13 @@ class _Scene:
     profile_identity_stable_call_gap_sec: float = 15.0
     profile_identity_schema_retry_limit: int = 1
     profile_identity_max_attempts_per_minute: int = 12
-    # Minimum duration of repeated, non-empty unsupported identity evidence
-    # before auto profile ownership transitions to confirmed no-profile.
-    profile_identity_recovery_clear_sec: float = 15.0
+    # A calibrated name block that reads as nobody on the reviewed list (a page
+    # overlay, a misread, an unlisted streamer) keeps the current profile (owner
+    # decision 2026-10-16). While it stays unchanged it is re-read after this gap,
+    # doubling up to 300 s; any visible change reads at once. Runs
+    # 20261013/20261016 re-read such a block every 5 s, hit the Groq
+    # 8,000 TPM limit, and the real stream switch then waited ~45 s for quota.
+    profile_identity_unresolved_reread_sec: float = 30.0
     profile_identity_expiry_sec: float = 300.0
     # Calibrated channel-name ROI: once a window's identity is confirmed, re-read
     # only when the name block or window changes, plus this slow safety refresh.
@@ -566,7 +570,7 @@ class _Scene:
             "profile_identity_fast_call_gap_sec",
             "profile_identity_stable_call_gap_sec",
             "profile_identity_expiry_sec",
-            "profile_identity_recovery_clear_sec",
+            "profile_identity_unresolved_reread_sec",
             "profile_identity_confirmed_refresh_sec",
         ):
             value = getattr(self, field_name)

@@ -343,7 +343,9 @@ def test_unknown_identity_roi_retains_confirmed_profile_and_does_not_fallback():
     assert event["activation_decision"] == "retain_confirmed_profile"
 
 
-def test_stable_unsupported_identity_roi_confirms_no_profile_after_grace():
+def test_stable_unsupported_identity_roi_keeps_the_profile():
+    # Owner decision 2026-10-16: an unrecognized name block ("orts" while a 마냥
+    # stream played, run 20261013) never drops the profile to general.
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     state.confirm_content("url", evidence_source="authoritative_identity_roi")
     identity_reader = QuerySequence([
@@ -358,41 +360,71 @@ def test_stable_unsupported_identity_roi_confirms_no_profile_after_grace():
             identity_roi_provider=identity_reader,
             identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
         )
-        updater._profile_recovery_clear_sec = 15
         updater.tick()
         clock.advance(15)
         updater.tick()
 
-    assert state.current().effective_profile_id == ""
-    assert state.current().confirmation_state == "confirmed_no_profile"
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "url"
+    assert state.current().confirmation_state == "confirmed"
     event = [
         item for item in events if item["event_type"] == "profile_resolution"
     ][-1]
-    assert event["activation_decision"] == "unsupported_identity_confirmed_no_profile"
+    assert event["activation_decision"] == "retain_confirmed_profile"
 
 
-def test_unsupported_identity_evidence_must_be_consistent_and_nonempty():
+def test_unchanged_unrecognized_block_is_reread_slowly_and_a_change_reads_at_once():
     state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
     state.confirm_content("url", evidence_source="authoritative_identity_roi")
-    identity_reader = QuerySequence([
-        '{"identity":"first unsupported"}',
-        '{"identity":""}',
-        '{"identity":"second unsupported"}',
-    ])
+    identity_reader = QuerySequence(['{"identity":"orts"}', '{"identity":"orts"}', '{"identity":"릴파"}'])
+    same = image_frame(40)
     with patch.object(scene_context, "profile_state", state):
         updater, _source, _capture, _activity, _manual, _events, clock = make_updater(
-            frames=[image_frame(40), image_frame(100), image_frame(180)],
+            frames=[same, same, same, same, image_frame(100)],
             profile_resolution_enabled=True,
             profile_vision_provider=QuerySequence([]),
             identity_roi_provider=identity_reader,
             identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
         )
-        for _ in range(3):
+        updater._profile_fast_gap = 5
+        updater.tick()                      # t=0: read "orts"
+        for advance in (5, 20):             # t=5, t=25: unchanged, inside 30 s
+            clock.advance(advance)
             updater.tick()
-            clock.advance(15)
+        assert len(identity_reader.calls) == 1
+        clock.advance(6)                    # t=31: unchanged, gap over
+        updater.tick()
+        assert len(identity_reader.calls) == 2
+        clock.advance(1)                    # t=32: the block changes (stream switch)
+        updater.tick()
+    assert len(identity_reader.calls) == 3
+    assert state.current().effective_profile_id == "isegye_lilpa"
 
+
+def test_unrecognized_block_rereads_back_off_and_reset_on_change():
+    state = ProfileState(profile_state.registry, source_profile_id="isegye_lilpa")
+    state.confirm_content("url", evidence_source="authoritative_identity_roi")
+    identity_reader = QuerySequence(['{"identity":"orts"}'] * 4 + ['{"identity":"other"}'] * 2)
+    same = image_frame(40)
+    with patch.object(scene_context, "profile_state", state):
+        updater, _source, _capture, _activity, _manual, _events, clock = make_updater(
+            frames=[same] * 9 + [image_frame(100)] * 3,
+            profile_resolution_enabled=True,
+            profile_vision_provider=QuerySequence([]),
+            identity_roi_provider=identity_reader,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 0.5)),
+        )
+        updater._profile_fast_gap = 5
+        reads_at = []
+        for t in (0, 29, 31, 89, 92, 210, 213, 520, 523, 524, 553, 556):
+            clock.advance(t - clock.now) if t > clock.now else None
+            before = len(identity_reader.calls)
+            updater.tick()
+            if len(identity_reader.calls) > before:
+                reads_at.append(t)
+    # gaps 30, 60, 120, 240 s (cap 300); a changed block reads at once and the gap starts at 30 s again
+    assert reads_at == [0, 31, 92, 213, 520, 524, 556]
     assert state.current().effective_profile_id == "url"
-    assert state.current().confirmation_state == "confirmed"
 
 
 def test_calibrated_roi_capture_failure_never_expires_confirmed_profile():
@@ -1109,7 +1141,6 @@ def test_sustained_capture_failure_retains_confirmed_profile_and_recovers_fast()
             profile_resolution_enabled=True,
         )
         updater._profile_expiry = 300
-        updater._profile_recovery_clear_sec = 15
         updater._profile_fast_gap = 0
         updater.tick()
         clock.advance(1)
