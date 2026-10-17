@@ -895,6 +895,46 @@ class TestSttThread(unittest.TestCase):
         wavs = list(tmp.glob("**/utt-1.wav"))
         self.assertEqual(len(wavs), 1, "expected one dumped wav named by utterance_id")
 
+    def test_audio_dump_keeps_chunks_skipped_as_too_quiet(self):
+        import tempfile
+        from pathlib import Path
+        import numpy as np
+        from config import cfg
+        from modules.pipeline_events import AudioChunk
+        from modules.stt import start as stt_start
+
+        audio_q: queue.Queue = queue.Queue()
+        text_q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        tmp = Path(tempfile.mkdtemp())
+        rng = np.random.default_rng(0)
+        quiet = (rng.standard_normal(16000) * 0.0005).astype(np.float32)
+        loud = (rng.standard_normal(16000) * 0.2).astype(np.float32)
+
+        object.__setattr__(cfg.stt, "dump_audio", True)
+        try:
+            with patch("modules.stt.STTEngine") as MockEngine, \
+                    patch("modules.stt._AUDIO_DUMP_ROOT", tmp):
+                instance = MockEngine.return_value
+                instance.available = True
+                instance.transcribe_event.return_value = None
+                stt_start(audio_q, text_q, stop)
+                audio_q.put(AudioChunk(audio=quiet, audio_chunk_id="audio-000007"))
+                audio_q.put(AudioChunk(audio=loud, audio_chunk_id="audio-000008"))
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and (
+                    instance.transcribe_event.call_count < 2
+                    or not list(tmp.glob("**/quiet-audio-000007.wav"))
+                ):
+                    time.sleep(0.01)
+                time.sleep(0.05)  # the loud chunk's (absent) write would have happened by now
+                stop.set()
+        finally:
+            object.__setattr__(cfg.stt, "dump_audio", False)
+
+        names = sorted(p.name for p in tmp.glob("**/*.wav"))
+        self.assertEqual(names, ["quiet-audio-000007.wav"])
+
     def test_none_transcription_not_forwarded(self):
         from modules.stt import start as stt_start
         audio_q: queue.Queue = queue.Queue()

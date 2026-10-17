@@ -1650,6 +1650,15 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
                 put_latest(text_queue, event, log, "text_queue", "tokens")
             else:
                 metrics.increment("stt.none")
+                # Chunks under the volume gate never reach STT. Keep them in the dump (named by
+                # audio chunk id, joinable to the stt event) so a run can show whether they held speech.
+                chunk_id = str(getattr(chunk, "audio_chunk_id", "") or "")
+                if dump_dir is not None and chunk_id:
+                    try:
+                        if _rms(_normalize_audio_for_stt(audio)[0]) < cfg.audio.volume_threshold:
+                            write_wav(dump_dir / f"quiet-{chunk_id}.wav", audio, cfg.audio.sample_rate)
+                    except Exception as exc:  # never let dumping break transcription
+                        log.warning("Audio dump failed for %s: %s", chunk_id, exc)
             metrics.log_summary_if_due()
 
         log.info("STT stopped")
