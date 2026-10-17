@@ -2265,15 +2265,10 @@ class SceneContextUpdater:
             else 1
         )
         self._release_unused_profile_attempts(route_capacity, used_attempts)
-        result_diagnostics = (
-            result.diagnostics if isinstance(result, VisionClassification) else None
-        )
-        retry_after = self._install_profile_provider_rate_limit_fence(
-            result_diagnostics,
-            now=self._clock(),
-        )
-        if not retry_after:
-            self._profile_provider_backoff_until = 0.0
+        # A read that succeeded, even on the fallback-key route after the primary key
+        # hit 429, leaves no fence: the next name read must not wait ~45 s while the
+        # fallback key still has quota. A read where every route failed still fences.
+        self._profile_provider_backoff_until = 0.0
         discard = self._window_discard_reason(
             self._resolver.validate(identity),
             resolver_generation=resolver_generation,
@@ -2361,6 +2356,8 @@ class SceneContextUpdater:
             candidate_profile_id=marker.profile_id if marker is not None else "",
             latency_ms=round((self._clock() - started) * 1000, 2),
             window_generation=window_generation,
+            # which route answered, and any 429 before it, so a run shows the fallback key at work
+            **(result.diagnostics.event_fields() if isinstance(result, VisionClassification) else {}),
             **profile_state.current().as_metadata(),
         )
 

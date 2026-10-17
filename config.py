@@ -179,7 +179,7 @@ _VALID_DEEPSEEK_ROUTES = {"primary", "off"}
 _VALID_BACKEND_MODES     = {"deepseek"}
 # Retired backends found in persisted dashboard configs migrate to DeepSeek.
 _BACKEND_ALIASES         = {"anthropic": "deepseek", "nvidia": "deepseek", "ollama": "deepseek"}
-_VALID_SCENE_VISION_PROVIDERS = {"groq"}
+_VALID_SCENE_VISION_PROVIDERS = {"groq", "groq_fallback_key"}
 _SCENE_VISION_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}")
 
 
@@ -468,7 +468,12 @@ class _Scene:
     # Explicit provider/model route. Groq owns scene and identity vision.
     vision_provider:      str   = "groq"
     vision_model:         str   = "qwen/qwen3.8-27b"
-    vision_fallback_routes: tuple[tuple[str, str], ...] = ()
+    # The same model on GROQ_API_KEY_fall_back: Groq limits vision per key at
+    # 8,000 TPM (~3 name reads a minute), and the second key has its own bucket
+    # (measured 2026-10-17). A stream switch that hit a 429 waited ~45 s.
+    vision_fallback_routes: tuple[tuple[str, str], ...] = (
+        ("groq_fallback_key", "qwen/qwen3.8-27b"),
+    )
     vision_timeout:       float = 20.0
     vision_max_retries:   int   = 0
     max_activity_chars:   int   = 40

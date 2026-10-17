@@ -149,6 +149,33 @@ def test_route_credentials_are_not_selected_opportunistically():
     )
 
 
+def test_fallback_key_route_uses_only_the_fallback_key():
+    scene = _Scene(
+        vision_provider="groq",
+        vision_model="qwen/qwen3.8-27b",
+        vision_fallback_routes=(("groq_fallback_key", "qwen/qwen3.8-27b"),),
+    )
+    keys = SimpleNamespace(groq="primary-key", groq_fallback="fallback-key")
+    provider = build_vision_provider("bounded prompt", scene_config=scene, keys=keys)
+    assert provider.route_identities == (
+        "groq:qwen/qwen3.8-27b",
+        "groq_fallback_key:qwen/qwen3.8-27b",
+    )
+    primary, fallback = provider._providers
+    assert (primary._api_key, fallback._api_key) == ("primary-key", "fallback-key")
+    # without a second, distinct key the route is dropped: startup still works and a 429 never
+    # retries into the same bucket
+    for keys in (
+        SimpleNamespace(groq="primary-key", groq_fallback=""),
+        SimpleNamespace(groq="", groq_fallback="only-key"),
+        SimpleNamespace(groq="same-key", groq_fallback="same-key"),
+    ):
+        assert missing_vision_route_credentials(scene, keys) == ()
+        assert build_vision_provider("bounded prompt", scene_config=scene, keys=keys).route_identities == (
+            "groq:qwen/qwen3.8-27b",
+        )
+
+
 def test_builder_freezes_explicit_provider_model_pairs():
     scene = _Scene(
         vision_provider="groq",

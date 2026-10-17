@@ -662,9 +662,30 @@ def _build_groq(
     )
 
 
+class GroqFallbackKeyVisionProvider(GroqVisionProvider):
+    """The Groq route on the fallback key, which has its own rate-limit bucket."""
+
+    provider_name = "groq_fallback_key"
+
+
+def _build_groq_fallback_key(
+    route: VisionRoute,
+    prompt: str,
+    keys: object,
+    timeout: float,
+) -> VisionProvider:
+    return GroqFallbackKeyVisionProvider(
+        model_name=route.model,
+        prompt=prompt,
+        api_key=str(getattr(keys, "groq_fallback", "") or ""),
+        timeout=timeout,
+    )
+
+
 VISION_PROVIDER_REGISTRY: MappingProxyType = MappingProxyType(
     {
         "groq": _build_groq,
+        "groq_fallback_key": _build_groq_fallback_key,
     }
 )
 
@@ -694,15 +715,32 @@ def configured_vision_routes(scene_config: object | None = None) -> tuple[Vision
     return routes
 
 
+def _usable_routes(routes: tuple[VisionRoute, ...], keys: object) -> tuple[VisionRoute, ...]:
+    """Drop the fallback-key route unless a second, distinct key exists.
+
+    It only adds quota when GROQ_API_KEY_fall_back is set and differs from the key the
+    primary route uses; otherwise it would retry into the same bucket, or stop startup.
+    """
+    primary_key = str(getattr(keys, "groq", "") or getattr(keys, "groq_fallback", "") or "")
+    fallback_key = str(getattr(keys, "groq_fallback", "") or "")
+    distinct = bool(fallback_key) and fallback_key != primary_key
+    return tuple(
+        route for index, route in enumerate(routes)
+        if index == 0 or route.provider != "groq_fallback_key" or distinct
+    )
+
+
 def missing_vision_route_credentials(
     scene_config: object | None = None,
     keys: object | None = None,
 ) -> tuple[str, ...]:
     key_config = keys or cfg.keys
     missing = []
-    for route in configured_vision_routes(scene_config):
+    for route in _usable_routes(configured_vision_routes(scene_config), key_config):
         configured = bool(
-            getattr(key_config, "groq", "")
+            getattr(key_config, "groq_fallback", "")
+            if route.provider == "groq_fallback_key"
+            else getattr(key_config, "groq", "")
             or getattr(key_config, "groq_fallback", "")
         )
         if not configured:
@@ -718,7 +756,7 @@ def build_vision_provider(
 ) -> RoutedVisionProvider:
     scene = scene_config or cfg.scene
     key_config = keys or cfg.keys
-    routes = configured_vision_routes(scene)
+    routes = _usable_routes(configured_vision_routes(scene), key_config)
     timeout = float(getattr(scene, "vision_timeout", 20.0))
     providers = tuple(
         VISION_PROVIDER_REGISTRY[route.provider](

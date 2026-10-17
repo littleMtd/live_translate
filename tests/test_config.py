@@ -79,10 +79,11 @@ class TestConfig(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "between 1 and 8"):
                     _Translation(live_route_max_inflight=value)
 
-    def test_scene_vision_route_is_explicit_groq_only(self):
+    def test_scene_vision_route_is_explicit_groq_with_fallback_key(self):
         self.assertEqual(cfg.scene.vision_provider, "groq")
         self.assertEqual(cfg.scene.vision_model, "qwen/qwen3.8-27b")
-        self.assertEqual(cfg.scene.vision_fallback_routes, ())
+        # same model on the fallback key, which has its own rate-limit bucket
+        self.assertEqual(cfg.scene.vision_fallback_routes, (("groq_fallback_key", "qwen/qwen3.8-27b"),))
         self.assertEqual(cfg.scene.vision_max_retries, 0)
 
     def test_scene_vision_rejects_unknown_malformed_and_duplicate_routes(self):

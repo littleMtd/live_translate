@@ -692,60 +692,48 @@ def test_identity_roi_zero_second_rate_reset_uses_fast_gap_floor():
     assert event["profile_provider_retry_after_sec"] == 5.0
 
 
-def test_identity_rate_limit_fence_survives_fallback_success_and_roi_removal():
+def test_identity_read_rescued_by_fallback_route_leaves_no_rate_limit_fence():
+    # The fallback route is the same model on a second key with its own quota
+    # (2026-10-17), so a read it rescued must not hold the next read for ~45 s.
     state = ProfileState(profile_state.registry, source_profile_id="mwmeu")
     diagnostics = VisionDiagnostics(
         outcome="success",
         attempt_limit=2,
-        provider="groq",
-        model="fallback-model",
+        provider="groq_fallback_key",
+        model="qwen/qwen3.8-27b",
         attempt_chain=(
             VisionAttemptDiagnostics(
-                provider="groq",
-                model="primary-model",
-                outcome="error",
-                retryable=True,
-                error_type="rate_limit",
-                http_status=429,
-                rate_limit_reset_tokens_sec=20.0,
+                provider="groq", model="qwen/qwen3.8-27b", outcome="error",
+                retryable=True, error_type="rate_limit", http_status=429,
+                rate_limit_reset_tokens_sec=42.0,
             ),
             VisionAttemptDiagnostics(
-                provider="groq",
-                model="fallback-model",
-                outcome="success",
-                retryable=False,
+                provider="groq_fallback_key", model="qwen/qwen3.8-27b",
+                outcome="success", retryable=False,
             ),
         ),
     )
-    roi_store = FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1))
     identity_reader = QuerySequence([
-        VisionClassification('{"identity":"밍굴_"}', diagnostics),
-    ])
-    whole_scene = QuerySequence([
-        '{"profile_id":"mwmeu","matched_markers":["mwmeu_member_mwmeu"]}'
+        VisionClassification('{"identity":"리"}', diagnostics),
+        '{"identity":"릴파"}',
     ])
     with patch.object(scene_context, "profile_state", state):
         updater, _source, _capture, _activity, _manual, _events, clock = make_updater(
-            frames=[
-                image_frame_with_identity_block(30),
-                image_frame_with_identity_block(220),
-                image_frame_with_identity_block(100),
-            ],
+            frames=[image_frame_with_identity_block(30), image_frame_with_identity_block(220)],
             profile_resolution_enabled=True,
-            profile_vision_provider=whole_scene,
+            profile_vision_provider=QuerySequence([]),
             identity_roi_provider=identity_reader,
-            identity_roi_store=roi_store,
+            identity_roi_store=FixedRoiStore(NormalizedRoi(0, 0, 0.5, 1)),
         )
-        updater.tick()
-        roi_store.roi = None
-        clock.advance(10)
-        updater.tick()
-        assert len(whole_scene.calls) == 0
-        clock.advance(12)
-        updater.tick()
-
-    assert len(identity_reader.calls) == 1
-    assert len(whole_scene.calls) == 1
+        updater.tick()                 # loading page reads "리" via the fallback key
+        assert updater._profile_provider_backoff_until == 0.0
+        rescued = [e for e in _events if e.get("event_type") == "profile_resolution"][-1]
+        assert rescued["vision_provider"] == "groq_fallback_key"
+        assert rescued["vision_attempt_count"] == 2
+        clock.advance(5)
+        updater.tick()                 # the real name shows: read at once
+    assert len(identity_reader.calls) == 2
+    assert state.current().effective_profile_id == "isegye_lilpa"
 
 
 def test_discarded_identity_roi_read_does_not_publish_new_registry_match():
