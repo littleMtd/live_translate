@@ -50,6 +50,7 @@ def _engine(text: str = "안녕하세요") -> STTEngine:
 def _cfg() -> MagicMock:
     config = MagicMock()
     config.audio.volume_threshold = 0.01
+    config.audio.stt_min_rms = 0.01
     config.audio.sample_rate = 16000
     config.audio.stt_normalize_enabled = False
     config.active_streamer_profile = "irise"
@@ -90,6 +91,23 @@ def _profile_snapshot(common=(), terms=()):
         registry=registry,
         as_metadata=lambda: {"profile_id": "irise", "profile_generation": 7},
     )
+
+
+def test_quiet_speech_is_sent_and_only_near_silence_is_skipped():
+    # run 20261017T125706Z: quiet chunks at normalized RMS 0.0037-0.0085 held real speech
+    from config import cfg as real_cfg
+
+    assert real_cfg.audio.stt_min_rms == 0.003
+    for level, sent in ((0.0037, True), (0.0085, True), (0.002, False)):
+        engine = _engine("쿨타임 40초? 오케이.")
+        config = _cfg()
+        config.audio.stt_min_rms = real_cfg.audio.stt_min_rms
+        with patch("modules.stt.cfg", config), \
+                patch("modules.stt.profile_state.current", return_value=_profile_snapshot()), \
+                patch("modules.stt.runtime_events.emit"):
+            event = engine.transcribe_event(np.full(16000, level, dtype=np.float32))
+        assert (event is not None) is sent, level
+        assert engine._elevenlabs_client.speech_to_text.convert.called is sent, level
 
 
 def test_scribe_v2_success_returns_elevenlabs_event_and_observability():

@@ -56,6 +56,12 @@ class _Audio:
     stt_target_rms:       float = 0.08
     stt_max_gain:         float = 4.0
     stt_peak_limit:       float = 0.95
+    # Minimum RMS of the normalized chunk before it is sent to STT. It was
+    # volume_threshold (0.01), which kept quiet but real speech from STT: 7 of 8
+    # skipped chunks in run 20261017T125706Z held speech (normalized RMS
+    # 0.0037-0.0085), while empty and hallucinated results all came from loud
+    # audio (October p05 0.021 / 0.037). VAD has already called these speech.
+    stt_min_rms:          float = 0.003
     # Silero VAD — used when vad_enabled=True and torch is available
     # Falls back to RMS automatically if torch.hub download fails.
     vad_silero_threshold:  float = 0.5   # speech probability threshold (0–1)

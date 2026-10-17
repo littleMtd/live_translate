@@ -590,7 +590,7 @@ class STTEngine:
             return None
 
         request_audio, audio_stats = _normalize_audio_for_stt(audio)
-        if _rms(request_audio) < cfg.audio.volume_threshold:
+        if _rms(request_audio) < cfg.audio.stt_min_rms:
             self._emit_elevenlabs_runtime_event(
                 audio=audio,
                 started=started,
@@ -879,7 +879,7 @@ class STTEngine:
         # raw-audio gates in VAD/fixed capture — that is the point: quiet
         # speech that normalization can rescue should not be dropped here.
         gate_rms = _rms(request_audio)
-        if gate_rms < cfg.audio.volume_threshold:
+        if gate_rms < cfg.audio.stt_min_rms:
             self._last_avg_logprob = None
             self._last_no_speech_prob = None
             log.debug("Groq STT skipped: audio below volume threshold")
@@ -1655,7 +1655,7 @@ def start(audio_queue: queue.Queue, text_queue: queue.Queue,
                 chunk_id = str(getattr(chunk, "audio_chunk_id", "") or "")
                 if dump_dir is not None and chunk_id:
                     try:
-                        if _rms(_normalize_audio_for_stt(audio)[0]) < cfg.audio.volume_threshold:
+                        if _rms(_normalize_audio_for_stt(audio)[0]) < cfg.audio.stt_min_rms:
                             write_wav(dump_dir / f"quiet-{chunk_id}.wav", audio, cfg.audio.sample_rate)
                     except Exception as exc:  # never let dumping break transcription
                         log.warning("Audio dump failed for %s: %s", chunk_id, exc)

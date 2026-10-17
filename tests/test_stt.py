@@ -516,6 +516,7 @@ class TestTranscribeFallback(unittest.TestCase):
             "modules.stt.profile_state.current", return_value=neutral
         ):
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "isegye_lilpa"
             mock_cfg.stt.groq_prompt = ""
@@ -544,6 +545,7 @@ class TestTranscribeFallback(unittest.TestCase):
         with patch("modules.stt.cfg") as mock_cfg, \
                 patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = ""
             mock_cfg.stt.groq_prompt = ""
@@ -583,6 +585,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = ""
             mock_cfg.stt.groq_prompt = ""
@@ -607,6 +610,7 @@ class TestTranscribeFallback(unittest.TestCase):
         with patch("modules.stt.cfg") as mock_cfg, \
                 patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = ""
             mock_cfg.stt.groq_prompt = ""
@@ -634,6 +638,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = ""
@@ -680,6 +685,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = ""
@@ -717,6 +723,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = ""
@@ -753,6 +760,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = ""
@@ -782,6 +790,7 @@ class TestTranscribeFallback(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = ""
@@ -1195,6 +1204,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
         with patch("modules.stt.cfg") as mock_cfg, \
              patch("modules.stt.build_stt_glossary", return_value="profile terms"):
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.stt.groq_prompt = "seed prompt"
             mock_cfg.stt.use_profile_glossary = True
@@ -1230,6 +1240,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = "seed prompt"
@@ -1267,6 +1278,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
         ]
         with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit"):
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.stt.groq_prompt = "seed prompt"
             mock_cfg.stt.use_profile_glossary = False
@@ -1311,6 +1323,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
 
         with patch("modules.stt.cfg") as mock_cfg, patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = "seed prompt"
@@ -1357,6 +1370,7 @@ class TestGroqPromptBuilder(unittest.TestCase):
         with patch("modules.stt.cfg") as mock_cfg, \
                 patch("modules.stt.runtime_events.emit") as emit:
             mock_cfg.audio.volume_threshold = 0.01
+            mock_cfg.audio.stt_min_rms = 0.01
             mock_cfg.audio.sample_rate = 16000
             mock_cfg.active_streamer_profile = "hades_chxxnnx"
             mock_cfg.stt.groq_prompt = "seed prompt"
