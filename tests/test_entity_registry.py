@@ -72,6 +72,9 @@ def test_alias_scopes_are_isolated_and_lookup_is_exact():
         # live run 20261010T085831Z-3968: the SOOP name ROI read 비챤 as 비찬 and the profile stayed general
         ("비찬", "isegye_lilpa", "isegye_viichan"),
         ("띵귤_", "hades_chxxnnx", "hades_singgyul"),
+        ("밍굴_", "hades_chxxnnx", "hades_singgyul"),
+        # live run 20261017T073136Z-22732: the same stream's name ROI read 밍굴_ as 명굴_ three times
+        ("명굴_", "hades_chxxnnx", "hades_singgyul"),
         ("연초록🎵", "hades_chxxnnx", "hades_yeon_chorok"),
     )
     for alias, profile_id, entity_id in reviewed_roi_aliases:
