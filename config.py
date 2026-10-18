@@ -392,6 +392,11 @@ class _Subtitle:
     # subtitles just before and after it go to logs/bookmarks_YYYYMMDD.md.
     bookmark_before_lines: int = 4
     bookmark_after_ms: int = 20000
+    # Keep the previous subtitle above the current one, smaller and grey, so a
+    # glance away does not lose a line (only the latest line was on screen).
+    show_previous_line: bool = True
+    previous_font:    tuple = ("Microsoft JhengHei", 15, "bold")
+    previous_color:   str   = "#BBBBBB"
     # Short notices (bookmark saved, "press Esc again") on the status line.
     notice_ms:        int   = 2000
     # System-wide hotkeys: they work while the player, not the subtitle window, has

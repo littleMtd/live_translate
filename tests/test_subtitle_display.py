@@ -75,7 +75,7 @@ def test_toggle_discards_subtitle_held_for_reading_speed_guard():
 def test_final_revision_replaces_visible_provisional_without_duplicate_hold():
     window, _root, _drawn = _window_with_fake_root()
     shown = []
-    window._show = shown.append
+    window._show = lambda text, new_line=True: shown.append((text, new_line))
     subtitle_id = "provisional:utt-1"
 
     window._queue.put(
@@ -87,7 +87,8 @@ def test_final_revision_replaces_visible_provisional_without_duplicate_hold():
     )
     window._poll()
 
-    assert shown == ["暫定字幕", "最終字幕"]
+    # the final revision replaces the line in place; it must not push the provisional up as "previous"
+    assert shown == [("暫定字幕", True), ("最終字幕", False)]
     assert window._current_subtitle_id == subtitle_id
     assert window._pending_text is None
 
@@ -95,7 +96,7 @@ def test_final_revision_replaces_visible_provisional_without_duplicate_hold():
 def test_late_provisional_cannot_replace_displayed_final_revision():
     window, _root, _drawn = _window_with_fake_root()
     shown = []
-    window._show = shown.append
+    window._show = lambda text, **_kw: shown.append(text)
     subtitle_id = "provisional:utt-late"
 
     window._queue.put(SubtitlePayload("final", subtitle_id, revision=1, phase="final"))
@@ -145,7 +146,14 @@ def _overlay_window(monkeypatch, labels=None, records=()):
     window = SubtitleWindow(queue.Queue(), threading.Event(), threading.Event())
     window._root = _FakeRoot()
     drawn = []
-    window._draw_lines = lambda lines, justify: drawn.append((justify, [text for text, _f, _c in lines]))
+    window._raw_lines = []
+
+    def record(lines, justify):
+        window._raw_lines.append(list(lines))
+        # blank rows (the reserved previous-line row) are layout, not content
+        drawn.append((justify, [text for text, _f, _c in lines if text.strip()]))
+
+    window._draw_lines = record
     box = {"labels": list(labels or [])}
     monkeypatch.setattr(subtitle_display.live_status, "flags", lambda profile_unresolved: list(box["labels"]))
     monkeypatch.setattr(subtitle_display.live_status, "recent_subtitles",
@@ -165,6 +173,71 @@ def test_status_line_appears_above_the_subtitle_and_disappears(monkeypatch):
     box["labels"] = []
     window._refresh_overlay(11.5)
     assert drawn[-1] == ("center", ["今天要玩什麼"])
+
+
+def test_previous_subtitle_stays_above_the_new_one(monkeypatch):
+    window, drawn, _box = _overlay_window(monkeypatch)
+    window._show("第一句")
+    assert drawn[-1] == ("center", ["第一句"])
+    window._show("第二句")
+    assert drawn[-1] == ("center", ["第一句", "第二句"])
+    window._show("第二句修正", new_line=False)   # final revision of the same subtitle
+    assert drawn[-1] == ("center", ["第一句", "第二句修正"])
+    window._show("第三句")
+    assert drawn[-1] == ("center", ["第二句修正", "第三句"])
+
+
+def test_previous_row_is_reserved_and_one_row_so_the_current_line_does_not_jump(monkeypatch):
+    from config import cfg
+
+    window, _drawn, _box = _overlay_window(monkeypatch)
+    window._show("第一句")
+    first = window._raw_lines[-1]
+    assert [text for text, _f, _c in first] == [" ", "第一句"]          # blank row held
+    assert first[0][1] == cfg.subtitle.previous_font
+    long_line = "很長" * 40
+    window._show(long_line)
+    window._show("下一句")
+    previous = window._raw_lines[-1][0][0]
+    # no Tk root in tests, so the conservative character fallback applies
+    assert previous == "…" + long_line.replace("\n", "")[-23:]
+
+
+def test_status_redraw_keeps_previous_line_and_flash_hides_it(monkeypatch):
+    window, drawn, box = _overlay_window(monkeypatch)
+    window._show("第一句")
+    window._show("第二句")
+    box["labels"] = ["Groq 辨識"]
+    window._refresh_overlay(100.0)
+    assert drawn[-1] == ("center", ["● Groq 辨識", "第一句", "第二句"])
+    window._flash("⏸", ms=None)
+    assert drawn[-1] == ("center", ["● Groq 辨識", "⏸"])
+
+
+def test_previous_subtitle_clears_after_idle_hide_and_pause(monkeypatch):
+    window, drawn, _box = _overlay_window(monkeypatch)
+    window._show("很久以前")
+    window._hide()
+    window._show("隔了一陣子")
+    assert drawn[-1] == ("center", ["隔了一陣子"])
+    window._toggle_translation()   # pause
+    window._toggle_translation()   # resume
+    window._show("恢復後")
+    assert drawn[-1] == ("center", ["恢復後"])
+
+
+def test_previous_subtitle_can_be_turned_off(monkeypatch):
+    from config import cfg
+
+    window, drawn, _box = _overlay_window(monkeypatch)
+    original = cfg.subtitle.show_previous_line
+    object.__setattr__(cfg.subtitle, "show_previous_line", False)
+    try:
+        window._show("第一句")
+        window._show("第二句")
+    finally:
+        object.__setattr__(cfg.subtitle, "show_previous_line", original)
+    assert drawn[-1] == ("center", ["第二句"])
 
 
 def test_status_line_stays_when_the_subtitle_hides(monkeypatch):

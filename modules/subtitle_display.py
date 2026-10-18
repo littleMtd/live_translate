@@ -18,6 +18,31 @@ from modules.global_hotkeys import GlobalHotkeys
 log = get_logger("subtitle_display")
 
 
+_PREVIOUS_ROW_FALLBACK_CHARS = 24  # fits 700 px at 15 pt even at 125 % display scaling
+
+
+def _one_row(text: str) -> str:
+    """The previous subtitle squeezed into one row: its last part, with … when cut.
+
+    Measured in pixels against the canvas wrap width, so it never wraps to a second row;
+    without a Tk font (tests, early startup) a conservative character count is used.
+    """
+    flat = text.replace("\n", "")
+    try:
+        from tkinter import font as tkfont
+
+        measure = tkfont.Font(font=cfg.subtitle.previous_font).measure
+        fits = lambda s: measure(s) <= cfg.subtitle.wraplength  # noqa: E731
+    except (tk.TclError, RuntimeError):
+        fits = lambda s: len(s) <= _PREVIOUS_ROW_FALLBACK_CHARS  # noqa: E731
+    if fits(flat):
+        return flat
+    keep = len(flat) - 1
+    while keep > 0 and not fits("…" + flat[-keep:]):
+        keep -= 1
+    return "…" + flat[-keep:] if keep > 0 else "…"
+
+
 class SubtitleWindow:
     def __init__(self, subtitle_queue: queue.Queue, stop_event: threading.Event,
                  pause_event: threading.Event | None = None,
@@ -42,6 +67,8 @@ class SubtitleWindow:
         self._show_min_ms: int = 0
         # Status indicator / history overlay state.
         self._visible_text = ""          # wrapped subtitle currently on screen ("" = hidden)
+        self._current_line = ""          # wrapped text of the latest real subtitle (not a ⏸/▶ flash)
+        self._previous_line = ""         # the subtitle before it, drawn small above it
         self._status_labels: list[str] = []
         self._status_checked_at = 0.0
         self._history_until = 0.0        # monotonic deadline while the history view is open
@@ -143,6 +170,8 @@ class SubtitleWindow:
     def _toggle_translation(self):
         self._close_history()
         self._translating = not self._translating
+        self._current_line = ""
+        self._previous_line = ""
         # Queue draining does not remove a line already held for the
         # reading-speed guard. It is stale after any pause-state change.
         self._pending_text = None
@@ -240,7 +269,7 @@ class SubtitleWindow:
                         candidate.subtitle_id
                         and candidate.subtitle_id == self._current_subtitle_id
                     ):
-                        self._show(candidate.text)
+                        self._show(candidate.text, new_line=False)
                         self._current_subtitle_revision = candidate.revision
                         self._pending_text = None
                         metrics.increment("subtitle.revision_replaced")
@@ -470,6 +499,10 @@ class SubtitleWindow:
         lines: list[tuple[str, tuple, str]] = []
         if self._status_labels:
             lines.append(("● " + " · ".join(self._status_labels), cfg.subtitle.status_font, cfg.subtitle.status_color))
+        if text and text == self._current_line and cfg.subtitle.show_previous_line:
+            # Always one row (a blank one when there is no previous line), so the current
+            # subtitle stays at the same height on screen instead of jumping down.
+            lines.append((_one_row(self._previous_line) or " ", cfg.subtitle.previous_font, cfg.subtitle.previous_color))
         if text:
             lines.append((text, cfg.subtitle.font, cfg.subtitle.fg))
         self._draw_lines(lines, justify="center")
@@ -524,7 +557,8 @@ class SubtitleWindow:
             )
             y += h + gap
 
-    def _show(self, text: str):
+    def _show(self, text: str, *, new_line: bool = True):
+        """Draw a subtitle; a revision of the same subtitle (new_line=False) keeps the previous line."""
         if self._root is None:
             return
         text = text.strip()
@@ -532,6 +566,9 @@ class SubtitleWindow:
             return
         try:
             wrapped = "\n".join(textwrap.wrap(text, width=cfg.subtitle.max_width_chars)) or text
+            if new_line and self._current_line and self._current_line != wrapped:
+                self._previous_line = self._current_line
+            self._current_line = wrapped
             self._visible_text = wrapped
             self._draw_outlined_text(wrapped)
             log.debug("Subtitle: %s", wrapped)
@@ -547,6 +584,9 @@ class SubtitleWindow:
 
     def _hide(self):
         self._visible_text = ""
+        # After a quiet spell the next line starts fresh instead of under a stale one.
+        self._current_line = ""
+        self._previous_line = ""
         try:
             if self._history_until:
                 pass  # an earlier subtitle's hide timer: leave the history view alone
