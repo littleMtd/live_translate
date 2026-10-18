@@ -19,7 +19,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "097685905c31a28d20f45696885b613a29600cc27d22c9f15fbe0311ebefde72"
+_TRANSLATION_PROFILE_DATA_HASH = "47613d8ea08d372167696275b721bd2283caf74f1d8ae4873d90fc1d122d9cc8"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -200,6 +200,8 @@ def test_stellive_translation_profiles_contain_official_romanization():
         assert "Yuni" in profile
         assert "楓之谷" in profile
         assert "투니버스 메들리" in profile
+        for name in ("Shizuki Toa", "Kogane Lang", "Hanayo Hiyori", "Tokino Meri", "ABYSS"):
+            assert name in profile
 
 
 def test_url_translation_profiles_contain_official_group_terms():

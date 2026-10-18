@@ -72,7 +72,7 @@ def test_translation_correction_data_snapshot_counts():
         profile: len(groups)
         for profile, groups in tables.profile_source_aware_target_replacements.items()
     } == {
-        "stellive_hina": 5,
+        "stellive_hina": 8,  # +3 ABYSS member-name groups (2026-10-19)
         "hades_chxxnnx": 1,
         "isegye_lilpa": 1,
         "url": 8,
@@ -88,7 +88,7 @@ def test_translation_correction_data_snapshot_counts():
         len(group.replacements)
         for groups in tables.profile_source_aware_target_replacements.values()
         for group in groups
-    ) == 52
+    ) == 60  # +8 ABYSS member-name replacements (2026-10-19)
 
 
 def test_required_canonical_rules_are_explicit_and_narrow():

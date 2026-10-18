@@ -4180,6 +4180,12 @@ class TestTranslateOptimizations(unittest.TestCase):
             ("히나유키 히나가 시켰다고 할게", "希拉尤基·Hina叫的", "Shirayuki Hina叫的"),
             ("메이플 하고 싶다", "想玩 Maple", "想玩 楓之谷"),
             ("투니버스 메들리 보고 들어왔어요", "看了Touriverus Madeline才進來的", "看了투니버스 메들리才進來的"),
+            # ABYSS (4th gen), run 20261018T103732Z: 토아 -> Towa, 메리 -> Mary/梅莉
+            ("토아랑 나랑 뒤에서 걸어가고 있었는데", "那時我跟Towa走在後面", "那時我跟Toa走在後面"),
+            ("메리가 춤을 자주 추긴 하는데", "Mary雖然常跳舞", "Meri雖然常跳舞"),
+            ("그런 메리의 모습이 너무 좋아", "我很喜歡梅莉這樣的樣子", "我很喜歡Meri這樣的樣子"),
+            ("히요리에게", "給日和", "給Hiyori"),
+            ("메리 크리스마스 여러분", "大家Merry Christmas", "大家Merry Christmas"),
         )
 
         with _active_translation_profile("stellive_hina"):

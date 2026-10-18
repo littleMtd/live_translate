@@ -822,6 +822,62 @@
             "right": "투니버스"
           }
         ]
+      },
+      {
+        "source_terms": [
+          "토아",
+          "시즈키 토아"
+        ],
+        "replacements": [
+          {
+            "wrong": "Towa",
+            "right": "Toa"
+          },
+          {
+            "wrong": "托亞",
+            "right": "Toa"
+          },
+          {
+            "wrong": "토아",
+            "right": "Toa"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "히요리",
+          "하나요 히요리"
+        ],
+        "replacements": [
+          {
+            "wrong": "日和",
+            "right": "Hiyori"
+          },
+          {
+            "wrong": "히요리",
+            "right": "Hiyori"
+          }
+        ]
+      },
+      {
+        "source_terms": [
+          "메리",
+          "토키노 메리"
+        ],
+        "replacements": [
+          {
+            "wrong": "Mary",
+            "right": "Meri"
+          },
+          {
+            "wrong": "梅莉",
+            "right": "Meri"
+          },
+          {
+            "wrong": "瑪莉",
+            "right": "Meri"
+          }
+        ]
       }
     ],
     "hades_chxxnnx": [
