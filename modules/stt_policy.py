@@ -67,6 +67,9 @@ def dedupe_transcript_overlap(
     return current
 
 
+_MIN_LOOP_COPIES = 3
+
+
 def is_hallucinated(
     text: str,
     max_japanese_chars: int,
@@ -92,16 +95,23 @@ def is_hallucinated(
     repeat_ratio = min(1.0, max(0.0, repeat_ratio))
     # Four-word repetitions are common in natural livestream emphasis. Keep
     # the old six-word floor, then let max_repeat_ratio tune longer loops.
+    # A phrase said twice is ordinary speech ("아 너무 떨려. 아 너무 떨려."): all
+    # 16 Korean two-copy rejections in October runs read as real lines, while
+    # loops ran three copies or more. So a loop needs at least three copies.
     if len(words) >= 6:
-        for phrase_len in range(2, len(words) // 2 + 1):
-            for start in range(0, len(words) - 2 * phrase_len + 1):
+        for phrase_len in range(2, len(words) // 3 + 1):
+            for start in range(0, len(words) - 3 * phrase_len + 1):
                 phrase = words[start:start + phrase_len]
-                for repeat_start in range(start + phrase_len, len(words) - phrase_len + 1):
-                    if phrase != words[repeat_start:repeat_start + phrase_len]:
-                        continue
-                    if (phrase_len * 2) / len(words) >= repeat_ratio:
-                        logger.debug("STT rejected (repetition loop): %s", text[:40])
-                        return True
+                copies, position = 1, start + phrase_len
+                while position + phrase_len <= len(words):
+                    if words[position:position + phrase_len] == phrase:
+                        copies += 1
+                        position += phrase_len
+                    else:
+                        position += 1
+                if copies >= _MIN_LOOP_COPIES and (phrase_len * copies) / len(words) >= repeat_ratio:
+                    logger.debug("STT rejected (repetition loop): %s", text[:40])
+                    return True
 
     return False
 

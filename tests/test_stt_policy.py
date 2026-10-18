@@ -32,19 +32,36 @@ class TestSttPolicy(unittest.TestCase):
     def test_japanese_allowance_does_not_disable_repetition_filter(self):
         self.assertTrue(
             is_hallucinated(
-                "今日は とても 楽しい 今日は とても 楽しい",
+                "今日は とても 楽しい 今日は とても 楽しい 今日は とても 楽しい",
                 max_japanese_chars=2,
                 allow_japanese=True,
             )
         )
 
     def test_is_hallucinated_rejects_repetition_loop(self):
-        self.assertTrue(is_hallucinated("one two three one two three", max_japanese_chars=2))
+        self.assertTrue(is_hallucinated("one two three one two three one two three", max_japanese_chars=2))
+
+    def test_phrase_said_twice_is_speech_not_a_loop(self):
+        # October runs: every Korean two-copy rejection read as a real line
+        for text in (
+            "아 죄송해요. 아 너무 떨려. 아 너무 떨려.",
+            "파스텔 나 무서워, 안 무서워? 나 무서워, 안 무서워?",
+            "어, 믿고 싶은 대로 믿어. 믿고 싶은 대로 믿어.",
+            "one two three one two three",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(is_hallucinated(text, max_japanese_chars=2))
+        for text in (
+            "어디야? 어디야? 어디야? 어디야? 어디야? 어디야? 어디야? 어디야?",
+            "SOOP SOOP SOOP SOOP SOOP SOOP SOOP SOOP SOOP SOOP",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_hallucinated(text, max_japanese_chars=2))
 
     def test_is_hallucinated_honors_repeat_ratio_setting(self):
-        text = "one two three one two three tail tail"
-        self.assertTrue(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.7))
-        self.assertFalse(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.8))
+        text = "one two three one two three one two three tail tail"  # 9 of 11 words loop
+        self.assertTrue(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.8))
+        self.assertFalse(is_hallucinated(text, max_japanese_chars=2, max_repeat_ratio=0.9))
 
     def test_is_hallucinated_allows_short_repeated_emphasis(self):
         text = "okay okay okay okay"
