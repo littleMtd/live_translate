@@ -141,6 +141,10 @@ _TRANSLATION_WORKERS = 2
 _MAX_PENDING_TRANSLATIONS = 4
 _MIN_SIMPLIFIED_SCRIPT_EVIDENCE = 2  # Avoid one-character name/variant ambiguity.
 _TRANSLATION_LOOP_POLL_SEC = 0.05
+# A preview waits at most this long for earlier sentences' finals before it is dropped
+# (its own final follows); finals take ~1 s, a stuck one would otherwise hold previews.
+_PREVIEW_ORDER_WAIT_SEC = 5.0
+_PREVIEW_ORDER_POLL_SEC = 0.05
 _MODEL_REFUSAL_RE = re.compile(
     r"^\s*(?:"
     r"(?:translation|output|target|번역|출력|译文|譯文)\s*[:：]"
@@ -3679,12 +3683,43 @@ class _ProvisionalWorker:
         self._subtitle_queue = subtitle_queue
         self._publication_lock = threading.Lock()
         self._publication_open = True
+        self._earlier_finals_shown: Callable[[], bool] | None = None
+
+    def _wait_for_earlier_finals(self, provisional_id: str) -> bool:
+        """Hold a preview until the finals of earlier sentences are out.
+
+        Previews bypass the ordered emitter, so a preview for sentence N+1 could reach
+        the screen while sentence N's final was still translating, and the screen read
+        N+1, N, N+1 (about 1 % of finals in older runs). Returns False when the wait is
+        abandoned: this sentence's own final already closed it, shutdown, or timeout.
+        """
+        shown = self._earlier_finals_shown
+        if shown is None:
+            return True
+        deadline = time.monotonic() + _PREVIEW_ORDER_WAIT_SEC
+        while not shown():
+            if (
+                self._stop_event.is_set()
+                or self._store.is_closed(provisional_id)
+                or time.monotonic() >= deadline
+            ):
+                return False
+            self._stop_event.wait(_PREVIEW_ORDER_POLL_SEC)
+        return True
 
     def close_publication(self) -> None:
         with self._publication_lock:
             self._publication_open = False
 
-    def translate(self, request: ProvisionalRequest) -> None:
+    def translate(
+        self,
+        request: ProvisionalRequest,
+        earlier_finals_shown: Callable[[], bool] | None = None,
+    ) -> None:
+        """``earlier_finals_shown`` reports whether every final submitted before this
+        preview's sentence has been emitted; the preview waits for it (see
+        ``_wait_for_earlier_finals``)."""
+        self._earlier_finals_shown = earlier_finals_shown
         started = time.monotonic()
         request_contract_id = ""
         if not deepseek_provisional_eligible():
@@ -3984,6 +4019,16 @@ class _ProvisionalWorker:
         engine_result, display_target, started, completed, usage, diagnostics,
         request_contract_id,
     ) -> None:
+        if not self._wait_for_earlier_finals(request.provisional_id):
+            self._store.close(request.provisional_id)
+            metrics.increment("translation.provisional.order_wait_abandoned")
+            runtime_events.emit(
+                "provisional_translation",
+                action="cancelled_late",
+                provisional_id=request.provisional_id,
+                reason="earlier_final_pending",
+            )
+            return
         with self._publication_lock:
             if (
                 self._stop_event.is_set()
@@ -4511,6 +4556,29 @@ class _OrderedEmitter:
                 len(self.completed),
                 self.next_emit_seq,
             )
+    def _withdraw_preview(self, event_metadata: dict, reason: str) -> None:
+        """The final will not be shown: replace this sentence's preview with nothing.
+
+        Without this an unchecked preview stayed up until the next subtitle or the
+        30 s idle hide, and never reached history. The empty final revision is a no-op
+        on screen when no preview was displayed.
+        """
+        provisional_id = str(event_metadata.get("provisional_id") or "")
+        if not provisional_id:
+            return
+        put_latest(
+            self._subtitle_queue,
+            SubtitlePayload(text="", subtitle_id=provisional_id, revision=1, phase="final"),
+            log,
+            "subtitle_queue",
+        )
+        runtime_events.emit(
+            "provisional_translation",
+            action="withdrawn",
+            provisional_id=provisional_id,
+            reason=reason,
+        )
+
     def emit_completed(self, item: _CompletedTranslation) -> None:
         outcome = item.outcome
         elapsed = item.elapsed
@@ -4572,6 +4640,7 @@ class _OrderedEmitter:
                 subtitle_emitted=False,
                 subtitle_suppressed_reason="final_script_invariant",
             )
+            self._withdraw_preview(event_metadata, "final_script_invariant")
             return
         with self._shared_state.lock:
             if result:
@@ -4605,6 +4674,7 @@ class _OrderedEmitter:
                     subtitle_emitted=False,
                     subtitle_suppressed_reason="stale_output_delay",
                 )
+                self._withdraw_preview(event_metadata, "stale_output_delay")
                 return
         if outcome.deferred_success is not None:
             try:
@@ -4634,6 +4704,7 @@ class _OrderedEmitter:
                     subtitle_emitted=False,
                     subtitle_suppressed_reason="duplicate",
                 )
+                self._withdraw_preview(event_metadata, "duplicate")
                 return
             self.last_result = result
             self.last_result_time = now
@@ -4667,6 +4738,7 @@ class _OrderedEmitter:
                 subtitle_emitted=False,
                 subtitle_suppressed_reason="",
             )
+            self._withdraw_preview(event_metadata, outcome.status or "empty")
         metrics.log_summary_if_due()
 
 def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
@@ -4707,8 +4779,16 @@ def start(sentence_queue: queue.Queue, subtitle_queue: queue.Queue,
                     except queue.Empty:
                         request = None
                     if isinstance(request, ProvisionalRequest):
+                        # Finals already submitted, plus sentences still queued under
+                        # backpressure, belong to earlier sentences; the preview may
+                        # show only once they have all been emitted. If the count
+                        # includes this preview's own sentence, its final closes the
+                        # provisional and the wait gives up.
+                        barrier = emitter.next_seq + sentence_queue.qsize()
                         provisional_future = provisional_executor.submit(
-                            provisional_worker.translate, request
+                            provisional_worker.translate,
+                            request,
+                            lambda barrier=barrier: emitter.next_emit_seq >= barrier,
                         )
                 emitter.collect_finished()
                 emitter.emit_ready()

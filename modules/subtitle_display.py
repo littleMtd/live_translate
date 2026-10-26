@@ -188,6 +188,23 @@ class SubtitleWindow:
             self._flash("⏸", ms=None)
             log.info("Pipeline paused")
 
+    def _withdraw(self, subtitle_id: str) -> None:
+        if not subtitle_id:
+            return
+        if self._pending_text is not None and self._pending_text.subtitle_id == subtitle_id:
+            self._pending_text = None
+        elif subtitle_id == self._current_subtitle_id:
+            # Drop the withdrawn line; the last line that was really shown takes its place.
+            self._current_line, self._previous_line = self._previous_line, ""
+            self._visible_text = self._current_line
+            self._current_subtitle_id = ""
+            self._show_min_ms = 0  # the withdrawn line's reading time no longer holds the next one
+            self._redraw()
+        else:
+            return
+        metrics.increment("subtitle.preview_withdrawn")
+        runtime_events.emit("provisional_translation", action="display_withdrawn", provisional_id=subtitle_id)
+
     def _cancel_hide(self):
         if self._root is None or self._hide_job is None:
             self._hide_job = None
@@ -264,6 +281,11 @@ class SubtitleWindow:
                     if not isinstance(candidate, SubtitlePayload):
                         continue
                     if not self._accept_revision(candidate):
+                        continue
+                    if not candidate.text.strip():
+                        # The translator withdrew this subtitle's preview: its final
+                        # will not be shown, so the unchecked preview must go too.
+                        self._withdraw(candidate.subtitle_id)
                         continue
                     if (
                         candidate.subtitle_id
