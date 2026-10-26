@@ -241,6 +241,9 @@ def _downmix_to_mono(indata: np.ndarray) -> np.ndarray:
 # Silero VAD
 # ---------------------------------------------------------------------------
 
+_SILERO_VAD_REPO = "snakers4/silero-vad:v6.2.1"
+
+
 class _SileroDetector:
     """
     Wraps the Silero VAD model for per-frame speech detection.
@@ -253,7 +256,9 @@ class _SileroDetector:
         self._threshold = threshold
         self._sr        = cfg.audio.sample_rate
         model, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
+            # Pinned tag: the unpinned repo fetched whatever was on master whenever the
+            # hub cache was missing. 6.2.1 is the version live runs have used since 2026-08.
+            repo_or_dir=_SILERO_VAD_REPO,
             model="silero_vad",
             force_reload=False,
             verbose=False,
