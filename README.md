@@ -50,6 +50,14 @@ Remove-Item Env:LIVE_TRANSLATE_RUN_KIND
 
 ## Profile identity
 
+本機固定某個 profile（例如整場看同一位主播）時，不要改 `config.py` 的預設值，改在專案根目錄建立不進 git 的 `local_settings.json`，每次啟動都會套用（測試不會讀它）：
+
+```json
+{"translation": {"streamer_profile": "stellive_hina", "profile_mode": "manual", "use_profile": true}}
+```
+
+只接受與 dashboard 相同的白名單欄位，無效值會被忽略；確實改到設定時，啟動 log 會印出 `Local settings applied from local_settings.json`。刪掉檔案即回到 `config.py` 預設（auto）。優先順序：`--profile` > Tauri dashboard 啟動（套用上次匯出的 `logs/live_translate_config.json`）> `local_settings.json` > `config.py`。
+
 Auto mode 啟動時是 neutral；畫面上的 `profile=general` 表示尚未取得 reviewed identity evidence，不是辨識到一個名為 general 的主播。`config.py` 的 `streamer_profile` 只保留 configured source metadata，不能在 auto mode 自動取得 ownership。校準方式：
 
 ```powershell

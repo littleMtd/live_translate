@@ -815,6 +815,29 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
         return base
 
 
+# Per-machine choices (which streamer profile, auto/manual) live in an untracked
+# local_settings.json next to this file instead of edits to the defaults above:
+# editing config.py broke the request-byte tests and showed up in every diff.
+# Same whitelist and validation as the dashboard JSON; invalid values are ignored.
+# LIVE_TRANSLATE_LOCAL_SETTINGS points elsewhere, and "" disables it (tests do).
+_LOCAL_SETTINGS_JSON = Path(__file__).parent / "local_settings.json"
+_LOCAL_SETTINGS_ENV = "LIVE_TRANSLATE_LOCAL_SETTINGS"
+
+
+def local_settings_path() -> Path | None:
+    value = os.environ.get(_LOCAL_SETTINGS_ENV)
+    if value is None:
+        return _LOCAL_SETTINGS_JSON
+    return Path(value) if value else None
+
+
 cfg = _Config()
+_local_settings = local_settings_path()
+if _local_settings is not None and _local_settings.is_file():
+    cfg = _apply_dashboard_overrides(cfg, _local_settings)
+# True only when local_settings.json changed something; a Tauri launch applies the
+# dashboard JSON afterwards, and that JSON (the previous run's export) wins.
+LOCAL_SETTINGS_APPLIED = cfg != _Config()
 if os.environ.get(_DASHBOARD_OVERRIDE_ENV):
     cfg = _apply_dashboard_overrides(cfg)
+    LOCAL_SETTINGS_APPLIED = False

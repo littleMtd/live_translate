@@ -15,6 +15,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
+import config as config_module
 from config import cfg
 from utils.logger import get_logger
 from modules import audio_capture, stt, sentence_splitter, translator, subtitle_display
@@ -260,6 +261,22 @@ def _configure_profile(args: argparse.Namespace) -> None:
     )
 
 
+def _export_config_for_dashboard(args: argparse.Namespace) -> None:
+    """Export the config with the profile lock actually in force.
+
+    The profile watcher hot-reloads this file, so after `--profile X` it must hold X
+    (manual), not config.py's default; otherwise any later change to the file would
+    silently replace the lock.
+    """
+    from utils import config_export
+
+    config_export.write(
+        {"streamer_profile": args.profile, "profile_mode": "manual", "use_profile": True}
+        if args.profile
+        else None
+    )
+
+
 def main():
     args = _parse_args()
     from utils.logger import enable_file_logging
@@ -295,9 +312,16 @@ def main():
         _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         raise
 
+    if config_module.LOCAL_SETTINGS_APPLIED:
+        log.info(
+            "Local settings applied from %s: profile=%s mode=%s",
+            config_module.local_settings_path().name,
+            cfg.translation.streamer_profile or "general",
+            cfg.translation.profile_mode,
+        )
+
     try:
-        from utils.config_export import write as _write_config_json
-        _write_config_json()
+        _export_config_for_dashboard(args)
         log.debug("Config exported for Tauri dashboard")
     except Exception as e:
         log.debug("Config export skipped: %s", e)

@@ -23,6 +23,10 @@ if "PYTEST_DEBUG_TEMPROOT" not in os.environ:
     _PYTEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(_PYTEST_TEMP_ROOT)
 
+# Tests run against the checked-in defaults, never the owner's local profile
+# choice (local_settings.json); set before anything imports config.
+os.environ["LIVE_TRANSLATE_LOCAL_SETTINGS"] = ""
+
 import pytest
 import modules.db as _db_module
 

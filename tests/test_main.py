@@ -292,7 +292,7 @@ def test_downstream_start_failure_cleans_up_started_stages(monkeypatch):
     main_module.pause_event.clear()
     monkeypatch.setattr(sys, "argv", ["main.py"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(
         main_module.audio_capture,
@@ -329,7 +329,7 @@ def test_profile_control_start_failure_cleans_up_audio_and_exports(monkeypatch):
     main_module.pause_event.clear()
     monkeypatch.setattr(sys, "argv", ["main.py"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(
         main_module.audio_capture,
@@ -374,7 +374,7 @@ def test_fatal_stt_worker_marks_shutdown_failed(monkeypatch):
     main_module.pause_event.clear()
     monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(
         main_module.audio_capture,
@@ -432,7 +432,7 @@ def test_stuck_critical_worker_marks_shutdown_failed(monkeypatch):
     main_module.pause_event.clear()
     monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(
         main_module.audio_capture,
@@ -487,7 +487,7 @@ def test_fatal_audio_worker_marks_shutdown_failed(monkeypatch):
     main_module.pause_event.clear()
     monkeypatch.setattr(sys, "argv", ["main.py", "--stt-only"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(main_module.audio_capture, "start", start_audio)
     monkeypatch.setattr(
@@ -550,7 +550,7 @@ def test_audio_start_failure_exports_and_preserves_exit(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["main.py"])
     monkeypatch.setattr(main_module, "_validate_config", lambda _stt_only: None)
     monkeypatch.setattr(main_module.profile_state, "configure_source", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(config_export, "write", lambda: None)
+    monkeypatch.setattr(config_export, "write", lambda *_a, **_k: None)
     monkeypatch.setattr(main_module.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(
         main_module.audio_capture,

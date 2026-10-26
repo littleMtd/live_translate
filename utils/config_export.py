@@ -33,8 +33,12 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _to_dict() -> dict:
+def _to_dict(translation_overrides: dict | None = None) -> dict:
     d = _to_jsonable(cfg)
+    if translation_overrides:
+        # e.g. `main.py --profile X`: the profile watcher reloads this file, so it must
+        # hold the state actually in force, not config.py's default.
+        d.setdefault("translation", {}).update(translation_overrides)
     d.pop("keys", None)
     d.pop("thread_join_timeout", None)
     sub = d.get("subtitle", {})
@@ -66,7 +70,7 @@ def _cleanup_stale_temps() -> None:
             pass
 
 
-def write() -> None:
+def write(translation_overrides: dict | None = None) -> None:
     """Write non-secret config to JSON for Tauri dashboard."""
     _EXPORT_PATH.parent.mkdir(exist_ok=True)
     _cleanup_stale_temps()
@@ -76,7 +80,7 @@ def write() -> None:
                                          prefix=f"{_EXPORT_PATH.name}.", suffix=".tmp",
                                          delete=False) as handle:
             temp_path = Path(handle.name)
-            handle.write(json.dumps(_to_dict(), indent=2, ensure_ascii=False))
+            handle.write(json.dumps(_to_dict(translation_overrides), indent=2, ensure_ascii=False))
         os.replace(temp_path, _EXPORT_PATH)
     finally:
         if temp_path is not None:
