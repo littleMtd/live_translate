@@ -64,23 +64,6 @@ class CompletenessDecision:
     signals: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class EarlyCutAssessment:
-    classification: str
-    reason: str
-    matched_ending: str
-    signals: tuple[str, ...]
-    would_cut: bool
-    candidate_kind: str
-    candidate_text: str
-    residual_text: str
-    elapsed_ms: float
-    saved_wait_ms: float
-    legacy_would_cut: bool
-    source_count: int
-    evidence_source_count: int
-
-
 def _terminal_core(text: str) -> str:
     core = text.rstrip()
     while core and core[-1] in _BOUNDARY_CLOSERS:
@@ -200,34 +183,6 @@ def classify_korean_completeness(text: str) -> CompletenessDecision:
         grammatical.matched_ending or structural.matched_ending,
         signals,
     )
-
-
-def split_safe_complete_prefix(text: str) -> tuple[str, str]:
-    """Return the first safe punctuation-bounded prefix and its residual."""
-    stripped = (text or "").strip()
-    index = 0
-    while index < len(stripped):
-        char = stripped[index]
-        if char not in ".!?~？！。":
-            index += 1
-            continue
-        end = index + 1
-        while end < len(stripped) and stripped[end] in _BOUNDARY_CLOSERS:
-            end += 1
-        if end < len(stripped) and not stripped[end].isspace():
-            index += 1
-            continue
-        prefix = stripped[:end].strip()
-        residual = stripped[end:].strip()
-        if (
-            residual
-            and _significant_len(prefix) >= _MIN_PREFIX_SIGNIFICANT
-            and _significant_len(residual) > _MAX_TRIVIAL_RESIDUAL
-            and classify_korean_completeness(prefix).state == "complete"
-        ):
-            return prefix, residual
-        index += 1
-    return "", stripped
 
 
 def _split_prefix_with_reason(
@@ -461,62 +416,6 @@ class SentenceBuffer:
             source_avg_logprobs=tuple(self._source_avg_logprobs),
             source_no_speech_probs=tuple(self._source_no_speech_probs),
             profile_source=self._profile_source,
-        )
-
-    def assess_semantic_early_cut(
-        self,
-        now: float,
-        *,
-        min_wait_seconds: float,
-        force_cut_seconds: float,
-    ) -> EarlyCutAssessment:
-        """Describe a counterfactual early cut without mutating the buffer."""
-        text = self._buffer.strip()
-        elapsed = (
-            max(0.0, now - self._first_token_time)
-            if self._first_token_time is not None
-            else 0.0
-        )
-        prefix, residual = split_safe_complete_prefix(text)
-        decision = classify_korean_completeness(prefix or text)
-        candidate_kind = "prefix" if prefix else ("full" if decision.state == "complete" else "")
-        candidate_text = prefix or text
-        would_cut = bool(candidate_kind)
-        legacy_complete = is_complete(text)
-        legacy_silence_ready = bool(
-            self._silence_complete_enabled
-            and self._silence_complete_pending
-            and not _ends_with_incomplete_ending(text)
-            and _significant_len(text) >= _MIN_PREFIX_SIGNIFICANT
-        )
-        legacy_would_cut = bool(
-            text
-            and (
-                legacy_silence_ready
-                or elapsed >= force_cut_seconds
-                or (elapsed >= min_wait_seconds and legacy_complete)
-            )
-        )
-        if legacy_would_cut or not would_cut:
-            saved_wait = 0.0
-        elif candidate_kind == "prefix":
-            saved_wait = max(0.0, force_cut_seconds - elapsed)
-        else:
-            saved_wait = max(0.0, min_wait_seconds - elapsed)
-        return EarlyCutAssessment(
-            classification=decision.state,
-            reason=decision.reason,
-            matched_ending=decision.matched_ending,
-            signals=decision.signals,
-            would_cut=would_cut,
-            candidate_kind=candidate_kind,
-            candidate_text=candidate_text,
-            residual_text=residual if prefix else "",
-            elapsed_ms=round(elapsed * 1000, 2),
-            saved_wait_ms=round(saved_wait * 1000, 2),
-            legacy_would_cut=legacy_would_cut,
-            source_count=len(self._source_utterance_ids),
-            evidence_source_count=len(self._evidence_source_utterance_ids),
         )
 
     def flush(self, now: float) -> SentenceCut | None:

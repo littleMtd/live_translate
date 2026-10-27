@@ -7,7 +7,6 @@ from modules.sentence_buffer import (
     _split_prefix_with_reason,
     classify_korean_completeness,
     is_complete,
-    split_safe_complete_prefix,
     split_complete_prefix,
 )
 
@@ -90,36 +89,6 @@ class TestKoreanCompletenessDecision(unittest.TestCase):
         decision = classify_korean_completeness("출게요")
         self.assertEqual(decision.state, "uncertain")
         self.assertEqual(decision.reason, "ambiguous_tail")
-
-    def test_safe_prefix_keeps_closing_quote_and_rejects_unsafe_dots(self):
-        self.assertEqual(
-            split_safe_complete_prefix('"안녕하세요?" 그런데 아직'),
-            ('"안녕하세요?"', "그런데 아직"),
-        )
-        self.assertEqual(
-            split_safe_complete_prefix("오늘도 안녕하세요. 그런데 아직"),
-            ("오늘도 안녕하세요.", "그런데 아직"),
-        )
-        for text in ("버전 1.2 입니다", "example.com 주소예요", "잠깐... 아직"):
-            with self.subTest(text=text):
-                self.assertEqual(split_safe_complete_prefix(text), ("", text))
-
-    def test_safe_prefix_returns_first_boundary_to_bound_subtitle_length(self):
-        self.assertEqual(
-            split_safe_complete_prefix(
-                "첫 번째 문장입니다. 두 번째 문장입니다. 아직 이어지는 내용"
-            ),
-            ("첫 번째 문장입니다.", "두 번째 문장입니다. 아직 이어지는 내용"),
-        )
-
-    def test_safe_prefix_rejects_punctuated_incomplete_grammar(self):
-        for text in (
-            "오늘은 게임을 하고. 다음 문장입니다",
-            "내가 예전에 자주 하던. 다음 문장입니다",
-        ):
-            with self.subTest(text=text):
-                self.assertEqual(split_safe_complete_prefix(text), ("", text))
-
 
 class TestSentenceBuffer(unittest.TestCase):
     def test_profile_generation_change_requires_explicit_boundary(self):

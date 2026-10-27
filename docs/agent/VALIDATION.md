@@ -238,10 +238,6 @@ an unconstrained "latest" run.
 - Windows capture startup is summarized under `audio_startup_summary`, separate
   from VAD chunk counts under `audio_summary`; use the startup fields to verify
   actual device/host API, requested format, and stream-ready latency;
-- T20 record-only completeness diagnostics are included in the broad
-  schema-v3 summary under `sentence_early_cut`. They are counterfactual only:
-  production defaults `off`, `shadow` must be selected deliberately, and no
-  active value is accepted after the frozen T20 shadow gate closed no-go;
 - latency attribution: `scripts/analyze_latency_tail.py`;
 - Groq STT error bursts: `scripts/analyze_groq_error_bursts.py`;
 - SQLite behavior/corpus: `scripts/analyze_cache.py`;

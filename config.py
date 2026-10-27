@@ -122,9 +122,6 @@ class _STT:
             raise ValueError(f"cfg.stt.primary_engine invalid: {self.primary_engine!r}")
 
 
-_VALID_SEMANTIC_EARLY_CUT_MODES = {"off", "shadow"}
-
-
 @dataclass(frozen=True)
 class _Splitter:
     min_wait_seconds:  int = 3
@@ -138,17 +135,10 @@ class _Splitter:
     provisional_enabled: bool = True
     provisional_hold_seconds: float = 1.75
     provisional_queue_maxsize: int = 4
-    # T20's shadow gate did not clear the frozen activation criteria. Keep the
-    # record-only diagnostic explicit; no "active" value is accepted.
-    semantic_early_cut_mode: str = "off"
+    # The semantic early-cut shadow (T20) never cleared its activation criteria
+    # and was removed on 2026-10-27; it is in git history.
 
     def __post_init__(self):
-        if self.semantic_early_cut_mode not in _VALID_SEMANTIC_EARLY_CUT_MODES:
-            raise ValueError(
-                "cfg.splitter.semantic_early_cut_mode invalid: "
-                f"{self.semantic_early_cut_mode!r} "
-                f"(must be one of {_VALID_SEMANTIC_EARLY_CUT_MODES})"
-            )
         if (
             isinstance(self.provisional_hold_seconds, bool)
             or not isinstance(self.provisional_hold_seconds, (int, float))

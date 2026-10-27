@@ -66,7 +66,7 @@ Quality retry, Japanese translation shadow/active, DeepSeek record-only shadow/m
 - `modules/sentence_buffer.py`: completeness/cut decisions, including bounded holds for unpunctuated Korean embedded-question/subordinate tails. Safe ordinary full stops complete a sentence, while URL/version/decimal/ellipsis dots do not; the existing force-cut remains authoritative.
 - `modules/sentence_splitter.py`: queue orchestration, bounded merge, provisional submission, sentence events.
 
-`semantic_early_cut_mode` supports only `off|shadow`; the frozen T20 gate was NO-GO, so shadow cannot alter sentence timing. Provisional subtitles are a separate active feature.
+The T20 semantic early-cut shadow (gate NO-GO) was removed on 2026-10-27. Provisional subtitles are a separate active feature.
 
 Selective secondary-ASR source replacement is not active. Historical SenseVoice and faster-whisper replay did not establish a safe trigger or reconciliation rule; faster-whisper remains outside the live latency envelope, and ASR majority voting fails known context-supported cases. Groq remains provider-failure fallback rather than a semantic-evidence route.
 
