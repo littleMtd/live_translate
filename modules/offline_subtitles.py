@@ -56,11 +56,16 @@ def _seconds(value):
         raise ValueError("invalid timestamp")
     return sum(x * 60 ** i for i, x in enumerate(reversed(nums)))
 
+# Zero-width characters some uploaders pad subtitle lines with for positioning;
+# str.split() keeps them, so they reached the Korean output and the translator.
+_ZERO_WIDTH = re.compile(r"[​-‍⁠﻿]")
+
+
 def _line(text, automatic):
     text = re.sub(r"<[^>]*>", "", text)
     if automatic:
         text = re.sub(r"\[[^\]]*\]", "", text)
-    return " ".join(html.unescape(text).split())
+    return " ".join(_ZERO_WIDTH.sub("", html.unescape(text)).split())
 
 def parse_subtitles(text, *, automatic=None):
     text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")

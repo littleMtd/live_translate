@@ -199,6 +199,12 @@ def test_deliver_and_rename_rollback(tmp_path, monkeypatch):
         off.deliver(tmp_path,"a",cues,cues,{})
     assert before == {p.name:p.read_bytes() for p in tmp_path.iterdir()}
 
+def test_zero_width_padding_is_removed_from_cues():
+    text = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n​​​ ​첫 줄​ ​​\n\n"
+            "00:00:03.000 --> 00:00:04.000\n​⁠﻿\n")
+    cues = off.parse_subtitles(text)
+    assert [cue.text for cue in cues] == ["첫 줄"]          # padding stripped, invisible-only cue dropped
+
 def test_deliver_writes_korean_chinese_side_by_side(tmp_path):
     source = [off.Cue("c1", 0.0, 1.5, "첫 줄"), off.Cue("c2", 2.0, 3.0, "둘째 줄")]
     target = [off.Cue("c1", 0.0, 1.5, "第一行"), off.Cue("c2", 2.0, 3.0, "第二行")]
