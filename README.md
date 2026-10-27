@@ -140,6 +140,8 @@ Runtime JSONL 使用 schema v6，位於 `logs/runtime_events_YYYYMMDD.jsonl`。
 
 ### 離線字幕工具
 
+**視窗版：** 雙擊 `setup_scripts\subtitle_gui.bat`，貼網址（剪貼簿裡的網址會自動帶入）、勾「這是歌曲」、按「開始」；長影片會先跳出費用確認，完成後自動開啟資料夾。
+
 **貼網址就好：** 雙擊 `setup_scripts\subtitle_url.bat`，貼上影片網址並回答是不是歌曲；或在命令列執行
 `setup_scripts\subtitle_url.bat <網址> [--lyrics] [--out 目錄] [--profile ID]`。影片有上傳者提供的韓文字幕就直接翻譯（較準、不花語音辨識費），沒有才下載音訊做語音辨識（`--prefer-audio` 可強制）。`--lyrics` 讓翻譯照歌詞處理。成品放在 `下載\字幕\<標題> [<影片ID>]\`，完成後自動開啟資料夾。底層就是下面的 `make_subtitles.py`，費用與品質報告相同。
 
