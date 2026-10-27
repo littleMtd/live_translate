@@ -319,6 +319,25 @@ def test_coloured_outputs(tmp_path):
     assert "<font" not in read("song.zh-TW.vtt")                  # cafe_fansite reads this one
 
 
+def test_duet_translations_are_split_where_it_is_safe():
+    B, O = "#4BD0FF", "#FFA54C"
+    cue = lambda *voices: off.Cue("c1", 0.0, 1.0, "".join(t for _, t in voices), voices=voices)
+    # English kept verbatim anchors its singer; the rest goes to the other singer
+    assert off.chinese_voices(cue((B, "다가와 줘 "), (O, "I my me mine")), "悄悄靠近吧 I my me mine") == [
+        (B, "悄悄靠近吧"), ("", " "), (O, "I my me mine")]
+    assert off.chinese_voices(cue((O, "I like you 말할래 "), (B, "I my me mine")),
+                              "我想說 I like you I my me mine") == [
+        (O, "我想說 I like you"), ("", " "), (B, "I my me mine")]
+    # same number of space-separated parts as singers: coloured in order
+    assert off.chinese_voices(cue((B, "아직 말 못해 "), (O, "아직 말 못해")), "還說不出口 還說不出口") == [
+        (B, "還說不出口"), ("", " "), (O, "還說不出口")]
+    # no safe split: whole line stays uncoloured
+    assert off.chinese_voices(cue((B, "가 "), (O, "나")), "一二三") == [("", "一二三")]
+    assert off.chinese_voices(cue((B, "가 "), (O, "나 "), (B, "다")), "一 二") == [("", "一 二")]
+    # a lone "I" must not anchor inside another word
+    assert off.chinese_voices(cue((B, "가 "), (O, "I")), "In一") == [("", "In一")]
+
+
 def test_syllable_colouring_never_splits_a_word():
     vtt = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n"
            "<c.colorFF0000>사</c><c.colorFF0000>랑</c><c.color00AAFF>해</c> <i>요</i>\n")

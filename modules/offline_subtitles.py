@@ -225,9 +225,75 @@ def _srt_korean(cue):
     return "".join(_font(text, colour) for colour, text in cue.voices)
 
 
-def _srt_chinese(source, target):
+_LATIN_ONLY = re.compile(r"[A-Za-z0-9\s'’,.!?&-]*[A-Za-z][A-Za-z0-9\s'’,.!?&-]*")
+
+
+def chinese_voices(source, text) -> list:
+    """Split a translated duet line into (colour, text) parts.
+
+    English segments kept verbatim anchor their singer's colour; the Chinese between
+    anchors goes to the remaining segment, or to several segments in order when it has
+    exactly that many space-separated parts. Anything else stays uncoloured as a whole.
+    """
     colours = _cue_colours(source)
-    return _font(target.text, colours[0] if len(colours) == 1 else "")
+    if len(colours) < 2:
+        return [(colours[0] if colours else "", text)]
+    pieces, pending, cursor = [], [], 0
+
+    def flush(gap):
+        if not pending:
+            if gap.strip():
+                return False
+            pieces.append(("", gap))
+            return True
+        parts = re.split(r"(\s+)", gap.strip())
+        words = parts[::2]
+        if not gap.strip() or len(pending) not in (1, len(words)):
+            return False
+        lead = gap[:len(gap) - len(gap.lstrip())]
+        tail = gap[len(gap.rstrip()):]
+        pieces.append(("", lead))
+        if len(pending) == 1:
+            pieces.append((pending[0], gap.strip()))
+        else:
+            for i, word in enumerate(words):
+                pieces.append((pending[i], word))
+                if i < len(words) - 1:
+                    pieces.append(("", parts[2 * i + 1]))
+        pieces.append(("", tail))
+        pending.clear()
+        return True
+
+    for colour, segment in source.voices:
+        segment = segment.strip()
+        if not segment:
+            continue
+        found = None
+        if _LATIN_ONLY.fullmatch(segment):
+            found = re.compile(r"(?<![A-Za-z])" + re.escape(segment) + r"(?![A-Za-z])",
+                               re.I).search(text, cursor)
+        if not found:
+            pending.append(colour)
+            continue
+        if not flush(text[cursor:found.start()]):
+            return [("", text)]
+        pieces.append((colour, found.group()))
+        cursor = found.end()
+    if not flush(text[cursor:]):
+        return [("", text)]
+    merged = []
+    for colour, part in pieces:
+        if not part:
+            continue
+        if merged and merged[-1][0] == colour:
+            merged[-1] = (colour, merged[-1][1] + part)
+        else:
+            merged.append((colour, part))
+    return merged
+
+
+def _srt_chinese(source, target):
+    return "".join(_font(text, colour) for colour, text in chinese_voices(source, target.text))
 
 
 def render_srt_markup(cues, bodies):
@@ -279,8 +345,7 @@ def side_by_side_html(pairs, title: str) -> str:
     for source, target in pairs:
         korean = ("".join(span(text, colour) for colour, text in source.voices)
                   if source.voices else html.escape(source.text))
-        colours = _cue_colours(source)
-        chinese = span(target.text, colours[0] if len(colours) == 1 else "")
+        chinese = "".join(span(text, colour) for colour, text in chinese_voices(source, target.text))
         rows.append(f'<div class="pair"><div class="ko">{korean}</div><div class="zh">{chinese}</div></div>')
     legend = "".join(f'<span class="singer" style="color:{_readable(colour)}">● 演唱者 {n}</span>'
                      for colour, n in numbers.items())
