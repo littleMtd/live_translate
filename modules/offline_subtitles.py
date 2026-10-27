@@ -67,7 +67,9 @@ def _line(text, automatic):
         text = re.sub(r"\[[^\]]*\]", "", text)
     return " ".join(_ZERO_WIDTH.sub("", html.unescape(text)).split())
 
-def parse_subtitles(text, *, automatic=None):
+def parse_subtitles(text, *, automatic=None, tidy=True):
+    """``tidy=False`` keeps cues exactly as written: needed when two files that were
+    written from one cue list (ko and zh outputs) must be read back cue for cue."""
     text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     if automatic is None:
         automatic = "align:start position:0%" in text or bool(
@@ -94,7 +96,46 @@ def parse_subtitles(text, *, automatic=None):
         value = " ".join(x for x in content if x)
         if value:
             result.append(Cue(f"c{len(result) + 1}", start, end, value))
-    return result
+    return tidy_cues(result) if tidy else result
+
+
+UNTRANSLATED_MARK = "【未翻譯】"
+_FRAGMENT_SECONDS = 0.3   # karaoke animation frames are ~0.07 s
+_SHORT_TAIL_SECONDS = 1.0
+_TOUCH_SECONDS = 0.05
+
+
+def tidy_cues(cues):
+    """Clean karaoke-style uploader tracks: fragments, overlaps, split repeats.
+
+    A run of ~0.07 s frames of one line folds into the cue that follows it; a cue
+    that runs into the next is cut where the next begins; and a line split into a
+    long and a short touching piece becomes one cue. A line really sung again
+    (two full-length touching cues) stays as two. Run 2026-10-27: one MV line came
+    as 16 overlapping cues that all ended at the same moment.
+    """
+    ordered = sorted(cues, key=lambda cue: cue.start)
+    folded = []
+    for cue in ordered:
+        if (folded and folded[-1].text == cue.text
+                and folded[-1].end - folded[-1].start < _FRAGMENT_SECONDS
+                and cue.start <= folded[-1].end + _TOUCH_SECONDS):
+            cue = replace(cue, start=folded.pop().start)
+        folded.append(cue)
+    for i in range(len(folded) - 1):
+        nxt = folded[i + 1]
+        if nxt.start > folded[i].start and folded[i].end > nxt.start:
+            folded[i] = replace(folded[i], end=nxt.start)
+    merged = []
+    for cue in folded:
+        prev = merged[-1] if merged else None
+        if (prev and prev.text == cue.text and cue.start <= prev.end + _TOUCH_SECONDS
+                and min(prev.end - prev.start, cue.end - cue.start) < _SHORT_TAIL_SECONDS):
+            merged[-1] = replace(prev, end=max(prev.end, cue.end))
+            continue
+        merged.append(cue)
+    kept = [cue for cue in merged if cue.end - cue.start >= 0.01]
+    return [replace(cue, id=f"c{i}") for i, cue in enumerate(kept, 1)]
 
 def timestamp(value, srt=False):
     millis = int(round(value * 1000))
@@ -635,7 +676,7 @@ def translate(cues, snapshot, engine, progress, *, batch_size=20, style=""):
                 reset_corrections()
                 raw = mapped.get(cue.id)
                 if raw is None:
-                    value = "【未翻譯】" + cue.text
+                    value = UNTRANSLATED_MARK + cue.text
                 else:
                     corrected = _apply_source_aware_corrections(row["ko"], raw)
                     value = _normalize_deepseek_taiwan_script(corrected)
@@ -650,9 +691,24 @@ def translate(cues, snapshot, engine, progress, *, batch_size=20, style=""):
             progress("translate", done=len(targets), total=len(cues))
     if cues and len(failures) == len(cues):
         raise RuntimeError("translation failed for every cue")
+    unified = 0
+    if style == "lyrics":
+        # A chorus line sung again keeps the first successful translation, instead of
+        # three near-synonyms for the same Korean (owner feedback 2026-10-27).
+        first: dict[str, str] = {}
+        for i, cue in enumerate(cues):
+            # a cue missing from a batch reply is marked untranslated without being in
+            # `failures`; it must neither set nor receive the shared translation
+            if cue.id in failures or targets[i].text.startswith(UNTRANSLATED_MARK):
+                continue
+            kept = first.setdefault(cue.text, targets[i].text)
+            if kept != targets[i].text:
+                targets[i] = replace(targets[i], text=kept)
+                unified += 1
     report = {"failed_cues": failures, "quality_flags": flags,
               "prompt_version": PROMPT_VERSION, "profile": snapshot.effective_profile_id,
-              "run_kind": _runtime_run_kind(), "cue_count": len(cues), "style": style or "speech"}
+              "run_kind": _runtime_run_kind(), "cue_count": len(cues), "style": style or "speech",
+              "unified_repeats": unified}
     if isinstance(engine, GeminiTranslator):
         usage = dict(engine.usage)
         report.update(translator="gemini", translation_model=engine.model, translation_usage=usage,

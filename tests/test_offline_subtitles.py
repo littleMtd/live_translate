@@ -199,6 +199,79 @@ def test_deliver_and_rename_rollback(tmp_path, monkeypatch):
         off.deliver(tmp_path,"a",cues,cues,{})
     assert before == {p.name:p.read_bytes() for p in tmp_path.iterdir()}
 
+def test_karaoke_fragments_fold_and_overlaps_are_cut():
+    C = off.Cue
+    cues = [
+        C("a", 74.792, 77.828, "A"),
+        C("b", 77.027, 77.094, "A"), C("c", 77.094, 77.161, "A"), C("d", 77.161, 77.227, "A"),
+        C("e", 77.227, 77.828, "A"),                     # long + short tail of one line
+        C("f", 77.828, 81.498, "B"),
+        # one line sung four times; every last frame ran to 94.678
+        C("g", 81.498, 81.565, "R"), C("h", 81.565, 81.632, "R"), C("i", 81.632, 94.678, "R"),
+        C("j", 84.701, 84.768, "R"), C("k", 84.768, 94.678, "R"),
+        C("l", 87.871, 87.938, "R"), C("m", 87.938, 94.678, "R"),
+        C("n", 91.141, 94.678, "R"),
+        C("o", 94.678, 97.0, "S"),
+        C("p", 97.0, 99.3, "T"), C("q", 99.3, 101.6, "T"),  # sung twice back to back: kept
+    ]
+    tidy = [(c.text, round(c.start, 3), round(c.end, 3)) for c in off.tidy_cues(cues)]
+    assert tidy == [
+        ("A", 74.792, 77.828), ("B", 77.828, 81.498),
+        ("R", 81.498, 84.701), ("R", 84.701, 87.871), ("R", 87.871, 91.141), ("R", 91.141, 94.678),
+        ("S", 94.678, 97.0), ("T", 97.0, 99.3), ("T", 99.3, 101.6),
+    ]
+    assert [c.id for c in off.tidy_cues(cues)] == [f"c{i}" for i in range(1, 10)]
+
+
+def test_ids_stay_contiguous_when_a_cue_is_dropped_and_tidy_can_be_skipped():
+    C = off.Cue
+    cues = [C("x", 1.0, 3.0, "A"), C("y", 1.005, 3.0, "B"), C("z", 3.0, 4.0, "C")]
+    assert [c.id for c in off.tidy_cues(cues)] == ["c1", "c2"]
+    vtt = ("WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nA\n\n"
+           "00:00:02.000 --> 00:00:04.000\nB\n")
+    assert [(c.start, c.end) for c in off.parse_subtitles(vtt)] == [(1.0, 2.0), (2.0, 4.0)]
+    assert [(c.start, c.end) for c in off.parse_subtitles(vtt, tidy=False)] == [(1.0, 3.0), (2.0, 4.0)]
+
+
+def _translate_with(replies, cues, style):
+    import modules.offline_subtitles as module
+    original = module.request_batch
+    module.request_batch = lambda *a, **k: next(replies)
+    try:
+        return off.translate(cues, off.profile_scope(""), object(), lambda *a, **k: None, style=style)
+    finally:
+        module.request_batch = original
+
+
+def test_unification_is_lyrics_only_and_never_spreads_a_failed_cue():
+    cues = [off.Cue("c1", 0, 1, "후렴"), off.Cue("c2", 1, 2, "후렴")]
+    targets, report = _translate_with(iter([{"c1": "一", "c2": "二"}]), cues, "")
+    assert [t.text for t in targets] == ["一", "二"] and report["unified_repeats"] == 0
+    # c1 fails in the batch and again on its own, c2 succeeds: c2 keeps its own text
+    replies = iter([{"c2": "二"}, {}, {"c2": "二"}])
+    targets, report = _translate_with(replies, cues, "lyrics")
+    assert targets[0].text.startswith("【未翻譯】") and targets[1].text == "二"
+
+
+def test_lyrics_repeats_keep_the_first_translation():
+    cues = [off.Cue("c1", 0, 1, "후렴"), off.Cue("c2", 1, 2, "다른 줄"), off.Cue("c3", 2, 3, "후렴")]
+    replies = iter([{"c1": "副歌一", "c2": "另一行", "c3": "副歌二"}])
+
+    class Engine:
+        pass
+
+    import modules.offline_subtitles as module
+    original = module.request_batch
+    module.request_batch = lambda *a, **k: next(replies)
+    try:
+        snapshot = off.profile_scope("")
+        targets, report = off.translate(cues, snapshot, Engine(), lambda *a, **k: None, style="lyrics")
+    finally:
+        module.request_batch = original
+    assert [t.text for t in targets] == ["副歌一", "另一行", "副歌一"]
+    assert report["unified_repeats"] == 1
+
+
 def test_zero_width_padding_is_removed_from_cues():
     text = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n​​​ ​첫 줄​ ​​\n\n"
             "00:00:03.000 --> 00:00:04.000\n​⁠﻿\n")
