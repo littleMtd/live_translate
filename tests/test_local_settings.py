@@ -215,7 +215,10 @@ def test_example_file_lists_every_tunable_with_its_default():
     assert settings_store.settings_problems(example, _Config()) == []
     listed = {k: v for k, v in settings_store.tunable_values(example).items()}
     defaults = settings_store.config_tunables(_Config())
-    assert listed == defaults                                     # every field, at its default
+    # every field at its default, except current_activity: owner found it useless, it stays
+    # tunable (and dashboard-editable) but is left out of the example
+    defaults.pop("translation.current_activity")
+    assert listed == defaults
 
 
 def test_startup_saves_dashboard_edits_and_reports_settings(monkeypatch, tmp_path, caplog):

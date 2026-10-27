@@ -1,5 +1,5 @@
 {
-  "_說明": "複製成 local_settings.json（不進 git）再改。只寫你要改的欄位就好，沒寫的用 config.py 預設值；下面的值就是預設值。以 _ 開頭的欄位是註解。dashboard 改的設定也會在下次啟動時自動存進 local_settings.json。寫錯欄位或值，啟動 log 會出現警告。",
+  "_說明": "欄位說明與預設值。你的 local_settings.json（不進 git）只要寫值、不用抄這些 _ 開頭的說明；沒寫的欄位用 config.py 預設值。dashboard 改的設定會在下次啟動時自動存進 local_settings.json。寫錯欄位或值，啟動 log 會出現警告。",
   "translation": {
     "_streamer_profile": "主播：\"\"（不套）、stellive_hina、isegye_lilpa、hades_chxxnnx、mwmeu、irise、url",
     "streamer_profile": "mwmeu",
@@ -9,8 +9,6 @@
     "use_profile": true,
     "_translation_mode": "live：直播；clip：剪輯片段（保守，保留原句結構）",
     "translation_mode": "live",
-    "_current_activity": "現在在做什麼（例如 StarCraft），給翻譯當背景；空白 = 不給",
-    "current_activity": "",
     "target_lang": "zh-TW",
     "max_tokens": 200
   },
