@@ -62,6 +62,8 @@ def main(argv=None):
                             help="transcription provider; no automatic fallback between them")
         parser.add_argument("--duration", type=float,
                             help="transcribe --estimate only: media length in seconds, no input file needed")
+        parser.add_argument("--lyrics", action="store_true",
+                            help="the cues are song lyrics: translate them as lyric lines")
         args = parser.parse_args(argv)
         from modules import offline_subtitles as offline
         from config import cfg
@@ -137,7 +139,8 @@ def main(argv=None):
                 stt_report = {"stt_provider": "groq", "stt_model": stt_model}
             if not cues:
                 raise Error("no usable transcription segments")
-        targets, report = offline.translate(cues, snapshot, engine, progress)
+        targets, report = offline.translate(cues, snapshot, engine, progress,
+                                            style="lyrics" if args.lyrics else "")
         report.update(stt_report)
         report["job"] = job
         files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report)
