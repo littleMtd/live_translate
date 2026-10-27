@@ -78,7 +78,7 @@ class _FakeYDL:
             Path(template.replace("%(ext)s", "m4a")).write_bytes(b"")
 
 
-def _run(monkeypatch, tmp_path, info, argv):
+def _run(monkeypatch, tmp_path, info, argv, status=0):
     calls = {}
     monkeypatch.setattr(subtitle_url, "fetch_info", lambda url: info)
     monkeypatch.setattr(subtitle_url, "_ydl", _FakeYDL)
@@ -87,7 +87,12 @@ def _run(monkeypatch, tmp_path, info, argv):
     def fake_job(job):
         calls["job"] = job
         calls["input_name"] = Path(job[2]).name
-        return 0
+        calls["input_text"] = Path(job[2]).read_text(encoding="utf-8") if job[2].endswith(".vtt") else ""
+        out = Path(job[job.index("--out-dir") + 1])
+        out.mkdir(parents=True, exist_ok=True)      # deliver() creates the folder before it can fail
+        if status == 0:
+            (out / f"{Path(job[2]).stem}.zh-TW.srt").write_text("new", encoding="utf-8")
+        return status
 
     monkeypatch.setattr(make_subtitles, "main", fake_job)
     calls["status"] = subtitle_url.main([*argv, "--out", str(tmp_path), "--no-open"])
@@ -123,6 +128,149 @@ def test_rerun_is_refused_before_any_download_or_paid_call(monkeypatch, tmp_path
     assert "已經做過了" in capsys.readouterr().err
 
 
+def _done_folder(tmp_path, stem="곡", video_id="abc"):
+    done = tmp_path / f"{stem} [{video_id}]"
+    done.mkdir()
+    (done / f"{stem}.zh-TW.srt").write_text("old", encoding="utf-8")
+    (done / f"{stem}.ko.vtt").write_text("WEBVTT\n\nprevious", encoding="utf-8")
+    return done
+
+
+def opt(job, name):
+    """Value of a "--name=value" argument, or None."""
+    return next((a.split("=", 1)[1] for a in job if a.startswith(name + "=")), None)
+
+
+def test_retranslate_refetches_the_track_and_keeps_the_old_version(monkeypatch, tmp_path, capsys):
+    done = _done_folder(tmp_path)
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate", "--singers=-A,B"])
+    assert calls["status"] == 0 and calls["job"][0] == "translate"
+    assert calls["input_text"] == "WEBVTT\n"                       # the uploader track, fetched again
+    assert opt(calls["job"], "--singers") == "-A,B"                # a leading "-" stays a value
+    assert (done / "곡.zh-TW.srt").read_text(encoding="utf-8") == "new"
+    archived = list((done / "舊版").iterdir())
+    assert len(archived) == 1 and (archived[0] / "곡.zh-TW.srt").read_text(encoding="utf-8") == "old"
+    assert (archived[0] / "곡.ko.vtt").is_file() and not (done / "곡.ko.vtt").exists()
+    assert sorted(p.name for p in done.iterdir()) == ["舊版", "곡.zh-TW.srt"]   # staging folder removed
+    assert "上一版移到" in capsys.readouterr().out
+
+
+def test_retranslate_with_prefer_audio_still_uses_the_coloured_track(monkeypatch, tmp_path):
+    # the saved ko.vtt has no singer colours; the earlier job used the track, so fetch it again
+    _done_folder(tmp_path)
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate", "--prefer-audio"])
+    assert calls["status"] == 0 and calls["input_text"] == "WEBVTT\n"
+
+
+def test_retranslate_after_speech_recognition_reuses_it_even_with_a_track(monkeypatch, tmp_path):
+    done = _done_folder(tmp_path)
+    (done / "곡.report.json").write_text('{"stt_provider": "elevenlabs"}', encoding="utf-8")
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate"])
+    assert calls["status"] == 0 and calls["input_text"] == "WEBVTT\n\nprevious"
+
+
+def test_retranslate_without_a_track_reuses_the_recognised_korean(monkeypatch, tmp_path):
+    _done_folder(tmp_path)
+    info = {"title": "곡", "id": "abc", "subtitles": {}, "duration": 3 * 3600}   # long: STT would ask
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate"])
+    assert calls["status"] == 0 and calls["job"][0] == "translate"
+    assert calls["input_text"] == "WEBVTT\n\nprevious" and calls["input_name"] == "곡.vtt"
+
+
+def test_failed_retranslate_leaves_the_folder_as_it_was(monkeypatch, tmp_path):
+    done = _done_folder(tmp_path)
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate"], status=1)
+    assert calls["status"] == 1
+    assert sorted(p.name for p in done.iterdir()) == ["곡.ko.vtt", "곡.zh-TW.srt"]
+    assert (done / "곡.zh-TW.srt").read_text(encoding="utf-8") == "old"
+
+
+def test_bad_singer_names_fail_before_any_download(monkeypatch, tmp_path, capsys):
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
+    fetched = []
+    monkeypatch.setattr(subtitle_url, "download_subtitle", lambda *a: fetched.append(a))
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--singers", ",".join("A" * 13)])
+    assert calls["status"] == 1 and "job" not in calls and not fetched
+    assert "演唱者名字有誤" in capsys.readouterr().err
+
+
+def test_retranslate_needs_the_previous_korean_when_there_is_no_track(monkeypatch, tmp_path, capsys):
+    done = _done_folder(tmp_path)
+    (done / "곡.ko.vtt").unlink()
+    info = {"title": "곡", "id": "abc", "subtitles": {}}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--retranslate"])
+    assert calls["status"] == 1 and "job" not in calls
+    assert "找不到上次的韓文字幕" in capsys.readouterr().err
+
+
+def test_replacing_outputs_rolls_back_when_a_file_is_locked(monkeypatch, tmp_path):
+    out, new = _done_folder(tmp_path), tmp_path / "new"
+    new.mkdir()
+    (new / "곡.zh-TW.srt").write_text("new", encoding="utf-8")
+    real_replace = subtitle_url.os.replace
+
+    def locked(src, dst):
+        if Path(src).parent == new:
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(subtitle_url.os, "replace", locked)
+    with pytest.raises(subtitle_url.ToolError, match="正在被其他程式開啟"):
+        subtitle_url.replace_outputs(out, new, "t")
+    assert (out / "곡.zh-TW.srt").read_text(encoding="utf-8") == "old" and (out / "곡.ko.vtt").is_file()
+    assert not (out / "舊版").exists() and (new / "곡.zh-TW.srt").is_file()
+
+
+def test_rollback_that_cannot_finish_still_reports_a_tool_error(monkeypatch, tmp_path):
+    out, new = _done_folder(tmp_path), tmp_path / "new"
+    new.mkdir()
+    (new / "곡.zh-TW.srt").write_text("new", encoding="utf-8")
+    real_replace, seen = subtitle_url.os.replace, []
+
+    def flaky(src, dst):
+        seen.append(src)
+        if Path(src).parent == new or len(seen) > 3:     # the new file, then every undo, fail
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(subtitle_url.os, "replace", flaky)
+    with pytest.raises(subtitle_url.ToolError):
+        subtitle_url.replace_outputs(out, new, "t")
+
+
+def test_same_second_retranslations_get_separate_archives(tmp_path):
+    out = _done_folder(tmp_path)
+    for text in ("one", "two"):
+        new = out / f"stage-{text}"
+        new.mkdir()
+        (new / "곡.zh-TW.srt").write_text(text, encoding="utf-8")
+        subtitle_url.replace_outputs(out, new, "t")
+    assert sorted(p.name for p in (out / "舊版").iterdir()) == ["t", "t-1"]
+    assert (out / "곡.zh-TW.srt").read_text(encoding="utf-8") == "two"
+
+
+def test_info_prints_a_summary_without_downloading(monkeypatch, tmp_path, capsys):
+    _done_folder(tmp_path)
+    info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}, "duration": 200,
+            "description": "WISHes 데뷔곡\nhttps://x.com/a\n#MV #WISHes\n\n\n\nCredits\n@label"}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--info"])
+    assert calls["status"] == 0 and "job" not in calls
+    import json
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
+    assert summary == {"title": "곡", "duration": 200, "korean_track": True, "done": True,
+                       "description": "WISHes 데뷔곡\n\nCredits"}
+
+
+def test_description_is_cut_at_a_line_boundary():
+    assert subtitle_url.clean_description("一二三\n四五六\n七八九", 9) == "一二三\n四五六"
+    # one long paragraph is cut, not dropped
+    assert subtitle_url.clean_description("字" * 50, 10) == "字" * 9
+
+
 def test_lyrics_style_only_changes_the_system_prompt():
     rows, facts = [{"id": "1", "ko": "가사"}], "FACTS"
     plain = offline_subtitles.messages_for(rows, facts, [])
@@ -134,10 +282,9 @@ def test_lyrics_style_only_changes_the_system_prompt():
 def test_title_and_owner_note_reach_the_job(monkeypatch, tmp_path):
     info = {"title": "곡", "id": "abc", "subtitles": {"ko": [{}]}}
     calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/abc", "--background", " 雙人曲 "])
-    job = calls["job"]
-    assert job[job.index("--background") + 1] == "影片標題：곡\n雙人曲"
+    assert opt(calls["job"], "--background") == "影片標題：곡\n雙人曲"
     calls = _run(monkeypatch, tmp_path / "plain", info, ["https://youtu.be/abc"])
-    assert calls["job"][calls["job"].index("--background") + 1] == "影片標題：곡"
+    assert opt(calls["job"], "--background") == "影片標題：곡"
 
 
 def test_overlong_note_fails_before_any_download(monkeypatch, tmp_path, capsys):

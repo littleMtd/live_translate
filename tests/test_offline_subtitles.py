@@ -193,7 +193,7 @@ def test_deliver_and_rename_rollback(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
     monkeypatch.setattr(os,"rename",rename)
     files = off.deliver(tmp_path,"a",cues,cues,{})
-    assert len(files) == 7
+    assert len(files) == 9
     before = {p.name:p.read_bytes() for p in tmp_path.iterdir()}
     with pytest.raises(FileExistsError):
         off.deliver(tmp_path,"a",cues,cues,{})
@@ -317,6 +317,33 @@ def test_coloured_outputs(tmp_path):
     assert '<span style="color:#4BD0FF">사아 </span><span style="color:#FFA54C">자차</span>' in page
     assert "演唱者 2" in page
     assert "<font" not in read("song.zh-TW.vtt")                  # cafe_fansite reads this one
+
+
+def test_singer_names_replace_numbers(tmp_path):
+    source = off.parse_subtitles(COLOUR_VTT)
+    target = [off.replace(c, text=zh) for c, zh in zip(source, ["一", "二", "三 四", "五"])]
+    files = off.deliver(tmp_path, "song", source, target, {}, singers=("<A>", ""))
+    read = lambda key: Path(files[key]).read_text(encoding="utf-8")
+    sheet = read("song.ko-zh.txt")
+    assert sheet.startswith("<A> = #4BD0FF\n演唱者 2 = #FFA54C\n\n")    # a blank name keeps the number
+    assert "[<A>] 사아 / [2] 자차\n[<A>+2] 三 四" in sheet
+    page = read("song.ko-zh.html")
+    assert "● &lt;A&gt;" in page and "● 演唱者 2" in page
+    assert json.loads(read("song.report.json"))["singers"] == ["<A>", ""]
+
+
+def test_ass_keeps_colours_and_escapes_tags(tmp_path):
+    source = off.parse_subtitles(COLOUR_VTT)
+    target = [off.replace(c, text=zh) for c, zh in zip(source, ["一{\\b1}", "二", "三 四", "五"])]
+    files = off.deliver(tmp_path, "song", source, target, {})
+    zh = Path(files["song.zh-TW.ass"]).read_text(encoding="utf-8")
+    both = Path(files["song.ko-zh.ass"]).read_text(encoding="utf-8")
+    assert zh.startswith("[Script Info]") and "Dialogue: 0,0:00:01.00,0:00:02.00,Default" in zh
+    assert "{\\c&HFFD04B&}一｛＼b1｝{\\c&HFFFFFF&}" in zh          # #4BD0FF as BGR; tags neutralised
+    # duet split per singer, and the Korean line keeps its own colours above it
+    assert "{\\c&HFFD04B&}三{\\c&HFFFFFF&} {\\c&H4CA5FF&}四{\\c&HFFFFFF&}" in zh
+    assert "{\\fs46}{\\c&HFFD04B&}사아 {\\c&HFFFFFF&}{\\c&H4CA5FF&}자차{\\c&HFFFFFF&}\\N{\\fs64}" in both
+    assert ",,카타\\N" not in both and "{\\fs46}카타\\N{\\fs64}五" in both
 
 
 def test_duet_translations_are_split_where_it_is_safe():
@@ -506,7 +533,7 @@ runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
     values=[json.loads(line) for line in run.stdout.splitlines()]
     assert [v["stage"] for v in values] == ["translate","done"]
     assert values[-1]["report"]["run_kind"] == "cafe_clip"
-    assert len(values[-1]["files"]) == 7
+    assert len(values[-1]["files"]) == 9
     assert "Profile current" in run.stderr
 
 def test_ffmpeg_missing_is_clear(monkeypatch):
@@ -1320,7 +1347,7 @@ def _transcribe_cli(monkeypatch, keys, tmp_path, name, scribe_script=None, groq_
 
 def test_cli_silent_middle_slice_delivers(monkeypatch, capsys, keys, tmp_path):
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_el_silent")
-    assert code == 0 and len(list(out.glob("*"))) == 7
+    assert code == 0 and len(list(out.glob("*"))) == 9
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["stage"] == "done" and done["report"]["stt_provider"] == "elevenlabs"
 
@@ -1336,7 +1363,7 @@ def test_cli_groq_path_still_delivers(monkeypatch, capsys, keys, tmp_path):
     segments = [[{"start": 1, "end": 2, "text": "안녕"}], [{"start": 10, "end": 11, "text": "중간"}],
                 [{"start": 20, "end": 21, "text": "끝"}]]
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_groq_ok", groq_segments=segments, stt="groq")
-    assert code == 0 and len(list(out.glob("*"))) == 7
+    assert code == 0 and len(list(out.glob("*"))) == 9
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["report"]["stt_provider"] == "groq" and done["report"]["stt_model"] == "whisper-large-v3"
     assert done["report"]["cue_count"] == 3

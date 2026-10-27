@@ -303,12 +303,29 @@ def render_srt_markup(cues, bodies):
     return "\n".join(blocks)
 
 
-def side_by_side_text(pairs) -> str:
-    """Korean above Chinese; with singer colours each line starts with [n] / [1+2]."""
-    numbers = singer_numbers(source for source, _ in pairs)
+def parse_singers(text) -> tuple:
+    """--singers "A, B" -> ("A", "B"); commas may be full-width or 、."""
+    if not (text or "").strip():
+        return ()
+    names = tuple(name.strip() for name in re.split(r"[,，、]", text))
+    if len(names) > 12 or any(len(name) > 30 or "\n" in name or "\r" in name for name in names):
+        raise OfflineSubtitleError("--singers takes at most 12 names of up to 30 characters")
+    return names
+
+
+def singer_labels(cues, names=()) -> dict:
+    """Singer colour -> the owner's name for it (in order of first appearance), else "1", "2", ..."""
+    names = [name.strip() for name in names]
+    return {colour: (names[n - 1] if n <= len(names) and names[n - 1] else str(n))
+            for colour, n in singer_numbers(cues).items()}
+
+
+def side_by_side_text(pairs, names=()) -> str:
+    """Korean above Chinese; with singer colours each line starts with [n] / [1+2] (or names)."""
+    numbers = singer_labels((source for source, _ in pairs), names)
 
     def label(colours):
-        return "[" + "+".join(str(numbers[c]) for c in colours) + "] " if colours else ""
+        return "[" + "+".join(numbers[c] for c in colours) + "] " if colours else ""
 
     blocks = []
     for source, target in pairs:
@@ -320,7 +337,8 @@ def side_by_side_text(pairs) -> str:
         blocks.append(f"{korean}\n{label(_cue_colours(source))}{target.text}")
     header = ""
     if numbers:
-        header = "\n".join(f"演唱者 {n} = {colour}" for colour, n in numbers.items()) + "\n\n"
+        header = "\n".join(f"{n if not n.isdigit() else '演唱者 ' + n} = {colour}"
+                           for colour, n in numbers.items()) + "\n\n"
     return header + "\n\n".join(blocks) + "\n"
 
 
@@ -333,9 +351,9 @@ def _readable(colour: str) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-def side_by_side_html(pairs, title: str) -> str:
+def side_by_side_html(pairs, title: str, names=()) -> str:
     """A lyric sheet in the track's own colours; open in a browser."""
-    numbers = singer_numbers(source for source, _ in pairs)
+    numbers = singer_labels((source for source, _ in pairs), names)
 
     def span(text, colour):
         escaped = html.escape(text)
@@ -347,7 +365,8 @@ def side_by_side_html(pairs, title: str) -> str:
                   if source.voices else html.escape(source.text))
         chinese = "".join(span(text, colour) for colour, text in chinese_voices(source, target.text))
         rows.append(f'<div class="pair"><div class="ko">{korean}</div><div class="zh">{chinese}</div></div>')
-    legend = "".join(f'<span class="singer" style="color:{_readable(colour)}">● 演唱者 {n}</span>'
+    legend = "".join(f'<span class="singer" style="color:{_readable(colour)}">● '
+                     f'{html.escape(n if not n.isdigit() else "演唱者 " + n)}</span>'
                      for colour, n in numbers.items())
     return (
         "<!doctype html>\n<html lang=\"zh-Hant\"><head><meta charset=\"utf-8\">"
@@ -359,6 +378,51 @@ def side_by_side_html(pairs, title: str) -> str:
         "</style></head><body>"
         f"<h1>{html.escape(title)}</h1><div class=\"legend\">{legend}</div>{''.join(rows)}"
         "</body></html>\n")
+
+
+_ASS_HEADER = (
+    "[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\nWrapStyle: 0\n"
+    "ScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+    "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+    "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    "Style: Default,Microsoft JhengHei,64,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+    "0,0,0,0,100,100,0,0,1,3,1,2,60,60,50,1\n\n[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+_ASS_KOREAN_SIZE = 46
+
+
+def _ass_time(value):
+    centis = int(round(value * 100))
+    hours, centis = divmod(centis, 360_000)
+    minutes, centis = divmod(centis, 6000)
+    seconds, centis = divmod(centis, 100)
+    return f"{hours}:{minutes:02}:{seconds:02}.{centis:02}"
+
+
+def _ass_runs(parts):
+    """(colour, text) runs as ASS text; braces and backslashes would be read as tags."""
+    out = []
+    for colour, text in parts:
+        text = (text.replace("\\", "＼").replace("{", "｛").replace("}", "｝")
+                .replace("\r", "").replace("\n", "\\N"))
+        if colour:
+            bgr = colour[5:7] + colour[3:5] + colour[1:3]
+            text = f"{{\\c&H{bgr}&}}{text}{{\\c&HFFFFFF&}}"
+        out.append(text)
+    return "".join(out)
+
+
+def render_ass(pairs, korean=True):
+    """ASS keeps colours (and the two-colour duet lines) more reliably than SRT in desktop players."""
+    lines = []
+    for source, target in pairs:
+        text = _ass_runs(chinese_voices(source, target.text))
+        if korean:
+            ko = _ass_runs(source.voices or (("", source.text),))
+            text = f"{{\\fs{_ASS_KOREAN_SIZE}}}{ko}\\N{{\\fs64}}{text}"
+        lines.append(f"Dialogue: 0,{_ass_time(target.start)},{_ass_time(target.end)},Default,,0,0,0,,{text}")
+    return _ASS_HEADER + "\n".join(lines) + "\n"
 
 
 def render(cues, srt=False):
@@ -955,10 +1019,13 @@ def _runtime_run_kind():
     from utils.runtime_events import runtime_events
     return runtime_events.run_kind
 
-def deliver(out_dir, name, source, target, report):
+def deliver(out_dir, name, source, target, report, singers=()):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pairs = list(zip(source, target, strict=True))
+    singers = tuple(singers)
+    if singers:
+        report = {**report, "singers": list(singers)}
     # SRT outputs carry the uploader's singer colours (<font color>); the VTT files stay
     # plain because cafe_fansite reads zh-TW.vtt with its own parser.
     payloads = {f"{name}.ko.vtt": render(source), f"{name}.zh-TW.vtt": render(target),
@@ -966,8 +1033,10 @@ def deliver(out_dir, name, source, target, report):
                 # Korean above Chinese: a two-line subtitle, a plain sheet and a coloured page
                 f"{name}.ko-zh.srt": render_srt_markup(
                     target, [f"{_srt_korean(ko)}\n{_srt_chinese(ko, zh)}" for ko, zh in pairs]),
-                f"{name}.ko-zh.txt": side_by_side_text(pairs),
-                f"{name}.ko-zh.html": side_by_side_html(pairs, name),
+                f"{name}.zh-TW.ass": render_ass(pairs, korean=False),
+                f"{name}.ko-zh.ass": render_ass(pairs),
+                f"{name}.ko-zh.txt": side_by_side_text(pairs, singers),
+                f"{name}.ko-zh.html": side_by_side_html(pairs, name, singers),
                 f"{name}.report.json": json.dumps(report, ensure_ascii=False, indent=2) + "\n"}
     finals = [out_dir / filename for filename in payloads]
     if any(path.exists() for path in finals):

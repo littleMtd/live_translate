@@ -9,11 +9,13 @@ report and file layout are the same as the cafe_fansite "下載＋字幕" job.
 Files land in <out>/<title> [<id>]/ ; the folder opens when the job is done.
 """
 import argparse
+import json
 import os
 import re
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,8 @@ KOREAN_TRACKS = ("ko", "ko-KR", "ko-kr")
 # Speech recognition beyond this needs a confirmation (or --yes): a 3-hour VOD is real money.
 LONG_TRANSCRIBE_SECONDS = 30 * 60
 STT_USD_PER_HOUR = 0.27  # ElevenLabs Scribe v2 + keyterms, batch price checked 2026-10-09
+# Owner note cap: offline_subtitles.BACKGROUND_LIMIT (1500) minus room for the title line
+NOTE_LIMIT = 1200
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
              *(f"LPT{i}" for i in range(1, 10))}
@@ -144,6 +148,88 @@ def background_note(title: str, note: str) -> str:
     return text
 
 
+_LINK_LINE = re.compile(r"https?://|www\.|@\w", re.I)
+_TAGS_LINE = re.compile(r"^(#\S+\s*)+$")
+
+
+def clean_description(text: str, limit: int) -> str:
+    """The video description as a starting background note: links and hashtag lines dropped."""
+    kept = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if _LINK_LINE.search(line) or _TAGS_LINE.match(line):
+            continue
+        if line or (kept and kept[-1]):
+            kept.append(line)
+    out = ""
+    for line in kept:
+        room = limit - len(out) - 1
+        if len(line) > room:
+            # a long single paragraph is cut, not dropped
+            out += line[:max(room, 0)]
+            break
+        out += line + "\n"
+    return out.strip()
+
+
+def video_summary(info: dict, out: Path) -> dict:
+    """What the GUI needs before a job: no download, no paid call."""
+    title, video_id = info.get("title") or "video", info.get("id") or "unknown"
+    out_dir = out / f"{safe_name(title)} [{video_id}]"
+    return {"title": title, "duration": info.get("duration") or 0,
+            "korean_track": bool(korean_track(info.get("subtitles") or {})),
+            "done": _has_files(out_dir),
+            "description": clean_description(info.get("description") or "", NOTE_LIMIT)}
+
+
+def _has_files(folder: Path) -> bool:
+    return folder.is_dir() and any(p.is_file() for p in folder.iterdir())
+
+
+def replace_outputs(out_dir: Path, new_dir: Path, stamp: str) -> Path:
+    """Move the previous files into 舊版/<stamp>/ and the new ones (staged in a folder inside
+    out_dir, so every move is a same-volume rename) in. os.replace never falls back to
+    copy-then-delete, so a locked file fails cleanly; a failure is undone best-effort and
+    the new files stay in new_dir for the owner."""
+    archive = out_dir / "舊版" / stamp
+    n = 1
+    while archive.exists():
+        archive, n = out_dir / "舊版" / f"{stamp}-{n}", n + 1
+    moved = []
+    try:
+        archive.mkdir(parents=True)
+        for old in sorted(p for p in out_dir.iterdir() if p.is_file()):
+            os.replace(old, archive / old.name)
+            moved.append((archive / old.name, old))
+        for new in sorted(new_dir.iterdir()):
+            os.replace(new, out_dir / new.name)
+            moved.append((out_dir / new.name, new))
+    except OSError:
+        for now, before in reversed(moved):
+            try:
+                os.replace(now, before)
+            except OSError:
+                pass
+        for folder in (archive, archive.parent):
+            try:
+                folder.rmdir()               # only when empty
+            except OSError:
+                pass
+        raise ToolError(f"有檔案正在被其他程式開啟，無法替換：{out_dir}（關掉後再試；"
+                        f"新的翻譯在 {new_dir.name}）") from None
+    new_dir.rmdir()
+    return archive
+
+
+def previous_was_transcribed(out_dir: Path, stem: str) -> bool:
+    """Whether the folder's last job came from speech recognition (its report names an STT provider)."""
+    try:
+        report = json.loads((out_dir / f"{stem}.report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(report, dict) and bool(report.get("stt_provider"))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Korean video URL -> zh-TW subtitles")
     parser.add_argument("url")
@@ -155,6 +241,13 @@ def main(argv=None) -> int:
                         help="transcribe the audio even when the video has Korean subtitles")
     parser.add_argument("--background", default="",
                         help="note for the translator: singers, story, tone (the title is added automatically)")
+    parser.add_argument("--singers", default="",
+                        help="names for the singer colours, comma-separated in order of first appearance")
+    parser.add_argument("--retranslate", action="store_true",
+                        help="translate again into an existing folder; old files move to 舊版/, "
+                             "speech recognition is never repeated")
+    parser.add_argument("--info", action="store_true",
+                        help="print the video's title, length and cleaned description as JSON, then stop")
     parser.add_argument("--yes", action="store_true", help="skip the long-video cost confirmation")
     parser.add_argument("--no-open", action="store_true", help="do not open the folder when done")
     args = parser.parse_args(argv)
@@ -166,18 +259,40 @@ def main(argv=None) -> int:
 
 
 def run(args) -> int:
-    print("讀取影片資訊…", flush=True)
+    from modules.offline_subtitles import OfflineSubtitleError, parse_singers
+
+    try:
+        parse_singers(args.singers)        # checked before any download, not after
+    except OfflineSubtitleError as exc:
+        raise ToolError(f"演唱者名字有誤：{exc}") from None
+    if not args.info:
+        print("讀取影片資訊…", flush=True)
     info = fetch_info(args.url)
     check_video(info)
+    if args.info:
+        print(json.dumps({"info": video_summary(info, args.out)}, ensure_ascii=False), flush=True)
+        return 0
     title, video_id = info.get("title") or "video", info.get("id") or "unknown"
     stem = safe_name(title)
     background = background_note(title, args.background)
     out_dir = args.out / f"{stem} [{video_id}]"
-    if out_dir.is_dir() and any(out_dir.iterdir()):
+    retranslate = args.retranslate and _has_files(out_dir)
+    if _has_files(out_dir) and not retranslate:
         raise ToolError(f"這支影片已經做過了：{out_dir}（要重做請先刪掉或改 --out）")
     mode, track = plan(info, args.prefer_audio)
+    previous = out_dir / f"{stem}.ko.vtt"
+    if retranslate:
+        # Keep the source of the last job: its uploader track again (free, and the saved
+        # ko.vtt has no singer colours), or its speech-recognition result, never STT again.
+        track = None if previous_was_transcribed(out_dir, stem) else korean_track(info.get("subtitles") or {})
+        mode = "translate"
+        if not track and not previous.is_file():
+            raise ToolError(f"找不到上次的韓文字幕 {previous.name}，無法只重新翻譯")
     print(f"影片：{title}（{info.get('duration_string') or '?'}）", flush=True)
-    print("使用影片內建的韓文字幕翻譯" if track else "沒有內建韓文字幕，下載音訊做語音辨識", flush=True)
+    if retranslate:
+        print("重新翻譯：" + ("重新抓影片內建的韓文字幕" if track else "沿用上次的韓文字幕"), flush=True)
+    else:
+        print("使用影片內建的韓文字幕翻譯" if track else "沒有內建韓文字幕，下載音訊做語音辨識", flush=True)
     if mode == "transcribe":
         confirm_long_transcribe(float(info.get("duration") or 0), args.yes)
 
@@ -185,16 +300,30 @@ def run(args) -> int:
 
     with tempfile.TemporaryDirectory(prefix="subtitle_url_") as temp:
         workdir = Path(temp)
-        source = download_subtitle(args.url, track, workdir) if track else download_audio(args.url, workdir)
+        if track:
+            source = download_subtitle(args.url, track, workdir)
+        elif retranslate:
+            source = Path(shutil.copy2(previous, workdir / "source.vtt"))
+        else:
+            source = download_audio(args.url, workdir)
         # make_subtitles names its outputs after the input file's stem
         source = source.rename(workdir / f"{stem}{source.suffix}")
-        job_args = [mode, "--input", str(source), "--out-dir", str(out_dir),
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        # staged inside out_dir: replacing is then a same-volume rename even when --out is on another drive
+        job_out = out_dir / f"新版暫存-{stamp}" if retranslate else out_dir
+        # "--opt=value": a value starting with "-" is not read as an option
+        job_args = [mode, "--input", str(source), "--out-dir", str(job_out),
                     "--profile", args.profile, "--translator", args.translator,
-                    "--background", background]
+                    f"--background={background}", f"--singers={args.singers}"]
         if args.lyrics:
             job_args.append("--lyrics")
         print("翻譯中…（進度為 JSON 行）", flush=True)
         status = make_subtitles.main(job_args)
+        if retranslate and status != 0:
+            shutil.rmtree(job_out, ignore_errors=True)   # a failed job leaves nothing worth keeping
+        if status == 0 and retranslate:
+            archive = replace_outputs(out_dir, job_out, stamp)
+            print(f"上一版移到：{archive}", flush=True)
     if status != 0:
         raise ToolError("字幕製作失敗，原因見上方訊息")
     print(f"完成：{out_dir}", flush=True)

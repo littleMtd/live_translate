@@ -66,6 +66,8 @@ def main(argv=None):
                             help="the cues are song lyrics: translate them as lyric lines")
         parser.add_argument("--background", default="",
                             help="note about the video (singers, story, tone) sent with each translation batch")
+        parser.add_argument("--singers", default="",
+                            help="comma-separated names for the singer colours, in order of first appearance")
         args = parser.parse_args(argv)
         from modules import offline_subtitles as offline
         from config import cfg
@@ -84,6 +86,7 @@ def main(argv=None):
             raise Error("--gemini-model must be a Gemini model name and needs --translator gemini")
         if len(args.background.strip()) > offline.BACKGROUND_LIMIT:
             raise Error(f"--background must be at most {offline.BACKGROUND_LIMIT} characters")
+        singers = offline.parse_singers(args.singers)
         if not args.estimate and args.out_dir is None:
             raise Error("--out-dir is required for output")
         if args.mode == "translate":
@@ -148,7 +151,7 @@ def main(argv=None):
                                             background=args.background)
         report.update(stt_report)
         report["job"] = job
-        files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report)
+        files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report, singers)
         progress("done", files=files, report=report)
         return 0
     except KeyboardInterrupt:
