@@ -26,6 +26,9 @@ class Cue:
     start: float
     end: float
     text: str
+    # Singer colours from the uploader's track: ((hex colour or "", text), ...) in
+    # order. Empty when the track has no colours (most videos).
+    voices: tuple = ()
 
 @dataclass(frozen=True)
 class Slice:
@@ -67,6 +70,58 @@ def _line(text, automatic):
         text = re.sub(r"\[[^\]]*\]", "", text)
     return " ".join(_ZERO_WIDTH.sub("", html.unescape(text)).split())
 
+_COLOR_SPAN = re.compile(r"<c\.color([0-9A-Fa-f]{6})[^>]*>(.*?)</c>", re.S)
+
+
+def _is_neutral(hex_colour: str) -> bool:
+    """Grey, black or white (karaoke base text, outlines): low saturation or very dark.
+    Saturation, not channel spread, so pastel member colours (#FFD1DC) still count."""
+    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (0, 2, 4))
+    high, low = max(r, g, b), min(r, g, b)
+    return high < 48 or (high - low) / high < 0.12
+
+
+def _voices(raw_lines) -> tuple:
+    """Coloured segments of one cue, as ((#RRGGBB or "", text), ...).
+
+    Segments keep their own spacing, so "".join(texts) == cue.text even when a word
+    is coloured syllable by syllable. Neutral colours count as uncoloured; adjacent
+    segments of one colour merge. Returns () unless some segment has a singer colour.
+    """
+    pieces = []
+    for number, raw in enumerate(raw_lines):
+        if number:
+            pieces.append(("", " "))
+        position = 0
+        for match in _COLOR_SPAN.finditer(raw):
+            pieces.append(("", raw[position:match.start()]))
+            colour = match.group(1).upper()
+            pieces.append(("" if _is_neutral(colour) else f"#{colour}", match.group(2)))
+            position = match.end()
+        pieces.append(("", raw[position:]))
+    merged: list = []
+    for colour, chunk in pieces:
+        text = re.sub(r"\s+", " ", _ZERO_WIDTH.sub("", html.unescape(re.sub(r"<[^>]*>", "", chunk))))
+        if not text:
+            continue
+        if merged and (merged[-1][0] == colour or not text.strip()):
+            merged[-1] = (merged[-1][0], merged[-1][1] + text)   # spaces join the previous run
+        else:
+            merged.append((colour, text))
+    cleaned, previous_space = [], True                       # trims the leading space
+    for colour, text in merged:
+        text = re.sub(" {2,}", " ", text)                    # spaces of two joined pieces
+        if previous_space:
+            text = text.lstrip(" ")
+        if text:
+            cleaned.append([colour, text])
+            previous_space = text.endswith(" ")
+    if cleaned:
+        cleaned[-1][1] = cleaned[-1][1].rstrip(" ")
+    result = tuple((colour, text) for colour, text in cleaned if text)
+    return result if any(colour for colour, _ in result) else ()
+
+
 def parse_subtitles(text, *, automatic=None, tidy=True):
     """``tidy=False`` keeps cues exactly as written: needed when two files that were
     written from one cue list (ko and zh outputs) must be read back cue for cue."""
@@ -95,7 +150,8 @@ def parse_subtitles(text, *, automatic=None, tidy=True):
             content = content[1:]
         value = " ".join(x for x in content if x)
         if value:
-            result.append(Cue(f"c{len(result) + 1}", start, end, value))
+            voices = () if automatic else _voices(raw_lines)
+            result.append(Cue(f"c{len(result) + 1}", start, end, value, voices))
     return tidy_cues(result) if tidy else result
 
 
@@ -143,6 +199,102 @@ def timestamp(value, srt=False):
     minutes, millis = divmod(millis, 60_000)
     seconds, millis = divmod(millis, 1000)
     return f"{hours:02}:{minutes:02}:{seconds:02}{',' if srt else '.'}{millis:03}"
+
+def singer_numbers(cues) -> dict:
+    """Singer colour -> 1, 2, ... in order of first appearance."""
+    order: dict = {}
+    for cue in cues:
+        for colour, _ in cue.voices:
+            if colour and colour not in order:
+                order[colour] = len(order) + 1
+    return order
+
+
+def _cue_colours(cue) -> list:
+    return list(dict.fromkeys(colour for colour, _ in cue.voices if colour))
+
+
+def _font(text, colour):
+    escaped = html.escape(text, quote=False)
+    return f'<font color="{colour}">{escaped}</font>' if colour else escaped
+
+
+def _srt_korean(cue):
+    if not cue.voices:
+        return html.escape(cue.text, quote=False)
+    return "".join(_font(text, colour) for colour, text in cue.voices)
+
+
+def _srt_chinese(source, target):
+    colours = _cue_colours(source)
+    return _font(target.text, colours[0] if len(colours) == 1 else "")
+
+
+def render_srt_markup(cues, bodies):
+    """SRT with bodies already escaped/marked up (``<font color>`` is widely supported)."""
+    blocks = [f"{i}\n{timestamp(cue.start, True)} --> {timestamp(cue.end, True)}\n{body}\n"
+              for i, (cue, body) in enumerate(zip(cues, bodies, strict=True), 1)]
+    return "\n".join(blocks)
+
+
+def side_by_side_text(pairs) -> str:
+    """Korean above Chinese; with singer colours each line starts with [n] / [1+2]."""
+    numbers = singer_numbers(source for source, _ in pairs)
+
+    def label(colours):
+        return "[" + "+".join(str(numbers[c]) for c in colours) + "] " if colours else ""
+
+    blocks = []
+    for source, target in pairs:
+        if source.voices and numbers:
+            korean = " / ".join(f"{label([colour] if colour else [])}{text.strip()}"
+                                for colour, text in source.voices if text.strip())
+        else:
+            korean = source.text
+        blocks.append(f"{korean}\n{label(_cue_colours(source))}{target.text}")
+    header = ""
+    if numbers:
+        header = "\n".join(f"演唱者 {n} = {colour}" for colour, n in numbers.items()) + "\n\n"
+    return header + "\n\n".join(blocks) + "\n"
+
+
+def _readable(colour: str) -> str:
+    """Lift a dark singer colour toward white so it stays legible on the dark page."""
+    r, g, b = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b >= 110:
+        return colour
+    r, g, b = ((value + 255) // 2 for value in (r, g, b))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def side_by_side_html(pairs, title: str) -> str:
+    """A lyric sheet in the track's own colours; open in a browser."""
+    numbers = singer_numbers(source for source, _ in pairs)
+
+    def span(text, colour):
+        escaped = html.escape(text)
+        return f'<span style="color:{_readable(colour)}">{escaped}</span>' if colour else escaped
+
+    rows = []
+    for source, target in pairs:
+        korean = ("".join(span(text, colour) for colour, text in source.voices)
+                  if source.voices else html.escape(source.text))
+        colours = _cue_colours(source)
+        chinese = span(target.text, colours[0] if len(colours) == 1 else "")
+        rows.append(f'<div class="pair"><div class="ko">{korean}</div><div class="zh">{chinese}</div></div>')
+    legend = "".join(f'<span class="singer" style="color:{_readable(colour)}">● 演唱者 {n}</span>'
+                     for colour, n in numbers.items())
+    return (
+        "<!doctype html>\n<html lang=\"zh-Hant\"><head><meta charset=\"utf-8\">"
+        f"<title>{html.escape(title)}</title><style>"
+        "body{background:#15171a;color:#e8e8e8;font-family:'Microsoft JhengHei','Malgun Gothic',sans-serif;"
+        "max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.5}"
+        "h1{font-size:1.1rem;font-weight:600}.legend{margin-bottom:1.5rem}.singer{margin-right:1rem}"
+        ".pair{margin:0 0 1.1rem}.ko{font-size:1.05rem}.zh{opacity:.92}"
+        "</style></head><body>"
+        f"<h1>{html.escape(title)}</h1><div class=\"legend\">{legend}</div>{''.join(rows)}"
+        "</body></html>\n")
+
 
 def render(cues, srt=False):
     blocks = []
@@ -728,11 +880,15 @@ def deliver(out_dir, name, source, target, report):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pairs = list(zip(source, target, strict=True))
+    # SRT outputs carry the uploader's singer colours (<font color>); the VTT files stay
+    # plain because cafe_fansite reads zh-TW.vtt with its own parser.
     payloads = {f"{name}.ko.vtt": render(source), f"{name}.zh-TW.vtt": render(target),
-                f"{name}.zh-TW.srt": render(target, True),
-                # Korean above Chinese: a two-line subtitle and a plain side-by-side sheet
-                f"{name}.ko-zh.srt": render([replace(zh, text=f"{ko.text}\n{zh.text}") for ko, zh in pairs], True),
-                f"{name}.ko-zh.txt": "\n\n".join(f"{ko.text}\n{zh.text}" for ko, zh in pairs) + "\n",
+                f"{name}.zh-TW.srt": render_srt_markup(target, [_srt_chinese(ko, zh) for ko, zh in pairs]),
+                # Korean above Chinese: a two-line subtitle, a plain sheet and a coloured page
+                f"{name}.ko-zh.srt": render_srt_markup(
+                    target, [f"{_srt_korean(ko)}\n{_srt_chinese(ko, zh)}" for ko, zh in pairs]),
+                f"{name}.ko-zh.txt": side_by_side_text(pairs),
+                f"{name}.ko-zh.html": side_by_side_html(pairs, name),
                 f"{name}.report.json": json.dumps(report, ensure_ascii=False, indent=2) + "\n"}
     finals = [out_dir / filename for filename in payloads]
     if any(path.exists() for path in finals):

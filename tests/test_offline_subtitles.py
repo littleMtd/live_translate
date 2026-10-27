@@ -193,7 +193,7 @@ def test_deliver_and_rename_rollback(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
     monkeypatch.setattr(os,"rename",rename)
     files = off.deliver(tmp_path,"a",cues,cues,{})
-    assert len(files) == 6
+    assert len(files) == 7
     before = {p.name:p.read_bytes() for p in tmp_path.iterdir()}
     with pytest.raises(FileExistsError):
         off.deliver(tmp_path,"a",cues,cues,{})
@@ -277,6 +277,79 @@ def test_zero_width_padding_is_removed_from_cues():
             "00:00:03.000 --> 00:00:04.000\n​⁠﻿\n")
     cues = off.parse_subtitles(text)
     assert [cue.text for cue in cues] == ["첫 줄"]          # padding stripped, invisible-only cue dropped
+
+COLOUR_VTT = (
+    "WEBVTT\n\n"
+    "00:00:01.000 --> 00:00:02.000\n<c.color4BD0FF>가나다</c>\n\n"
+    "00:00:02.000 --> 00:00:03.000\n<c.colorFFA54C>라마</c><c.colorA0AAB4>바</c>\n\n"
+    "00:00:03.000 --> 00:00:04.000\n<c.color4BD0FF>사아</c> <c.colorFFA54C>자차</c>\n\n"
+    "00:00:04.000 --> 00:00:05.000\n카타\n"
+)
+
+
+def test_singer_colours_are_kept_and_neutral_colours_ignored():
+    cues = off.parse_subtitles(COLOUR_VTT)
+    assert [c.voices for c in cues] == [
+        (("#4BD0FF", "가나다"),),
+        (("#FFA54C", "라마"), ("", "바")),             # grey karaoke base is not a singer
+        (("#4BD0FF", "사아 "), ("#FFA54C", "자차")),    # one line, two singers; spacing kept
+        (),                                              # no colour at all
+    ]
+    assert off.singer_numbers(cues) == {"#4BD0FF": 1, "#FFA54C": 2}
+    # automatic captions never get voices
+    assert all(not c.voices for c in off.parse_subtitles(COLOUR_VTT, automatic=True))
+
+
+def test_coloured_outputs(tmp_path):
+    source = off.parse_subtitles(COLOUR_VTT)
+    target = [off.replace(c, text=zh) for c, zh in zip(source, ["一", "二", "三", "四"])]
+    files = off.deliver(tmp_path, "song", source, target, {})
+    read = lambda key: Path(files[key]).read_text(encoding="utf-8")
+    zh_srt = read("song.zh-TW.srt")
+    assert '<font color="#4BD0FF">一</font>' in zh_srt and '<font color="#FFA54C">二</font>' in zh_srt
+    assert "\n三\n" in zh_srt and "\n四\n" in zh_srt              # duet and uncoloured stay plain
+    dual = read("song.ko-zh.srt")
+    assert '<font color="#4BD0FF">사아 </font><font color="#FFA54C">자차</font>\n三' in dual
+    sheet = read("song.ko-zh.txt")
+    assert sheet.startswith("演唱者 1 = #4BD0FF\n演唱者 2 = #FFA54C\n\n")
+    assert "[1] 사아 / [2] 자차\n[1+2] 三" in sheet and "카타\n四" in sheet
+    page = read("song.ko-zh.html")
+    assert '<span style="color:#4BD0FF">사아 </span><span style="color:#FFA54C">자차</span>' in page
+    assert "演唱者 2" in page
+    assert "<font" not in read("song.zh-TW.vtt")                  # cafe_fansite reads this one
+
+
+def test_syllable_colouring_never_splits_a_word():
+    vtt = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n"
+           "<c.colorFF0000>사</c><c.colorFF0000>랑</c><c.color00AAFF>해</c> <i>요</i>\n")
+    cue = off.parse_subtitles(vtt)[0]
+    assert cue.text == "사랑해 요"
+    assert "".join(text for _, text in cue.voices) == cue.text
+    assert cue.voices == (("#FF0000", "사랑"), ("#00AAFF", "해"), ("", " 요"))
+    two_lines = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c.colorFF0000>가 </c>\n"
+                 " <c.colorFF0000> 나</c>\n")
+    joined = off.parse_subtitles(two_lines)[0]
+    assert joined.voices == (("#FF0000", "가 나"),) and joined.text == "가 나"
+
+
+def test_pastel_members_count_and_dark_colours_are_lifted_in_html(tmp_path):
+    assert not off._is_neutral("FFD1DC")          # pastel pink is a singer colour
+    assert off._is_neutral("A0AAB4") and off._is_neutral("000000") and off._is_neutral("FFFFFF")
+    assert off._readable("#000080") != "#000080" and off._readable("#4BD0FF") == "#4BD0FF"
+    vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c.color000080>&lt;b&gt; &amp; 가</c>\n"
+    source = off.parse_subtitles(vtt)
+    page = off.side_by_side_html([(source[0], off.replace(source[0], text="<甲> & 乙"))], "a<b>&c")
+    assert "&lt;b&gt; &amp; 가" in page and "&lt;甲&gt; &amp; 乙" in page
+    assert "<title>a&lt;b&gt;&amp;c</title>" in page and "#000080" not in page
+
+
+def test_outputs_without_colours_stay_plain(tmp_path):
+    cues = [off.Cue("c1", 0.0, 1.0, "가 & 나")]
+    files = off.deliver(tmp_path, "talk", cues, [off.replace(cues[0], text="甲 & 乙")], {})
+    assert Path(files["talk.ko-zh.txt"]).read_text(encoding="utf-8") == "가 & 나\n甲 & 乙\n"
+    assert "<font" not in Path(files["talk.zh-TW.srt"]).read_text(encoding="utf-8")
+    assert "&amp;" in Path(files["talk.zh-TW.srt"]).read_text(encoding="utf-8")
+
 
 def test_deliver_writes_korean_chinese_side_by_side(tmp_path):
     source = [off.Cue("c1", 0.0, 1.5, "첫 줄"), off.Cue("c2", 2.0, 3.0, "둘째 줄")]
@@ -414,7 +487,7 @@ runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
     values=[json.loads(line) for line in run.stdout.splitlines()]
     assert [v["stage"] for v in values] == ["translate","done"]
     assert values[-1]["report"]["run_kind"] == "cafe_clip"
-    assert len(values[-1]["files"]) == 6
+    assert len(values[-1]["files"]) == 7
     assert "Profile current" in run.stderr
 
 def test_ffmpeg_missing_is_clear(monkeypatch):
@@ -1228,7 +1301,7 @@ def _transcribe_cli(monkeypatch, keys, tmp_path, name, scribe_script=None, groq_
 
 def test_cli_silent_middle_slice_delivers(monkeypatch, capsys, keys, tmp_path):
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_el_silent")
-    assert code == 0 and len(list(out.glob("*"))) == 6
+    assert code == 0 and len(list(out.glob("*"))) == 7
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["stage"] == "done" and done["report"]["stt_provider"] == "elevenlabs"
 
@@ -1244,7 +1317,7 @@ def test_cli_groq_path_still_delivers(monkeypatch, capsys, keys, tmp_path):
     segments = [[{"start": 1, "end": 2, "text": "안녕"}], [{"start": 10, "end": 11, "text": "중간"}],
                 [{"start": 20, "end": 21, "text": "끝"}]]
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_groq_ok", groq_segments=segments, stt="groq")
-    assert code == 0 and len(list(out.glob("*"))) == 6
+    assert code == 0 and len(list(out.glob("*"))) == 7
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["report"]["stt_provider"] == "groq" and done["report"]["stt_model"] == "whisper-large-v3"
     assert done["report"]["cue_count"] == 3
