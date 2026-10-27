@@ -335,10 +335,16 @@ for actual repairs.
 ### Configuration and data ownership
 
 - `.env`: secrets only; never print, export, or commit.
-- `config.py`: runtime defaults and validation.
+- `config.py`: runtime defaults and validation only; never edit it for the
+  owner's personal choices.
+- `local_settings.json` (untracked; fields listed in
+  `local_settings.example.json`): the owner's settings, applied by
+  `settings_store.py`. Only `_DASHBOARD_OVERRIDE_FIELDS` /
+  `_DASHBOARD_OVERRIDE_TOP` there are tunable.
 - `logs/live_translate_config.json`: dashboard bridge; not a second unrestricted
-  config source. Only `_DASHBOARD_OVERRIDE_FIELDS` /
-  `_DASHBOARD_OVERRIDE_TOP` can override Python settings on restart.
+  config source. Fields the dashboard changed since the last export (snapshot
+  `live_translate_config.exported.json`) are applied and saved into
+  `local_settings.json` at the next start (`settings_store.py`).
 - `data/default_slang.json`: exact direct translations for short slang.
 - `modules/semantic_terminology.py`: production semantic terminology rules;
   intentionally separate from canonical names and unknown-name escrow.

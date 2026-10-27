@@ -1,4 +1,4 @@
-"""Dashboard -> pipeline config round-trip (config._apply_dashboard_overrides).
+"""Dashboard -> pipeline config round-trip (settings_store._apply_dashboard_overrides).
 
 The Tauri dashboard saves edits to logs/live_translate_config.json. config.py applies
 a whitelisted subset of those edits onto cfg when the launcher opts in via
@@ -8,6 +8,7 @@ saved settings instead of silently discarding them.
 import json
 
 import config as config_mod
+import settings_store
 
 
 def _write(path, payload):
@@ -28,7 +29,7 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
         "live_engine": base.live_engine,
     })
 
-    merged = config_mod._apply_dashboard_overrides(base, json_path)
+    merged = settings_store._apply_dashboard_overrides(base, json_path)
 
     # whitelisted fields applied
     assert merged.subtitle.alpha == 0.5
@@ -50,7 +51,7 @@ def test_whitelisted_fields_override_and_others_are_ignored(tmp_path):
 
 def test_missing_file_returns_base_unchanged(tmp_path):
     base = config_mod._Config()
-    merged = config_mod._apply_dashboard_overrides(base, tmp_path / "absent.json")
+    merged = settings_store._apply_dashboard_overrides(base, tmp_path / "absent.json")
     assert merged is base
 
 
@@ -58,7 +59,7 @@ def test_malformed_json_returns_base_unchanged(tmp_path):
     base = config_mod._Config()
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json", encoding="utf-8")
-    assert config_mod._apply_dashboard_overrides(base, bad) is base
+    assert settings_store._apply_dashboard_overrides(base, bad) is base
 
 
 def test_invalid_override_value_falls_back_to_base(tmp_path):
@@ -67,7 +68,7 @@ def test_invalid_override_value_falls_back_to_base(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "c.json"
     _write(json_path, {"live_engine": "not-a-valid-backend-mode"})
-    assert config_mod._apply_dashboard_overrides(base, json_path) is base
+    assert settings_store._apply_dashboard_overrides(base, json_path) is base
 
 
 def test_elevenlabs_is_an_accepted_stt_engine(tmp_path):
@@ -75,7 +76,7 @@ def test_elevenlabs_is_an_accepted_stt_engine(tmp_path):
     json_path = tmp_path / "elevenlabs.json"
     _write(json_path, {"stt": {"primary_engine": "elevenlabs"}})
 
-    merged = config_mod._apply_dashboard_overrides(base, json_path)
+    merged = settings_store._apply_dashboard_overrides(base, json_path)
 
     assert merged.stt.primary_engine == "elevenlabs"
 
@@ -90,7 +91,7 @@ def test_invalid_field_values_are_ignored_without_discarding_valid_overrides(tmp
         "scene": {"publish_open_set_activity": "true"},
     })
 
-    merged = config_mod._apply_dashboard_overrides(base, json_path)
+    merged = settings_store._apply_dashboard_overrides(base, json_path)
 
     assert merged.audio.vad_enabled is base.audio.vad_enabled
     assert merged.audio.vad_max_speech_sec == 12.0
@@ -116,7 +117,7 @@ def test_malformed_enum_types_are_ignored_without_crashing_or_losing_valid_field
             "subtitle": {"idle_hide_ms": 12000},
         })
 
-        merged = config_mod._apply_dashboard_overrides(base, json_path)
+        merged = settings_store._apply_dashboard_overrides(base, json_path)
 
         assert merged.stt.primary_engine == base.stt.primary_engine
         assert merged.translation.translation_mode == base.translation.translation_mode
@@ -133,7 +134,7 @@ def test_retired_translation_routes_are_ignored(tmp_path):
         "subtitle": {"idle_hide_ms": 12000},
     })
 
-    merged = config_mod._apply_dashboard_overrides(base, json_path)
+    merged = settings_store._apply_dashboard_overrides(base, json_path)
 
     assert not hasattr(merged.translation, "engine_chain")
     assert merged.subtitle.idle_hide_ms == 12000
@@ -157,7 +158,7 @@ def test_dashboard_cannot_disable_or_reorder_protected_deepseek_route(tmp_path):
         },
     )
 
-    merged = config_mod._apply_dashboard_overrides(base, json_path)
+    merged = settings_store._apply_dashboard_overrides(base, json_path)
 
     assert merged.translation.deepseek_route == "primary"
     with patch.object(translation_engines, "cfg", merged):
@@ -176,7 +177,7 @@ def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):
             "scene": {"publish_open_set_activity": value},
             "subtitle": {"idle_hide_ms": 12000},
         })
-        merged = config_mod._apply_dashboard_overrides(base, json_path)
+        merged = settings_store._apply_dashboard_overrides(base, json_path)
         assert merged.scene.publish_open_set_activity is True
         assert merged.subtitle.idle_hide_ms == 12000
 
@@ -184,12 +185,12 @@ def test_open_set_publication_override_accepts_only_json_booleans(tmp_path):
         scene=config_mod._Scene(publish_open_set_activity=False)
     )
     _write(json_path, {"scene": {"publish_open_set_activity": True}})
-    assert config_mod._apply_dashboard_overrides(
+    assert settings_store._apply_dashboard_overrides(
         disabled_base, json_path
     ).scene.publish_open_set_activity is True
 
     _write(json_path, {"scene": {"publish_open_set_activity": False}})
-    assert config_mod._apply_dashboard_overrides(
+    assert settings_store._apply_dashboard_overrides(
         base, json_path
     ).scene.publish_open_set_activity is False
 
@@ -198,4 +199,4 @@ def test_no_whitelisted_changes_returns_base(tmp_path):
     base = config_mod._Config()
     json_path = tmp_path / "c.json"
     _write(json_path, {"database": {"db_path": "x"}, "nvidia": {"timeout": 5}})
-    assert config_mod._apply_dashboard_overrides(base, json_path) is base
+    assert settings_store._apply_dashboard_overrides(base, json_path) is base

@@ -25,6 +25,7 @@
     "idle_hide_ms": 30000,
     "_show_previous_line": "在目前字幕上方保留上一句",
     "show_previous_line": true,
+    "_global_hotkeys_enabled": "全域快捷鍵：書籤、暫停、歷史紀錄",
     "global_hotkeys_enabled": true,
     "hotkey_bookmark": "ctrl+alt+b",
     "hotkey_pause": "ctrl+alt+p",
@@ -33,6 +34,7 @@
   "audio": {
     "_device_name": "錄音裝置名稱（部分符合即可）",
     "device_name": "CABLE Output",
+    "_vad_enabled": "用語音偵測切句；false = 固定長度切",
     "vad_enabled": true,
     "_vad_silence_sec": "停頓多久算一句結束（秒，0–5）",
     "vad_silence_sec": 0.9,
@@ -44,7 +46,9 @@
     "primary_engine": "elevenlabs"
   },
   "scene": {
+    "_publish_open_set_activity": "把畫面辨識出的「現在在做什麼」給翻譯當背景（活動偵測預設關閉，關閉時這項沒作用）",
     "publish_open_set_activity": true
   },
+  "_live_engine": "翻譯引擎（目前只有 deepseek）",
   "live_engine": "deepseek"
 }

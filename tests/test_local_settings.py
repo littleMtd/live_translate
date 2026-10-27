@@ -2,7 +2,9 @@
 import json
 
 import config
-from config import _Config, _apply_dashboard_overrides, local_settings_path
+import settings_store
+from config import _Config
+from settings_store import _apply_dashboard_overrides, local_settings_path
 
 
 def test_local_settings_override_profile_choice_only(tmp_path):
@@ -29,7 +31,7 @@ def test_invalid_local_settings_are_ignored(tmp_path):
 
 def test_path_switch_and_tests_never_read_the_owner_file(monkeypatch, tmp_path):
     monkeypatch.delenv("LIVE_TRANSLATE_LOCAL_SETTINGS", raising=False)
-    assert local_settings_path() == config._LOCAL_SETTINGS_JSON
+    assert local_settings_path() == settings_store._LOCAL_SETTINGS_JSON
     monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", str(tmp_path / "x.json"))
     assert local_settings_path() == tmp_path / "x.json"
     monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", "")
@@ -88,9 +90,9 @@ def test_dashboard_edits_are_measured_against_the_export_snapshot(tmp_path):
                                      "translation": {"profile_mode": "auto"}}), encoding="utf-8")
     snapshot.write_text(json.dumps({"subtitle.alpha": 1.0, "subtitle.font_size": 30,
                                     "translation.profile_mode": "auto"}), encoding="utf-8")
-    assert config.dashboard_edits(dashboard, snapshot) == ({"subtitle.alpha": 0.5}, {})
+    assert settings_store.dashboard_edits(dashboard, snapshot) == ({"subtitle.alpha": 0.5}, {})
     # no snapshot yet (first run): nothing counts as an edit
-    assert config.dashboard_edits(dashboard, tmp_path / "absent.json") == ({}, {})
+    assert settings_store.dashboard_edits(dashboard, tmp_path / "absent.json") == ({}, {})
 
 
 def test_stale_dashboard_write_back_never_undoes_a_hand_edit(monkeypatch, tmp_path):
@@ -101,13 +103,13 @@ def test_stale_dashboard_write_back_never_undoes_a_hand_edit(monkeypatch, tmp_pa
     monkeypatch.setattr(config_export, "_EXPORT_PATH", export)
     config_export.write()                                         # alpha exported at 1.0
     base = json.loads(export.read_text(encoding="utf-8"))
-    hand_edited = config._apply_overrides(_Config(), {"subtitle": {"alpha": 0.8}})
+    hand_edited = settings_store._apply_overrides(_Config(), {"subtitle": {"alpha": 0.8}})
     monkeypatch.setattr(config_export, "cfg", hand_edited)
     config_export.write()                                         # next start: alpha 0.8, history [1.0]
     # the dashboard (cached at 1.0) saves a profile change and writes alpha 1.0 back
     stale = {**base, "translation": {**base["translation"], "profile_mode": "manual"}}
     export.write_text(json.dumps(stale), encoding="utf-8")
-    edits, old = config.dashboard_edits(export, snapshot)
+    edits, old = settings_store.dashboard_edits(export, snapshot)
     assert edits == {"translation.profile_mode": "manual"} and old == {"subtitle.alpha": 1.0}
 
 
@@ -128,14 +130,14 @@ def test_switching_back_and_forth_in_the_dashboard_keeps_working(monkeypatch, tm
     config_export.write()
     for value in ("irise", "mwmeu", "irise", "mwmeu"):            # profile A -> B -> A -> B
         _dashboard_save(export, "translation", "streamer_profile", value)
-        edits, stale = config.dashboard_edits(export, snapshot)
+        edits, stale = settings_store.dashboard_edits(export, snapshot)
         assert edits == {"translation.streamer_profile": value} and stale == {}
         # next start: the edit is applied and exported
-        current = config._apply_overrides(current, {"translation": {"streamer_profile": value}})
+        current = settings_store._apply_overrides(current, {"translation": {"streamer_profile": value}})
         monkeypatch.setattr(config_export, "cfg", current)
-        monkeypatch.setattr(config, "PENDING_DASHBOARD_EDITS", edits)
+        monkeypatch.setattr(settings_store, "PENDING_DASHBOARD_EDITS", edits)
         config_export.write()
-        monkeypatch.setattr(config, "PENDING_DASHBOARD_EDITS", {})
+        monkeypatch.setattr(settings_store, "PENDING_DASHBOARD_EDITS", {})
 
 
 def test_profile_flag_run_does_not_block_choosing_that_profile_later(monkeypatch, tmp_path):
@@ -148,7 +150,7 @@ def test_profile_flag_run_does_not_block_choosing_that_profile_later(monkeypatch
     config_export.write({"streamer_profile": "irise", "profile_mode": "manual"})   # main.py --profile irise
     config_export.write()                                                          # normal start again
     _dashboard_save(export, "translation", "streamer_profile", "irise")
-    assert config.dashboard_edits(export, snapshot) == ({"translation.streamer_profile": "irise"}, {})
+    assert settings_store.dashboard_edits(export, snapshot) == ({"translation.streamer_profile": "irise"}, {})
 
 
 def test_invalid_dashboard_values_are_not_saved(tmp_path):
@@ -156,7 +158,7 @@ def test_invalid_dashboard_values_are_not_saved(tmp_path):
     dashboard.write_text(json.dumps({"audio": {"vad_silence_sec": 99}, "subtitle": {"font_size": 99}}),
                          encoding="utf-8")
     snapshot.write_text(json.dumps({"audio.vad_silence_sec": 0.9, "subtitle.font_size": 22}), encoding="utf-8")
-    assert config.dashboard_edits(dashboard, snapshot) == ({}, {})
+    assert settings_store.dashboard_edits(dashboard, snapshot) == ({}, {})
 
 
 def test_failed_export_leaves_no_snapshot(monkeypatch, tmp_path):
@@ -182,7 +184,7 @@ def test_problems_are_reported_not_silently_dropped():
     data = {"_說明": "note", "translation": {"_x": "note", "profile_mode": "sometimes", "modle": "x"},
             "keys": {"deepseek": "secret"}, "subtitle": {"font_size": 99, "alpha": 0.5},
             "live_engine": "groq"}
-    problems = config.settings_problems(data, _Config())
+    problems = settings_store.settings_problems(data, _Config())
     assert len(problems) == 5
     assert any("translation.profile_mode" in p for p in problems)
     assert any("translation.modle" in p and "不認得" in p for p in problems)
@@ -195,13 +197,13 @@ def test_saving_keeps_notes_and_other_fields(tmp_path):
     path = tmp_path / "local_settings.json"
     path.write_text(json.dumps({"_說明": "mine", "translation": {"profile_mode": "manual", "_n": 1}}),
                     encoding="utf-8")
-    config.save_local_settings({"translation.profile_mode": "auto", "subtitle.alpha": 0.8}, path)
+    settings_store.save_local_settings({"translation.profile_mode": "auto", "subtitle.alpha": 0.8}, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "_說明": "mine", "translation": {"profile_mode": "auto", "_n": 1}, "subtitle": {"alpha": 0.8}}
     path.write_text("{broken", encoding="utf-8")
     import pytest
     with pytest.raises(ValueError):
-        config.save_local_settings({"subtitle.alpha": 0.8}, path)
+        settings_store.save_local_settings({"subtitle.alpha": 0.8}, path)
     assert path.read_text(encoding="utf-8") == "{broken"          # never overwritten
 
 
@@ -210,9 +212,9 @@ def test_example_file_lists_every_tunable_with_its_default():
 
     example = json.loads((Path(config.__file__).parent / "local_settings.example.json")
                          .read_text(encoding="utf-8"))
-    assert config.settings_problems(example, _Config()) == []
-    listed = {k: v for k, v in config.tunable_values(example).items()}
-    defaults = config.config_tunables(_Config())
+    assert settings_store.settings_problems(example, _Config()) == []
+    listed = {k: v for k, v in settings_store.tunable_values(example).items()}
+    defaults = settings_store.config_tunables(_Config())
     assert listed == defaults                                     # every field, at its default
 
 
@@ -224,10 +226,10 @@ def test_startup_saves_dashboard_edits_and_reports_settings(monkeypatch, tmp_pat
     path = tmp_path / "local_settings.json"
     path.write_text(json.dumps({"translation": {"profile_mode": "manual"}}), encoding="utf-8")
     monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", str(path))
-    monkeypatch.setattr(config, "PENDING_DASHBOARD_EDITS", {"subtitle.alpha": 0.7})
-    monkeypatch.setattr(config, "LOCAL_SETTINGS_PROBLEMS", ["translation.modle：不認得的欄位"])
-    monkeypatch.setattr(config, "STALE_DASHBOARD_VALUES", {"subtitle.font_size": 20})
-    changed = config._apply_overrides(_Config(), {"subtitle": {"alpha": 0.7}})
+    monkeypatch.setattr(settings_store, "PENDING_DASHBOARD_EDITS", {"subtitle.alpha": 0.7})
+    monkeypatch.setattr(settings_store, "LOCAL_SETTINGS_PROBLEMS", ["translation.modle：不認得的欄位"])
+    monkeypatch.setattr(settings_store, "STALE_DASHBOARD_VALUES", {"subtitle.font_size": 20})
+    changed = settings_store._apply_overrides(_Config(), {"subtitle": {"alpha": 0.7}})
     monkeypatch.setattr(main, "cfg", changed)
     with caplog.at_level(logging.INFO):
         main._report_local_settings()
@@ -264,6 +266,6 @@ def test_profile_flag_export_holds_the_locked_profile(monkeypatch, tmp_path):
     snapshot = json.loads((tmp_path / "live_translate_config.exported.json").read_text(encoding="utf-8"))
     assert snapshot.pop("_overridden") == ["translation.profile_mode", "translation.streamer_profile",
                                            "translation.use_profile"]
-    assert snapshot == config.tunable_values(exported)
-    assert config.dashboard_edits(tmp_path / "live_translate_config.json",
+    assert snapshot == settings_store.tunable_values(exported)
+    assert settings_store.dashboard_edits(tmp_path / "live_translate_config.json",
                                   tmp_path / "live_translate_config.exported.json") == ({}, {})

@@ -266,24 +266,26 @@ def _report_local_settings() -> None:
 
     Runs before the export, which refreshes the snapshot the edits were measured against.
     """
-    path = config_module.local_settings_path()
+    import settings_store
+
+    path = settings_store.local_settings_path()
     if path is None:
         return
-    edits = config_module.PENDING_DASHBOARD_EDITS
+    edits = settings_store.PENDING_DASHBOARD_EDITS
     if edits:
         try:
-            config_module.save_local_settings(edits, path)
+            settings_store.save_local_settings(edits, path)
             for key, value in edits.items():
                 log.info("Dashboard change saved to %s: %s = %r", path.name, key, value)
         except (OSError, ValueError) as exc:
             log.warning("Dashboard changes applied for this run only; %s not updated: %s", path.name, exc)
-    for key, value in config_module.STALE_DASHBOARD_VALUES.items():
+    for key, value in settings_store.STALE_DASHBOARD_VALUES.items():
         log.warning("Dashboard file holds an older value %s = %r; not applied (the dashboard saves its "
                     "whole cached config). If you meant it, set it in %s.", key, value, path.name)
-    for problem in config_module.LOCAL_SETTINGS_PROBLEMS:
+    for problem in settings_store.LOCAL_SETTINGS_PROBLEMS:
         log.warning("%s: %s (ignored)", path.name, problem)
-    defaults = config_module.config_tunables(config_module._Config())
-    for key, value in config_module.config_tunables(cfg).items():
+    defaults = settings_store.config_tunables(config_module._Config())
+    for key, value in settings_store.config_tunables(cfg).items():
         if value != defaults[key]:
             log.info("Setting from %s: %s = %r (config.py default %r)", path.name, key, value, defaults[key])
 

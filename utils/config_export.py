@@ -96,18 +96,18 @@ def write(translation_overrides: dict | None = None) -> None:
     config.py treats a field that differs from the snapshot as a dashboard edit and
     main.py saves it into local_settings.json.
     """
-    import config
+    import settings_store
 
     _EXPORT_PATH.parent.mkdir(exist_ok=True)
     _cleanup_stale_temps()
     data = _to_dict(translation_overrides)
-    snapshot = config.tunable_values(data)
+    snapshot = settings_store.tunable_values(data)
     try:
         previous = json.loads(_snapshot_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         previous = {}
     previous = previous if isinstance(previous, dict) else {}
-    old_history = previous.get(config.SNAPSHOT_HISTORY_KEY)
+    old_history = previous.get(settings_store.SNAPSHOT_HISTORY_KEY)
     old_history = old_history if isinstance(old_history, dict) else {}
     was_overridden = previous.get(_OVERRIDDEN_KEY)
     was_overridden = set(was_overridden) if isinstance(was_overridden, list) else set()
@@ -121,10 +121,10 @@ def write(translation_overrides: dict | None = None) -> None:
         if key not in previous or previous[key] == value:
             if key in old_history:
                 history[key] = old_history[key]
-        elif not ({key} & (set(config.PENDING_DASHBOARD_EDITS) | was_overridden | overridden)):
+        elif not ({key} & (set(settings_store.PENDING_DASHBOARD_EDITS) | was_overridden | overridden)):
             history[key] = [previous[key]]
     if history:
-        snapshot[config.SNAPSHOT_HISTORY_KEY] = history
+        snapshot[settings_store.SNAPSHOT_HISTORY_KEY] = history
     if overridden:
         snapshot[_OVERRIDDEN_KEY] = sorted(overridden)
     try:
