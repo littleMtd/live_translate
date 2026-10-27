@@ -23,16 +23,13 @@ the Tauri/Vue source before copying them.
     subtitle overlay.
   - `--stt-only`: stops after sentence assembly and writes/prints sentences.
   - `--listen`: STT-only song/music mode with relaxed STT thresholds.
-  - `--donation-ocr`: launches `donation_ocr/app.py` as a separate DB-less
-    process alongside the audio pipeline.
-- `config.py`: frozen dataclass configuration and `.env` key loading. It also
-  applies a strict whitelist of dashboard JSON overrides from
-  `logs/live_translate_config.json` when the override environment switch is
-  enabled.
-- `src-tauri/src/main.rs`: optional Tauri v2 desktop dashboard entry.
+- `config.py`: frozen dataclass defaults and `.env` key loading; the owner's
+  settings are applied by `settings_store.py` (see Configuration below).
+- `src-tauri/src/main.rs`: optional Tauri v2 desktop dashboard entry (kept as
+  room for a future GUI; not built on the owner's machine as of 2026-10-27).
 - `src-frontend/src/main.ts`: Vue 3/Vite dashboard entry.
-- `donation_ocr/app.py`: independent PaddleOCR ROI prototype that reuses the
-  translator but disables SQLite/history-file I/O.
+- The donation OCR prototype (`donation_ocr/`, `--donation-ocr`) was removed on
+  2026-10-27 (owner never launched it); it is in git history.
 
 ### Live pipeline and concurrency
 
@@ -439,13 +436,8 @@ Tauri v2 exposes config, cache, process, and system-stat commands under
 changes take effect on the next Python restart when dashboard overrides are
 enabled. API keys never enter the JSON bridge.
 
-The OCR work has two distinct surfaces:
-
-- `modules/scene_context.py`: context-only activity classification and optional
-  translation metadata publication; never a spoken-text source or automatic
-  STT-term source.
-- `donation_ocr/`: separate ROI OCR translation prototype and process, with
-  session logs under `scratch/donation_panel/`.
+`modules/scene_context.py` reads the screen for profile identity only; it is
+never a spoken-text source or automatic STT-term source.
 
 Do not merge OCR text into spoken STT source or silently treat a Tier-4 OCR
 proposal as implementation-ready.

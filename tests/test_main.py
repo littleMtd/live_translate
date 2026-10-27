@@ -125,19 +125,6 @@ def test_apply_listen_mode_config_relaxes_stt_filters():
         object.__setattr__(main_module.cfg, "stt", original_stt)
 
 
-@pytest.mark.parametrize("applied, expected", [(True, "url"), (False, "")])
-def test_donation_ocr_command_uses_effective_profile(monkeypatch, applied, expected):
-    import main as main_module
-    from types import SimpleNamespace
-
-    app_path = main_module.Path("donation_ocr/app.py")
-    monkeypatch.setattr(main_module.profile_state, "current",
-                        lambda: SimpleNamespace(effective_profile_id="url", translation_profile_applied=applied))
-    assert main_module._donation_ocr_command(app_path) == [
-        main_module.sys.executable, str(app_path), "--profile", expected
-    ]
-
-
 def _wait_until(predicate, timeout: float, interval: float = 0.02) -> bool:
     """Poll `predicate` until it returns truthy or the deadline elapses.
 

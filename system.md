@@ -102,7 +102,7 @@ export is fail-soft and never changes the runtime's original exit status.
 - `data/translation_corrections.json`: deterministic normalization, corrections, and canonical tables.
 - `data/replay_eval_snapshot.jsonl`: frozen deterministic replay baseline.
 
-The implemented Tauri v2/Vue 3 dashboard exposes configuration, cache, process, and system-stat commands; API keys never enter its JSON bridge. Scene context is translation-only and never becomes spoken source text. `donation_ocr/` remains a separate OCR prototype/process.
+The implemented Tauri v2/Vue 3 dashboard exposes configuration, cache, process, and system-stat commands; API keys never enter its JSON bridge. Scene context is translation-only and never becomes spoken source text.
 
 ## Validation
 

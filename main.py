@@ -86,12 +86,6 @@ def _validate_config(stt_only: bool):
     _validate_scene_vision_config()
 
 
-def _donation_ocr_command(app_path: Path) -> list[str]:
-    snapshot = profile_state.current()
-    profile = snapshot.effective_profile_id if snapshot.translation_profile_applied else ""
-    return [sys.executable, str(app_path), "--profile", profile]
-
-
 def _handle_signal(sig, frame):
     log.info("Shutdown requested (signal %s)", sig)
     stop_event.set()
@@ -236,9 +230,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                       help="calibrate the current SOOP/CHZZK identity ROI, then start normally")
     mode.add_argument("--show-identity-roi", action="store_true",
                       help="show the saved ROI for the current SOOP/CHZZK player and exit")
-    parser.add_argument("--donation-ocr", action="store_true",
-                        help="also launch the donation OCR translation panel "
-                             "(donation_ocr/app.py) as a side process")
     parser.add_argument("--profile", help="lock this run to a streamer profile ID")
     args = parser.parse_args(argv)
     if args.profile and (args.calibrate_identity_roi or args.show_identity_roi):
@@ -354,16 +345,6 @@ def main():
 
     log.info("Starting pipeline… (stt-only=%s, listen=%s)", stt_only, args.listen)
 
-    ocr_proc = None
-    if args.donation_ocr:
-        # Side process, not a pipeline stage. It runs its own Translator in
-        # DB-less mode (no SQLite/history-file access), so it never contends
-        # with this process's translation DB writes.
-        import subprocess
-        app_path = Path(__file__).parent / "donation_ocr" / "app.py"
-        ocr_proc = subprocess.Popen(_donation_ocr_command(app_path))
-        log.info("Donation OCR panel launched (pid=%s)", ocr_proc.pid)
-
     all_queues = [
         audio_queue,
         text_queue,
@@ -388,9 +369,6 @@ def main():
     except Exception as exc:
         log.error("Audio capture failed to start: %s", exc)
         stop_event.set()
-        if ocr_proc is not None and ocr_proc.poll() is None:
-            ocr_proc.terminate()
-            log.info("Donation OCR panel terminated")
         _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         sys.exit(1)
 
@@ -477,9 +455,6 @@ def main():
                 pipeline_error = RuntimeError(
                     f"Critical pipeline thread did not stop: {names}"
                 )
-        if ocr_proc is not None and ocr_proc.poll() is None:
-            ocr_proc.terminate()
-            log.info("Donation OCR panel terminated")
         _export_chatgpt_bundle_on_shutdown(
             status="failed" if pipeline_error is not None else "completed"
         )
