@@ -48,15 +48,19 @@ Remove-Item Env:LIVE_TRANSLATE_RUN_KIND
 
 自然 production 證據必須由使用者執行 `python main.py`，並在自己的 SOOP/CHZZK 直播觀看流程中產生。分析工具不得自行搜尋、播放或下載外部直播代替 production evidence。
 
-## Profile identity
+## 自己的設定：local_settings.json
 
-本機固定某個 profile（例如整場看同一位主播）時，不要改 `config.py` 的預設值，改在專案根目錄建立不進 git 的 `local_settings.json`，每次啟動都會套用（測試不會讀它）：
+你會自己調的設定（主播 profile、auto／manual、字型、透明度、上一句、快捷鍵、錄音裝置、VAD、STT 引擎）全部放在專案根目錄的 `local_settings.json`（不進 git，測試不會讀它）；`config.py` 只放預設值和不會動的設定，不要為了個人選擇改它。可調欄位、說明和預設值都列在 `local_settings.example.json`，複製一份再改，只寫要改的欄位即可：
 
 ```json
-{"translation": {"streamer_profile": "stellive_hina", "profile_mode": "manual", "use_profile": true}}
+{"translation": {"streamer_profile": "stellive_hina", "profile_mode": "manual"}}
 ```
 
-只接受與 dashboard 相同的白名單欄位，無效值會被忽略；確實改到設定時，啟動 log 會印出 `Local settings applied from local_settings.json`。刪掉檔案即回到 `config.py` 預設（auto）。優先順序：`--profile` > Tauri dashboard 啟動（套用上次匯出的 `logs/live_translate_config.json`）> `local_settings.json` > `config.py`。
+- 在 Tauri dashboard 改的設定，下次啟動 Python 時會自動存進 `local_settings.json`；手改 `local_settings.json` 也不會被舊的 dashboard 檔蓋回去。
+- 啟動 log 會列出每個與 `config.py` 預設不同的設定（`Setting from local_settings.json: ...`）；欄位名打錯或值不合法會出現 WARNING，該欄位不套用。
+- 刪掉檔案即回到 `config.py` 預設。優先順序：`main.py --profile` > `local_settings.json`（含 dashboard 的修改）> `config.py`。
+
+## Profile identity
 
 Auto mode 啟動時是 neutral；畫面上的 `profile=general` 表示尚未取得 reviewed identity evidence，不是辨識到一個名為 general 的主播。`config.py` 的 `streamer_profile` 只保留 configured source metadata，不能在 auto mode 自動取得 ownership。校準方式：
 

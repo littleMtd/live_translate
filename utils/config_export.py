@@ -51,6 +51,7 @@ def _to_dict(translation_overrides: dict | None = None) -> dict:
 
 
 _STALE_TEMP_SECONDS = 24 * 60 * 60
+_OVERRIDDEN_KEY = "_overridden"  # snapshot fields set by main.py --profile for that run only
 
 
 def _cleanup_stale_temps() -> None:
@@ -70,21 +71,69 @@ def _cleanup_stale_temps() -> None:
             pass
 
 
-def write(translation_overrides: dict | None = None) -> None:
-    """Write non-secret config to JSON for Tauri dashboard."""
-    _EXPORT_PATH.parent.mkdir(exist_ok=True)
-    _cleanup_stale_temps()
+def _snapshot_path() -> Path:
+    return _EXPORT_PATH.with_name("live_translate_config.exported.json")
+
+
+def _atomic_write(path: Path, text: str) -> None:
     temp_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=_EXPORT_PATH.parent,
-                                         prefix=f"{_EXPORT_PATH.name}.", suffix=".tmp",
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f"{path.name}.", suffix=".tmp",
                                          delete=False) as handle:
             temp_path = Path(handle.name)
-            handle.write(json.dumps(_to_dict(translation_overrides), indent=2, ensure_ascii=False))
-        os.replace(temp_path, _EXPORT_PATH)
+            handle.write(text)
+        os.replace(temp_path, path)
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+def write(translation_overrides: dict | None = None) -> None:
+    """Write non-secret config to JSON for Tauri dashboard.
+
+    A snapshot of the exported tunable values goes next to it: at the next start,
+    config.py treats a field that differs from the snapshot as a dashboard edit and
+    main.py saves it into local_settings.json.
+    """
+    import config
+
+    _EXPORT_PATH.parent.mkdir(exist_ok=True)
+    _cleanup_stale_temps()
+    data = _to_dict(translation_overrides)
+    snapshot = config.tunable_values(data)
+    try:
+        previous = json.loads(_snapshot_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    previous = previous if isinstance(previous, dict) else {}
+    old_history = previous.get(config.SNAPSHOT_HISTORY_KEY)
+    old_history = old_history if isinstance(old_history, dict) else {}
+    was_overridden = previous.get(_OVERRIDDEN_KEY)
+    was_overridden = set(was_overridden) if isinstance(was_overridden, list) else set()
+    overridden = {f"translation.{name}" for name in (translation_overrides or {})}
+    # History holds only the value before the latest change that did NOT come from the
+    # dashboard (a hand edit of local_settings.json): that is exactly what a dashboard
+    # still caching the old config could write back. Dashboard edits and --profile
+    # overrides (in either direction) never enter it, so normal switching stays free.
+    history = {}
+    for key, value in snapshot.items():
+        if key not in previous or previous[key] == value:
+            if key in old_history:
+                history[key] = old_history[key]
+        elif not ({key} & (set(config.PENDING_DASHBOARD_EDITS) | was_overridden | overridden)):
+            history[key] = [previous[key]]
+    if history:
+        snapshot[config.SNAPSHOT_HISTORY_KEY] = history
+    if overridden:
+        snapshot[_OVERRIDDEN_KEY] = sorted(overridden)
+    try:
+        _atomic_write(_EXPORT_PATH, json.dumps(data, indent=2, ensure_ascii=False))
+        _atomic_write(_snapshot_path(), json.dumps(snapshot, indent=2, ensure_ascii=False))
+    except BaseException:
+        # without a matching snapshot nothing can be misread as a dashboard edit
+        _snapshot_path().unlink(missing_ok=True)
+        raise
 
 
 def read() -> dict:

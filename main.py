@@ -261,6 +261,33 @@ def _configure_profile(args: argparse.Namespace) -> None:
     )
 
 
+def _report_local_settings() -> None:
+    """Save dashboard edits into local_settings.json and say which settings are in force.
+
+    Runs before the export, which refreshes the snapshot the edits were measured against.
+    """
+    path = config_module.local_settings_path()
+    if path is None:
+        return
+    edits = config_module.PENDING_DASHBOARD_EDITS
+    if edits:
+        try:
+            config_module.save_local_settings(edits, path)
+            for key, value in edits.items():
+                log.info("Dashboard change saved to %s: %s = %r", path.name, key, value)
+        except (OSError, ValueError) as exc:
+            log.warning("Dashboard changes applied for this run only; %s not updated: %s", path.name, exc)
+    for key, value in config_module.STALE_DASHBOARD_VALUES.items():
+        log.warning("Dashboard file holds an older value %s = %r; not applied (the dashboard saves its "
+                    "whole cached config). If you meant it, set it in %s.", key, value, path.name)
+    for problem in config_module.LOCAL_SETTINGS_PROBLEMS:
+        log.warning("%s: %s (ignored)", path.name, problem)
+    defaults = config_module.config_tunables(config_module._Config())
+    for key, value in config_module.config_tunables(cfg).items():
+        if value != defaults[key]:
+            log.info("Setting from %s: %s = %r (config.py default %r)", path.name, key, value, defaults[key])
+
+
 def _export_config_for_dashboard(args: argparse.Namespace) -> None:
     """Export the config with the profile lock actually in force.
 
@@ -312,13 +339,7 @@ def main():
         _export_chatgpt_bundle_on_shutdown(status="startup_failed")
         raise
 
-    if config_module.LOCAL_SETTINGS_APPLIED:
-        log.info(
-            "Local settings applied from %s: profile=%s mode=%s",
-            config_module.local_settings_path().name,
-            cfg.translation.streamer_profile or "general",
-            cfg.translation.profile_mode,
-        )
+    _report_local_settings()
 
     try:
         _export_config_for_dashboard(args)

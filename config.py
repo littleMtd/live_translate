@@ -669,7 +669,9 @@ class _Config:
             )
 
 
-_DASHBOARD_CONFIG_JSON = Path(__file__).parent / "logs" / "live_translate_config.json"
+# LIVE_TRANSLATE_DASHBOARD_CONFIG moves it (tests point it at a temp file)
+_DASHBOARD_CONFIG_JSON = Path(os.environ.get("LIVE_TRANSLATE_DASHBOARD_CONFIG")
+                              or Path(__file__).parent / "logs" / "live_translate_config.json")
 _DASHBOARD_OVERRIDE_ENV = "LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG"
 
 # Only these dashboard-editable fields (src-frontend ConfigPanel.vue) may override
@@ -678,14 +680,16 @@ _DASHBOARD_OVERRIDE_ENV = "LIVE_TRANSLATE_APPLY_DASHBOARD_CONFIG"
 # subtitle font is stored as a `font` tuple in config.py but flattened into
 # font_family/font_size/font_style by config_export; the override reverses that.
 _DASHBOARD_OVERRIDE_FIELDS = {
-    "audio": ("vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
+    "audio": ("device_name", "vad_enabled", "vad_silence_sec", "vad_max_speech_sec"),
     "stt": ("primary_engine",),
     "translation": ("translation_mode", "max_tokens", "target_lang",
                     "current_activity", "streamer_profile", "use_profile", "profile_mode"),
     "scene": ("publish_open_set_activity",),
-    "subtitle": ("idle_hide_ms", "alpha"),
+    "subtitle": ("idle_hide_ms", "alpha", "show_previous_line", "global_hotkeys_enabled",
+                 "hotkey_bookmark", "hotkey_pause", "hotkey_history"),
 }
 _DASHBOARD_OVERRIDE_TOP = ("live_engine",)
+_FONT_FIELDS = ("font_family", "font_size", "font_style")
 
 
 def _is_finite_number(value: object) -> bool:
@@ -714,6 +718,8 @@ def _dashboard_value_is_valid(
     creating a config that only fails after a pipeline thread has started.
     """
     if section == "audio":
+        if name == "device_name":
+            return isinstance(value, str) and bool(value.strip()) and len(value) <= 200
         if name == "vad_enabled":
             return isinstance(value, bool)
         if name == "vad_silence_sec":
@@ -744,6 +750,10 @@ def _dashboard_value_is_valid(
             return isinstance(value, int) and not isinstance(value, bool) and 1000 <= value <= 120000
         if name == "alpha":
             return _is_finite_number(value) and 0.1 <= float(value) <= 1.0
+        if name in ("show_previous_line", "global_hotkeys_enabled"):
+            return isinstance(value, bool)
+        if name.startswith("hotkey_"):
+            return isinstance(value, str) and bool(value.strip()) and len(value) <= 40
     return False
 
 
@@ -759,20 +769,24 @@ def _dashboard_font_is_valid(sub: dict[str, object], base_font: tuple) -> bool:
 
 
 def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CONFIG_JSON) -> "_Config":
-    """Merge dashboard-edited fields from live_translate_config.json onto ``base``.
+    """Merge whitelisted fields from a settings JSON file onto ``base``.
 
-    Scoped to the ConfigPanel-editable whitelist. Any read/parse/validation failure
-    falls back to the unmodified ``base`` so a stale or malformed JSON never breaks
-    startup. Applied only when the launching process opts in via the env var (the Tauri
-    "Start Python" button sets it); manual ``python main.py`` runs use pure config.py.
+    Any read/parse/validation failure falls back to the unmodified ``base`` so a
+    stale or malformed JSON never breaks startup.
     """
-    try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return base
-    if not isinstance(data, dict):
-        return base
+    data = _read_json_object(json_path)
+    return base if data is None else _apply_overrides(base, data)
 
+
+def _read_json_object(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _apply_overrides(base: "_Config", data: dict) -> "_Config":
     section_updates: dict[str, object] = {}
     for section, fields_ in _DASHBOARD_OVERRIDE_FIELDS.items():
         sub = data.get(section)
@@ -786,7 +800,7 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
             if name in sub and _dashboard_value_is_valid(section, name, sub[name], base)
         }
         if section == "subtitle" and any(
-            key in sub for key in ("font_family", "font_size", "font_style")
+            key in sub for key in _FONT_FIELDS
         ) and _dashboard_font_is_valid(sub, base.subtitle.font):
             base_font = base.subtitle.font
             changes["font"] = (
@@ -815,13 +829,21 @@ def _apply_dashboard_overrides(base: "_Config", json_path: Path = _DASHBOARD_CON
         return base
 
 
-# Per-machine choices (which streamer profile, auto/manual) live in an untracked
-# local_settings.json next to this file instead of edits to the defaults above:
-# editing config.py broke the request-byte tests and showed up in every diff.
-# Same whitelist and validation as the dashboard JSON; invalid values are ignored.
+# The owner's own choices all live in ONE untracked file, local_settings.json next to
+# this one (local_settings.example.json lists every field). config.py holds defaults
+# only: editing it for a personal choice broke request-byte tests and showed up in
+# every diff. Same whitelist and validation as the dashboard; problems are reported
+# at startup (main.py), never silently dropped.
+#
+# The dashboard rewrites logs/live_translate_config.json, which main.py exports at
+# every start together with a snapshot of the exported tunable values. A field that
+# differs from that snapshot was changed in the dashboard since: it is applied and
+# main.py saves it into local_settings.json, so the file stays the single place.
+# A hand edit of local_settings.json is never undone by an older dashboard file.
 # LIVE_TRANSLATE_LOCAL_SETTINGS points elsewhere, and "" disables it (tests do).
 _LOCAL_SETTINGS_JSON = Path(__file__).parent / "local_settings.json"
 _LOCAL_SETTINGS_ENV = "LIVE_TRANSLATE_LOCAL_SETTINGS"
+_EXPORT_SNAPSHOT_JSON = _DASHBOARD_CONFIG_JSON.with_name("live_translate_config.exported.json")
 
 
 def local_settings_path() -> Path | None:
@@ -831,13 +853,158 @@ def local_settings_path() -> Path | None:
     return Path(value) if value else None
 
 
+def tunable_values(data: object) -> dict[str, object]:
+    """Whitelisted values in a settings/dashboard JSON, keyed "section.name"."""
+    out: dict[str, object] = {}
+    if not isinstance(data, dict):
+        return out
+    for section, names in _DASHBOARD_OVERRIDE_FIELDS.items():
+        sub = data.get(section)
+        if not isinstance(sub, dict):
+            continue
+        for name in names + (_FONT_FIELDS if section == "subtitle" else ()):
+            if name in sub:
+                out[f"{section}.{name}"] = sub[name]
+    for name in _DASHBOARD_OVERRIDE_TOP:
+        if name in data:
+            out[name] = data[name]
+    return out
+
+
+def config_tunables(conf: "_Config") -> dict[str, object]:
+    """The same keys read from a config object (font tuple flattened)."""
+    out: dict[str, object] = {}
+    for section, names in _DASHBOARD_OVERRIDE_FIELDS.items():
+        for name in names:
+            out[f"{section}.{name}"] = getattr(getattr(conf, section), name)
+    font = tuple(conf.subtitle.font) + (None, None, None)
+    out.update({f"subtitle.{name}": font[i] for i, name in enumerate(_FONT_FIELDS)})
+    for name in _DASHBOARD_OVERRIDE_TOP:
+        out[name] = getattr(conf, name)
+    return out
+
+
+def _nest(values: dict[str, object]) -> dict:
+    nested: dict = {}
+    for key, value in values.items():
+        if "." in key:
+            section, name = key.split(".", 1)
+            nested.setdefault(section, {})[name] = value
+        else:
+            nested[key] = value
+    return nested
+
+
+def _merge(base: dict, extra: dict) -> dict:
+    merged = {key: (dict(value) if isinstance(value, dict) else value) for key, value in base.items()}
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+SNAPSHOT_HISTORY_KEY = "_history"   # earlier exported values per field, newest last
+
+
+def dashboard_edits(json_path: Path = _DASHBOARD_CONFIG_JSON,
+                    snapshot_path: Path = _EXPORT_SNAPSHOT_JSON,
+                    base: "_Config | None" = None) -> tuple[dict[str, object], dict[str, object]]:
+    """(edits, stale): tunable fields the dashboard changed since main.py last exported them.
+
+    The dashboard caches the config it loaded and saves the whole set, so a field the
+    owner never touched there can come back with an older exported value (after a hand
+    edit of local_settings.json). Such a value is reported as stale instead of applied.
+    Invalid values are dropped, so they are never saved into local_settings.json.
+    """
+    current = _read_json_object(json_path)
+    snapshot = _read_json_object(snapshot_path)
+    if current is None or snapshot is None:
+        return {}, {}
+    base = base or _Config()
+    history = snapshot.get(SNAPSHOT_HISTORY_KEY)
+    history = history if isinstance(history, dict) else {}
+    edits, stale = {}, {}
+    for key, value in tunable_values(current).items():
+        if key not in snapshot or snapshot[key] == value:
+            continue
+        section, _, name = key.partition(".")
+        valid = (_dashboard_font_is_valid({name: value}, base.subtitle.font) if name in _FONT_FIELDS
+                 else _dashboard_value_is_valid(section, name, value, base) if name
+                 else isinstance(value, str) and _BACKEND_ALIASES.get(value, value) in _VALID_BACKEND_MODES)
+        if not valid:
+            continue
+        if value in (history.get(key) or []):
+            stale[key] = value
+        else:
+            edits[key] = value
+    return edits, stale
+
+
+def settings_problems(data: dict, base: "_Config") -> list[str]:
+    """Unknown or invalid entries in local_settings.json; keys starting with "_" are notes."""
+    problems = []
+    for section, sub in data.items():
+        if section.startswith("_"):
+            continue
+        if section in _DASHBOARD_OVERRIDE_TOP:
+            if not (isinstance(sub, str) and _BACKEND_ALIASES.get(sub, sub) in _VALID_BACKEND_MODES):
+                problems.append(f"{section}：值不合法 {sub!r}")
+            continue
+        names = _DASHBOARD_OVERRIDE_FIELDS.get(section)
+        if names is None:
+            problems.append(f"{section}：不認得的區段（只能調 local_settings.example.json 列出的欄位）")
+            continue
+        if not isinstance(sub, dict):
+            problems.append(f"{section}：應該是一組欄位")
+            continue
+        for name, value in sub.items():
+            if name.startswith("_"):
+                continue
+            if section == "subtitle" and name in _FONT_FIELDS:
+                if not _dashboard_font_is_valid({name: value}, base.subtitle.font):
+                    problems.append(f"{section}.{name}：值不合法 {value!r}")
+            elif name not in names:
+                problems.append(f"{section}.{name}：不認得的欄位")
+            elif not _dashboard_value_is_valid(section, name, value, base):
+                problems.append(f"{section}.{name}：值不合法 {value!r}")
+    return problems
+
+
+def save_local_settings(values: dict[str, object], path: Path | None = None) -> None:
+    """Write "section.name" values into local_settings.json, keeping its other entries."""
+    path = path or local_settings_path()
+    if path is None or not values:
+        return
+    data = _read_json_object(path) if path.is_file() else {}
+    if data is None:
+        raise ValueError(f"{path.name} is not valid JSON; not overwriting it")
+    data = _merge(data, _nest(values))
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 cfg = _Config()
 _local_settings = local_settings_path()
-if _local_settings is not None and _local_settings.is_file():
-    cfg = _apply_dashboard_overrides(cfg, _local_settings)
-# True only when local_settings.json changed something; a Tauri launch applies the
-# dashboard JSON afterwards, and that JSON (the previous run's export) wins.
-LOCAL_SETTINGS_APPLIED = cfg != _Config()
-if os.environ.get(_DASHBOARD_OVERRIDE_ENV):
+LOCAL_SETTINGS_PROBLEMS: list[str] = []
+PENDING_DASHBOARD_EDITS: dict[str, object] = {}
+STALE_DASHBOARD_VALUES: dict[str, object] = {}
+if _local_settings is not None:
+    _local_data = _read_json_object(_local_settings) if _local_settings.is_file() else {}
+    if _local_data is None:
+        LOCAL_SETTINGS_PROBLEMS.append(f"{_local_settings.name} 不是有效的 JSON，整個檔案沒有套用")
+        _local_data = {}
+    LOCAL_SETTINGS_PROBLEMS += settings_problems(_local_data, cfg)
+    PENDING_DASHBOARD_EDITS, STALE_DASHBOARD_VALUES = dashboard_edits()
+    cfg = _apply_overrides(cfg, _merge(_local_data, _nest(PENDING_DASHBOARD_EDITS)))
+elif os.environ.get(_DASHBOARD_OVERRIDE_ENV):
+    # local settings disabled: the old whole-file dashboard override (kept for the
+    # Tauri launch without a local file setup)
     cfg = _apply_dashboard_overrides(cfg)
-    LOCAL_SETTINGS_APPLIED = False
+# True when the owner's settings changed anything from config.py's defaults
+LOCAL_SETTINGS_APPLIED = cfg != _Config()

@@ -96,7 +96,7 @@
         <span>Activity: {{ profileStatus.activity || 'unknown' }}</span>
       </div>
       <p class="field-note">
-        Auto uses a confirmed scene identity and otherwise falls back to the source profile.
+        Auto uses a confirmed scene identity; until one is confirmed no profile is applied.
         Manual prevents scene-driven switching.
       </p>
     </div>
