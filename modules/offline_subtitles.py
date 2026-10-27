@@ -666,8 +666,12 @@ def _runtime_run_kind():
 def deliver(out_dir, name, source, target, report):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    pairs = list(zip(source, target, strict=True))
     payloads = {f"{name}.ko.vtt": render(source), f"{name}.zh-TW.vtt": render(target),
                 f"{name}.zh-TW.srt": render(target, True),
+                # Korean above Chinese: a two-line subtitle and a plain side-by-side sheet
+                f"{name}.ko-zh.srt": render([replace(zh, text=f"{ko.text}\n{zh.text}") for ko, zh in pairs], True),
+                f"{name}.ko-zh.txt": "\n\n".join(f"{ko.text}\n{zh.text}" for ko, zh in pairs) + "\n",
                 f"{name}.report.json": json.dumps(report, ensure_ascii=False, indent=2) + "\n"}
     finals = [out_dir / filename for filename in payloads]
     if any(path.exists() for path in finals):

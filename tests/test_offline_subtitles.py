@@ -193,11 +193,23 @@ def test_deliver_and_rename_rollback(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
     monkeypatch.setattr(os,"rename",rename)
     files = off.deliver(tmp_path,"a",cues,cues,{})
-    assert len(files) == 4
+    assert len(files) == 6
     before = {p.name:p.read_bytes() for p in tmp_path.iterdir()}
     with pytest.raises(FileExistsError):
         off.deliver(tmp_path,"a",cues,cues,{})
     assert before == {p.name:p.read_bytes() for p in tmp_path.iterdir()}
+
+def test_deliver_writes_korean_chinese_side_by_side(tmp_path):
+    source = [off.Cue("c1", 0.0, 1.5, "첫 줄"), off.Cue("c2", 2.0, 3.0, "둘째 줄")]
+    target = [off.Cue("c1", 0.0, 1.5, "第一行"), off.Cue("c2", 2.0, 3.0, "第二行")]
+    files = off.deliver(tmp_path, "song", source, target, {})
+    sheet = Path(files["song.ko-zh.txt"]).read_text(encoding="utf-8")
+    assert sheet == "첫 줄\n第一行\n\n둘째 줄\n第二行\n"
+    dual = Path(files["song.ko-zh.srt"]).read_text(encoding="utf-8")
+    assert "00:00:00,000 --> 00:00:01,500\n첫 줄\n第一行\n" in dual
+    # cafe_fansite picks the one non-Korean .vtt; the new files are neither .vtt nor ko-free
+    picks = [key for key in files if key.endswith(".vtt") and "ko" not in key.lower()]
+    assert picks == ["song.zh-TW.vtt"]
 
 def test_estimate_unknown_and_overlap():
     result = off.estimate([],1201,model="unknown",translation_model="unknown")
@@ -323,7 +335,7 @@ runpy.run_path('scripts/make_subtitles.py',run_name='__main__')
     values=[json.loads(line) for line in run.stdout.splitlines()]
     assert [v["stage"] for v in values] == ["translate","done"]
     assert values[-1]["report"]["run_kind"] == "cafe_clip"
-    assert len(values[-1]["files"]) == 4
+    assert len(values[-1]["files"]) == 6
     assert "Profile current" in run.stderr
 
 def test_ffmpeg_missing_is_clear(monkeypatch):
@@ -1137,7 +1149,7 @@ def _transcribe_cli(monkeypatch, keys, tmp_path, name, scribe_script=None, groq_
 
 def test_cli_silent_middle_slice_delivers(monkeypatch, capsys, keys, tmp_path):
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_el_silent")
-    assert code == 0 and len(list(out.glob("*"))) == 4
+    assert code == 0 and len(list(out.glob("*"))) == 6
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["stage"] == "done" and done["report"]["stt_provider"] == "elevenlabs"
 
@@ -1153,7 +1165,7 @@ def test_cli_groq_path_still_delivers(monkeypatch, capsys, keys, tmp_path):
     segments = [[{"start": 1, "end": 2, "text": "안녕"}], [{"start": 10, "end": 11, "text": "중간"}],
                 [{"start": 20, "end": 21, "text": "끝"}]]
     code, out = _transcribe_cli(monkeypatch, keys, tmp_path, "make_subtitles_groq_ok", groq_segments=segments, stt="groq")
-    assert code == 0 and len(list(out.glob("*"))) == 4
+    assert code == 0 and len(list(out.glob("*"))) == 6
     done = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert done["report"]["stt_provider"] == "groq" and done["report"]["stt_model"] == "whisper-large-v3"
     assert done["report"]["cue_count"] == 3
