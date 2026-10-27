@@ -1,6 +1,6 @@
 """Korean video URL -> Traditional Chinese subtitle files, in one command.
 
-    python scripts/subtitle_url.py <url> [--lyrics] [--out DIR] [--profile ID] [--yes]
+    python scripts/subtitle_url.py <url> [--lyrics] [--background TEXT] [--out DIR] [--profile ID] [--yes]
 
 Uses the video's own Korean subtitles when it has them (more accurate than speech
 recognition, and no STT cost); otherwise downloads only the audio and transcribes it.
@@ -133,6 +133,17 @@ def confirm_long_transcribe(duration: float, assume_yes: bool) -> None:
         raise ToolError("已取消")
 
 
+def background_note(title: str, note: str) -> str:
+    """What the translator sees about the video: its title, then the owner's own note."""
+    from modules.offline_subtitles import BACKGROUND_LIMIT
+
+    note = (note or "").strip()
+    text = f"影片標題：{title}" + (f"\n{note}" if note else "")
+    if len(text) > BACKGROUND_LIMIT:
+        raise ToolError(f"背景說明太長了（連同標題最多 {BACKGROUND_LIMIT} 字）")
+    return text
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Korean video URL -> zh-TW subtitles")
     parser.add_argument("url")
@@ -142,6 +153,8 @@ def main(argv=None) -> int:
     parser.add_argument("--translator", choices=("gemini", "deepseek"), default="gemini")
     parser.add_argument("--prefer-audio", action="store_true",
                         help="transcribe the audio even when the video has Korean subtitles")
+    parser.add_argument("--background", default="",
+                        help="note for the translator: singers, story, tone (the title is added automatically)")
     parser.add_argument("--yes", action="store_true", help="skip the long-video cost confirmation")
     parser.add_argument("--no-open", action="store_true", help="do not open the folder when done")
     args = parser.parse_args(argv)
@@ -158,6 +171,7 @@ def run(args) -> int:
     check_video(info)
     title, video_id = info.get("title") or "video", info.get("id") or "unknown"
     stem = safe_name(title)
+    background = background_note(title, args.background)
     out_dir = args.out / f"{stem} [{video_id}]"
     if out_dir.is_dir() and any(out_dir.iterdir()):
         raise ToolError(f"這支影片已經做過了：{out_dir}（要重做請先刪掉或改 --out）")
@@ -175,7 +189,8 @@ def run(args) -> int:
         # make_subtitles names its outputs after the input file's stem
         source = source.rename(workdir / f"{stem}{source.suffix}")
         job_args = [mode, "--input", str(source), "--out-dir", str(out_dir),
-                    "--profile", args.profile, "--translator", args.translator]
+                    "--profile", args.profile, "--translator", args.translator,
+                    "--background", background]
         if args.lyrics:
             job_args.append("--lyrics")
         print("翻譯中…（進度為 JSON 行）", flush=True)

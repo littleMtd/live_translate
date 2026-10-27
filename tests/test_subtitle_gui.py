@@ -15,7 +15,13 @@ def test_command_carries_every_option():
     assert {"--lyrics", "--prefer-audio", "--yes"} <= set(command)
     plain = subtitle_gui.build_command("u", lyrics=False, profile="", out="o", prefer_audio=False,
                                        assume_yes=False)
-    assert not {"--lyrics", "--prefer-audio", "--yes", "--profile"} & set(plain)
+    assert not {"--lyrics", "--prefer-audio", "--yes", "--profile", "--background"} & set(plain)
+    noted = subtitle_gui.build_command("u", lyrics=True, profile="", out="o", prefer_audio=False,
+                                       assume_yes=False, background="  兩人合唱\n藍色是姊姊  ")
+    assert noted[noted.index("--background") + 1] == "兩人合唱\n藍色是姊姊"
+    blank = subtitle_gui.build_command("u", lyrics=True, profile="", out="o", prefer_audio=False,
+                                       assume_yes=False, background=" \n ")
+    assert "--background" not in blank
 
 
 def test_progress_lines_are_described():

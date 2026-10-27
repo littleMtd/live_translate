@@ -19,6 +19,8 @@ TOOL = ROOT / "scripts" / "subtitle_url.py"
 DEFAULT_OUT = Path.home() / "Downloads" / "字幕"
 NEEDS_CONFIRM = "--yes"          # subtitle_url's message when a long transcription needs consent
 _JSON_PREFIX = "{"
+# offline_subtitles.BACKGROUND_LIMIT (1500) minus room for the title subtitle_url adds
+BACKGROUND_NOTE_LIMIT = 1200
 
 
 def profile_choices() -> list[tuple[str, str]]:
@@ -45,10 +47,12 @@ def console_python() -> str:
 
 
 def build_command(url: str, *, lyrics: bool, profile: str, out: str, prefer_audio: bool,
-                  assume_yes: bool) -> list[str]:
+                  assume_yes: bool, background: str = "") -> list[str]:
     command = [console_python(), str(TOOL), url, "--no-open", "--out", out]
     if lyrics:
         command.append("--lyrics")
+    if background.strip():
+        command += ["--background", background.strip()]
     if profile:
         command += ["--profile", profile]
     if prefer_audio:
@@ -107,8 +111,8 @@ class App:
         self.output_dir: str | None = None
         self.last_error = ""
         root.title("影片字幕翻譯")
-        root.geometry("620x420")
-        root.minsize(520, 360)
+        root.geometry("640x540")
+        root.minsize(540, 460)
         frame = ttk.Frame(root, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
@@ -132,24 +136,31 @@ class App:
         self.profile.current(0)
         self.profile.grid(row=3, column=1, sticky="w", pady=4)
 
-        ttk.Label(frame, text="輸出資料夾").grid(row=4, column=0, sticky="w")
+        ttk.Label(frame, text="背景說明").grid(row=4, column=0, sticky="nw", pady=4)
+        self.background = tk.Text(frame, height=4, wrap="word", undo=True)
+        self.background.grid(row=4, column=1, columnspan=2, sticky="ew", pady=4)
+        ttk.Label(frame, text="選填，給翻譯模型參考：誰在唱、故事、氣氛、名字寫法（標題會自動附上）",
+                  foreground="gray").grid(row=5, column=1, columnspan=2, sticky="w")
+
+        ttk.Label(frame, text="輸出資料夾").grid(row=6, column=0, sticky="w")
         self.out = tk.StringVar(value=str(DEFAULT_OUT))
-        ttk.Entry(frame, textvariable=self.out).grid(row=4, column=1, sticky="ew", pady=4)
-        ttk.Button(frame, text="瀏覽…", command=self._pick_folder).grid(row=4, column=2, padx=(6, 0))
+        ttk.Entry(frame, textvariable=self.out).grid(row=6, column=1, sticky="ew", pady=4)
+        ttk.Button(frame, text="瀏覽…", command=self._pick_folder).grid(row=6, column=2, padx=(6, 0))
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 4))
+        buttons.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(8, 4))
         self.start_button = ttk.Button(buttons, text="開始", command=self.start)
         self.start_button.pack(side="left")
         self.open_button = ttk.Button(buttons, text="開啟資料夾", command=self._open_folder, state="disabled")
         self.open_button.pack(side="left", padx=6)
 
         self.progress = ttk.Progressbar(frame, mode="determinate", maximum=1.0)
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew", pady=4)
+        self.progress.grid(row=8, column=0, columnspan=3, sticky="ew", pady=4)
         self.log = tk.Text(frame, height=10, wrap="word", state="disabled")
-        self.log.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        frame.rowconfigure(7, weight=1)
-        root.bind("<Return>", lambda _e: self.start())
+        self.log.grid(row=9, column=0, columnspan=3, sticky="nsew")
+        frame.rowconfigure(9, weight=1)
+        # only the URL field: Enter in the background box is a new line, not a start
+        entry.bind("<Return>", lambda _e: self.start())
         root.protocol("WM_DELETE_WINDOW", self._close)
         root.after(100, self._drain)
 
@@ -182,10 +193,15 @@ class App:
         if not url.startswith(("http://", "https://")):
             messagebox.showwarning("影片字幕翻譯", "請貼上影片網址")
             return
+        background = self.background.get("1.0", "end").strip()
+        if len(background) > BACKGROUND_NOTE_LIMIT:
+            messagebox.showwarning("影片字幕翻譯",
+                                   f"背景說明最多 {BACKGROUND_NOTE_LIMIT} 字（目前 {len(background)} 字）")
+            return
         command = build_command(
             url, lyrics=self.lyrics.get(), profile=self.profiles[self.profile.current()][1],
             out=self.out.get().strip() or str(DEFAULT_OUT), prefer_audio=self.prefer_audio.get(),
-            assume_yes=assume_yes)
+            assume_yes=assume_yes, background=background)
         self.output_dir, self.last_error = None, ""
         self.open_button.configure(state="disabled")
         self.start_button.configure(state="disabled")

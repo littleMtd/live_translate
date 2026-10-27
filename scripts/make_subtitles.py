@@ -64,6 +64,8 @@ def main(argv=None):
                             help="transcribe --estimate only: media length in seconds, no input file needed")
         parser.add_argument("--lyrics", action="store_true",
                             help="the cues are song lyrics: translate them as lyric lines")
+        parser.add_argument("--background", default="",
+                            help="note about the video (singers, story, tone) sent with each translation batch")
         args = parser.parse_args(argv)
         from modules import offline_subtitles as offline
         from config import cfg
@@ -80,6 +82,8 @@ def main(argv=None):
         if args.gemini_model is not None and (args.translator != "gemini"
                                               or not re.fullmatch(r"[a-z0-9][a-z0-9.\-]{0,63}", args.gemini_model)):
             raise Error("--gemini-model must be a Gemini model name and needs --translator gemini")
+        if len(args.background.strip()) > offline.BACKGROUND_LIMIT:
+            raise Error(f"--background must be at most {offline.BACKGROUND_LIMIT} characters")
         if not args.estimate and args.out_dir is None:
             raise Error("--out-dir is required for output")
         if args.mode == "translate":
@@ -140,7 +144,8 @@ def main(argv=None):
             if not cues:
                 raise Error("no usable transcription segments")
         targets, report = offline.translate(cues, snapshot, engine, progress,
-                                            style="lyrics" if args.lyrics else "")
+                                            style="lyrics" if args.lyrics else "",
+                                            background=args.background)
         report.update(stt_report)
         report["job"] = job
         files = offline.deliver(args.out_dir, args.input.stem, cues, targets, report)
