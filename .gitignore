@@ -38,3 +38,4 @@ src-tauri/gen/
 # Node / frontend build artifacts
 src-frontend/node_modules/
 src-frontend/dist/
+local_settings.toml

@@ -94,7 +94,7 @@ def write(translation_overrides: dict | None = None) -> None:
 
     A snapshot of the exported tunable values goes next to it: at the next start,
     config.py treats a field that differs from the snapshot as a dashboard edit and
-    main.py saves it into local_settings.json.
+    main.py saves it into local_settings.toml.
     """
     import settings_store
 
@@ -113,7 +113,7 @@ def write(translation_overrides: dict | None = None) -> None:
     was_overridden = set(was_overridden) if isinstance(was_overridden, list) else set()
     overridden = {f"translation.{name}" for name in (translation_overrides or {})}
     # History holds only the value before the latest change that did NOT come from the
-    # dashboard (a hand edit of local_settings.json): that is exactly what a dashboard
+    # dashboard (a hand edit of local_settings.toml): that is exactly what a dashboard
     # still caching the old config could write back. Dashboard edits and --profile
     # overrides (in either direction) never enter it, so normal switching stays free.
     history = {}

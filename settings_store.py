@@ -1,7 +1,7 @@
-"""The owner's settings: local_settings.json and dashboard edits, applied onto config.py.
+"""The owner's settings: local_settings.toml and dashboard edits, applied onto config.py.
 
 config.py holds the defaults; this module holds everything about the settings files:
-the whitelist of tunable fields and their validation, reading local_settings.json,
+the whitelist of tunable fields and their validation, reading local_settings.toml,
 measuring dashboard edits against the export snapshot, and saving them back.
 config.py calls load() once at import; main.py reports and saves the results.
 """
@@ -182,8 +182,11 @@ def _apply_overrides(base: "_Config", data: dict) -> "_Config":
         return base
 
 
-# The owner's own choices all live in ONE untracked file, local_settings.json next to
-# this one (local_settings.example.json lists every field). config.py holds defaults
+# The owner's own choices all live in ONE untracked file, local_settings.toml next to
+# this one (local_settings.example.toml lists every field). TOML, not JSON, because
+# the owner edits it by hand and wants comments next to the values; tomlkit keeps
+# those comments when dashboard edits are saved into it. An older local_settings.json
+# is still read when no .toml exists. config.py holds defaults
 # only: editing it for a personal choice broke request-byte tests and showed up in
 # every diff. Same whitelist and validation as the dashboard; problems are reported
 # at startup (main.py), never silently dropped.
@@ -191,10 +194,11 @@ def _apply_overrides(base: "_Config", data: dict) -> "_Config":
 # The dashboard rewrites logs/live_translate_config.json, which main.py exports at
 # every start together with a snapshot of the exported tunable values. A field that
 # differs from that snapshot was changed in the dashboard since: it is applied and
-# main.py saves it into local_settings.json, so the file stays the single place.
-# A hand edit of local_settings.json is never undone by an older dashboard file.
+# main.py saves it into local_settings.toml, so the file stays the single place.
+# A hand edit of local_settings.toml is never undone by an older dashboard file.
 # LIVE_TRANSLATE_LOCAL_SETTINGS points elsewhere, and "" disables it (tests do).
-_LOCAL_SETTINGS_JSON = Path(__file__).parent / "local_settings.json"
+_LOCAL_SETTINGS_TOML = Path(__file__).parent / "local_settings.toml"
+_LOCAL_SETTINGS_JSON = Path(__file__).parent / "local_settings.json"   # before 2026-10-27
 _LOCAL_SETTINGS_ENV = "LIVE_TRANSLATE_LOCAL_SETTINGS"
 _EXPORT_SNAPSHOT_JSON = _DASHBOARD_CONFIG_JSON.with_name("live_translate_config.exported.json")
 
@@ -202,8 +206,22 @@ _EXPORT_SNAPSHOT_JSON = _DASHBOARD_CONFIG_JSON.with_name("live_translate_config.
 def local_settings_path() -> Path | None:
     value = os.environ.get(_LOCAL_SETTINGS_ENV)
     if value is None:
-        return _LOCAL_SETTINGS_JSON
+        if not _LOCAL_SETTINGS_TOML.is_file() and _LOCAL_SETTINGS_JSON.is_file():
+            return _LOCAL_SETTINGS_JSON
+        return _LOCAL_SETTINGS_TOML
     return Path(value) if value else None
+
+
+def _read_settings(path: Path) -> dict | None:
+    """The settings file as plain values (TOML or JSON by suffix); None when unreadable."""
+    if path.suffix.lower() != ".toml":
+        return _read_json_object(path)
+    import tomllib
+
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):   # tomllib.TOMLDecodeError is a ValueError
+        return None
 
 
 def tunable_values(data: object) -> dict[str, object]:
@@ -268,8 +286,8 @@ def dashboard_edits(json_path: Path = _DASHBOARD_CONFIG_JSON,
 
     The dashboard caches the config it loaded and saves the whole set, so a field the
     owner never touched there can come back with an older exported value (after a hand
-    edit of local_settings.json). Such a value is reported as stale instead of applied.
-    Invalid values are dropped, so they are never saved into local_settings.json.
+    edit of local_settings.toml). Such a value is reported as stale instead of applied.
+    Invalid values are dropped, so they are never saved into local_settings.toml.
     """
     current = _read_json_object(json_path)
     snapshot = _read_json_object(snapshot_path)
@@ -296,7 +314,7 @@ def dashboard_edits(json_path: Path = _DASHBOARD_CONFIG_JSON,
 
 
 def settings_problems(data: dict, base: "_Config") -> list[str]:
-    """Unknown or invalid entries in local_settings.json; keys starting with "_" are notes."""
+    """Unknown or invalid entries in local_settings.toml; keys starting with "_" are notes."""
     problems = []
     for section, sub in data.items():
         if section.startswith("_"):
@@ -307,7 +325,7 @@ def settings_problems(data: dict, base: "_Config") -> list[str]:
             continue
         names = _DASHBOARD_OVERRIDE_FIELDS.get(section)
         if names is None:
-            problems.append(f"{section}：不認得的區段（只能調 local_settings.example.json 列出的欄位）")
+            problems.append(f"{section}：不認得的區段（只能調 local_settings.example.toml 列出的欄位）")
             continue
         if not isinstance(sub, dict):
             problems.append(f"{section}：應該是一組欄位")
@@ -326,17 +344,32 @@ def settings_problems(data: dict, base: "_Config") -> list[str]:
 
 
 def save_local_settings(values: dict[str, object], path: Path | None = None) -> None:
-    """Write "section.name" values into local_settings.json, keeping its other entries."""
+    """Write "section.name" values into the settings file, keeping its other entries
+    (and, for TOML, its comments and layout)."""
     path = path or local_settings_path()
     if path is None or not values:
         return
-    data = _read_json_object(path) if path.is_file() else {}
-    if data is None:
-        raise ValueError(f"{path.name} is not valid JSON; not overwriting it")
-    data = _merge(data, _nest(values))
+    if _read_settings(path) is None and path.is_file():
+        raise ValueError(f"{path.name} cannot be parsed; not overwriting it")
+    if path.suffix.lower() == ".toml":
+        import tomlkit
+
+        document = tomlkit.parse(path.read_text(encoding="utf-8-sig")) if path.is_file() else tomlkit.document()
+        for key, value in values.items():
+            section, _, name = key.rpartition(".")
+            if not section:
+                document[name] = value
+                continue
+            if section not in document:
+                document[section] = tomlkit.table()
+            document[section][name] = value
+        text = tomlkit.dumps(document)
+    else:
+        data = _merge(_read_json_object(path) if path.is_file() else {}, _nest(values))
+        text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     temporary = path.with_name(path.name + ".tmp")
     try:
-        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(text, encoding="utf-8")
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -349,7 +382,7 @@ STALE_DASHBOARD_VALUES: dict[str, object] = {}
 
 
 def load(base: "_Config") -> "_Config":
-    """config.py's defaults with local_settings.json and pending dashboard edits applied."""
+    """config.py's defaults with local_settings.toml and pending dashboard edits applied."""
     global PENDING_DASHBOARD_EDITS, STALE_DASHBOARD_VALUES
     LOCAL_SETTINGS_PROBLEMS.clear()
     path = local_settings_path()
@@ -359,9 +392,9 @@ def load(base: "_Config") -> "_Config":
             # Tauri launch without a local file setup)
             return _apply_dashboard_overrides(base)
         return base
-    data = _read_json_object(path) if path.is_file() else {}
+    data = _read_settings(path) if path.is_file() else {}
     if data is None:
-        LOCAL_SETTINGS_PROBLEMS.append(f"{path.name} 不是有效的 JSON，整個檔案沒有套用")
+        LOCAL_SETTINGS_PROBLEMS.append(f"{path.name} 格式錯誤，整個檔案沒有套用")
         data = {}
     LOCAL_SETTINGS_PROBLEMS.extend(settings_problems(data, base))
     PENDING_DASHBOARD_EDITS, STALE_DASHBOARD_VALUES = dashboard_edits(base=base)

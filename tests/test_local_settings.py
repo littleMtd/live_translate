@@ -31,7 +31,14 @@ def test_invalid_local_settings_are_ignored(tmp_path):
 
 def test_path_switch_and_tests_never_read_the_owner_file(monkeypatch, tmp_path):
     monkeypatch.delenv("LIVE_TRANSLATE_LOCAL_SETTINGS", raising=False)
-    assert local_settings_path() == settings_store._LOCAL_SETTINGS_JSON
+    toml, legacy = tmp_path / "local_settings.toml", tmp_path / "local_settings.json"
+    monkeypatch.setattr(settings_store, "_LOCAL_SETTINGS_TOML", toml)
+    monkeypatch.setattr(settings_store, "_LOCAL_SETTINGS_JSON", legacy)
+    assert local_settings_path() == toml                         # nothing yet: the TOML file
+    legacy.write_text("{}", encoding="utf-8")
+    assert local_settings_path() == legacy                       # an older JSON file still works
+    toml.write_text("", encoding="utf-8")
+    assert local_settings_path() == toml                         # TOML wins once it exists
     monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", str(tmp_path / "x.json"))
     assert local_settings_path() == tmp_path / "x.json"
     monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", "")
@@ -207,11 +214,40 @@ def test_saving_keeps_notes_and_other_fields(tmp_path):
     assert path.read_text(encoding="utf-8") == "{broken"          # never overwritten
 
 
+def test_toml_settings_are_read_and_saved_with_comments_kept(tmp_path):
+    path = tmp_path / "local_settings.toml"
+    path.write_text('# 我的設定\nlive_engine = "deepseek"\n\n[translation]\n'
+                    'profile_mode = "manual"   # 固定\n', encoding="utf-8")
+    assert settings_store._read_settings(path) == {"live_engine": "deepseek",
+                                                   "translation": {"profile_mode": "manual"}}
+    settings_store.save_local_settings({"translation.profile_mode": "auto", "subtitle.alpha": 0.8,
+                                        "live_engine": "deepseek"}, path)
+    text = path.read_text(encoding="utf-8")
+    assert "# 我的設定" in text and 'profile_mode = "auto"   # 固定' in text
+    assert settings_store._read_settings(path) == {
+        "live_engine": "deepseek", "translation": {"profile_mode": "auto"}, "subtitle": {"alpha": 0.8}}
+    path.write_text("[translation\nbroken", encoding="utf-8")
+    assert settings_store._read_settings(path) is None
+    import pytest
+    with pytest.raises(ValueError):
+        settings_store.save_local_settings({"subtitle.alpha": 0.8}, path)
+    assert path.read_text(encoding="utf-8") == "[translation\nbroken"   # never overwritten
+
+
+def test_broken_toml_is_reported_and_nothing_applied(monkeypatch, tmp_path):
+    path = tmp_path / "local_settings.toml"
+    path.write_text('[translation]\nprofile_mode = manual\n', encoding="utf-8")   # unquoted string
+    monkeypatch.setenv("LIVE_TRANSLATE_LOCAL_SETTINGS", str(path))
+    assert settings_store.load(_Config()) == _Config()
+    assert settings_store.LOCAL_SETTINGS_PROBLEMS == ["local_settings.toml 格式錯誤，整個檔案沒有套用"]
+
+
 def test_example_file_lists_every_tunable_with_its_default():
+    import tomllib
     from pathlib import Path
 
-    example = json.loads((Path(config.__file__).parent / "local_settings.example.json")
-                         .read_text(encoding="utf-8"))
+    example = tomllib.loads((Path(config.__file__).parent / "local_settings.example.toml")
+                            .read_text(encoding="utf-8"))
     assert settings_store.settings_problems(example, _Config()) == []
     listed = {k: v for k, v in settings_store.tunable_values(example).items()}
     defaults = settings_store.config_tunables(_Config())

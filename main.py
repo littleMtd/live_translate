@@ -262,7 +262,7 @@ def _configure_profile(args: argparse.Namespace) -> None:
 
 
 def _report_local_settings() -> None:
-    """Save dashboard edits into local_settings.json and say which settings are in force.
+    """Save dashboard edits into local_settings.toml and say which settings are in force.
 
     Runs before the export, which refreshes the snapshot the edits were measured against.
     """

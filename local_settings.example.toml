@@ -1,0 +1,36 @@
+# 欄位說明與預設值（進 git）。你的設定請寫在 local_settings.toml（不進 git），
+# 只寫要改的欄位即可，沒寫的用 config.py 預設值。換電腦時可以整份複製過去再改。
+
+live_engine = "deepseek"   # 翻譯引擎（目前只有 deepseek）
+
+[translation]
+streamer_profile = "mwmeu"           # ""（不套）、stellive_hina、isegye_lilpa、hades_chxxnnx、mwmeu、irise、url
+profile_mode = "auto"                # auto：看畫面自動判斷（認出前不套 profile）；manual：固定用 streamer_profile
+use_profile = true                   # false：完全不套 profile
+translation_mode = "live"            # live：直播；clip：剪輯片段（保守，保留原句結構）
+target_lang = "zh-TW"
+max_tokens = 200
+
+[subtitle]
+alpha = 1.0                      # 字幕視窗不透明度 0.1–1.0
+font_family = "Microsoft JhengHei"
+font_size = 22                   # 8–48
+font_style = "bold"
+idle_hide_ms = 30000             # 沒有新字幕多久後隱藏（毫秒，1000–120000）
+show_previous_line = true        # 在目前字幕上方保留上一句
+global_hotkeys_enabled = true    # 全域快捷鍵：書籤、暫停、歷史紀錄
+hotkey_bookmark = "ctrl+alt+b"
+hotkey_pause = "ctrl+alt+p"
+hotkey_history = "ctrl+alt+h"
+
+[audio]
+device_name = "CABLE Output"   # 錄音裝置名稱（部分符合即可）
+vad_enabled = true             # 用語音偵測切句；false = 固定長度切
+vad_silence_sec = 0.9          # 停頓多久算一句結束（秒，0–5）
+vad_max_speech_sec = 6.5       # 一句最長多少秒就強制切
+
+[stt]
+primary_engine = "elevenlabs"   # elevenlabs 或 groq
+
+[scene]
+publish_open_set_activity = true   # 把畫面辨識出的「現在在做什麼」給翻譯當背景（活動偵測預設關閉，關閉時這項沒作用）

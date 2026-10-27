@@ -10,3 +10,4 @@ opencc==1.4.2
 torch
 torchaudio
 yt-dlp==2026.08.19  # scripts/subtitle_url.py
+tomlkit==0.13.3  # writes dashboard edits into local_settings.toml without losing comments
