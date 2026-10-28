@@ -11,6 +11,7 @@ import threading
 import time
 from unittest.mock import patch
 
+import modules.translation_pipeline as translation_pipeline
 import modules.translator as translator_module
 from modules.translator import TranslationOutcome
 
@@ -176,7 +177,7 @@ def test_drain_timeout_cancels_pending_and_logs_warning():
     warnings = []
     with patch.object(translator_module, "Translator", fake), \
             patch.object(translator_module, "runtime_events"), \
-            patch.object(translator_module, "_stop_drain_timeout_sec", return_value=0.3), \
+            patch.object(translation_pipeline, "_stop_drain_timeout_sec", return_value=0.3), \
             patch.object(
                 translator_module.log, "warning",
                 side_effect=lambda message, *args: warnings.append(message % args),

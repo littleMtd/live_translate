@@ -3576,8 +3576,10 @@ class TestFallbackProbe(unittest.TestCase):
         probe_thread = MagicMock()
         probe_thread.is_alive.return_value = False
 
+        import modules.translation_pipeline as pipeline_module
+
         with patch.object(
-            translator_module,
+            pipeline_module,
             "_start_fallback_probe_thread",
             return_value=probe_thread,
         ):
