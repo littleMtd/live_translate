@@ -11,3 +11,4 @@ torch
 torchaudio
 yt-dlp==2026.08.19  # scripts/subtitle_url.py
 tomlkit==0.13.3  # writes dashboard edits into local_settings.toml without losing comments
+soundcard==0.4.6  # scripts/audio_grab.py: record a speaker (0.4.6+ works with numpy 2 and fills silence)

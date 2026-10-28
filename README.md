@@ -144,6 +144,15 @@ Runtime JSONL 使用 schema v6，位於 `logs/runtime_events_YYYYMMDD.jsonl`。
 - Validation workflows：[`docs/agent/VALIDATION.md`](docs/agent/VALIDATION.md)
 - Maintained tool inventory：[`docs/agent/TOOL_INVENTORY.md`](docs/agent/TOOL_INVENTORY.md)
 
+### 只錄聲音
+
+雙擊 `setup_scripts\audio_grab_gui.bat`。成品預設放在 `下載\錄音\`。
+
+- **貼網址（影片或直播）**：保留網站原本的音軌，不轉檔、不多損失（YouTube 通常是 `.opus`）；網站只給影音合一時用 ffmpeg 把聲音原樣抽出來。直播會一直錄到按「停止並存檔」或直播結束。轉成 WAV／FLAC 不會更好聽，只會更大。
+- **錄電腦正在播放的聲音**：選耳機／喇叭（你聽到的聲音）或 CABLE Output 等輸入，存成無損 FLAC。安靜的片段也照實際時間保留；其他程式的聲音（通知、Discord）也會一起錄進去。
+
+命令列：`python scripts\audio_grab.py url <網址>`、`python scripts\audio_grab.py record [--device 名稱]`（Ctrl+C 停止並存檔）、`python scripts\audio_grab.py devices`。
+
 ### 離線字幕工具
 
 **視窗版：** 雙擊 `setup_scripts\subtitle_gui.bat`，貼網址（剪貼簿裡的網址會自動帶入；可一次貼多個，依序處理）、勾「這是歌曲」、按「開始」；長影片會先跳出費用確認，完成後自動開啟資料夾。「帶入影片說明」把影片說明欄（去掉連結與 hashtag）填進背景說明；「演唱者」依字幕顏色出現順序填名字；可選翻譯模型。已經做過的影片會詢問是否重新翻譯：舊檔移到該資料夾的 `舊版\<時間>\`，不重做語音辨識。
