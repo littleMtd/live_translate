@@ -179,7 +179,14 @@ def video_summary(info: dict, out: Path) -> dict:
     return {"title": title, "duration": info.get("duration") or 0,
             "korean_track": bool(korean_track(info.get("subtitles") or {})),
             "done": _has_files(out_dir),
+            "lyric_lines": len(description_lyrics(info)),
             "description": clean_description(info.get("description") or "", NOTE_LIMIT)}
+
+
+def description_lyrics(info: dict) -> list[str]:
+    from modules.lyrics_align import lyric_lines
+
+    return lyric_lines(info.get("description") or "")
 
 
 def _has_files(folder: Path) -> bool:
@@ -248,6 +255,8 @@ def main(argv=None) -> int:
                              "speech recognition is never repeated")
     parser.add_argument("--info", action="store_true",
                         help="print the video's title, length and cleaned description as JSON, then stop")
+    parser.add_argument("--stt-lyrics", action="store_true",
+                        help="song: keep the recognised Korean even when the description has the lyrics")
     parser.add_argument("--yes", action="store_true", help="skip the long-video cost confirmation")
     parser.add_argument("--no-open", action="store_true", help="do not open the folder when done")
     args = parser.parse_args(argv)
@@ -317,6 +326,12 @@ def run(args) -> int:
                     f"--background={background}", f"--singers={args.singers}"]
         if args.lyrics:
             job_args.append("--lyrics")
+        official = description_lyrics(info) if args.lyrics and mode == "transcribe" and not args.stt_lyrics else []
+        if official:
+            lyrics_file = workdir / "lyrics.txt"
+            lyrics_file.write_text("\n".join(official), encoding="utf-8")
+            job_args += ["--lyrics-text", str(lyrics_file)]
+            print(f"影片說明裡有歌詞（{len(official)} 行），韓文會換成官方歌詞，時間用語音辨識對齊", flush=True)
         print("翻譯中…（進度為 JSON 行）", flush=True)
         status = make_subtitles.main(job_args)
         if retranslate and status != 0:

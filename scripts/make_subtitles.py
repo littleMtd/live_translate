@@ -66,6 +66,9 @@ def main(argv=None):
                             help="the cues are song lyrics: translate them as lyric lines")
         parser.add_argument("--background", default="",
                             help="note about the video (singers, story, tone) sent with each translation batch")
+        parser.add_argument("--lyrics-text", type=Path,
+                            help="transcribe with ElevenLabs: UTF-8 file of official lyric lines; "
+                                 "recognised words give their timing")
         parser.add_argument("--singers", default="",
                             help="comma-separated names for the singer colours, in order of first appearance")
         args = parser.parse_args(argv)
@@ -87,6 +90,12 @@ def main(argv=None):
         if len(args.background.strip()) > offline.BACKGROUND_LIMIT:
             raise Error(f"--background must be at most {offline.BACKGROUND_LIMIT} characters")
         singers = offline.parse_singers(args.singers)
+        official = []
+        if args.lyrics_text is not None:
+            if args.mode != "transcribe" or args.stt != "elevenlabs" or not args.lyrics_text.is_file():
+                raise Error("--lyrics-text needs an existing file, transcribe and --stt elevenlabs")
+            official = [line.strip() for line in args.lyrics_text.read_text(encoding="utf-8-sig").splitlines()
+                        if line.strip()]
         if not args.estimate and args.out_dir is None:
             raise Error("--out-dir is required for output")
         if args.mode == "translate":
@@ -131,9 +140,19 @@ def main(argv=None):
                 from elevenlabs.client import ElevenLabs
                 keyterms = offline.offline_keyterms(snapshot)
                 client = ElevenLabs(api_key=cfg.keys.elevenlabs, timeout=offline.OFFLINE_STT_TIMEOUT_SECONDS)
+                lyrics_report = {}
+
+                def group(words, length):
+                    from modules import lyrics_align
+                    timed, stats = lyrics_align.align(words, official, length, offline.group_words)
+                    lyrics_report.update(stats)
+                    progress("lyrics", **stats)
+                    return timed if timed is not None else offline.group_words(words, length)
+
                 cues = offline.transcribe_elevenlabs(args.input, duration, encoder, client, keyterms,
-                                                     stt_model, progress)
-                stt_report = {"stt_provider": "elevenlabs", "stt_model": stt_model, "stt_keyterms": len(keyterms)}
+                                                     stt_model, progress, group=group if official else None)
+                stt_report = {"stt_provider": "elevenlabs", "stt_model": stt_model, "stt_keyterms": len(keyterms),
+                              **lyrics_report}
             else:
                 from groq import Groq
                 with bind_profile_snapshot(snapshot), bind_activity_snapshot(capture_activity_snapshot("")):

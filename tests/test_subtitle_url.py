@@ -262,7 +262,7 @@ def test_info_prints_a_summary_without_downloading(monkeypatch, tmp_path, capsys
     import json
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
     assert summary == {"title": "곡", "duration": 200, "korean_track": True, "done": True,
-                       "description": "WISHes 데뷔곡\n\nCredits"}
+                       "lyric_lines": 0, "description": "WISHes 데뷔곡\n\nCredits"}
 
 
 def test_description_is_cut_at_a_line_boundary():
@@ -326,3 +326,38 @@ def test_translate_sends_background_and_records_it(monkeypatch):
 def test_unknown_style_is_rejected():
     with pytest.raises(ValueError):
         offline_subtitles.translate([], None, None, lambda *a, **k: None, style="poem")
+
+
+# Made-up lines for the tests, not real lyrics.
+_MADE_UP = ["창밖에 작은 새가 노래해", "오늘도 너를 기다려", "바람이 불어오면 웃어줘",
+            "우리의 여름은 끝나지 않아", "하늘 위로 손을 뻗어 봐", "별빛이 내리는 밤에",
+            "조용히 너를 불러", "내일도 같은 자리에서"]
+
+
+def test_description_lyrics_reach_a_transcribed_song(monkeypatch, tmp_path):
+    info = {"title": "곡", "id": "s1", "subtitles": {}, "duration": 200,
+            "description": "\n".join(["작사 : 누군가", *_MADE_UP, "https://x.com/a"])}
+    seen = {}
+    import make_subtitles
+
+    def capture(job):
+        seen["lyrics"] = Path(job[job.index("--lyrics-text") + 1]).read_text(encoding="utf-8")
+        return 1
+    monkeypatch.setattr(subtitle_url, "fetch_info", lambda url: info)
+    monkeypatch.setattr(subtitle_url, "_ydl", _FakeYDL)
+    monkeypatch.setattr(make_subtitles, "main", capture)
+    subtitle_url.main(["https://youtu.be/s1", "--lyrics", "--out", str(tmp_path), "--no-open"])
+    assert seen["lyrics"].splitlines() == _MADE_UP
+
+
+def test_description_lyrics_are_used_only_for_transcribed_songs(monkeypatch, tmp_path):
+    description = "\n".join(_MADE_UP)
+
+    def job(video_id, track, argv):
+        info = {"title": video_id, "id": video_id, "subtitles": {"ko": [{}]} if track else {},
+                "duration": 200, "description": description}
+        return _run(monkeypatch, tmp_path, info, ["u", *argv])["job"]
+    assert "--lyrics-text" not in job("a", False, [])                          # not marked as a song
+    assert "--lyrics-text" not in job("b", True, ["--lyrics"])                 # uploader track is used
+    assert "--lyrics-text" not in job("c", False, ["--lyrics", "--stt-lyrics"])
+    assert "--lyrics-text" in job("d", False, ["--lyrics"])

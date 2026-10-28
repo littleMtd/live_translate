@@ -293,6 +293,8 @@ class App:
         minutes, seconds = divmod(int(summary.get("duration") or 0), 60)
         facts = [f"影片：{summary.get('title', '')}（{minutes}:{seconds:02}）",
                  "有內建韓文字幕" if summary.get("korean_track") else "沒有內建韓文字幕（會用語音辨識）"]
+        if summary.get("lyric_lines") and not summary.get("korean_track"):
+            facts.append(f"說明裡有歌詞 {summary['lyric_lines']} 行（勾「這是歌曲」會用官方歌詞）")
         if summary.get("done"):
             facts.append("已經做過，再做會詢問是否重新翻譯")
         self._write("｜".join(facts))

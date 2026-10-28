@@ -160,7 +160,7 @@ Runtime JSONL 使用 schema v6，位於 `logs/runtime_events_YYYYMMDD.jsonl`。
 **輸出：** 韓文／繁中 VTT（無顏色，cafe_fansite 讀這個）、繁中與韓中對照 SRT 和 ASS（保留上傳者字幕的歌手顏色，合唱句盡量分色；桌面播放器建議用 ASS）、韓中對照 txt 與 html、report.json。
 
 **貼網址就好：** 雙擊 `setup_scripts\subtitle_url.bat`，貼上影片網址並回答是不是歌曲；或在命令列執行
-`setup_scripts\subtitle_url.bat <網址> [--lyrics] [--background 說明] [--singers 名字A,名字B] [--retranslate] [--info] [--out 目錄] [--profile ID]`。影片有上傳者提供的韓文字幕就直接翻譯（較準、不花語音辨識費），沒有才下載音訊做語音辨識（`--prefer-audio` 可強制）。`--lyrics` 讓翻譯照歌詞處理。影片標題一律附給翻譯模型；`--background`（GUI 的「背景說明」欄）再補充誰在唱、故事、氣氛等，只當參考資料，不會被當成指令，並記在 report.json。成品放在 `下載\字幕\<標題> [<影片ID>]\`，完成後自動開啟資料夾。底層就是下面的 `make_subtitles.py`，費用與品質報告相同。
+`setup_scripts\subtitle_url.bat <網址> [--lyrics] [--background 說明] [--singers 名字A,名字B] [--retranslate] [--info] [--out 目錄] [--profile ID]`。影片有上傳者提供的韓文字幕就直接翻譯（較準、不花語音辨識費），沒有才下載音訊做語音辨識（`--prefer-audio` 可強制）。`--lyrics` 讓翻譯照歌詞處理；歌曲走語音辨識時，若影片說明欄附了歌詞，韓文會換成說明欄的官方歌詞，時間由語音辨識逐字對齊（重複的副歌也會對到，對不到的即興段保留辨識結果；整體對不上就整份沿用辨識結果，`--stt-lyrics` 可關掉），對齊比例記在 report.json 的 `lyrics_*`。影片標題一律附給翻譯模型；`--background`（GUI 的「背景說明」欄）再補充誰在唱、故事、氣氛等，只當參考資料，不會被當成指令，並記在 report.json。成品放在 `下載\字幕\<標題> [<影片ID>]\`，完成後自動開啟資料夾。底層就是下面的 `make_subtitles.py`，費用與品質報告相同。
 
 以獨立程序執行 `live-subtitle-env\Scripts\python.exe scripts\make_subtitles.py translate --input ko.vtt --profile isegye_lilpa --out-dir <目錄>`；音訊／影片則使用 `transcribe --input audio.m4a`。語音辨識預設使用 ElevenLabs Scribe v2（需 `.env` 的 `ELEVENLABS_API_KEY`；`--stt groq` 可改用 Groq Whisper），翻譯預設使用 Gemini 3.8 Flash（需 `.env` 的 `GEMINI_API_KEY`；`--translator deepseek` 可改用 DeepSeek），Gemini 預付餘額用完時會直接提示到 AI Studio 加值。支援 VTT／SRT、YouTube 滾動字幕清理，輸出韓文 VTT、繁中 VTT／SRT 及品質報告；stdout 為含 job ID 的 JSONL，診斷在 stderr。
 

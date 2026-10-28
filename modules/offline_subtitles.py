@@ -643,7 +643,9 @@ def _elevenlabs_error(exc):
 
 
 def transcribe_elevenlabs(path, duration, encoder, client, keyterms, model, progress,
-                          *, length=600, overlap=5, sleep=None, max_retries=3, max_job_retries=6, max_wait=300):
+                          *, length=600, overlap=5, sleep=None, max_retries=3, max_job_retries=6, max_wait=300,
+                          group=None):
+    """group(words, duration) -> cues replaces the default grouping (lyrics_align uses it)."""
     sleep = sleep or time.sleep
     parts = slices(duration, length, overlap)
     words = []
@@ -684,7 +686,7 @@ def transcribe_elevenlabs(path, duration, encoder, client, keyterms, model, prog
                 retried += 1
             words.extend(scribe_words(response, part))
             progress("transcribe", done=i + 1, total=len(parts))
-    cues = group_words(words, duration)
+    cues = (group or group_words)(words, duration)
     return [replace(cue, id=f"c{i}") for i, cue in enumerate(cues, 1)]
 
 
