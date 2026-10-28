@@ -4,16 +4,16 @@ import pytest
 
 from config import cfg
 from modules.translation_corrections import (
+    SHARED_NAME_SCOPE as _SHARED_NAME_SCOPE,
     _name_rendering_rules,
     evaluate_canonical_obligations,
     load_translation_corrections,
 )
-from modules.translator import (
+from modules.translator import _HADES_PROFILE_ID
+from modules.translation_normalization import (
     _BOUNDARY_SOURCE_NORM_BY_PROFILE,
     _CONDITIONAL_SOURCE_NORM_BY_PROFILE,
     _CONDITIONAL_SOURCE_NORM_SHARED,
-    _HADES_PROFILE_ID,
-    _SHARED_NAME_SCOPE,
     _SOURCE_AWARE_TARGET_REPLACEMENTS,
     _SOURCE_NORM_BY_PROFILE,
     _PROFILE_SOURCE_AWARE_TARGET_REPLACEMENTS,

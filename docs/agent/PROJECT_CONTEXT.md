@@ -160,9 +160,17 @@ same-chunk provider-failure fallback, not a semantic second-opinion route.
 Translation:
 
 - `modules/translator.py`: facade and pipeline worker pool; deterministic
-  policy, source normalization, slang, cache, prompt, fallback, source-aware
-  target corrections, deterministic publication guards, ordered emission,
-  translation events, and the background recovery-probe thread.
+  policy, slang, cache, prompt, fallback, ordered emission, translation
+  events, and the background recovery-probe thread. It re-exports the names
+  of the two modules below, so `from modules.translator import ...` keeps
+  working; tests that patch their internals must patch the new module.
+- `modules/translation_normalization.py`: source normalization before
+  matching, source-aware target corrections, name rendering, canonical-name
+  obligations and the per-request correction log.
+- `modules/translation_guard.py`: deterministic publication guards:
+  placeholder/meta-garbage/refusal detection, candidate adjudication, the
+  output guard with its copied-name rescue, profile QA and the
+  untranslated-output check.
 - `modules/translation_engines.py`: engine registry and API adapters for
   DeepSeek and the Groq fallback;
   request/history shaping, per-call diagnostics, attempt chains, and token

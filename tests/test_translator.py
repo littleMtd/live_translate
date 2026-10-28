@@ -1035,8 +1035,10 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         engine.engine_name = "deepseek"
         replacement = (("문장",), (("느졋", "太晚"),), False)
 
+        import modules.translation_normalization as normalization
+
         with patch.object(
-            translator_module,
+            normalization,
             "_SOURCE_AWARE_TARGET_REPLACEMENTS",
             (replacement,),
         ):
@@ -1100,8 +1102,10 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
         translator_module._record_correction("seed", "seed", "before", "after")
         before = get_corrections()
 
+        import modules.translation_guard as guard_module
+
         with patch.object(
-            translator_module,
+            guard_module,
             "_publication_approved_terms",
             return_value=frozenset({"해둥이"}),
         ):
