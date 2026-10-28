@@ -176,17 +176,32 @@ def video_summary(info: dict, out: Path) -> dict:
     """What the GUI needs before a job: no download, no paid call."""
     title, video_id = info.get("title") or "video", info.get("id") or "unknown"
     out_dir = out / f"{safe_name(title)} [{video_id}]"
+    lyrics = description_lyrics(info)
+    # the lyrics go to their own box; the background note keeps the rest of the description
+    rest = [line for line in (info.get("description") or "").splitlines() if line.strip() not in set(lyrics)]
     return {"title": title, "duration": info.get("duration") or 0,
             "korean_track": bool(korean_track(info.get("subtitles") or {})),
             "done": _has_files(out_dir),
-            "lyric_lines": len(description_lyrics(info)),
-            "description": clean_description(info.get("description") or "", NOTE_LIMIT)}
+            "lyrics": "\n".join(lyrics),
+            "description": clean_description("\n".join(rest), NOTE_LIMIT)}
 
 
 def description_lyrics(info: dict) -> list[str]:
     from modules.lyrics_align import lyric_lines
 
     return lyric_lines(info.get("description") or "")
+
+
+def read_lyrics(path: Path) -> list[str]:
+    from modules.lyrics_align import clean_lines
+
+    try:
+        lines = clean_lines(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError):
+        raise ToolError(f"讀不到歌詞檔：{path}") from None
+    if not lines:
+        raise ToolError("歌詞是空的")
+    return lines
 
 
 def _has_files(folder: Path) -> bool:
@@ -255,8 +270,9 @@ def main(argv=None) -> int:
                              "speech recognition is never repeated")
     parser.add_argument("--info", action="store_true",
                         help="print the video's title, length and cleaned description as JSON, then stop")
-    parser.add_argument("--stt-lyrics", action="store_true",
-                        help="song: keep the recognised Korean even when the description has the lyrics")
+    parser.add_argument("--lyrics-file", type=Path,
+                        help="UTF-8 file with the song's Korean lyrics, one line per subtitle, in sung order; "
+                             "they replace speech recognition and are timed by forced alignment (implies --lyrics)")
     parser.add_argument("--yes", action="store_true", help="skip the long-video cost confirmation")
     parser.add_argument("--no-open", action="store_true", help="do not open the folder when done")
     args = parser.parse_args(argv)
@@ -274,6 +290,7 @@ def run(args) -> int:
         parse_singers(args.singers)        # checked before any download, not after
     except OfflineSubtitleError as exc:
         raise ToolError(f"演唱者名字有誤：{exc}") from None
+    official = read_lyrics(args.lyrics_file) if args.lyrics_file is not None else []
     if not args.info:
         print("讀取影片資訊…", flush=True)
     info = fetch_info(args.url)
@@ -288,21 +305,30 @@ def run(args) -> int:
     retranslate = args.retranslate and _has_files(out_dir)
     if _has_files(out_dir) and not retranslate:
         raise ToolError(f"這支影片已經做過了：{out_dir}（要重做請先刪掉或改 --out）")
-    mode, track = plan(info, args.prefer_audio)
+    # pasted lyrics are the owner's choice over an uploader track
+    mode, track = plan(info, args.prefer_audio or bool(official))
     previous = out_dir / f"{stem}.ko.vtt"
-    if retranslate:
+    if official:
+        from modules.offline_subtitles import ALIGN_MAX_SECONDS
+
+        if float(info.get("duration") or 0) > ALIGN_MAX_SECONDS:     # refused before any download
+            raise ToolError(f"歌詞對齊只支援 {ALIGN_MAX_SECONDS // 60} 分鐘以內的影片")
+    elif retranslate:
         # Keep the source of the last job: its uploader track again (free, and the saved
         # ko.vtt has no singer colours), or its speech-recognition result, never STT again.
+        # Pasted lyrics are aligned again instead: that is not speech recognition.
         track = None if previous_was_transcribed(out_dir, stem) else korean_track(info.get("subtitles") or {})
         mode = "translate"
         if not track and not previous.is_file():
             raise ToolError(f"找不到上次的韓文字幕 {previous.name}，無法只重新翻譯")
     print(f"影片：{title}（{info.get('duration_string') or '?'}）", flush=True)
-    if retranslate:
+    if official:
+        print(f"使用你提供的歌詞（{len(official)} 行），下載音訊對齊時間", flush=True)
+    elif retranslate:
         print("重新翻譯：" + ("重新抓影片內建的韓文字幕" if track else "沿用上次的韓文字幕"), flush=True)
     else:
         print("使用影片內建的韓文字幕翻譯" if track else "沒有內建韓文字幕，下載音訊做語音辨識", flush=True)
-    if mode == "transcribe":
+    if mode == "transcribe" and not official:
         confirm_long_transcribe(float(info.get("duration") or 0), args.yes)
 
     import make_subtitles
@@ -324,14 +350,12 @@ def run(args) -> int:
         job_args = [mode, "--input", str(source), "--out-dir", str(job_out),
                     "--profile", args.profile, "--translator", args.translator,
                     f"--background={background}", f"--singers={args.singers}"]
-        if args.lyrics:
+        if args.lyrics or official:
             job_args.append("--lyrics")
-        official = description_lyrics(info) if args.lyrics and mode == "transcribe" and not args.stt_lyrics else []
         if official:
             lyrics_file = workdir / "lyrics.txt"
             lyrics_file.write_text("\n".join(official), encoding="utf-8")
             job_args += ["--lyrics-text", str(lyrics_file)]
-            print(f"影片說明裡有歌詞（{len(official)} 行），韓文會換成官方歌詞，時間用語音辨識對齊", flush=True)
         print("翻譯中…（進度為 JSON 行）", flush=True)
         status = make_subtitles.main(job_args)
         if retranslate and status != 0:

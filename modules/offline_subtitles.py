@@ -643,9 +643,7 @@ def _elevenlabs_error(exc):
 
 
 def transcribe_elevenlabs(path, duration, encoder, client, keyterms, model, progress,
-                          *, length=600, overlap=5, sleep=None, max_retries=3, max_job_retries=6, max_wait=300,
-                          group=None):
-    """group(words, duration) -> cues replaces the default grouping (lyrics_align uses it)."""
+                          *, length=600, overlap=5, sleep=None, max_retries=3, max_job_retries=6, max_wait=300):
     sleep = sleep or time.sleep
     parts = slices(duration, length, overlap)
     words = []
@@ -686,8 +684,68 @@ def transcribe_elevenlabs(path, duration, encoder, client, keyterms, model, prog
                 retried += 1
             words.extend(scribe_words(response, part))
             progress("transcribe", done=i + 1, total=len(parts))
-    cues = (group or group_words)(words, duration)
+    cues = group_words(words, duration)
     return [replace(cue, id=f"c{i}") for i, cue in enumerate(cues, 1)]
+
+
+ALIGN_MAX_SECONDS = 30 * 60   # one request carries the whole song; long videos are not songs
+
+
+def align_lyrics(path, duration, encoder, client, lines, progress, *, sleep=None, max_retries=3, max_wait=120):
+    """(cues, loss): the owner's lyric lines timed by ElevenLabs forced alignment."""
+    from modules.lyrics_align import timed_lines
+
+    if not lines:
+        raise OfflineSubtitleError("歌詞是空的")
+    if duration > ALIGN_MAX_SECONDS:
+        raise OfflineSubtitleError(f"歌詞對齊只支援 {ALIGN_MAX_SECONDS // 60} 分鐘以內的影片")
+    sleep = sleep or time.sleep
+    waited = 0.0
+    with tempfile.TemporaryDirectory(prefix="offline-subtitles-") as tmp:
+        wav = Path(tmp) / "song.wav"
+        subprocess.run([encoder, "-nostdin", "-v", "error", "-y", "-i", str(path), "-vn",
+                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)],
+                       capture_output=True, check=True, timeout=180)
+        for attempt in range(max_retries + 1):
+            kind = status = None
+            try:
+                with wav.open("rb") as audio:
+                    response = client.forced_alignment.create(file=audio, text="\n".join(lines),
+                                                              request_options={"max_retries": 0})
+                break
+            except Exception as exc:  # noqa: BLE001 - classified below; provider text is never shown
+                kind, status = _elevenlabs_error(exc)
+                delay = _retry_after(exc, attempt) if kind == "retry" else 0
+            label = f"HTTP {status}" if status else "連線錯誤"
+            if kind == "credit":
+                raise OfflineJobError(ELEVENLABS_CREDIT_MESSAGE)
+            if kind == "auth":
+                raise OfflineJobError(f"ElevenLabs 金鑰沒有歌詞對齊（forced alignment）權限或無效（{label}）")
+            if kind == "abort":
+                raise OfflineJobError(f"ElevenLabs 歌詞對齊失敗（{label}）")
+            if attempt >= max_retries or waited + delay > max_wait:
+                raise OfflineJobError(f"ElevenLabs 速率限制或暫時無法使用，重試後仍失敗（{label}）")
+            progress("retry", slice=1, attempt=attempt + 1, wait_seconds=delay)
+            sleep(delay)
+            waited += delay
+    words = []
+    for item in getattr(response, "words", None) or ():
+        start, end, text = getattr(item, "start", None), getattr(item, "end", None), getattr(item, "text", None)
+        if not isinstance(text, str):
+            continue
+        # a badly timed word keeps its text, so the lyrics still line up; only its time is unknown
+        timed = _finite(start) and _finite(end) and 0 <= start <= end
+        words.append((start, end, text) if timed else (None, None, text))
+    try:
+        timed = timed_lines(lines, words, duration)
+    except ValueError:
+        raise OfflineJobError("對齊結果和歌詞對不上（歌詞裡可能有對齊服務會改寫的字，例如數字或符號）") from None
+    if not timed:
+        raise OfflineJobError("歌詞對齊沒有得到任何時間")
+    loss = getattr(response, "loss", None)
+    progress("align", lines=len(lines), cues=len(timed))
+    cues = [Cue(f"c{i}", start, end, text) for i, (start, end, text) in enumerate(timed, 1)]
+    return cues, (round(loss, 4) if _finite(loss) else None)
 
 
 def profile_scope(profile):

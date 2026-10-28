@@ -11,6 +11,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -58,10 +59,12 @@ def console_python() -> str:
 
 def build_command(url: str, *, lyrics: bool, profile: str, out: str, prefer_audio: bool,
                   assume_yes: bool, background: str = "", singers: str = "",
-                  translator: str = "gemini", retranslate: bool = False) -> list[str]:
+                  translator: str = "gemini", retranslate: bool = False, lyrics_file: str = "") -> list[str]:
     command = [console_python(), str(TOOL), url, "--no-open", "--out", out]
     if lyrics:
         command.append("--lyrics")
+    if lyrics_file:
+        command.append(f"--lyrics-file={lyrics_file}")
     # "--opt=value": a note or name starting with "-" is not read as an option
     if background.strip():
         command.append(f"--background={background.strip()}")
@@ -153,9 +156,10 @@ class App:
         self.failed: list[str] = []
         self.options: dict = {}
         self.info_running = False
+        self.lyrics_file = ""
         root.title("影片字幕翻譯")
-        root.geometry("680x700")
-        root.minsize(560, 600)
+        root.geometry("680x840")
+        root.minsize(560, 720)
         frame = ttk.Frame(root, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
@@ -195,29 +199,36 @@ class App:
         self.info_button = ttk.Button(frame, text="帶入影片說明", command=self.fetch_info)
         self.info_button.grid(row=7, column=2, sticky="e")
 
-        ttk.Label(frame, text="演唱者").grid(row=8, column=0, sticky="w")
-        self.singers = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.singers).grid(row=8, column=1, columnspan=2, sticky="ew", pady=(4, 0))
-        ttk.Label(frame, text="選填，字幕有分顏色時，依顏色出現順序填名字，用逗號分隔，例如：成員A, 成員B",
-                  **hint).grid(row=9, column=1, columnspan=2, sticky="w")
+        ttk.Label(frame, text="歌詞").grid(row=8, column=0, sticky="nw", pady=4)
+        self.lyrics_text = tk.Text(frame, height=6, wrap="none", undo=True)
+        self.lyrics_text.grid(row=8, column=1, columnspan=2, sticky="ew", pady=4)
+        ttk.Label(frame, text="選填，歌曲的韓文歌詞，一行一句、照實際唱的順序（重複的副歌要寫出來）；"
+                              "填了就不做語音辨識，直接用這份歌詞對時間", **hint).grid(
+            row=9, column=1, columnspan=2, sticky="w")
 
-        ttk.Label(frame, text="輸出資料夾").grid(row=10, column=0, sticky="w")
+        ttk.Label(frame, text="演唱者").grid(row=10, column=0, sticky="w")
+        self.singers = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.singers).grid(row=10, column=1, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Label(frame, text="選填，字幕有分顏色時，依顏色出現順序填名字，用逗號分隔，例如：成員A, 成員B",
+                  **hint).grid(row=11, column=1, columnspan=2, sticky="w")
+
+        ttk.Label(frame, text="輸出資料夾").grid(row=12, column=0, sticky="w")
         self.out = tk.StringVar(value=str(DEFAULT_OUT))
-        ttk.Entry(frame, textvariable=self.out).grid(row=10, column=1, sticky="ew", pady=4)
-        ttk.Button(frame, text="瀏覽…", command=self._pick_folder).grid(row=10, column=2, padx=(6, 0))
+        ttk.Entry(frame, textvariable=self.out).grid(row=12, column=1, sticky="ew", pady=4)
+        ttk.Button(frame, text="瀏覽…", command=self._pick_folder).grid(row=12, column=2, padx=(6, 0))
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(8, 4))
+        buttons.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(8, 4))
         self.start_button = ttk.Button(buttons, text="開始", command=self.start)
         self.start_button.pack(side="left")
         self.open_button = ttk.Button(buttons, text="開啟資料夾", command=self._open_folder, state="disabled")
         self.open_button.pack(side="left", padx=6)
 
         self.progress = ttk.Progressbar(frame, mode="determinate", maximum=1.0)
-        self.progress.grid(row=12, column=0, columnspan=3, sticky="ew", pady=4)
+        self.progress.grid(row=14, column=0, columnspan=3, sticky="ew", pady=4)
         self.log = tk.Text(frame, height=10, wrap="word", state="disabled")
-        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew")
-        frame.rowconfigure(13, weight=1)
+        self.log.grid(row=15, column=0, columnspan=3, sticky="nsew")
+        frame.rowconfigure(15, weight=1)
         # only the URL field: Enter in the background box is a new line, not a start
         entry.bind("<Return>", lambda _e: self.start())
         root.protocol("WM_DELETE_WINDOW", self._close)
@@ -293,21 +304,31 @@ class App:
         minutes, seconds = divmod(int(summary.get("duration") or 0), 60)
         facts = [f"影片：{summary.get('title', '')}（{minutes}:{seconds:02}）",
                  "有內建韓文字幕" if summary.get("korean_track") else "沒有內建韓文字幕（會用語音辨識）"]
-        if summary.get("lyric_lines") and not summary.get("korean_track"):
-            facts.append(f"說明裡有歌詞 {summary['lyric_lines']} 行（勾「這是歌曲」會用官方歌詞）")
         if summary.get("done"):
             facts.append("已經做過，再做會詢問是否重新翻譯")
         self._write("｜".join(facts))
+        lyrics = summary.get("lyrics") or ""
+        if lyrics and summary.get("korean_track"):
+            # filling the box would replace the free uploader track (and its singer colours)
+            self._write("說明裡有歌詞，但影片已有內建韓文字幕，歌詞欄沒有自動填入")
+        elif lyrics and self._replace(self.lyrics_text, lyrics, "歌詞"):
+            self.lyrics.set(True)
+            self._write(f"說明裡有歌詞，已填入歌詞欄（{len(lyrics.splitlines())} 行），"
+                        "請確認順序和重複的段落，可以再刪改")
         description = summary.get("description") or ""
         if not description:
-            self._write("影片說明是空的（或只有連結），背景說明請自己填")
-            return
-        current = self.background.get("1.0", "end").strip()
-        if current and not messagebox.askyesno("影片字幕翻譯", "背景說明已經有內容，要用影片說明取代嗎？"):
-            return
-        self.background.delete("1.0", "end")
-        self.background.insert("1.0", description)
-        self._write(f"已帶入影片說明（{len(description)} 字，連結和 hashtag 已去掉），可以再刪改")
+            self._write("影片說明是空的（或只有連結/歌詞），背景說明請自己填")
+        elif self._replace(self.background, description, "背景說明"):
+            self._write(f"已帶入影片說明（{len(description)} 字，連結、hashtag 和歌詞已去掉），可以再刪改")
+
+    def _replace(self, box: tk.Text, text: str, name: str) -> bool:
+        current = box.get("1.0", "end").strip()
+        if current and current != text and not messagebox.askyesno(
+                "影片字幕翻譯", f"{name}已經有內容，要用影片說明裡的取代嗎？"):
+            return False
+        box.delete("1.0", "end")
+        box.insert("1.0", text)
+        return True
 
     # ---- job queue --------------------------------------------------------------------
     def start(self) -> None:
@@ -322,8 +343,18 @@ class App:
             messagebox.showwarning("影片字幕翻譯",
                                    f"背景說明最多 {BACKGROUND_NOTE_LIMIT} 字（目前 {len(background)} 字）")
             return
+        lyrics = self.lyrics_text.get("1.0", "end").strip()
+        if lyrics and len(urls) > 1:
+            messagebox.showwarning("影片字幕翻譯", "填了歌詞時一次只能處理一支影片")
+            return
+        self._remove_lyrics_file()
+        if lyrics:
+            handle, self.lyrics_file = tempfile.mkstemp(prefix="subtitle_lyrics_", suffix=".txt")
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                file.write(lyrics)
         # one snapshot for the whole queue: editing the window mid-queue does not change it
         self.options = dict(
+            lyrics_file=self.lyrics_file,
             lyrics=self.lyrics.get(), profile=self.profiles[self.profile.current()][1],
             out=self._out_dir(), prefer_audio=self.prefer_audio.get(), background=background,
             singers=self.singers.get(), translator=TRANSLATORS[self.translator.current()][1])
@@ -421,7 +452,13 @@ class App:
         self.failed.append(self.current)
         self._launch_next()
 
+    def _remove_lyrics_file(self) -> None:
+        if self.lyrics_file:
+            Path(self.lyrics_file).unlink(missing_ok=True)
+            self.lyrics_file = ""
+
     def _finish_queue(self) -> None:
+        self._remove_lyrics_file()
         self._busy(False)
         self.progress.configure(mode="determinate", value=1.0 if self.succeeded else 0.0)
         if self.total > 1:
@@ -439,6 +476,7 @@ class App:
             if not messagebox.askyesno("影片字幕翻譯", "還在處理中，確定要關閉嗎？"):
                 return
             stop_tree(self.process)
+        self._remove_lyrics_file()
         self.root.destroy()
 
 

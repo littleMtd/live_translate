@@ -262,7 +262,7 @@ def test_info_prints_a_summary_without_downloading(monkeypatch, tmp_path, capsys
     import json
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
     assert summary == {"title": "곡", "duration": 200, "korean_track": True, "done": True,
-                       "lyric_lines": 0, "description": "WISHes 데뷔곡\n\nCredits"}
+                       "lyrics": "", "description": "WISHes 데뷔곡\n\nCredits"}
 
 
 def test_description_is_cut_at_a_line_boundary():
@@ -334,30 +334,62 @@ _MADE_UP = ["창밖에 작은 새가 노래해", "오늘도 너를 기다려", "
             "조용히 너를 불러", "내일도 같은 자리에서"]
 
 
-def test_description_lyrics_reach_a_transcribed_song(monkeypatch, tmp_path):
-    info = {"title": "곡", "id": "s1", "subtitles": {}, "duration": 200,
-            "description": "\n".join(["작사 : 누군가", *_MADE_UP, "https://x.com/a"])}
+def _lyrics_job(monkeypatch, tmp_path, video_id, track, argv, text="\n".join(_MADE_UP)):
+    lyrics = tmp_path / f"{video_id}.txt"
+    lyrics.write_text(text, encoding="utf-8")
+    info = {"title": video_id, "id": video_id, "subtitles": {"ko": [{}]} if track else {}, "duration": 200}
     seen = {}
     import make_subtitles
 
     def capture(job):
-        seen["lyrics"] = Path(job[job.index("--lyrics-text") + 1]).read_text(encoding="utf-8")
+        seen["job"] = job
+        if "--lyrics-text" in job:
+            seen["lines"] = Path(job[job.index("--lyrics-text") + 1]).read_text(encoding="utf-8").splitlines()
         return 1
     monkeypatch.setattr(subtitle_url, "fetch_info", lambda url: info)
     monkeypatch.setattr(subtitle_url, "_ydl", _FakeYDL)
     monkeypatch.setattr(make_subtitles, "main", capture)
-    subtitle_url.main(["https://youtu.be/s1", "--lyrics", "--out", str(tmp_path), "--no-open"])
-    assert seen["lyrics"].splitlines() == _MADE_UP
+    seen["status"] = subtitle_url.main(["u", f"--lyrics-file={lyrics}", *argv, "--out", str(tmp_path), "--no-open"])
+    return seen
 
 
-def test_description_lyrics_are_used_only_for_transcribed_songs(monkeypatch, tmp_path):
-    description = "\n".join(_MADE_UP)
+def test_pasted_lyrics_replace_recognition_even_over_an_uploader_track(monkeypatch, tmp_path):
+    seen = _lyrics_job(monkeypatch, tmp_path, "s1", True, [], text="[Chorus]\n" + "\n\n".join(_MADE_UP))
+    assert seen["job"][0] == "transcribe" and "--lyrics" in seen["job"]
+    assert seen["lines"] == _MADE_UP
 
-    def job(video_id, track, argv):
-        info = {"title": video_id, "id": video_id, "subtitles": {"ko": [{}]} if track else {},
-                "duration": 200, "description": description}
-        return _run(monkeypatch, tmp_path, info, ["u", *argv])["job"]
-    assert "--lyrics-text" not in job("a", False, [])                          # not marked as a song
-    assert "--lyrics-text" not in job("b", True, ["--lyrics"])                 # uploader track is used
-    assert "--lyrics-text" not in job("c", False, ["--lyrics", "--stt-lyrics"])
-    assert "--lyrics-text" in job("d", False, ["--lyrics"])
+
+def test_empty_pasted_lyrics_fail_before_any_download(monkeypatch, tmp_path, capsys):
+    seen = _lyrics_job(monkeypatch, tmp_path, "s2", False, [], text="\n [Verse] \n")
+    assert seen["status"] == 1 and "job" not in seen
+    assert "歌詞是空的" in capsys.readouterr().err
+
+
+def test_info_moves_description_lyrics_out_of_the_background_note(monkeypatch, tmp_path, capsys):
+    info = {"title": "곡", "id": "d1", "subtitles": {}, "duration": 200,
+            "description": "\n".join(["랑코 신곡이 나왔습니다", "", *_MADE_UP, "", "Illust : 누군가"])}
+    calls = _run(monkeypatch, tmp_path, info, ["https://youtu.be/d1", "--info"])
+    import json
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
+    assert calls["status"] == 0
+    assert summary["lyrics"].splitlines() == _MADE_UP
+    assert summary["description"] == "랑코 신곡이 나왔습니다\n\nIllust : 누군가"
+
+
+def test_retranslate_with_pasted_lyrics_aligns_them_again(monkeypatch, tmp_path):
+    _done_folder(tmp_path, stem="r1", video_id="r1")
+    seen = _lyrics_job(monkeypatch, tmp_path, "r1", False, ["--retranslate"])
+    assert seen["job"][0] == "transcribe" and seen["lines"] == _MADE_UP
+    assert "新版暫存-" in seen["job"][seen["job"].index("--out-dir") + 1]
+
+
+def test_pasted_lyrics_for_a_long_video_fail_before_any_download(monkeypatch, tmp_path, capsys):
+    downloads = []
+    monkeypatch.setattr(subtitle_url, "download_audio", lambda *a: downloads.append(a))
+    lyrics = tmp_path / "l.txt"
+    lyrics.write_text("\n".join(_MADE_UP), encoding="utf-8")
+    monkeypatch.setattr(subtitle_url, "fetch_info",
+                        lambda url: {"title": "v", "id": "v", "subtitles": {}, "duration": 3600})
+    status = subtitle_url.main(["u", f"--lyrics-file={lyrics}", "--out", str(tmp_path), "--no-open"])
+    assert status == 1 and not downloads
+    assert "30 分鐘" in capsys.readouterr().err
