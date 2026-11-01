@@ -218,6 +218,8 @@ def video_summary(info: dict, out: Path) -> dict:
     rest = [line for line in (info.get("description") or "").splitlines() if line.strip() not in set(lyrics)]
     return {"title": title, "duration": info.get("duration") or 0,
             "korean_track": bool(korean_track(info.get("subtitles") or {})),
+            "tracks": [{"key": key, "name": (info["subtitles"][key][0] or {}).get("name") or key}
+                       for key in korean_tracks(info.get("subtitles") or {})],
             "done": _has_files(out_dir),
             "lyrics": "\n".join(lyrics),
             "description": clean_description("\n".join(rest), NOTE_LIMIT)}
@@ -296,6 +298,9 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"default {DEFAULT_OUT}")
     parser.add_argument("--profile", default="", help="streamer profile for names (default: none)")
     parser.add_argument("--translator", choices=("gemini", "deepseek"), default="gemini")
+    parser.add_argument("--track", default="",
+                        help="use this uploader subtitle track exactly (a key from --info), "
+                             "instead of picking the first Korean track that is not an effect track")
     parser.add_argument("--prefer-audio", action="store_true",
                         help="transcribe the audio even when the video has Korean subtitles")
     parser.add_argument("--background", default="",
@@ -342,8 +347,12 @@ def run(args) -> int:
     retranslate = args.retranslate and _has_files(out_dir)
     if _has_files(out_dir) and not retranslate:
         raise ToolError(f"這支影片已經做過了：{out_dir}（要重做請先刪掉或改 --out）")
+    if args.track and args.track not in (info.get("subtitles") or {}):
+        raise ToolError(f"這支影片沒有字幕「{args.track}」")
     # pasted lyrics are the owner's choice over an uploader track
     mode, track = plan(info, args.prefer_audio or bool(official))
+    if args.track and not (args.prefer_audio or official):
+        mode, track = "translate", args.track
     previous = out_dir / f"{stem}.ko.vtt"
     if official:
         from modules.offline_subtitles import ALIGN_MAX_SECONDS
@@ -354,7 +363,8 @@ def run(args) -> int:
         # Keep the source of the last job: its uploader track again (free, and the saved
         # ko.vtt has no singer colours), or its speech-recognition result, never STT again.
         # Pasted lyrics are aligned again instead: that is not speech recognition.
-        track = None if previous_was_transcribed(out_dir, stem) else korean_track(info.get("subtitles") or {})
+        if not args.track:
+            track = None if previous_was_transcribed(out_dir, stem) else korean_track(info.get("subtitles") or {})
         mode = "translate"
         if not track and not previous.is_file():
             raise ToolError(f"找不到上次的韓文字幕 {previous.name}，無法只重新翻譯")
@@ -372,7 +382,10 @@ def run(args) -> int:
 
     with tempfile.TemporaryDirectory(prefix="subtitle_url_") as temp:
         workdir = Path(temp)
-        source = pick_track(args.url, info, workdir) if track else None
+        if track and args.track:
+            source = download_subtitle(args.url, track, workdir)     # the owner's choice, used as is
+        else:
+            source = pick_track(args.url, info, workdir) if track else None
         if source is None and track:
             print("影片的韓文字幕都是特效動畫字幕（一句拆成很多小片段，無法當字幕用）", flush=True)
             if retranslate and not previous.is_file():

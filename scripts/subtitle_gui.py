@@ -59,7 +59,8 @@ def console_python() -> str:
 
 def build_command(url: str, *, lyrics: bool, profile: str, out: str, prefer_audio: bool,
                   assume_yes: bool, background: str = "", singers: str = "",
-                  translator: str = "gemini", retranslate: bool = False, lyrics_file: str = "") -> list[str]:
+                  translator: str = "gemini", retranslate: bool = False, lyrics_file: str = "",
+                  track: str = "") -> list[str]:
     command = [console_python(), str(TOOL), url, "--no-open", "--out", out]
     if lyrics:
         command.append("--lyrics")
@@ -76,6 +77,8 @@ def build_command(url: str, *, lyrics: bool, profile: str, out: str, prefer_audi
         command += ["--profile", profile]
     if prefer_audio:
         command.append("--prefer-audio")
+    if track:
+        command.append(f"--track={track}")
     if retranslate:
         command.append("--retranslate")
     if assume_yes:
@@ -179,6 +182,16 @@ class App:
         self.prefer_audio = tk.BooleanVar()
         ttk.Checkbutton(frame, text="不用內建字幕，改用語音辨識", variable=self.prefer_audio).grid(
             row=3, column=1, sticky="w")
+        tracks = ttk.Frame(frame)
+        tracks.grid(row=3, column=1, columnspan=2, sticky="e")
+        ttk.Label(tracks, text="韓文字幕").pack(side="left", padx=(0, 4))
+        # (label, track key); "" lets the tool skip animated effect tracks by itself
+        self.track_choices = [("自動（跳過特效字幕）", "")]
+        self.track = ttk.Combobox(tracks, state="readonly", width=24,
+                                  values=[label for label, _ in self.track_choices])
+        self.track.current(0)
+        self.track.pack(side="left")
+        self.url.trace_add("write", lambda *_: self._reset_tracks())     # tracks belong to one video
 
         ttk.Label(frame, text="主播").grid(row=4, column=0, sticky="w")
         self.profiles = profile_choices()
@@ -307,6 +320,10 @@ class App:
         if summary.get("done"):
             facts.append("已經做過，再做會詢問是否重新翻譯")
         self._write("｜".join(facts))
+        tracks = summary.get("tracks") or []
+        self._reset_tracks([(t["name"], t["key"]) for t in tracks])
+        if len(tracks) > 1:
+            self._write("有 " + str(len(tracks)) + " 條韓文字幕，可以在「韓文字幕」選要用哪一條")
         lyrics = summary.get("lyrics") or ""
         if lyrics and summary.get("korean_track"):
             # filling the box would replace the free uploader track (and its singer colours)
@@ -320,6 +337,11 @@ class App:
             self._write("影片說明是空的（或只有連結/歌詞），背景說明請自己填")
         elif self._replace(self.background, description, "背景說明"):
             self._write(f"已帶入影片說明（{len(description)} 字，連結、hashtag 和歌詞已去掉），可以再刪改")
+
+    def _reset_tracks(self, tracks=()) -> None:
+        self.track_choices = [("自動（跳過特效字幕）", ""), *tracks]
+        self.track.configure(values=[label for label, _ in self.track_choices])
+        self.track.current(0)
 
     def _replace(self, box: tk.Text, text: str, name: str) -> bool:
         current = box.get("1.0", "end").strip()
@@ -347,6 +369,10 @@ class App:
         if lyrics and len(urls) > 1:
             messagebox.showwarning("影片字幕翻譯", "填了歌詞時一次只能處理一支影片")
             return
+        track = self.track_choices[self.track.current()][1]
+        if track and len(urls) > 1:
+            messagebox.showwarning("影片字幕翻譯", "指定韓文字幕時一次只能處理一支影片（每支影片的字幕不同）")
+            return
         self._remove_lyrics_file()
         if lyrics:
             handle, self.lyrics_file = tempfile.mkstemp(prefix="subtitle_lyrics_", suffix=".txt")
@@ -354,7 +380,7 @@ class App:
                 file.write(lyrics)
         # one snapshot for the whole queue: editing the window mid-queue does not change it
         self.options = dict(
-            lyrics_file=self.lyrics_file,
+            lyrics_file=self.lyrics_file, track=track,
             lyrics=self.lyrics.get(), profile=self.profiles[self.profile.current()][1],
             out=self._out_dir(), prefer_audio=self.prefer_audio.get(), background=background,
             singers=self.singers.get(), translator=TRANSLATORS[self.translator.current()][1])

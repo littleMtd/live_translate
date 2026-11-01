@@ -262,7 +262,7 @@ def test_info_prints_a_summary_without_downloading(monkeypatch, tmp_path, capsys
     import json
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
     assert summary == {"title": "곡", "duration": 200, "korean_track": True, "done": True,
-                       "lyrics": "", "description": "WISHes 데뷔곡\n\nCredits"}
+                       "tracks": [{"key": "ko", "name": "ko"}], "lyrics": "", "description": "WISHes 데뷔곡\n\nCredits"}
 
 
 def test_description_is_cut_at_a_line_boundary():
@@ -420,7 +420,7 @@ def test_only_effect_tracks_fall_back_to_the_audio(monkeypatch, tmp_path):
     assert calls["job"][0] == "transcribe" and calls["input_name"].endswith(".m4a")
 
 
-def _tracks_run_with(monkeypatch, tmp_path, tracks, video_id):
+def _tracks_run_with(monkeypatch, tmp_path, tracks, video_id, extra=()):
     class TrackYDL(_FakeYDL):
         def download(self, urls):
             template = self.options["outtmpl"]
@@ -441,5 +441,25 @@ def _tracks_run_with(monkeypatch, tmp_path, tracks, video_id):
         calls["input_text"] = Path(job[2]).read_text(encoding="utf-8") if job[2].endswith(".vtt") else ""
         return 1
     monkeypatch.setattr(make_subtitles, "main", fake_job)
-    subtitle_url.main(["u", "--lyrics", "--out", str(tmp_path), "--no-open"])
+    subtitle_url.main(["u", "--lyrics", *extra, "--out", str(tmp_path), "--no-open"])
     return calls
+
+
+def test_a_chosen_track_is_used_as_is_even_when_it_is_an_effect_track(monkeypatch, tmp_path):
+    calls = _tracks_run_with(monkeypatch, tmp_path, {"ko": _EFFECT, "ko-mobile": _PLAIN}, "t1",
+                             ["--track=ko"])
+    assert calls["job"][0] == "translate" and "조각" in calls["input_text"]
+
+
+def test_an_unknown_track_fails_before_any_download(monkeypatch, tmp_path, capsys):
+    calls = _tracks_run_with(monkeypatch, tmp_path, {"ko": _PLAIN}, "t2", ["--track=ja"])
+    assert "job" not in calls and "沒有字幕" in capsys.readouterr().err
+
+
+def test_info_lists_the_korean_tracks_with_their_names(monkeypatch, tmp_path, capsys):
+    info = {"title": "곡", "id": "t3", "duration": 200, "description": "",
+            "subtitles": {"ko": [{"name": "Korean"}], "ko-x": [{"name": "Korean - Mobile"}], "en": [{}]}}
+    _run(monkeypatch, tmp_path, info, ["u", "--info"])
+    import json
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["info"]
+    assert summary["tracks"] == [{"key": "ko", "name": "Korean"}, {"key": "ko-x", "name": "Korean - Mobile"}]
