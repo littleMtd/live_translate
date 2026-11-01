@@ -92,6 +92,43 @@ def download_subtitle(url: str, track: str, workdir: Path) -> Path:
     return found[0]
 
 
+def korean_tracks(subtitles: dict) -> list[str]:
+    """Every uploader Korean track, the preferred one first."""
+    first = korean_track(subtitles)
+    rest = [key for key in subtitles if key.lower().startswith("ko") and key != first and subtitles.get(key)]
+    return ([first] if first else []) + rest
+
+
+def is_effect_track(text: str) -> bool:
+    """An animated "effect" track: frame-by-frame pieces of lines, not readable cues (most last
+    a frame or two even after tidy_cues). Such videos often add a plain "Mobile" track."""
+    from modules.offline_subtitles import parse_subtitles
+
+    cues = parse_subtitles(text)
+    return bool(cues) and sum(c.end - c.start < 0.3 for c in cues) > 0.5 * len(cues)
+
+
+def pick_track(url: str, info: dict, workdir: Path) -> Path | None:
+    """The first uploader Korean track that is not an effect track, or None."""
+    failed, downloaded = None, False
+    for n, key in enumerate(korean_tracks(info.get("subtitles") or {})):
+        folder = workdir / f"track-{n}"
+        folder.mkdir()
+        try:
+            path = download_subtitle(url, key, folder)
+        except ToolError as exc:
+            failed = failed or exc
+            continue
+        downloaded = True
+        if not is_effect_track(path.read_text(encoding="utf-8-sig")):
+            if n:
+                print(f"改用另一條韓文字幕（{key}）", flush=True)
+            return path
+    if failed and not downloaded:
+        raise failed
+    return None
+
+
 def download_audio(url: str, workdir: Path) -> Path:
     options = {"format": "bestaudio/best", "outtmpl": str(workdir / "source.%(ext)s"),
                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}]}
@@ -335,8 +372,17 @@ def run(args) -> int:
 
     with tempfile.TemporaryDirectory(prefix="subtitle_url_") as temp:
         workdir = Path(temp)
-        if track:
-            source = download_subtitle(args.url, track, workdir)
+        source = pick_track(args.url, info, workdir) if track else None
+        if source is None and track:
+            print("影片的韓文字幕都是特效動畫字幕（一句拆成很多小片段，無法當字幕用）", flush=True)
+            if retranslate and not previous.is_file():
+                raise ToolError(f"找不到上次的韓文字幕 {previous.name}，無法只重新翻譯")
+            if not retranslate:
+                mode = "transcribe"
+                print("改下載音訊做語音辨識", flush=True)
+                confirm_long_transcribe(float(info.get("duration") or 0), args.yes)
+        if source is not None:
+            pass
         elif retranslate:
             source = Path(shutil.copy2(previous, workdir / "source.vtt"))
         else:

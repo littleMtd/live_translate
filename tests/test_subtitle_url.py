@@ -393,3 +393,53 @@ def test_pasted_lyrics_for_a_long_video_fail_before_any_download(monkeypatch, tm
     status = subtitle_url.main(["u", f"--lyrics-file={lyrics}", "--out", str(tmp_path), "--no-open"])
     assert status == 1 and not downloads
     assert "30 分鐘" in capsys.readouterr().err
+
+
+def _vtt(cues):
+    body = "".join(f"{subtitle_url_ts(s)} --> {subtitle_url_ts(e)}\n{t}\n\n" for s, e, t in cues)
+    return "WEBVTT\n\n" + body
+
+
+def subtitle_url_ts(seconds):
+    return f"00:{int(seconds // 60):02}:{seconds % 60:06.3f}"
+
+
+# frame-by-frame pieces, the way animated "effect" tracks look after parsing
+_EFFECT = _vtt([(10 + i * 0.033, 10 + (i + 1) * 0.033, f"조각 {i % 7}") for i in range(60)])
+_PLAIN = _vtt([(10.0, 12.5, "첫째 줄"), (13.0, 15.5, "둘째 줄"), (16.0, 18.0, "셋째 줄")])
+
+
+def test_an_effect_track_is_skipped_for_the_plain_mobile_track(monkeypatch, tmp_path):
+    assert subtitle_url.is_effect_track(_EFFECT) and not subtitle_url.is_effect_track(_PLAIN)
+    calls = _tracks_run_with(monkeypatch, tmp_path, {"ko": _EFFECT, "ko-mobile": _PLAIN}, "e1")
+    assert calls["job"][0] == "translate" and "첫째 줄" in calls["input_text"]
+
+
+def test_only_effect_tracks_fall_back_to_the_audio(monkeypatch, tmp_path):
+    calls = _tracks_run_with(monkeypatch, tmp_path, {"ko": _EFFECT}, "e2")
+    assert calls["job"][0] == "transcribe" and calls["input_name"].endswith(".m4a")
+
+
+def _tracks_run_with(monkeypatch, tmp_path, tracks, video_id):
+    class TrackYDL(_FakeYDL):
+        def download(self, urls):
+            template = self.options["outtmpl"]
+            if self.options.get("writesubtitles"):
+                key = self.options["subtitleslangs"][0]
+                Path(f"{template}.{key}.vtt").write_text(tracks[key], encoding="utf-8")
+            else:
+                Path(template.replace("%(ext)s", "m4a")).write_bytes(b"")
+    calls = {}
+    info = {"title": video_id, "id": video_id, "subtitles": {key: [{}] for key in tracks}, "duration": 200}
+    monkeypatch.setattr(subtitle_url, "fetch_info", lambda url: info)
+    monkeypatch.setattr(subtitle_url, "_ydl", TrackYDL)
+    import make_subtitles
+
+    def fake_job(job):
+        calls["job"] = job
+        calls["input_name"] = Path(job[2]).name
+        calls["input_text"] = Path(job[2]).read_text(encoding="utf-8") if job[2].endswith(".vtt") else ""
+        return 1
+    monkeypatch.setattr(make_subtitles, "main", fake_job)
+    subtitle_url.main(["u", "--lyrics", "--out", str(tmp_path), "--no-open"])
+    return calls
