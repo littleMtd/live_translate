@@ -221,6 +221,9 @@ def test_url_translation_profiles_contain_official_group_terms():
         "Chemical Love",
         "Again",
         "Wish Me Love",
+        "Lullaby",
+        "Lowkey",
+        "로우키",
         "조금 더 가까이",
         "사계",
     )
