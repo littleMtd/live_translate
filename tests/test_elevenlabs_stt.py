@@ -496,10 +496,56 @@ def test_provider_failure_records_error_type_and_http_status(caplog):
     failed = next(call.kwargs for call in emit.call_args_list
                   if call.args == ("stt",) and call.kwargs["engine"] == "elevenlabs")
     assert "busy" not in caplog.text  # provider text (ApiError carries headers/body) is not logged
-    assert "ProviderError (status=503)" in caplog.text
+    assert "ProviderError (status=503, code=-)" in caplog.text
     assert failed["status"] == "failed"
     assert failed["error_type"] == "ProviderError"
     assert failed["error_status"] == 503
+    assert failed["error_code"] == ""
+
+
+def _fail_elevenlabs_once(error: Exception, caplog=None) -> tuple[object, dict, float]:
+    engine = _engine()
+    engine._elevenlabs_client.speech_to_text.convert.side_effect = error
+    engine._groq_client.audio.transcriptions.create.return_value = SimpleNamespace(
+        text="Groq fallback", language="ko", segments=[],
+    )
+    config = _cfg()
+    config.stt.use_profile_glossary = False
+    config.stt.elevenlabs_rate_limit_cooldown_sec = 3.0
+    with patch("modules.stt.cfg", config), \
+            patch("modules.stt.common_stt_terms", return_value=()), \
+            patch("modules.stt.profile_stt_terms", return_value=()), \
+            patch("modules.stt.time.monotonic", return_value=1000.0), \
+            patch("modules.stt.runtime_events.emit") as emit:
+        engine.transcribe_event(_audio())
+    failed = next(call.kwargs for call in emit.call_args_list
+                  if call.args == ("stt",) and call.kwargs["engine"] == "elevenlabs")
+    return engine, failed, engine._elevenlabs_retry_after - 1000.0
+
+
+def test_rate_limit_uses_short_cooldown_and_records_documented_code(caplog):
+    class ApiError(Exception):
+        status_code = 429
+        body = {"detail": {"status": "system_busy", "message": "secret-ish text"}}
+
+    _engine_, failed, cooldown = _fail_elevenlabs_once(ApiError("headers body"))
+
+    assert cooldown == 3.0
+    assert failed["error_status"] == 429
+    assert failed["error_code"] == "system_busy"
+    assert "ApiError (status=429, code=system_busy)" in caplog.text
+    assert "secret-ish" not in caplog.text
+
+
+def test_non_rate_limit_failure_keeps_long_cooldown():
+    class ApiError(Exception):
+        status_code = 503
+        body = {"detail": {"status": "made up provider words"}}
+
+    _engine_, failed, cooldown = _fail_elevenlabs_once(ApiError("down"))
+
+    assert cooldown == 30.0
+    assert failed["error_code"] == "other"
 
 
 def test_timeout_failure_has_no_http_status():

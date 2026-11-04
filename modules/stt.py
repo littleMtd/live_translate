@@ -90,6 +90,26 @@ def _is_groq_rate_limit_error(exc: Exception) -> bool:
     return "rate_limit_exceeded" in message
 
 
+_ELEVENLABS_ERROR_CODES = frozenset({
+    "system_busy",
+    "too_many_concurrent_requests",
+    "rate_limit_exceeded",
+    "quota_exceeded",
+})
+
+
+def _elevenlabs_error_code(exc: Exception) -> str:
+    """Documented ElevenLabs error code from the body; never free provider text."""
+    body = getattr(exc, "body", None)
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if not isinstance(detail, dict):
+        return ""
+    for key in ("status", "code"):
+        if detail.get(key) in _ELEVENLABS_ERROR_CODES:
+            return detail[key]
+    return "other"
+
+
 def _http_status_code(exc: Exception) -> int | None:
     """Provider HTTP status for telemetry; None for timeouts and transport errors."""
     status = getattr(exc, "status_code", None)
@@ -748,15 +768,21 @@ class STTEngine:
             return None
         except Exception as e:
             self._last_elevenlabs_error = True
-            self._elevenlabs_retry_after = time.monotonic() + max(
-                0.0,
-                _cfg_stt_float("elevenlabs_failure_cooldown_sec", 30.0),
+            status = _http_status_code(e)
+            error_code = _elevenlabs_error_code(e)
+            cooldown = (
+                _cfg_stt_float("elevenlabs_rate_limit_cooldown_sec", 3.0)
+                if status == 429
+                else _cfg_stt_float("elevenlabs_failure_cooldown_sec", 30.0)
             )
-            # Class and status only: ApiError's text carries response headers/body.
+            self._elevenlabs_retry_after = time.monotonic() + max(0.0, cooldown)
+            # Class, status and a documented code only: ApiError's text carries
+            # response headers/body.
             log.error(
-                "ElevenLabs STT error: %s (status=%s)",
+                "ElevenLabs STT error: %s (status=%s, code=%s)",
                 type(e).__name__,
-                _http_status_code(e),
+                status,
+                error_code or "-",
             )
             self._emit_elevenlabs_runtime_event(
                 audio=audio,
@@ -767,7 +793,8 @@ class STTEngine:
                 audio_stats=audio_stats,
                 will_retry=self._groq_client is not None or self._groq_fallback_client is not None,
                 error_type=type(e).__name__,
-                error_status=_http_status_code(e),
+                error_status=status,
+                error_code=error_code,
             )
             return None
 
@@ -1492,6 +1519,7 @@ class STTEngine:
         will_retry: bool = False,
         error_type: str = "",
         error_status: int | None = None,
+        error_code: str = "",
     ) -> None:
         audio_stats = audio_stats or {}
         word_logprobs = [
@@ -1519,6 +1547,7 @@ class STTEngine:
             reason=reason,
             error_type=error_type,
             error_status=error_status,
+            error_code=error_code,
             request_sent=request_sent,
             stt_request_contract_id=contract_id,
             attempt_index=1,

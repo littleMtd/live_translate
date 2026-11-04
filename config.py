@@ -76,6 +76,10 @@ class _STT:
     # sequential STT worker for the full 15 s before Groq took the chunk.
     elevenlabs_timeout: float = 6.0
     elevenlabs_failure_cooldown_sec: float = 30.0
+    # A 429 returns at once and the next chunk usually succeeds (one sequential
+    # request never reaches the plan's Scribe concurrency limit), so a long
+    # cooldown only sends several chunks to the weaker Groq fallback.
+    elevenlabs_rate_limit_cooldown_sec: float = 3.0
     # Keep this at or below 100: ElevenLabs applies a 20-second minimum
     # billable duration to requests containing more than 100 keyterms.
     elevenlabs_max_keyterms: int = 100
