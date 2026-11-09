@@ -289,9 +289,17 @@ def _source_activated_name_canonicals(
             profile_id,
             _SHARED_NAME_SCOPE,
         ) and not rule.entity_id
+    activations = _resolve_entity_request_context(source).activations
+    activated_ids = _activated_entity_ids(activations)
     registry_canonicals = frozenset(
-        activation.canonical_target
-        for activation in _resolve_entity_request_context(source).activations
+        entity.canonical_target
+        for entity in ENTITY_REGISTRY.entities
+        if entity.entity_id in activated_ids
+    ) | frozenset(
+        # A kept nickname may also keep its sourced spelling (버건니, 르르씨).
+        activation.matched_alias
+        for activation in activations
+        if activation.entity.nickname_of
     )
     return registry_canonicals | frozenset(
         rule.canonical
@@ -575,12 +583,25 @@ def _simplified_chinese_evidence(target: str) -> tuple[str, ...]:
 
 
 
+def _activated_entity_ids(activations: tuple[EntityActivation, ...]) -> frozenset[str]:
+    """Entities proven by the source, plus the member each sourced nickname names.
+
+    A nickname (세구) proves its member's canonical name (Gosegu), but neither a
+    full name nor a nickname proves the member's other nicknames.
+    """
+    return frozenset(
+        entity_id
+        for activation in activations
+        for entity_id in (activation.entity.entity_id, activation.entity.nickname_of)
+        if entity_id
+    )
+
+
 def _unactivated_registry_targets(source: str, target: str) -> tuple[str, ...]:
     """Reject reviewed entity renderings that lack sentence-local source proof."""
-    activated_ids = {
-        activation.entity.entity_id
-        for activation in _resolve_entity_request_context(source).activations
-    }
+    activated_ids = _activated_entity_ids(
+        _resolve_entity_request_context(source).activations
+    )
     return tuple(
         entity.canonical_target
         for entity in ENTITY_REGISTRY.entities

@@ -61,6 +61,9 @@ class ReviewedEntity:
     translation: EntityTranslationRule | None = None
     provenance: str = "reviewed_existing_data"
     review_status: str = "reviewed"
+    # A self-rendered nickname (세구땅) whose mention also proves the member
+    # entity it names, so the member's canonical name may appear in the target.
+    nickname_of: str = ""
 
     def aliases_for(self, scope: str) -> tuple[str, ...]:
         indexed = [
@@ -327,12 +330,30 @@ def load_entity_registry(path: Path = _DATA_PATH, *, known_profiles: frozenset[s
                 scope, _strings(raw_translation.get("wrong_forms"), f"{field}.translation.wrong_forms"),
                 policy, condition, activation, repair_context,
             )
+        nickname_of = raw_entity.get("nickname_of", "")
+        if not isinstance(nickname_of, str) or (nickname_of and translation is None):
+            raise ValueError(f"{field}.nickname_of requires a translation rule")
         entities.append(ReviewedEntity(
             entity_id, entity_type, canonical_source, canonical_target, profiles,
             tuple(aliases), identity, translation,
             str(raw_entity.get("provenance", "reviewed_existing_data")),
             str(raw_entity.get("review_status", "reviewed")),
+            nickname_of,
         ))
+    by_id = {entity.entity_id: entity for entity in entities}
+    for entity in entities:
+        if not entity.nickname_of:
+            continue
+        member = by_id.get(entity.nickname_of)
+        if (
+            member is None
+            or member.nickname_of
+            or not set(entity.profile_ids) <= set(member.profile_ids)
+        ):
+            raise ValueError(
+                f"{entity.entity_id}.nickname_of must name a member entity "
+                "in the same profiles"
+            )
     return EntityRegistry(version, f"entities:{version}:{sha256(raw).hexdigest()[:16]}", tuple(entities))
 
 

@@ -31,7 +31,7 @@ def _entity(entity_id="one", alias="Name", target="Canonical", **extra):
 
 
 def test_production_registry_loads_and_profiles_reference_real_entities():
-    assert len(ENTITY_REGISTRY.entities) == 24
+    assert len(ENTITY_REGISTRY.entities) == 37
     snapshot = load_registry_snapshot(
         __import__("pathlib").Path("data/streamer_profiles.json"), version=7
     )
@@ -134,6 +134,27 @@ def test_loader_rejects_wrong_profile_and_scope_leakage(tmp_path):
     )
     with pytest.raises(ValueError, match="requires translation_source"):
         load_entity_registry(_write_registry(tmp_path, [leaked]))
+
+
+def test_loader_validates_nickname_member(tmp_path):
+    member = _entity("member", "Full", "Full", translation={"scope": "url", "wrong_forms": []})
+    nickname = _entity(
+        "nick", "Nick", "Nick", nickname_of="member",
+        translation={"scope": "url", "wrong_forms": []},
+    )
+    registry = load_entity_registry(_write_registry(tmp_path, [member, nickname]))
+    assert registry.entity("nick").nickname_of == "member"
+
+    missing = dict(nickname, nickname_of="nobody")
+    with pytest.raises(ValueError, match="nickname_of must name a member"):
+        load_entity_registry(_write_registry(tmp_path, [member, missing]))
+    chained = _entity("chain", "Chain", "Chain", nickname_of="nick",
+                      translation={"scope": "url", "wrong_forms": []})
+    with pytest.raises(ValueError, match="nickname_of must name a member"):
+        load_entity_registry(_write_registry(tmp_path, [member, nickname, chained]))
+    untranslated = {key: value for key, value in nickname.items() if key != "translation"}
+    with pytest.raises(ValueError, match="requires a translation rule"):
+        load_entity_registry(_write_registry(tmp_path, [member, untranslated]))
 
 
 def test_loader_rejects_missing_activation_and_preserves_alias_context_policy(tmp_path):

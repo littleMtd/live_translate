@@ -9,6 +9,7 @@ from modules.translation_corrections import (
     evaluate_canonical_obligations,
     load_translation_corrections,
 )
+from modules.entity_registry import ENTITY_REGISTRY
 from modules.translator import _HADES_PROFILE_ID
 from modules.translation_normalization import (
     _BOUNDARY_SOURCE_NORM_BY_PROFILE,
@@ -622,9 +623,15 @@ def test_each_name_rendering_rule_triggers_and_is_gated():
             assert rule.canonical in _source_activated_name_canonicals(
                 source, profile_id="isegye_lilpa"
             )
-            assert rule.canonical not in _source_activated_name_canonicals(
-                source, profile_id="url"
-            )
+            # A reviewed registry nickname is proven by its source in any
+            # profile, like every other registry entity.
+            if not any(
+                entity.nickname_of and entity.canonical_target == rule.canonical
+                for entity in ENTITY_REGISTRY.entities
+            ):
+                assert rule.canonical not in _source_activated_name_canonicals(
+                    source, profile_id="url"
+                )
             continue
         wrong = next(form for form in rule.wrong_forms if form != rule.canonical)
         source = rule.source_aliases[0]

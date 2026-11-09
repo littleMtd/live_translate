@@ -1812,6 +1812,395 @@
         ],
         "publication_policy": "required"
       }
+    },
+    {
+      "entity_id": "isegye_gosegu_nick_0",
+      "entity_type": "person",
+      "canonical_source": "세구",
+      "canonical_target": "세구",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "세구",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "세구씨",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_gosegu"
+    },
+    {
+      "entity_id": "isegye_gosegu_nick_1",
+      "entity_type": "person",
+      "canonical_source": "세구땅",
+      "canonical_target": "세구땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "세구땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_gosegu"
+    },
+    {
+      "entity_id": "isegye_jururu_nick_2",
+      "entity_type": "person",
+      "canonical_source": "르르",
+      "canonical_target": "르르",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "르르",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "르르씨",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_jururu"
+    },
+    {
+      "entity_id": "isegye_jururu_nick_3",
+      "entity_type": "person",
+      "canonical_source": "르르땅",
+      "canonical_target": "르르땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "르르땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_jururu"
+    },
+    {
+      "entity_id": "isegye_lilpa_member_nick_4",
+      "entity_type": "person",
+      "canonical_source": "릴파땅",
+      "canonical_target": "릴파땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "릴파땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_lilpa_member"
+    },
+    {
+      "entity_id": "isegye_lilpa_member_nick_5",
+      "entity_type": "person",
+      "canonical_source": "릴파넴",
+      "canonical_target": "릴파넴",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "릴파넴",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_lilpa_member"
+    },
+    {
+      "entity_id": "isegye_ine_nick_6",
+      "entity_type": "person",
+      "canonical_source": "이네",
+      "canonical_target": "이네",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "이네",
+          "scopes": [
+            "translation_source"
+          ],
+          "requires_context": true,
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_ine"
+    },
+    {
+      "entity_id": "isegye_ine_nick_7",
+      "entity_type": "person",
+      "canonical_source": "이네땅",
+      "canonical_target": "이네땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "이네땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_ine"
+    },
+    {
+      "entity_id": "isegye_ine_nick_8",
+      "entity_type": "person",
+      "canonical_source": "아이네땅",
+      "canonical_target": "아이네땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "아이네땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_ine"
+    },
+    {
+      "entity_id": "isegye_jingburger_nick_9",
+      "entity_type": "person",
+      "canonical_source": "버거",
+      "canonical_target": "버거",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "버거",
+          "scopes": [
+            "translation_source"
+          ],
+          "requires_context": true,
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "버건니",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_jingburger"
+    },
+    {
+      "entity_id": "isegye_jingburger_nick_10",
+      "entity_type": "person",
+      "canonical_source": "버거땅",
+      "canonical_target": "버거땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "버거땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_jingburger"
+    },
+    {
+      "entity_id": "isegye_jingburger_nick_11",
+      "entity_type": "person",
+      "canonical_source": "부가땅",
+      "canonical_target": "부가땅",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "부가땅",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_jingburger"
+    },
+    {
+      "entity_id": "isegye_viichan_nick_12",
+      "entity_type": "person",
+      "canonical_source": "챠니",
+      "canonical_target": "챠니",
+      "profile_ids": [
+        "isegye_lilpa"
+      ],
+      "aliases": [
+        {
+          "value": "챠니",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 0
+          }
+        },
+        {
+          "value": "찬이",
+          "scopes": [
+            "translation_source"
+          ],
+          "order": {
+            "translation_source": 1
+          }
+        }
+      ],
+      "provenance": "reviewed_member_nickname",
+      "review_status": "reviewed",
+      "translation": {
+        "scope": "isegye_lilpa",
+        "wrong_forms": []
+      },
+      "nickname_of": "isegye_viichan"
     }
   ]
 }

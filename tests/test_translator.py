@@ -54,7 +54,31 @@ def test_isegye_names_followed_by_copula_endings_stay_approved():
     with _active_translation_profile("isegye_lilpa"):
         # "고세구" must not activate the standalone nickname "세구"
         guard = _translation_output_guard(engine, "세구來了", "고세구 왔어")
-        assert guard["reason"] == "unexpected_hangul"
+        assert guard["reason"] == "unactivated_entity_target"
+
+
+def test_isegye_nicknames_keep_korean_and_prove_their_member():
+    # live run 20261109T101511Z-7660 (comeback stream): 36 of 42 lost subtitles
+    # were nickname sentences rejected for kept Hangul or the member's name.
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    accepted = (
+        ("그러면 또 받아서 르르 언니는?", "那再收到之後，르르姐姐呢？"),
+        ("버거 언니가 그 파트가 돼가지고.", "버거姐姐負責那個部分。"),
+        ("르르씨가 스포를 하려고 한 거였어요.", "那是Jururu打算爆雷。"),
+        ("세구씨는 했는데 또 까먹은 거 아니에요?", "Gosegu做了，不會又忘了吧？"),
+        ("그럼 버건니가 둘 셋 해주세요.", "那請징버거喊二、三。"),
+        ("버건니가 제일 중요한 역할을 해요.", "버건니扮演最重要的角色。"),
+        ("이네 언니랑 세구랑 주고받는 파트", "아이네姐姐和세구互相對唱的段落"),
+    )
+    with _active_translation_profile("isegye_lilpa"):
+        for source, target in accepted:
+            assert _translation_output_guard(engine, target, source).get("reason") is None, source
+        # A nickname proves its member, not the member's other nicknames.
+        guard = _translation_output_guard(engine, "아이네땅的信", "이네땅의 편지")
+        assert guard["reason"] == "unactivated_entity_target"
+        # 버거 alone is food until a name context makes it a person.
+        assert not translator_module._resolve_entity_request_context("버거 먹고 싶다").activations
 
 
 def test_copula_endings_do_not_activate_registry_aliases_on_ordinary_words():
@@ -78,7 +102,8 @@ def test_isegye_fan_names_are_approved_only_when_sourced():
             guard = _translation_output_guard(engine, term + "來了", term + " 왔어")
             assert guard.get("reason") is None, term
             unsourced = _translation_output_guard(engine, term + "來了", "왔어")
-            assert unsourced["reason"] == "unexpected_hangul", term
+            # Registry nicknames are rejected as unproven entities, the rest as Hangul.
+            assert unsourced["reason"] in {"unexpected_hangul", "unactivated_entity_target"}, term
 from modules.translation_engines import (
     _build_engine_chain, _build_user_message, TranslationEngine,
     GroqTranslationEngine,
