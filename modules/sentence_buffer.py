@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, replace
 
 from modules.pipeline_events import TranscriptionEvent, transcription_text
-from modules.sentence_hold_shadow import analyze_unfinished_tail
+from modules.sentence_tail import analyze_unfinished_tail
 from utils.metrics import metrics
 from utils.text_heuristics import (
     SENTENCE_COMPLETE_ENDINGS,

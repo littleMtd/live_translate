@@ -1,8 +1,7 @@
-"""Record-only heuristics for evaluating a future sentence hold.
+"""Classify likely unfinished Korean sentence tails.
 
-This module classifies likely unfinished Korean tails and evaluates the first
-subsequent STT chunk. It does not sleep, buffer, merge, or otherwise alter the
-live sentence path.
+The sentence buffer holds a cut whose tail looks unfinished (a dangling
+particle or connector, an unclosed delimiter) for the next STT chunk.
 """
 from __future__ import annotations
 
@@ -108,7 +107,7 @@ def analyze_unfinished_tail(
     grammatical_min_significant: int = _MIN_GRAMMATICAL_TAIL_TEXT,
     include_adnominal: bool = False,
 ) -> UnfinishedTail:
-    """Classify conservative unfinished-tail signals for shadow telemetry."""
+    """Classify conservative unfinished-tail signals."""
     stripped = (text or "").rstrip()
     if not stripped:
         return UnfinishedTail(())
@@ -153,40 +152,3 @@ def analyze_unfinished_tail(
 
     return UnfinishedTail(tuple(signals), matched_ending, unclosed)
 
-
-def evaluate_next_chunk(
-    candidate_text: str,
-    next_chunk_text: str,
-    candidate: UnfinishedTail,
-) -> dict[str, object]:
-    """Estimate whether one observed next STT chunk would be a useful merge."""
-    next_text = (next_chunk_text or "").strip()
-    merged = f"{candidate_text.rstrip()} {next_text}".strip()
-    merged_tail = analyze_unfinished_tail(merged, forced=False)
-    meaningful_next = len(STT_INSIGNIFICANT_RE.sub("", next_text)) >= 2
-    delimiter_resolved = bool(
-        candidate.unclosed_delimiters
-        and not set(candidate.unclosed_delimiters).intersection(
-            merged_tail.unclosed_delimiters
-        )
-    )
-    merged_complete = _is_complete(merged)
-    raw_continuation = meaningful_next and bool(
-        {"unfinished_connector", "unfinished_particle"}.intersection(
-            candidate.signals
-        )
-    )
-    # Text alone cannot prove that a following complete sentence belongs to a
-    # connector/particle/lexical fragment. Keep that as weak/raw evidence.
-    # The actionable gate uses only an observable structural repair.
-    structural_resolution = meaningful_next and delimiter_resolved
-    return {
-        "next_chunk_text": next_text,
-        "merged_text": merged,
-        "merged_complete": merged_complete,
-        "delimiter_resolved": delimiter_resolved,
-        "raw_continuation_heuristic": raw_continuation,
-        "structural_resolution": structural_resolution,
-        "useful_merge_heuristic": structural_resolution,
-        "remaining_signals": list(merged_tail.signals),
-    }

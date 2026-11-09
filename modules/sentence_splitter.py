@@ -18,7 +18,6 @@ from modules.profile_context import profile_state
 from modules.pipeline_events import (
     TranscriptionEvent,
     source_confidence_summary,
-    transcription_text,
     transcription_to_sentence,
 )
 from modules.provisional_subtitles import (
@@ -26,11 +25,6 @@ from modules.provisional_subtitles import (
     deepseek_provisional_eligible,
 )
 from modules.sentence_buffer import SentenceBuffer, SentenceCut, is_complete, profile_sources_differ
-from modules.sentence_hold_shadow import (
-    UnfinishedTail,
-    analyze_unfinished_tail,
-    evaluate_next_chunk,
-)
 
 log = get_logger("sentence_splitter")
 
@@ -114,7 +108,7 @@ def _merge_cuts(first: SentenceCut, second: SentenceCut) -> SentenceCut:
 
 
 class _SentenceSplitterCoordinator:
-    """Own one splitter thread's assembly, shadow, and provisional state."""
+    """Own one splitter thread's assembly and provisional state."""
 
     def __init__(self, text_queue, sentence_queue, stop_event, pause_event, provisional_queue):
         self.text_queue = text_queue
@@ -145,107 +139,11 @@ class _SentenceSplitterCoordinator:
         self.sentence_emit_sequence = 0
         self.activity_cohort_epoch = 0
         self.last_activity_cohort_identity: tuple[str, str] | None = None
-        self.shadow_sequence = 0
-        self.active_shadow: dict[str, object] | None = None
         self.active_provisional_id = ""
         self.active_provisional_source_id = ""
 
 
-    def finish_shadow_without_chunk(self, reason: str, now: float) -> None:
-        if self.active_shadow is None:
-            return
-        started = float(self.active_shadow["started"])
-        runtime_events.emit(
-            "sentence_hold_shadow",
-            phase="outcome",
-            shadow_id=self.active_shadow["shadow_id"],
-            signals=self.active_shadow["signals"],
-            observed_next_chunk=False,
-            outcome_reason=reason,
-            observed_wait_ms=round(max(0.0, now - started) * 1000, 2),
-            within_300ms=False,
-            within_500ms=False,
-            raw_continuation_heuristic=False,
-            structural_resolution=False,
-            useful_merge_heuristic=False,
-        )
-        self.active_shadow = None
-
-
-    def start_shadow(self, cut: SentenceCut, now: float, disposition: str) -> None:
-        analysis = analyze_unfinished_tail(cut.text, forced=cut.forced)
-        if not analysis.signals:
-            return
-        if self.active_shadow is not None:
-            self.finish_shadow_without_chunk("superseded", now)
-        self.shadow_sequence += 1
-        shadow_id = f"sentence-hold-{self.shadow_sequence}"
-        self.active_shadow = {
-            "shadow_id": shadow_id,
-            "started": now,
-            "text": cut.text,
-            "analysis": analysis,
-            "signals": list(analysis.signals),
-        }
-        source = cut.source
-        runtime_events.emit(
-            "sentence_hold_shadow",
-            phase="candidate",
-            shadow_id=shadow_id,
-            disposition=disposition,
-            utterance_id=source.utterance_id if source else "",
-            profile_id=source.profile_id if source else "",
-            cut_reason=cut.cut_reason,
-            incomplete=cut.incomplete,
-            forced=cut.forced,
-            signals=list(analysis.signals),
-            matched_ending=analysis.matched_ending,
-            unclosed_delimiters=list(analysis.unclosed_delimiters),
-            candidate_text=cut.text,
-            candidate_text_len=len(cut.text),
-            source_utterance_ids=list(cut.source_utterance_ids),
-        )
-
-
-    def observe_next_chunk(self,
-        token: str | TranscriptionEvent,
-        now: float,
-    ) -> dict[str, object] | None:
-        if self.active_shadow is None:
-            return None
-        started = float(self.active_shadow["started"])
-        delay_ms = round(max(0.0, now - started) * 1000, 2)
-        analysis = self.active_shadow["analysis"]
-        assert isinstance(analysis, UnfinishedTail)
-        evaluation = evaluate_next_chunk(
-            str(self.active_shadow["text"]),
-            transcription_text(token),
-            analysis,
-        )
-        payload: dict[str, object] = {
-            "phase": "outcome",
-            "shadow_id": self.active_shadow["shadow_id"],
-            "signals": self.active_shadow["signals"],
-            "observed_next_chunk": True,
-            "outcome_reason": "next_stt_chunk",
-            "next_chunk_delay_ms": delay_ms,
-            "within_300ms": delay_ms <= 300,
-            "within_500ms": delay_ms <= 500,
-            "next_chunk_utterance_id": (
-                token.utterance_id if isinstance(token, TranscriptionEvent) else ""
-            ),
-            **evaluation,
-        }
-        self.active_shadow = None
-        return payload
-
-
-    def emit_cut(self,
-        cut: SentenceCut,
-        *,
-        track_shadow: bool = True,
-        shadow_started_at: float | None = None,
-    ) -> None:
+    def emit_cut(self, cut: SentenceCut) -> None:
         if cut.forced:
             log.debug("Force cut after %.1fs (incomplete=%s)", cut.elapsed, cut.incomplete)
         log.info("Sentence ready (incomplete=%s): %s", cut.incomplete, cut.text)
@@ -345,12 +243,6 @@ class _SentenceSplitterCoordinator:
                 replacement_sentence_id=sentence_id,
                 dropped_count=dropped,
             )
-        if track_shadow:
-            self.start_shadow(
-                cut,
-                time.monotonic() if shadow_started_at is None else shadow_started_at,
-                "emitted",
-            )
         if event.provisional_id:
             self.active_provisional_id = ""
             self.active_provisional_source_id = ""
@@ -362,7 +254,6 @@ class _SentenceSplitterCoordinator:
         self.pending_incomplete_since = now
         metrics.increment("sentence.incomplete_buffered")
         log.info("Sentence buffered for next chunk: %s", cut.text)
-        self.start_shadow(cut, now, "buffered")
 
 
     def clear_pending(self, ) -> None:
@@ -380,8 +271,7 @@ class _SentenceSplitterCoordinator:
             return
         metrics.increment("sentence.incomplete_timeout")
         log.info("Sentence pending incomplete timed out: %s", self.pending_incomplete.text)
-        self.finish_shadow_without_chunk("pending_incomplete_timeout", now)
-        self.emit_cut(self.pending_incomplete, track_shadow=False)
+        self.emit_cut(self.pending_incomplete)
         self.clear_pending()
 
 
@@ -396,10 +286,10 @@ class _SentenceSplitterCoordinator:
         if pending_switch or buffer_switch:
             switch_cut = self.buffer.flush_profile_switch(received_at) if buffer_switch else None
             if pending_switch or (buffer_switch and self.pending_incomplete is not None):
-                self.emit_cut(self.pending_incomplete, track_shadow=False)
+                self.emit_cut(self.pending_incomplete)
                 self.clear_pending()
             if switch_cut is not None:
-                self.emit_cut(switch_cut, track_shadow=False)
+                self.emit_cut(switch_cut)
             self.active_provisional_id = ""
             self.active_provisional_source_id = ""
             metrics.increment("sentence.profile_switch")
@@ -503,7 +393,6 @@ class _SentenceSplitterCoordinator:
         while not self.stop_event.is_set():
             if self.pause_event and self.pause_event.is_set():
                 self.buffer.reset()
-                self.finish_shadow_without_chunk("pipeline_paused", time.monotonic())
                 self.clear_pending()
                 self.active_provisional_id = ""
                 self.active_provisional_source_id = ""
@@ -522,19 +411,14 @@ class _SentenceSplitterCoordinator:
 
             # Wait up to 100 ms for the first new token, then drain the rest immediately.
             # This single blocking call replaces the two time.sleep(0.1) paths below.
-            deferred_shadow_outcomes: list[dict[str, object]] = []
             try:
                 token = self.text_queue.get(timeout=0.1)
                 received_at = time.monotonic()
-                if shadow_outcome := self.observe_next_chunk(token, received_at):
-                    deferred_shadow_outcomes.append(shadow_outcome)
                 self.admit_token(token, received_at)
                 while True:
                     try:
                         token = self.text_queue.get_nowait()
                         received_at = time.monotonic()
-                        if shadow_outcome := self.observe_next_chunk(token, received_at):
-                            deferred_shadow_outcomes.append(shadow_outcome)
                         self.admit_token(token, received_at)
                     except queue.Empty:
                         break
@@ -551,10 +435,7 @@ class _SentenceSplitterCoordinator:
             if cut:
                 if self.pending_incomplete is not None:
                     if _can_merge_cuts(self.pending_incomplete, cut):
-                        self.emit_cut(
-                            _merge_cuts(self.pending_incomplete, cut),
-                            shadow_started_at=now,
-                        )
+                        self.emit_cut(_merge_cuts(self.pending_incomplete, cut))
                         self.clear_pending()
                     else:
                         log.info(
@@ -565,27 +446,18 @@ class _SentenceSplitterCoordinator:
                             cut.cut_reason,
                         )
                         metrics.increment("sentence.merge_skipped")
-                        self.emit_cut(
-                            self.pending_incomplete,
-                            track_shadow=False,
-                            shadow_started_at=now,
-                        )
+                        self.emit_cut(self.pending_incomplete)
                         if cut.incomplete:
                             self.buffer_incomplete(cut, now)
                         else:
                             self.clear_pending()
-                            self.emit_cut(cut, shadow_started_at=now)
+                            self.emit_cut(cut)
                 elif cut.incomplete:
                     self.buffer_incomplete(cut, now)
                 else:
-                    self.emit_cut(cut, shadow_started_at=now)
+                    self.emit_cut(cut)
 
             self.maybe_publish_provisional(now, cut)
-
-            # Persist after buffer/cut behavior has completed so shadow I/O
-            # cannot delay the observed token's admission or its cut decision.
-            for shadow_outcome in deferred_shadow_outcomes:
-                runtime_events.emit("sentence_hold_shadow", **shadow_outcome)
 
         # Stop: flush the not-yet-cut tail of the buffer so the last sentence
         # isn't dropped, merging it with a pending incomplete cut when allowed
@@ -595,13 +467,12 @@ class _SentenceSplitterCoordinator:
             if _can_merge_cuts(self.pending_incomplete, final_cut):
                 self.emit_cut(_merge_cuts(self.pending_incomplete, final_cut))
             else:
-                self.emit_cut(self.pending_incomplete, track_shadow=False)
+                self.emit_cut(self.pending_incomplete)
                 self.emit_cut(final_cut)
         elif self.pending_incomplete is not None:
-            self.emit_cut(self.pending_incomplete, track_shadow=False)
+            self.emit_cut(self.pending_incomplete)
         elif final_cut is not None:
             self.emit_cut(final_cut)
-        self.finish_shadow_without_chunk("splitter_stopped", time.monotonic())
         log.info("Sentence splitter stopped")
 
 
