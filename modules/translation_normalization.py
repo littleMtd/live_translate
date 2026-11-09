@@ -12,7 +12,10 @@ from zhconv import convert as convert_chinese
 from config import cfg
 from modules.activity_context import effective_profile_id
 from modules.profile_context import effective_profile_applied
-from modules.translation_prompts import get_translation_profile_preserve_terms
+from modules.translation_prompts import (
+    get_translation_profile_mappings,
+    get_translation_profile_preserve_terms,
+)
 from modules.streamer_profiles import common_stt_terms
 from modules.request_protection import (
     ProtectedSourceSpan,
@@ -712,6 +715,57 @@ def _publication_approved_terms(
     # allow an unrelated active-profile name to mask ordinary Korean residue.
     terms.update(obligation.canonical_target for obligation in obligations)
     return frozenset(term for term in terms if term)
+
+
+
+@lru_cache(maxsize=16)
+def _profile_hangul_renderings(profile_id: str) -> tuple[tuple[str, str], ...]:
+    """``(source alias, Hangul output)`` pairs the profile glossary instructs.
+
+    Keep directives render an alias as itself; mappings render it as their
+    canonical (이세계 아이돌 -> 이세계아이돌). Names that are also ordinary words
+    (마냥, 오아) only count as names in a name context, so they stay with their
+    own name-context rules.
+    """
+    context_required = {
+        alias
+        for rule in _NAME_RENDERING_RULES
+        if rule.activation_policy == "name_context_required"
+        or rule.repair_requires_name_context
+        for alias in rule.source_aliases
+    } | {
+        alias.value
+        for entity in ENTITY_REGISTRY.entities
+        for alias in entity.aliases
+        if alias.requires_context
+        or (entity.translation and entity.translation.activation_policy == "name_context_required")
+    }
+    pairs = {
+        (term, term) for term in get_translation_profile_preserve_terms(profile_id)
+    } | {
+        (alias, canonical)
+        for aliases, canonical in get_translation_profile_mappings(profile_id)
+        for alias in aliases
+    }
+    return tuple(sorted(
+        (alias, rendering)
+        for alias, rendering in pairs
+        if _contains_hangul(rendering) and alias not in context_required
+    ))
+
+
+
+def _source_proven_profile_keep_terms(profile_id: str, source: str) -> frozenset[str]:
+    """Glossary renderings this source triggers, so their Hangul is source-proven."""
+    if not profile_id:
+        return frozenset()
+    return frozenset(
+        rendering
+        for alias, rendering in _profile_hangul_renderings(profile_id)
+        if _source_has_name_alias(
+            source, (alias,), korean_name_suffixes=_APPROVAL_ONLY_NAME_SUFFIXES
+        )
+    )
 
 
 

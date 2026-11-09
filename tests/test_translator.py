@@ -57,6 +57,46 @@ def test_isegye_names_followed_by_copula_endings_stay_approved():
         assert guard["reason"] == "unexpected_hangul"
 
 
+def test_guard_publishes_every_glossary_rendering_once_the_source_has_it():
+    # The glossary is what the model is told to write; the guard must not
+    # reject that exact rendering when the source names the term. 48 of 194
+    # renderings were rejected on 2026-11-10 (띵띵이, 우왁굳, 결속아이돌, ...).
+    from modules.translation_normalization import _profile_hangul_renderings
+    from modules.translation_prompts import (
+        get_translation_profile_mappings,
+        get_translation_profile_preserve_terms,
+        translation_profile_ids,
+    )
+
+    engine = MagicMock()
+    engine.engine_name = "deepseek"
+    rejected = []
+    for profile_id in sorted(translation_profile_ids()):
+        renderings = {(term, term) for term in get_translation_profile_preserve_terms(profile_id)}
+        renderings |= {
+            (alias, canonical)
+            for aliases, canonical in get_translation_profile_mappings(profile_id)
+            for alias in aliases
+        }
+        plain_names = {alias for alias, _ in _profile_hangul_renderings(profile_id)}
+        with _active_translation_profile(profile_id):
+            for alias, rendering in sorted(renderings):
+                if not any("가" <= char <= "힣" for char in alias):
+                    continue
+                # Names that are also ordinary words need a name context.
+                named = alias if alias in plain_names or not any(
+                    "가" <= char <= "힣" for char in rendering
+                ) else f"{alias}님"
+                for source, target in (
+                    (f"오늘 {named} 왔어요", f"今天{rendering}來了"),
+                    (f"{named}이 진짜 웃겼어", f"{rendering}真的很好笑"),
+                ):
+                    guard = _translation_output_guard(engine, target, source)
+                    if guard.get("reason"):
+                        rejected.append((profile_id, alias, source, guard["reason"]))
+    assert rejected == []
+
+
 def test_isegye_nicknames_keep_korean_and_prove_their_member():
     # live run 20261109T101511Z-7660 (comeback stream): 36 of 42 lost subtitles
     # were nickname sentences rejected for kept Hangul or the member's name.

@@ -36,6 +36,7 @@ from modules.translation_normalization import (
     _resolve_entity_request_context,
     _simplified_chinese_evidence,
     _source_activated_name_canonicals,
+    _source_proven_profile_keep_terms,
     _unactivated_registry_targets,
     get_corrections,
 )
@@ -366,6 +367,8 @@ def _adjudicate_translation_candidate(
     approved_terms.update(source_proven_quality_terms(source))
     approved_terms.update(_source_honorific_name_terms(source))
     approved_terms.update(_source_activated_name_canonicals(source))
+    # What the glossary tells the model to keep in Korean, once this source has it.
+    approved_terms.update(_source_proven_profile_keep_terms(profile_id, source))
     approved_terms.update(request_protection.approved_hangul_terms)
     approved_terms = frozenset(approved_terms)
     obligation_evaluation = evaluate_canonical_obligations(corrected, obligations)

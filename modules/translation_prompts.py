@@ -140,6 +140,35 @@ def get_translation_profile_output_terms(profile_id: str) -> frozenset[str]:
     return frozenset(terms)
 
 
+@lru_cache(maxsize=16)
+def get_translation_profile_mappings(profile_id: str) -> tuple[tuple[tuple[str, ...], str], ...]:
+    """Return ``(source aliases, canonical output)`` for unconditional mappings.
+
+    Same glossary block as ``get_translation_profile_output_terms()``, but any
+    rule that holds only in some contexts ("when ...") is excluded; keep
+    directives are covered by ``get_translation_profile_preserve_terms()``.
+    """
+    profile = get_translation_profile(profile_id)
+    glossary = profile.split("\n\n", 1)[0] if profile else ""
+    mappings: list[tuple[tuple[str, ...], str]] = []
+    for raw_line in glossary.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- ") or "->" not in line:
+            continue
+        left, right = (part.strip() for part in line[2:].split("->", 1))
+        right_lower = right.lower()
+        if right_lower.startswith("keep ") or any(
+            marker in right_lower
+            for marker in (" when ", "; preserve ")
+        ):
+            continue
+        canonical = re.split(r"\s+\([^)]*\)\s*$", right, maxsplit=1)[0].strip()
+        aliases = tuple(term.strip() for term in re.split(r"\s*/\s*", left) if term.strip())
+        if canonical and aliases:
+            mappings.append((aliases, canonical))
+    return tuple(mappings)
+
+
 def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
     profiles = _STREAMER_PROFILES_QWEN if qwen else _STREAMER_PROFILES
     return frozenset(profiles)
