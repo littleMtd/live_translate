@@ -16,6 +16,14 @@ What is replayed per case (model output held fixed = the shipped target):
                 previously shipped output. Idempotent under the baseline
                 ruleset, so any difference is exactly the blast radius of
                 a rule/data change.
+  4. capsule  — the per-request entity mapping block the source activates
+                (the name part of the provider prompt).
+  5. guard    — every logged provider candidate re-adjudicated by the
+                publication guard, then the copied-name rescue, in route
+                order: which candidate would publish now (deepseek / groq /
+                rescue / lost) and with what text. Every sentence that had a
+                rejected candidate is frozen, so a guard or name-data change
+                shows each sentence it gains or loses.
 
 Usage:
   # 1) freeze a golden set from real runtime events (records expectations
@@ -48,7 +56,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from types import SimpleNamespace  # noqa: E402
+
 from config import cfg  # noqa: E402
+from modules.translation_guard import (  # noqa: E402
+    _adjudicate_translation_candidate,
+    _choose_guard_rescue,
+)
+from modules.translation_normalization import _resolve_entity_request_context  # noqa: E402
 from modules.translator import (  # noqa: E402
     _apply_source_aware_corrections,
     _normalize_source_before_matching,
@@ -71,7 +86,52 @@ def _active_profile(profile_id: str, use_profile: bool = True):
         object.__setattr__(cfg.translation, "use_profile", original_use)
 
 
-def evaluate_case(source: str, shipped_target: str, profile_id: str) -> dict:
+def _publication(source: str, candidates: list[dict]) -> dict:
+    """Replay the fallback chain over the logged candidates.
+
+    Mirrors run_fallback_chain: the first route's rejected candidate may be
+    rescued at once; later routes are tried in order; when all are rejected
+    the last-resort rescue picks among them. Provider latency, deadlines and
+    provisional promotion are not replayed.
+    """
+    reasons: list[str] = []
+    rejected: list[dict] = []
+    for index, candidate in enumerate(candidates):
+        verdict = _adjudicate_translation_candidate(
+            SimpleNamespace(engine_name=candidate["engine"]), candidate["text"], source
+        )
+        reasons.append(verdict.reason or "")
+        if not verdict.reason:
+            return {
+                "expect_candidate_reasons": reasons,
+                "expect_outcome": "deepseek" if candidate["engine"] == "deepseek" else "groq",
+                "expect_published": verdict.candidate_output,
+            }
+        rejected.append({"status": "rejected_output", "output_guard": verdict.evidence})
+        if index == 0 and _choose_guard_rescue((rejected[0],), source):
+            return {
+                "expect_candidate_reasons": reasons,
+                "expect_outcome": "rescue",
+                "expect_published": verdict.candidate_output,
+            }
+    choice = _choose_guard_rescue(tuple(rejected), source)
+    for candidate in candidates[len(reasons):]:
+        reasons.append("not_reached")
+    if choice:
+        return {
+            "expect_candidate_reasons": reasons,
+            "expect_outcome": "rescue",
+            "expect_published": rejected[choice["attempt_index"]]["output_guard"].get("candidate_output", ""),
+        }
+    return {"expect_candidate_reasons": reasons, "expect_outcome": "lost", "expect_published": ""}
+
+
+def evaluate_case(
+    source: str,
+    shipped_target: str,
+    profile_id: str,
+    candidates: list[dict] | None = None,
+) -> dict:
     """Run the deterministic layers for one case. Fresh policy per case so
     stateful checks (duplicate/last_input) cannot couple cases together."""
     with _active_profile(profile_id):
@@ -79,11 +139,34 @@ def evaluate_case(source: str, shipped_target: str, profile_id: str) -> dict:
         rejection = policy.rejection_reason(source)
         norm = _normalize_source_before_matching(source)
         target = _apply_source_aware_corrections(source, shipped_target) if shipped_target else ""
-    return {
-        "expect_rejection": rejection,
-        "expect_norm_source": norm,
-        "expect_target": target,
-    }
+        result = {
+            "expect_rejection": rejection,
+            "expect_norm_source": norm,
+            "expect_target": target,
+            "expect_capsule": _resolve_entity_request_context(source).capsule,
+        }
+        if candidates:
+            result.update(_publication(source, candidates))
+    return result
+
+
+def event_candidates(event: dict) -> list[dict]:
+    """Provider candidates of one translation event, in route order."""
+    candidates = []
+    for attempt in event.get("attempts") or []:
+        guard = attempt.get("output_guard") if isinstance(attempt.get("output_guard"), dict) else {}
+        text = guard.get("candidate_raw_output")
+        if not text and attempt.get("status") == "success" and attempt.get("selected_for_output"):
+            text = event.get("target_text")  # accepted raw output is not logged
+        if text and attempt.get("engine"):
+            candidates.append({"engine": attempt["engine"], "text": text})
+    return candidates
+
+
+def _had_rejection(event: dict) -> bool:
+    return any(
+        attempt.get("status") == "rejected_output" for attempt in event.get("attempts") or []
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +209,10 @@ def build(args) -> int:
 
     # Stratify: spread cases across (profile, day), dedupe identical sources,
     # keep filtered events too (policy regressions are exactly about those).
+    # Every sentence with a rejected candidate is kept outside the quota:
+    # guard and name-data changes act on exactly those.
     buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    guard_events: list[dict] = []
     seen: set[str] = set()
     for event in events:
         source = (event.get("source_text") or "").strip()
@@ -137,10 +223,35 @@ def build(args) -> int:
         if cid in seen:
             continue
         seen.add(cid)
-        buckets[(profile_id, event["_day"])].append(event)
+        if _had_rejection(event):
+            guard_events.append(event)
+        else:
+            buckets[(profile_id, event["_day"])].append(event)
 
     cases: list[dict] = []
     per_profile: Counter = Counter()
+
+    def add_case(event: dict) -> None:
+        source = (event.get("source_text") or "").strip()
+        profile_id = event.get("profile_id") or ""
+        shipped_target = event.get("target_text") or ""
+        candidates = event_candidates(event)
+        case = {
+            "case_id": case_id(source, profile_id),
+            "profile_id": profile_id,
+            "day": event["_day"],
+            "source": source,
+            "shipped_status": event.get("status"),
+            "shipped_filter_reason": event.get("filter_reason") or "",
+            "shipped_target": shipped_target,
+        }
+        if candidates:
+            case["candidates"] = candidates
+        case.update(evaluate_case(source, shipped_target, profile_id, candidates))
+        cases.append(case)
+
+    for event in guard_events:
+        add_case(event)
     # round-robin over (profile, day) buckets for even coverage
     bucket_lists = sorted(buckets.items())
     index = 0
@@ -150,20 +261,7 @@ def build(args) -> int:
             if per_profile[profile_id] >= args.per_profile:
                 continue
             if index < len(bucket):
-                event = bucket[index]
-                source = (event.get("source_text") or "").strip()
-                shipped_target = event.get("target_text") or ""
-                expectations = evaluate_case(source, shipped_target, profile_id)
-                cases.append({
-                    "case_id": case_id(source, profile_id),
-                    "profile_id": profile_id,
-                    "day": day,
-                    "source": source,
-                    "shipped_status": event.get("status"),
-                    "shipped_filter_reason": event.get("filter_reason") or "",
-                    "shipped_target": shipped_target,
-                    **expectations,
-                })
+                add_case(bucket[index])
                 per_profile[profile_id] += 1
             if index + 1 < len(bucket) and per_profile[profile_id] < args.per_profile:
                 remaining.append(((profile_id, day), bucket))
@@ -177,8 +275,10 @@ def build(args) -> int:
             handle.write(json.dumps(case, ensure_ascii=False) + "\n")
 
     drift = sum(1 for c in cases if c["shipped_target"] and c["expect_target"] != c["shipped_target"])
-    print(f"snapshot written: {out} ({len(cases)} cases)")
+    print(f"snapshot written: {out} ({len(cases)} cases, "
+          f"{len(guard_events)} with a rejected candidate)")
     print("per profile:", dict(per_profile))
+    print("guard outcomes:", dict(Counter(c.get("expect_outcome") for c in cases if "candidates" in c)))
     print(f"historical drift (shipped output would render differently under "
           f"current rules): {drift}")
     return 0
@@ -193,15 +293,24 @@ def run(args) -> int:
     cases = [json.loads(line) for line in open(snapshot_path, encoding="utf-8")
              if line.strip()]
     diffs: list[tuple[str, dict, dict]] = []
+    compared = (
+        ("POLICY", "expect_rejection"),
+        ("NORM", "expect_norm_source"),
+        ("TARGET", "expect_target"),
+        ("CAPSULE", "expect_capsule"),
+        ("GUARD", "expect_candidate_reasons"),
+        ("OUTCOME", "expect_outcome"),
+        ("PUBLISHED", "expect_published"),
+    )
     for case in cases:
-        current = evaluate_case(case["source"], case["shipped_target"], case["profile_id"])
-        kinds = []
-        if current["expect_rejection"] != case["expect_rejection"]:
-            kinds.append("POLICY")
-        if current["expect_norm_source"] != case["expect_norm_source"]:
-            kinds.append("NORM")
-        if current["expect_target"] != case["expect_target"]:
-            kinds.append("TARGET")
+        current = evaluate_case(
+            case["source"], case["shipped_target"], case["profile_id"], case.get("candidates")
+        )
+        # Older snapshot rows predate a field; they are compared once updated.
+        kinds = [
+            kind for kind, key in compared
+            if key in case and current.get(key) != case[key]
+        ]
         if kinds:
             diffs.append(("+".join(kinds), case, current))
             if args.update:
@@ -211,6 +320,18 @@ def run(args) -> int:
     summary = Counter(kind for kind, _, _ in diffs)
     if summary:
         print("by kind:", dict(summary))
+    transitions = Counter(
+        f"{case['expect_outcome']} -> {current['expect_outcome']}"
+        for kind, case, current in diffs if "OUTCOME" in kind
+    )
+    if transitions:
+        print("subtitle outcome changes:", dict(transitions))
+    lost = sum(
+        1 for kind, case, current in diffs
+        if "OUTCOME" in kind and current["expect_outcome"] == "lost"
+    )
+    if lost:
+        print(f"WARNING: {lost} sentence(s) that had a subtitle would now have none")
     shown = 0
     for kind, case, current in diffs:
         if shown >= args.max_show:
@@ -225,6 +346,13 @@ def run(args) -> int:
             print(f"  norm: {case['expect_norm_source'][:60]!r} -> {current['expect_norm_source'][:60]!r}")
         if "TARGET" in kind:
             print(f"  target: {case['expect_target'][:60]!r} -> {current['expect_target'][:60]!r}")
+        if "CAPSULE" in kind:
+            print(f"  capsule: {case['expect_capsule'][-80:]!r} -> {current['expect_capsule'][-80:]!r}")
+        if "GUARD" in kind:
+            print(f"  candidates: {case['expect_candidate_reasons']} -> {current['expect_candidate_reasons']}")
+        if "OUTCOME" in kind or "PUBLISHED" in kind:
+            print(f"  outcome: {case['expect_outcome']} {case['expect_published'][:40]!r} -> "
+                  f"{current['expect_outcome']} {current['expect_published'][:40]!r}")
 
     if args.update and diffs:
         with open(snapshot_path, "w", encoding="utf-8") as handle:

@@ -182,6 +182,13 @@ Use this for policy filters, source normalization, target corrections, or name
 rendering. The read-only `run` command must precede `--update`; snapshot update
 means accepting every shown diff into the golden baseline.
 
+The snapshot also freezes every sentence that had a rejected provider
+candidate, with the candidates themselves. `run` re-adjudicates them through
+the publication guard and copied-name rescue and compares the entity mapping
+capsule, so guard, rescue, and entity-registry changes report each sentence
+whose published subtitle would change (`subtitle outcome changes`, and a
+warning for any sentence that would lose its subtitle).
+
 Offline eval cases:
 ```powershell
 .\live-subtitle-env\Scripts\python.exe scripts\evaluate_translations.py --json

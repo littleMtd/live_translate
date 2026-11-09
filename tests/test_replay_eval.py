@@ -75,6 +75,44 @@ def test_run_detects_divergence_and_update_accepts_it(tmp_path):
     assert main(["run", "--snapshot", str(snapshot)]) == 0  # accepted
 
 
+def _rejected_event():
+    event = _event("아무개가 오늘 방송에 와서 너무 반가웠어요", "", status="failed")
+    event["attempts"] = [{
+        "engine": "deepseek",
+        "status": "rejected_output",
+        "output_guard": {"candidate_raw_output": "아무개今天來直播，見到他真開心"},
+    }]
+    return event
+
+
+def test_build_freezes_rejected_candidates_and_their_publication(tmp_path):
+    events_path = tmp_path / "runtime_events_20261109.jsonl"
+    _write_events(events_path, [_event("게임 시작합니다", "遊戲開始"), _rejected_event()])
+    snapshot = tmp_path / "snapshot.jsonl"
+    assert main(["build", "--events", str(events_path), "--output", str(snapshot),
+                 "--per-profile", "0"]) == 0
+    cases = [json.loads(line) for line in open(snapshot, encoding="utf-8")]
+    assert len(cases) == 1  # the quota is 0, a rejected sentence is always kept
+    case = cases[0]
+    assert case["candidates"] == [{"engine": "deepseek", "text": "아무개今天來直播，見到他真開心"}]
+    assert case["expect_candidate_reasons"] == ["unexpected_hangul"]
+    assert case["expect_outcome"] == "rescue"
+    assert case["expect_published"] == "아무개今天來直播，見到他真開心"
+
+
+def test_run_reports_a_sentence_losing_its_subtitle(tmp_path, capsys):
+    events_path = tmp_path / "runtime_events_20261109.jsonl"
+    _write_events(events_path, [_rejected_event()])
+    snapshot = tmp_path / "snapshot.jsonl"
+    assert main(["build", "--events", str(events_path), "--output", str(snapshot)]) == 0
+    case = json.loads(snapshot.read_text(encoding="utf-8"))
+    case["expect_outcome"] = "deepseek"  # pretend it used to publish directly
+    snapshot.write_text(json.dumps(case, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert main(["run", "--snapshot", str(snapshot)]) == 1
+    assert "deepseek -> rescue" in capsys.readouterr().out
+
+
 def test_evaluate_case_policy_layer_flags_filtered_source():
     assert evaluate_case("아", "", "hades_chxxnnx")["expect_rejection"] == "too_short"
     assert evaluate_case(
