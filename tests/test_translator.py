@@ -54,7 +54,7 @@ def test_isegye_names_followed_by_copula_endings_stay_approved():
     with _active_translation_profile("isegye_lilpa"):
         # "고세구" must not activate the standalone nickname "세구"
         guard = _translation_output_guard(engine, "세구來了", "고세구 왔어")
-        assert guard["reason"] == "unactivated_entity_target"
+        assert guard["reason"] == "unexpected_hangul"
 
 
 def test_isegye_nicknames_keep_korean_and_prove_their_member():
@@ -74,6 +74,13 @@ def test_isegye_nicknames_keep_korean_and_prove_their_member():
     with _active_translation_profile("isegye_lilpa"):
         for source, target in accepted:
             assert _translation_output_guard(engine, target, source).get("reason") is None, source
+        # A nickname kept from a spelling the registry does not match (an
+        # unlisted particle) stays a Hangul question, so the copied-name rescue
+        # can still publish it instead of an entity rejection dropping it.
+        source = "해서 저는 릴파땅으로 하겠습니다. 어울리긴 해."
+        guard = _translation_output_guard(engine, "那我就用 릴파땅 吧，挺相配的。", source)
+        assert guard["reason"] == "unexpected_hangul"
+        assert translator_module._guard_rescue_eligible(guard, source)
         # A nickname proves its member, not the member's other nicknames.
         guard = _translation_output_guard(engine, "아이네땅的信", "이네땅의 편지")
         assert guard["reason"] == "unactivated_entity_target"

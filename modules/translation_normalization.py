@@ -608,6 +608,9 @@ def _unactivated_registry_targets(source: str, target: str) -> tuple[str, ...]:
         if entity.translation is not None
         and entity.entity_id not in activated_ids
         and not _target_has_bounded_term(source, entity.canonical_target)
+        # A nickname copied from an unmatched source spelling (릴파땅으로,
+        # 박버거) is left to the Hangul policy and its copied-name rescue.
+        and not (entity.nickname_of and entity.canonical_target in source)
         and _target_has_bounded_term(target, entity.canonical_target)
     )
 
