@@ -149,8 +149,6 @@ class TestConfig(unittest.TestCase):
 
         scene = _Scene()
         self.assertTrue(scene.publish_open_set_activity)
-        self.assertGreaterEqual(scene.max_open_set_identities_per_window, 1)
-        self.assertLessEqual(scene.max_open_set_identities_per_window, 32)
 
         for field_name in (
             "publish_translation_activity",
@@ -159,27 +157,14 @@ class TestConfig(unittest.TestCase):
             with self.subTest(field_name=field_name):
                 with self.assertRaisesRegex(ValueError, "must be boolean"):
                     _Scene(**{field_name: "yes"})
-        for value in (0, 33, True, 1.5):
-            with self.subTest(max_open_set_identities_per_window=value):
-                with self.assertRaisesRegex(ValueError, "between 1 and 32"):
-                    _Scene(max_open_set_identities_per_window=value)
 
     def test_scene_cadence_values_are_finite_and_bounded(self):
         from config import _Scene
 
-        for field_name in (
-            "check_interval_sec",
-            "min_call_gap_sec",
-            "refresh_interval_sec",
-        ):
-            for value in (0, -1, float("inf"), float("nan"), True):
-                with self.subTest(field_name=field_name, value=value):
-                    with self.assertRaisesRegex(ValueError, "positive and finite"):
-                        _Scene(**{field_name: value})
-        for value in (-1, float("inf"), float("nan"), True):
-            with self.subTest(change_threshold=value):
-                with self.assertRaisesRegex(ValueError, "finite and non-negative"):
-                    _Scene(change_threshold=value)
+        for value in (0, -1, float("inf"), float("nan"), True):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "positive and finite"):
+                    _Scene(check_interval_sec=value)
 
     def test_streamer_profile_ids_match_registry(self):
         from config import _VALID_STREAMER_PROFILES

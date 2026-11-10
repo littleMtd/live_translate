@@ -408,11 +408,10 @@ class _Database:
 
 @dataclass(frozen=True)
 class _Scene:
-    """Automatic scene-context updater (modules/scene_context.py).
+    """Browser-window observer for profile identity (modules/scene_context.py).
 
-    Samples a safe livestream player crop and records bounded activity
-    evidence a few times per hour. Capture and translation-only publication
-    have separate switches; automatic activity never reaches STT hot terms.
+    Samples the validated livestream player window to resolve the streamer
+    profile. The automatic activity detector was removed on 2026-11-10.
     """
     # Enabled after the complete activity/correctness runtime gate passed.
     enabled:              bool  = True
@@ -420,20 +419,13 @@ class _Scene:
     # fresh confirmed automatic snapshot may affect translation context only.
     # Off since 2026-10-07: a paid ablation showed no fix for activity-sensitive
     # errors, and run 20261007T111648Z-12404 showed game-flavoured invention on
-    # garbled STT (e.g. "핀드트" -> "以太晶蝶"). Detection keeps running record-only.
+    # garbled STT (e.g. "핀드트" -> "以太晶蝶").
     publish_translation_activity: bool = False
-    # Off since 2026-10-11: with publication off, the record-only activity call
-    # (full player crop) only consumed Groq vision TPM (8000/min); 147 of 150
-    # identity-read failures in October live runs were 429 rate limits. The
-    # scene thread still runs for profile identity; no activity vision call.
-    activity_detection_enabled: bool = False
-    # T15/T17 kill switch. The open-set runtime gate passed, so direct pipeline
-    # runs publish by default; an explicit dashboard false still disables it.
+    # The automatic activity detector this switch fed was removed on
+    # 2026-11-10 (off since 2026-10-11). The dashboard and local_settings.toml
+    # still carry the field, so it stays as an inert setting.
     publish_open_set_activity: bool = True
     check_interval_sec:   float = 5.0     # bounded fast profile discovery cadence
-    min_call_gap_sec:     float = 180.0   # at most one vision call per gap
-    refresh_interval_sec: float = 600.0   # re-ask even without a scene change
-    change_threshold:     float = 12.0    # mean abs diff on 64x64 grayscale
     # Capture only the livestream browser window. Full-screen capture polluted
     # current_activity when the local coding workspace was visible; matching
     # "Google Chrome" then failed the same way once the stream shared a window
@@ -471,8 +463,6 @@ class _Scene:
     )
     vision_timeout:       float = 20.0
     vision_max_retries:   int   = 0
-    max_activity_chars:   int   = 40
-    max_open_set_identities_per_window: int = 8
     # A second bounded classifier reuses the validated player crop to resolve
     # reviewed content profiles. It never emits free-form identities.
     resolve_content_profile: bool = True
@@ -540,23 +530,6 @@ class _Scene:
             if not isinstance(getattr(self, field_name), bool):
                 raise ValueError(f"cfg.scene.{field_name} must be boolean")
         if (
-            isinstance(self.max_activity_chars, bool)
-            or not isinstance(self.max_activity_chars, int)
-            or not 1 <= self.max_activity_chars <= 80
-        ):
-            raise ValueError(
-                "cfg.scene.max_activity_chars must be between 1 and 80"
-            )
-        if (
-            isinstance(self.max_open_set_identities_per_window, bool)
-            or not isinstance(self.max_open_set_identities_per_window, int)
-            or not 1 <= self.max_open_set_identities_per_window <= 32
-        ):
-            raise ValueError(
-                "cfg.scene.max_open_set_identities_per_window must be "
-                "between 1 and 32"
-            )
-        if (
             isinstance(self.vision_timeout, bool)
             or not isinstance(self.vision_timeout, (int, float))
             or not math.isfinite(self.vision_timeout)
@@ -565,8 +538,6 @@ class _Scene:
             raise ValueError("cfg.scene.vision_timeout must be positive")
         for field_name in (
             "check_interval_sec",
-            "min_call_gap_sec",
-            "refresh_interval_sec",
             "profile_identity_fast_call_gap_sec",
             "profile_identity_stable_call_gap_sec",
             "profile_identity_expiry_sec",
@@ -605,13 +576,6 @@ class _Scene:
             or not 1 <= self.profile_identity_max_attempts_per_minute <= 30
         ):
             raise ValueError("cfg.scene.profile_identity_max_attempts_per_minute must be 1..30")
-        if (
-            isinstance(self.change_threshold, bool)
-            or not isinstance(self.change_threshold, (int, float))
-            or not math.isfinite(self.change_threshold)
-            or self.change_threshold < 0
-        ):
-            raise ValueError("cfg.scene.change_threshold must be finite and non-negative")
 
 
 @dataclass(frozen=True)

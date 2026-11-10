@@ -33,4 +33,4 @@ vad_max_speech_sec = 6.5       # 一句最長多少秒就強制切
 primary_engine = "elevenlabs"   # elevenlabs 或 groq
 
 [scene]
-publish_open_set_activity = true   # 把畫面辨識出的「現在在做什麼」給翻譯當背景（活動偵測預設關閉，關閉時這項沒作用）
+publish_open_set_activity = true   # 已無作用：自動辨識遊戲在 2026-11-10 移除，保留欄位只為了相容儀表板

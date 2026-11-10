@@ -210,19 +210,15 @@ Translation:
 
 Context, display, and persistence:
 
-- `modules/scene_context.py`: optional automatic activity resolver and
-  translation-only publisher. It resolves exactly one platform-matching Chrome
-  HWND, uses window-only capture plus an exact bounded open-set vision schema,
-  and requires two distinct frames for model-derived identities. Known aliases
-  stabilize existing IDs but are not an admission list. Broad kinds use fixed
-  generic labels, and per-window identity-cap exhaustion stays fail-closed
-  until the window generation changes. A separate default-off switch gates
-  open-set publication; the resolver never writes
-  `cfg.translation.current_activity` and never activates STT hot terms.
-  Since 2026-10-07 `cfg.scene.publish_translation_activity` defaults to
-  `False`: detection still runs record-only (vision calls continue), but
-  automatic activity no longer reaches translation prompts, because it showed
-  no measured benefit and encouraged game-flavoured invention on garbled STT.
+- `modules/scene_context.py`: browser-window observer for streamer profile
+  identity. It resolves exactly one platform-matching Chrome HWND, uses
+  window-only capture, and reads the calibrated identity block (or whole-scene
+  markers). The automatic activity (game) detector was switched off on
+  2026-10-11 and removed on 2026-11-10 (automatic activity last reached a
+  prompt on 2026-10-07; it showed no measured benefit and encouraged
+  game-flavoured invention on garbled STT). Manual
+  `cfg.translation.current_activity` is the only activity source;
+  `cfg.scene.publish_open_set_activity` stays as an inert dashboard field.
 - `modules/profile_context.py`: immutable configured-source/confirmed-hint/effective profile and
   registry snapshots. Exact reviewed member-name markers are strong candidate
   evidence, but cannot independently authorize a cross-profile switch. A switch
@@ -405,8 +401,9 @@ Preserve it and do not stage/commit it unless the user asks.
   QA classifications.
 - The runtime analyzer retains read-only support for historical
   `translation_shadow` events, but current production no longer emits them.
-- `activity_shadow` events contain only accepted bounded activity IDs/kinds
-  and accepted display labels, parse status/rejection reason, resolver/capture generations, consensus, TTL,
+- `activity_shadow` events now carry window/capture status only (runs before
+  2026-11-10 also carried activity candidates). Historical events contain only
+  accepted bounded activity IDs/kinds and accepted display labels, parse status/rejection reason, resolver/capture generations, consensus, TTL,
   and provider diagnostics. Explicit fallback events include a bounded
   provider/model/latency/token/cost attempt chain. They never contain a
   complete title, frame/fingerprint, evidence key, rejected label, or raw
