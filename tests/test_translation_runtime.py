@@ -2,14 +2,11 @@ import logging
 import threading
 import time
 import unittest
-from collections import OrderedDict
 from unittest.mock import MagicMock
 
 from modules.translation_runtime import (
     FallbackState,
     active_engine,
-    cache_lookup,
-    cache_store,
     call_with_fallback,
     probe_primary_recovery,
 )
@@ -60,63 +57,6 @@ def _failed_engine(
     engine.translate.side_effect = fail
     return engine
 
-
-class TestTranslationRuntimeCache(unittest.TestCase):
-    def test_cache_lookup_moves_hit_to_end(self):
-        cache = OrderedDict()
-        cache[("first", False, "v1", "engine", "model")] = "one"
-        cache[("second", False, "v1", "engine", "model")] = "two"
-
-        self.assertEqual(cache_lookup(cache, "first", False, "v1", "engine", "model"), "one")
-
-        self.assertEqual(list(cache.keys())[-1], ("first", False, "v1", "engine", "model"))
-
-    def test_cache_store_evicts_oldest_entry(self):
-        cache = OrderedDict()
-        cache_store(
-            cache,
-            "first",
-            False,
-            "one",
-            "v1",
-            max_size=1,
-            engine_name="engine",
-            model_name="model",
-        )
-        cache_store(
-            cache,
-            "second",
-            False,
-            "two",
-            "v1",
-            max_size=1,
-            engine_name="engine",
-            model_name="model",
-        )
-
-        self.assertNotIn(("first", False, "v1", "engine", "model"), cache)
-        self.assertEqual(cache[("second", False, "v1", "engine", "model")], "two")
-
-    def test_cache_keys_are_engine_specific(self):
-        cache = OrderedDict()
-        cache_store(
-            cache,
-            "source",
-            False,
-            "fallback",
-            "v1",
-            max_size=2,
-            engine_name="groq",
-            model_name="fallback-model",
-        )
-
-        self.assertIsNone(
-            cache_lookup(cache, "source", False, "v1", "nvidia", "primary-model")
-        )
-        self.assertEqual(
-            cache_lookup(cache, "source", False, "v1", "groq", "fallback-model"),
-            "fallback",
-        )
 
 
 class TestTranslationRuntimeFallback(unittest.TestCase):

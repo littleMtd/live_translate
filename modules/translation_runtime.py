@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from modules.translation_engines import (
@@ -18,7 +18,6 @@ from modules.translation_engines import (
 from utils.metrics import metrics
 
 
-CacheKey = tuple[str, bool, str, str, str]
 UntranslatedCheck = Callable[[str, str], bool]
 OutputGuard = Callable[[TranslationEngine, str, str], Mapping[str, object] | None]
 ProbeObservationSink = Callable[[dict[str, object]], None]
@@ -238,54 +237,6 @@ def _output_rejection(
         or guard.get("canonical_obligations")
     )
     return rejected, guard if rejected or preserve_acceptance_evidence else {}
-
-
-def cache_key(
-    text: str,
-    incomplete: bool,
-    prompt_ver: str,
-    engine_name: str = "",
-    model_name: str = "",
-) -> CacheKey:
-    return (
-        text,
-        incomplete,
-        prompt_ver,
-        str(engine_name or ""),
-        str(model_name or ""),
-    )
-
-
-def cache_lookup(
-    cache: MutableMapping[CacheKey, str],
-    text: str,
-    incomplete: bool,
-    prompt_ver: str,
-    engine_name: str = "",
-    model_name: str = "",
-) -> str | None:
-    key = cache_key(text, incomplete, prompt_ver, engine_name, model_name)
-    if key not in cache:
-        return None
-    if move_to_end := getattr(cache, "move_to_end", None):
-        move_to_end(key)
-    return cache[key]
-
-
-def cache_store(
-    cache: MutableMapping[CacheKey, str],
-    text: str,
-    incomplete: bool,
-    value: str,
-    prompt_ver: str,
-    max_size: int,
-    engine_name: str = "",
-    model_name: str = "",
-) -> None:
-    key = cache_key(text, incomplete, prompt_ver, engine_name, model_name)
-    if len(cache) >= max_size:
-        cache.pop(next(iter(cache)))
-    cache[key] = value
 
 
 def call_with_fallback(

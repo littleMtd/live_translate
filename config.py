@@ -408,12 +408,9 @@ class _Subtitle:
 class _Database:
     db_path:           str = str(Path(__file__).resolve().parent / "logs" / "live_translate.db")
     db_cache_max_rows: int = 50_000   # LRU eviction threshold (by last_used_at)
-    # Live speech almost never repeats verbatim: 17 days of live data showed a
-    # 0.45% DB hit rate (45 reuses / ~10k rows), all trivial interjections.
-    # Disable the SQLite cache layer for live mode by default; clip mode
-    # (replayed segments genuinely repeat) keeps using it. Existing rows are
-    # kept on disk as a ko->zh corpus.
-    live_db_cache: bool = False
+    # The translator no longer reads or writes this SQLite cache (removed
+    # 2026-11-10: no hit since September). The dashboard's cache stats still
+    # read the existing file, which is kept as a ko->zh corpus.
 
 
 @dataclass(frozen=True)

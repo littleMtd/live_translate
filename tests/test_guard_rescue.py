@@ -195,12 +195,10 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(_final_script_rejection_reason(fields), "")
         self.assertEqual(_final_script_rejection_reason({**fields, "target_text": "公演 공연 취소됐어요"}), "unexpected_hangul")
 
-    def test_rescued_result_never_reaches_cache(self):
+    def test_rescued_result_reaches_history_and_transcript(self):
         translator = tt._make_translator()
         translator._engines = [tt._route_engine("deepseek", RESCUABLE)]
-        store, remember, transcript = MagicMock(), MagicMock(), MagicMock()
-        translator._memory.cache_store = store
-        translator._memory.db_store = store
+        remember, transcript = MagicMock(), MagicMock()
         translator._memory.write_history = transcript
         translator._history_state().remember = remember
         translation_engines_module.reset_translation_call_trace()
@@ -209,7 +207,6 @@ class EndToEndTests(unittest.TestCase):
         if outcome.deferred_success:
             outcome.deferred_success()
         self.assertEqual(outcome.result_source, "guard_rescue")
-        store.assert_not_called()
         remember.assert_called_once()
         transcript.assert_called_once_with(SOURCE, RESCUABLE)
 

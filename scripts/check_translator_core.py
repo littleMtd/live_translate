@@ -32,7 +32,6 @@ FOCUSED_TESTS = [
     "tests/test_activity_context.py",
     "tests/test_translation_prompts.py",
     "tests/test_evaluate_translations.py",
-    "tests/test_analyze_cache.py",
     "tests/test_metrics.py",
     "tests/test_translation_memory.py",
     "tests/test_translation_runtime.py",

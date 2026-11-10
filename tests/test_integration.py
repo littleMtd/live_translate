@@ -29,14 +29,6 @@ from config import cfg
 _LIVE_TESTS_ENABLED = os.getenv("RUN_LIVE_TESTS") == "1"
 
 
-class _NoOpDB:
-    @property
-    def available(self): return False
-    def lookup(self, *a, **kw): return None
-    def store(self, *a, **kw): pass
-    def close(self): pass
-
-
 @contextmanager
 def _mock_primary(text: str):
     """Mock the entire engine chain so the translator returns `text` for any input."""
@@ -46,8 +38,7 @@ def _mock_primary(text: str):
     mock_engine.model_name = "mock-model"
     mock_engine.available = True
     mock_engine.translate.return_value = text or None
-    with patch("modules.translator._build_engine_chain", return_value=[mock_engine]), \
-         patch("modules.translator._get_db", return_value=_NoOpDB()):
+    with patch("modules.translator._build_engine_chain", return_value=[mock_engine]):
         yield mock_engine
 
 

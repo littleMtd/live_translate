@@ -42,7 +42,6 @@ from modules.provisional_subtitles import (
     deepseek_provisional_eligible,
     provisional_fingerprint,
 )
-from modules.db import _get_db
 from modules.translation_prompts import (
     _BASE_PROMPT,
     _BASE_PROMPT_TAIL,
@@ -83,7 +82,7 @@ from modules.translation_runtime import (
     call_with_fallback,
     probe_primary_recovery,
 )
-from modules.translation_memory import MemoryLookup, TranslationMemory
+from modules.translation_memory import TranslationMemory
 from modules.translation_request import TranslationRequest, freeze_route_request
 from modules.translation_policy import RepetitionEvidence, TranslationPolicy
 from modules.request_protection import (
@@ -128,8 +127,6 @@ from modules.translation_guard import (
     _guard_rescue_eligible,
     _guard_rescue_text_ok,
     _is_legitimate_preserve_as_is,
-    _looks_like_meta_garbage_output,
-    _looks_like_model_refusal,
     _looks_untranslated,
     _profile_translation_qa,
     _quality_telemetry_approved_terms,
@@ -143,7 +140,6 @@ _LOG_DIR = Path(__file__).parent.parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
 
 _MIN_TRANSLATE_CHARS = 2    # skip STT fragments shorter than this
-_CACHE_MAX_SIZE = 500       # max entries in per-session translation cache
 _FALLBACK_PROBE_INTERVAL_SEC = 30.0
 _FALLBACK_PROBE_TEXT = "안녕하세요"
 _FALLBACK_THRESHOLD = 3      # consecutive primary failures before hard-switching to fallback
@@ -184,7 +180,6 @@ _API_EVENT_DEFAULTS = {
     "deadline_scope": "",
     "deadline_budget_ms": None,
 }
-_CACHE_HIT_STATUSES = {"memory_hit", "db_hit"}
 FallbackEventSink = Callable[..., None]
 
 
@@ -252,14 +247,6 @@ def _emit_fallback_runtime_event(action: str, **fields) -> None:
         circuit_breaker_enabled=_translation_circuit_breaker_enabled(),
         **fields,
     )
-
-
-def _db_cache_enabled() -> bool:
-    """SQLite cache layer is for clip mode (replays repeat); live mode showed a
-    ~0.45% hit rate so it is disabled by default (cfg.database.live_db_cache)."""
-    if cfg.translation.translation_mode == "clip":
-        return True
-    return bool(cfg.database.live_db_cache)
 
 
 _HISTORY_WRITE_LOCK = threading.Lock()
@@ -434,9 +421,7 @@ def _new_translation_memory(
     recent_window = _conversation_window()
     return TranslationMemory(
         recent_window=recent_window,
-        max_cache_size=_CACHE_MAX_SIZE,
         conversation_history=history,
-        db_factory=_get_db,
         history_writer=_write_history,
     )
 
@@ -564,7 +549,7 @@ def _outcome_used_api(outcome: TranslationOutcome) -> bool:
         return True
     if outcome.status == "failed" and outcome.result_source == "none":
         return True
-    if outcome.result_source == "post_policy" and outcome.cache_status not in _CACHE_HIT_STATUSES:
+    if outcome.result_source == "post_policy":
         return True
     return False
 
@@ -922,103 +907,6 @@ class Translator:
             request_protection, system_prompt, incomplete, history,
             canonical_obligations, history_cohort=history_cohort,
         )
-        prompt_ver = self._prompt_version_for_engine(
-            engine,
-            system_prompt,
-            protection_identity=request_protection.fingerprint_identity,
-            history=history,
-            route_request=(
-                translation_request.route(translation_route_id(engine))
-                if engine is not None else None
-            ),
-            translation_request=translation_request,
-        )
-
-        lookup = (
-            MemoryLookup(None, "miss")
-            if request_protection.requires_provider_protection
-            else self._lookup_existing_translation_event(
-                text, incomplete, prompt_ver, engine, history_cohort
-            )
-        )
-        if lookup.result:
-            cache_guard = _translation_output_guard(
-                None,
-                lookup.result,
-                text,
-                obligations=canonical_obligations,
-            )
-            if cache_guard.get("reason"):
-                metrics.increment(
-                    "translation.publication_invariant.cache_rejected"
-                )
-                self._invalidate_cached_translation(
-                    text,
-                    incomplete,
-                    prompt_ver,
-                    engine,
-                    lookup.result,
-                    history_cohort,
-                )
-                lookup = MemoryLookup(None, "miss")
-            else:
-                target_text = str(
-                    cache_guard.get("candidate_output") or lookup.result
-                )
-                cache_evaluation = evaluate_canonical_obligations(
-                    target_text, canonical_obligations
-                )
-        if lookup.result:
-            if (
-                _looks_like_meta_garbage_output(target_text)
-                or _looks_like_model_refusal(target_text)
-            ):
-                self._invalidate_cached_translation(
-                    text,
-                    incomplete,
-                    prompt_ver,
-                    engine,
-                    lookup.result,
-                    history_cohort,
-                )
-                self._reset_failed_input()
-                return TranslationOutcome(
-                    source_text=raw_text,
-                    prepared_source_text=text,
-                    target_text=None,
-                    status="filtered",
-                    result_source="post_policy",
-                    cache_status=lookup.source,
-                    incomplete=incomplete,
-                    filter_reason="meta_garbage_output",
-                    engine=engine.engine_name if engine else "",
-                    model=engine.model_name if engine else "",
-                    prompt_version=prompt_ver,
-                )
-            success_commit = lambda: self._record_lookup_context(
-                text,
-                target_text,
-                incomplete,
-                history_cohort,
-            )
-            if not getattr(self, "_defer_success_record", False):
-                success_commit()
-                success_commit = None
-            return TranslationOutcome(
-                source_text=raw_text,
-                prepared_source_text=text,
-                target_text=target_text,
-                status="success",
-                result_source=lookup.source,
-                cache_status=lookup.source,
-                incomplete=incomplete,
-                engine=engine.engine_name if engine else "",
-                model=engine.model_name if engine else "",
-                prompt_version=prompt_ver,
-                canonical_obligation_evaluation=cache_evaluation,
-                deferred_success=success_commit,
-            )
-
         deepseek_route_request = next(
             (route for route in translation_request.routes if route.engine == "deepseek"),
             None,
@@ -1103,8 +991,7 @@ class Translator:
             )
         # Attribute the outcome to the engine that actually produced it: on a
         # soft fallback the active engine stays primary, so reading
-        # _active_engine() here mislabeled the result source, API diagnostics
-        # and the DB cache row.
+        # _active_engine() here mislabeled the result source and API diagnostics.
         engine = used_engine or self._active_engine()
         prompt_ver = self._prompt_version_for_engine(
             engine,
@@ -1142,7 +1029,7 @@ class Translator:
             promoted=promoted,
             engine=engine,
             prompt_version=prompt_ver,
-            cache_status=lookup.source,
+            cache_status="skipped",
             incomplete=incomplete,
             canonical_obligations=canonical_obligations,
             request_protection=request_protection,
@@ -1282,16 +1169,12 @@ class Translator:
             )
 
         if rescued:
-            # Viewers saw it, so it stays in history/context, but it is never cached: an identical later
-            # sentence takes the normal path again.
             success_commit = lambda: self._record_rescue(prepared_text, result, incomplete, history_cohort)
         else:
             success_commit = lambda: self._record_success(
                 prepared_text,
                 result,
                 incomplete,
-                prompt_version,
-                engine,
                 history_cohort,
             )
         if not getattr(self, "_defer_success_record", False):
@@ -1364,103 +1247,20 @@ class Translator:
         # File I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
 
-    def _record_lookup_context(self, text: str, result: str, incomplete: bool,
-                               cohort: HistoryCohort) -> None:
-        with self._state_guard():
-            self._history_state().remember(text, result, incomplete, cohort)
-
-    def _lookup_existing_translation_event(
-        self,
-        text: str,
-        incomplete: bool,
-        prompt_ver: str,
-        engine: TranslationEngine | None = None,
-        cohort: HistoryCohort | None = None,
-    ) -> MemoryLookup:
-        # Memory cache under the lock; the SQLite read happens outside it (M1)
-        # so a slow DB never blocks the other worker.
-        if engine is None:
-            engine = self._active_engine()
-        with self._state_guard():
-            lookup = self._memory_state().lookup_memory_event(
-                text,
-                incomplete,
-                prompt_ver,
-                engine,
-                remember_recent=False,
-                cohort=cohort,
-            )
-        if lookup.result:
-            log.debug("Cache hit: %s", text[:20])
-            return lookup
-        if incomplete or engine is None or not _db_cache_enabled():
-            metrics.increment("translation.cache.skipped")
-            return MemoryLookup(None, "skipped")
-        db_result = self._memory_state().db_lookup(text, engine, prompt_ver)
-        if db_result:
-            with self._state_guard():
-                lookup = self._memory_state().record_db_hit(
-                    text,
-                    incomplete,
-                    prompt_ver,
-                    db_result,
-                    engine,
-                    remember_recent=False,
-                    cohort=cohort,
-                )
-            log.debug("Cache hit: %s", text[:20])
-            return lookup
-        metrics.increment("translation.cache.miss")
-        return MemoryLookup(None, "miss")
-
     def _record_success(self, text: str, result: str, incomplete: bool,
-                        prompt_ver: str,
-        engine: TranslationEngine | None = None,
-        cohort: HistoryCohort | None = None) -> None:
+                        cohort: HistoryCohort | None = None) -> None:
         with self._state_guard():
-            if engine is None:
-                engine = self._active_engine()
-            self._memory_state().cache_store(
-                text, incomplete, result, prompt_ver, engine
-            )
             self._history_state().remember(text, result, incomplete, cohort)
-        # File/DB I/O outside the shared lock (M1).
+        # File I/O outside the shared lock (M1).
         self._memory_state().write_history(text, result)
-        if not incomplete and engine is not None and _db_cache_enabled():
-            self._memory_state().db_store(text, result, engine, prompt_ver)
 
     def _record_rescue(self, text: str, result: str, incomplete: bool,
                        cohort: HistoryCohort | None = None) -> None:
-        """History and transcript only; a rescued subtitle is never cached (memory or DB)."""
+        """History and transcript, counted as a rescue."""
         metrics.increment("translation.guard_rescue.published")
         with self._state_guard():
             self._history_state().remember(text, result, incomplete, cohort)
         self._memory_state().write_history(text, result)
-
-    def _invalidate_cached_translation(
-        self,
-        text: str,
-        incomplete: bool,
-        prompt_ver: str,
-        active_engine: TranslationEngine | None,
-        result: str | None,
-        cohort: HistoryCohort | None = None,
-    ) -> None:
-        with self._state_guard():
-            self._memory_state().invalidate_memory(
-                text,
-                incomplete,
-                prompt_ver,
-                active_engine,
-                result,
-                cohort,
-            )
-            self._history_state().forget(text, result, cohort)
-        # DB delete outside the shared lock (M1). The delete is NOT gated on
-        # _db_cache_enabled(): stale rows must be purged even if the cache layer
-        # was enabled earlier in the session and disabled since.
-        if not incomplete and active_engine is not None:
-            self._memory_state().invalidate_db(text, active_engine, prompt_ver)
 
     def _active_engine(self) -> TranslationEngine | None:
         return active_engine(self._engines, self._active_idx)

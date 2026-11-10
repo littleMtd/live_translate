@@ -160,7 +160,7 @@ same-chunk provider-failure fallback, not a semantic second-opinion route.
 Translation:
 
 - `modules/translator.py`: facade and pipeline worker pool; deterministic
-  policy, slang, cache, prompt, fallback, ordered emission, translation
+  policy, slang, prompt, fallback, ordered emission, translation
   events, and the background recovery-probe thread. It re-exports the names
   of the two modules below, so `from modules.translator import ...` keeps
   working; tests that patch their internals must patch the new module.
@@ -175,19 +175,21 @@ Translation:
   DeepSeek and the Groq fallback;
   request/history shaping, per-call diagnostics, attempt chains, and token
   usage.
-- `modules/translation_runtime.py`: pure cache helpers plus fallback/circuit
-  state transitions and primary-route recovery probes.
+- `modules/translation_runtime.py`: fallback/circuit state transitions and
+  primary-route recovery probes.
 - `modules/translation_policy.py`: pre-translation rejection/sanitization,
   template/garbage/song/low-value rules, duplicate state, slang lookup, and
   evidence-gated repetition exemption.
 - `modules/session_context.py`: immutable live-session identity and the
   session/activity-epoch history cohort contract.
 - `modules/conversation_history.py`: bounded, quality-gated conversational
-  context. It is independent of cache lookup and accepts entries only through
-  the successful publication commit path.
-- `modules/translation_memory.py`: in-memory translation LRU, optional SQLite
-  read/write-through, and invalidation. Compatibility methods delegate recent
-  context to the shared `ConversationHistory` owner.
+  context. It accepts entries only through the successful publication commit
+  path.
+- `modules/translation_memory.py`: the translation-history file writer plus
+  compatibility methods that delegate recent context to the shared
+  `ConversationHistory` owner. The session and SQLite translation caches were
+  removed on 2026-11-10: keyed on the history-dependent prompt version, they
+  had no live hit since September.
 - `modules/translation_prompts.py`: prompt construction and JSON profile
   loading. DeepSeek receives the whole profile; the compact Groq and offline
   prompts receive its glossary block (the text before the first blank line).
@@ -273,8 +275,6 @@ Context, display, and persistence:
   terms.
 - `modules/subtitle_display.py`: tkinter overlay, pause/resume, timing, and
   queue clearing.
-- `modules/db.py`: SQLite schema v2 translation cache, WAL, `RLock`, migration,
-  prompt-versioned unique key, hit accounting, and LRU eviction.
 - `utils/runtime_events.py`: thread-safe daily JSONL writer and reference-free
   translation quality fields plus schema-v6 request-contract provenance.
 - `utils/chatgpt_bundle.py`: sanitized exact-run bundle export and integrity
@@ -297,8 +297,8 @@ Context, display, and persistence:
 
 All translation workers share one `LiveSessionSnapshot`, `ConversationHistory`,
 `TranslationPolicy`, `TranslationMemory`, and `FallbackState`; engine diagnostics
-remain thread-local per call. Cache lookup cannot write conversation context;
-only a successfully adjudicated result enters history. In live mode, primary
+remain thread-local per call. Only a successfully adjudicated result enters
+history. In live mode, primary
 (DeepSeek) failure opens a circuit and sends user traffic to the Groq fallback.
 A background probe waits for cooldown and requires consecutive valid responses
 before restoring the primary. Probe calls copy recent
@@ -416,9 +416,9 @@ Preserve it and do not stage/commit it unless the user asks.
   complete title, frame/fingerprint, evidence key, rejected label, or raw
   vision response.
 - `logs/translations_YYYYMMDD.txt` is the human-readable translation history.
-- `logs/live_translate.db` is the persistent cache/corpus. Live DB cache is
-  disabled by default because measured live hit rate was low; clip mode may
-  still use it.
+- `logs/live_translate.db` is the former translation cache, kept as a ko->zh
+  corpus; the translator no longer reads or writes it. The dashboard's cache
+  stats still read it.
 - `logs/audio_dump/<run_id>/<utterance_id>.wav` exists only when
   `LIVE_TRANSLATE_DUMP_AUDIO=1`.
 - `scratch/analysis/` is the normal destination for generated offline reports;

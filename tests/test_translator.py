@@ -174,11 +174,11 @@ from modules.request_protection import (
     FinalProtectionEvaluation,
     resolve_request_protection,
 )
+from modules.translation_guard import _looks_like_meta_garbage_output
 from modules.translator import (
     _adjudicate_translation_candidate,
     _apply_source_aware_corrections,
     _is_legitimate_preserve_as_is,
-    _looks_like_meta_garbage_output,
     _looks_untranslated,
     _translation_output_guard,
     _normalize_source_before_matching,
@@ -190,7 +190,6 @@ from modules.translator import (
     TranslationOutcome,
     Translator,
 )
-import modules.db as _db_module
 from modules.profile_context import bind_profile_snapshot, profile_state
 from modules.activity_context import (
     bind_activity_snapshot,
@@ -259,34 +258,16 @@ def test_worker_loop_exception_stops_pipeline_before_drain_wait():
     assert str(failures[0]) == "translator loop exploded"
 
 
-class _NoOpDB:
-    """No-op DB that keeps unit tests isolated from the on-disk production DB."""
-    @property
-    def available(self) -> bool:
-        return False
-    def lookup(self, *a, **kw):
-        return None
-    def store(self, *a, **kw):
-        pass
-    def close(self):
-        pass
-
-
-_db_patch = None
 _history_patch = None
 
 
 def setUpModule():
-    global _db_patch, _history_patch
-    _db_patch = unittest.mock.patch("modules.translator._get_db", return_value=_NoOpDB())
-    _db_patch.start()
+    global _history_patch
     _history_patch = unittest.mock.patch("modules.translator._write_history")
     _history_patch.start()
 
 
 def tearDownModule():
-    if _db_patch:
-        _db_patch.stop()
     if _history_patch:
         _history_patch.stop()
 
@@ -1238,7 +1219,6 @@ def _set_provider_failure(
 
 def _make_translator() -> Translator:
     """Build a Translator backed by mock engines — no real API clients."""
-    from modules.translator import _CACHE_MAX_SIZE
     from modules.translation_policy import TranslationPolicy
     from modules.translation_memory import TranslationMemory
     from config import cfg
@@ -1258,8 +1238,6 @@ def _make_translator() -> Translator:
     )
     t._memory = TranslationMemory(
         recent_window=3,
-        max_cache_size=_CACHE_MAX_SIZE,
-        db_factory=lambda: _NoOpDB(),
         history_writer=MagicMock(),
     )
     return t
@@ -1744,13 +1722,12 @@ class TestTranslationFallbackChain(unittest.TestCase):
             fields["request_contract_id"],
         )
 
-    def test_protected_member_referent_bypasses_unprotected_cache_lookup(self):
+    def test_protected_member_referent_is_restored(self):
         translator = _make_translator()
         engine = _route_engine(
             "deepseek", "有位叫__LT_UNK_1__的成員加入了。"
         )
         translator._engines = [engine]
-        translator._lookup_existing_translation_event = MagicMock()
 
         outcome = translator.translate_event(
             "키야라는 멤버가 새로 들어왔어요", False
@@ -1758,7 +1735,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
 
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
-        translator._lookup_existing_translation_event.assert_not_called()
 
     def test_excluded_common_member_noun_keeps_unexpected_hangul_guard(self):
         # The guard still rejects the copied common noun. Since rescue v2
@@ -2044,95 +2020,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
             [],
         )
 
-    def test_cache_with_missing_canonical_is_invalidated_and_falls_through(self):
-        translator = _make_translator()
-        translator._engines = [_route_engine("deepseek", "모카來了。")]
-        invalidator = MagicMock()
-        translator._invalidate_cached_translation = invalidator
-        translator._lookup_existing_translation_event = MagicMock(
-            return_value=translator_module.MemoryLookup("她來了。", "memory_hit")
-        )
-
-        with _active_translation_profile("url"):
-            outcome = translator.translate_event("모카가 왔어", False)
-
-        invalidator.assert_called_once()
-        self.assertEqual(outcome.result_source, "api")
-        self.assertEqual(outcome.target_text, "모카來了。")
-
-    def test_cache_with_unactivated_entity_target_is_invalidated(self):
-        translator = _make_translator()
-        translator._engines = [_route_engine("deepseek", "有人要驗收。")]
-        invalidator = MagicMock()
-        translator._invalidate_cached_translation = invalidator
-        translator._lookup_existing_translation_event = MagicMock(
-            return_value=translator_module.MemoryLookup(
-                "CHAENNA說要驗收。", "memory_hit"
-            )
-        )
-
-        with _active_translation_profile("hades_chxxnnx"):
-            outcome = translator.translate_event("찬양님이 검수해달라 그랬어.")
-
-        invalidator.assert_called_once()
-        self.assertEqual(outcome.result_source, "api")
-        self.assertEqual(outcome.target_text, "有人要驗收。")
-
-    def test_rejected_cache_is_removed_from_its_profile_history_cohort(self):
-        translator = _make_translator()
-        translator._engines = [_route_engine("deepseek", "有人要驗收。")]
-        source = "찬양님이 검수해달라 그랬어."
-        cached = "CHAENNA說要驗收。"
-
-        with _active_translation_profile("hades_chxxnnx"):
-            engine = translator._active_engine()
-            prompt_ver = translator._get_prompt_version_hash()
-            cohort = translator._history_cohort()
-            translator._memory.cache_store(
-                source, False, cached, prompt_ver, engine
-            )
-
-            outcome = translator.translate_event(source)
-            context = translator._memory.context(cohort)
-
-        self.assertEqual(outcome.target_text, "有人要驗收。")
-        self.assertNotIn((source, cached), context)
-        self.assertIn((source, "有人要驗收。"), context)
-
-    def test_cache_with_simplified_script_is_invalidated(self):
-        translator = _make_translator()
-        translator._engines = [_route_engine("deepseek", "後臺樣子很誇張。")]
-        invalidator = MagicMock()
-        translator._invalidate_cached_translation = invalidator
-        translator._lookup_existing_translation_event = MagicMock(
-            return_value=translator_module.MemoryLookup(
-                "后台样子很夸张。", "memory_hit"
-            )
-        )
-
-        outcome = translator.translate_event("백스테이지 모습이 너무 과장됐어.")
-
-        invalidator.assert_called_once()
-        self.assertEqual(outcome.result_source, "api")
-        self.assertEqual(outcome.target_text, "後臺樣子很誇張。")
-
-    def test_cache_with_unexpected_japanese_is_invalidated(self):
-        translator = _make_translator()
-        translator._engines = [_route_engine("deepseek", "這是測試。")]
-        invalidator = MagicMock()
-        translator._invalidate_cached_translation = invalidator
-        translator._lookup_existing_translation_event = MagicMock(
-            return_value=translator_module.MemoryLookup(
-                "這是テスト。", "memory_hit"
-            )
-        )
-
-        outcome = translator.translate_event("이건 테스트야.")
-
-        invalidator.assert_called_once()
-        self.assertEqual(outcome.result_source, "api")
-        self.assertEqual(outcome.target_text, "這是測試。")
-
     def test_slang_missing_canonical_falls_through_to_provider(self):
         translator = _make_translator()
         translator._engines = [_route_engine("deepseek", "모카來了。")]
@@ -2314,15 +2201,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
         self.assertEqual(len(attempts), 1)
         self.assertTrue(attempts[0]["selected_for_output"])
 
-        cached = translator._memory.cache_lookup(
-            "이것은 깨끗한 테스트 문장입니다",
-            False,
-            outcome.prompt_version,
-            flash,
-        )
-
-        self.assertEqual(cached, "這是乾淨的繁體中文結果")
-        self.assertEqual(len(flash.messages), 1)
         self.assertEqual(groq.messages, [])
 
     def test_flash_script_guard_selects_groq_without_candidate_state_leak(self):
@@ -3045,42 +2923,6 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(result, "retry-success")
         self.assertEqual(calls, 2)
 
-    def test_actual_api_and_memory_hit_defer_context_in_sequence_order(self):
-        t = _make_translator()
-        t._defer_success_record = True
-        t._engines[0].translate.return_value = "第一筆翻譯"
-        first = t.translate_event("first source text")
-
-        cached_source = "cached source text"
-        system_prompt = t._build_system_prompt()
-        prompt_ver = t._prompt_version_for_engine(t._engines[0], system_prompt)
-        t._memory.cache_store(
-            cached_source,
-            False,
-            "第二筆快取翻譯",
-            prompt_ver,
-            t._engines[0],
-        )
-        second = t.translate_event(cached_source)
-
-        self.assertEqual(t._memory.context(), [])
-        self.assertIsNotNone(first.deferred_success)
-        self.assertIsNotNone(second.deferred_success)
-        first.deferred_success()
-        second.deferred_success()
-
-        self.assertEqual(
-            t._memory.context(),
-            [
-                ("first source text", "第一筆翻譯"),
-                (cached_source, "第二筆快取翻譯"),
-            ],
-        )
-        t._memory._history_writer.assert_called_once_with(
-            "first source text",
-            "第一筆翻譯",
-        )
-
     def test_actual_api_and_slang_defer_history_in_sequence_order(self):
         t = _make_translator()
         t._defer_success_record = True
@@ -3296,23 +3138,6 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertTrue(subtitle_q.empty())
         events.emit.assert_called_once()
         self.assertFalse(events.emit.call_args.kwargs["subtitle_emitted"])
-
-    def test_memory_hit_ignores_stale_nvidia_retry_diagnostics(self):
-        event = self._emit_outcome_with_stale_nvidia_diagnostics(
-            TranslationOutcome(
-                source_text="안녕하세요",
-                target_text="你好",
-                status="success",
-                result_source="memory_hit",
-                cache_status="memory_hit",
-                incomplete=False,
-                engine="nvidia",
-                model="nvidia-test",
-            )
-        )
-
-        self.assertEqual(event["retry_count"], 0)
-        self.assertEqual(event["retry_reason"], "")
 
     def test_slang_hit_ignores_stale_nvidia_retry_diagnostics(self):
         event = self._emit_outcome_with_stale_nvidia_diagnostics(
@@ -4159,36 +3984,6 @@ class TestTranslateOptimizations(unittest.TestCase):
         self.assertEqual(retry.target_text, "valid retry")
         self.assertEqual(t._engines[0].translate.call_count, 2)
 
-    def test_cached_meta_garbage_output_is_filtered(self):
-        t = _make_translator()
-        engine = t._active_engine()
-        prompt_ver = t._get_prompt_version_hash()
-        source = "오늘 방송 진짜 재미있었어요"
-        t._memory.cache_store(
-            source,
-            False,
-            "（無法理解的STT亂碼，無明確語義）",
-            prompt_ver,
-            engine,
-        )
-
-        outcome = t.translate_event(source)
-
-        self.assertEqual(outcome.status, "filtered")
-        self.assertEqual(outcome.result_source, "post_policy")
-        self.assertEqual(outcome.cache_status, "memory_hit")
-        self.assertEqual(outcome.filter_reason, "meta_garbage_output")
-        self.assertIsNone(t._memory.cache_lookup(source, False, prompt_ver, engine))
-        self.assertEqual(list(t._memory.recent), [])
-        for engine in t._engines:
-            engine.translate.assert_not_called()
-
-        t._engines[0].translate.return_value = "valid retry"
-        retry = t.translate_event(source)
-        self.assertEqual(retry.status, "success")
-        self.assertEqual(retry.target_text, "valid retry")
-        t._engines[0].translate.assert_called_once()
-
     def test_source_aware_corrections_fix_runtime_term_misfires(self):
         source = (
             "마가뜨는 게 정확히 말하는 거. 붕 뜨는 시간. 개복치같은 스타일. "
@@ -4657,7 +4452,7 @@ class TestTranslateOptimizations(unittest.TestCase):
                 "KimSungtae ... KimSungtae",
             )
 
-    def test_streamer_name_rendering_cache_round_trip_does_not_double_apply(self):
+    def test_streamer_name_rendering_repeated_source_does_not_double_apply(self):
         t = _make_translator()
         source = "봉준이 왔어요"
         with _active_translation_profile("hades_chxxnnx"):
@@ -4669,11 +4464,10 @@ class TestTranslateOptimizations(unittest.TestCase):
 
         self.assertEqual(first.result_source, "api")
         self.assertEqual(first.target_text, "Kim Bongjun")
-        self.assertEqual(second.result_source, "memory_hit")
+        self.assertEqual(second.result_source, "api")
         self.assertEqual(second.target_text, "Kim Bongjun")
-        self.assertEqual(t._engines[0].translate.call_count, 1)
 
-    def test_irise_canonical_rendering_covers_api_and_memory_hit_paths(self):
+    def test_irise_canonical_rendering_is_stable_for_a_repeated_source(self):
         t = _make_translator()
         source = "키리씨가 왔어요"
         with _active_translation_profile("irise"):
@@ -4685,9 +4479,8 @@ class TestTranslateOptimizations(unittest.TestCase):
 
         self.assertEqual(first.result_source, "api")
         self.assertEqual(first.target_text, "KIIRI來了。")
-        self.assertEqual(second.result_source, "memory_hit")
+        self.assertEqual(second.result_source, "api")
         self.assertEqual(second.target_text, "KIIRI來了。")
-        self.assertEqual(t._engines[0].translate.call_count, 1)
 
     def test_translation_memory_honors_context_window_config(self):
         from config import cfg
@@ -4850,33 +4643,6 @@ class TestTranslateOptimizations(unittest.TestCase):
         total_calls = sum(e.translate.call_count for e in t._engines)
         self.assertEqual(total_calls, 1, "API should be called only once; second call hits cache")
 
-    def test_cache_evicts_when_full(self):
-        from modules.translator import _CACHE_MAX_SIZE
-        t = _make_translator()
-        engine = t._active_engine()
-        prompt_ver = t._get_prompt_version_hash()
-        for i in range(_CACHE_MAX_SIZE):
-            t._memory.cache[
-                (f"key{i}", False, prompt_ver, engine.engine_name, engine.model_name)
-            ] = f"val{i}"
-        t._memory.cache_store("overflow", False, "x", prompt_ver, engine)
-        self.assertLessEqual(len(t._memory.cache), _CACHE_MAX_SIZE)
-        self.assertIn(
-            ("overflow", False, prompt_ver, engine.engine_name, engine.model_name),
-            t._memory.cache,
-        )
-
-    def test_incomplete_lookup_skips_db(self):
-        t = _make_translator()
-        t._memory.db_lookup = MagicMock(return_value="DB result")
-        lookup = t._lookup_existing_translation_event(
-            "불완전한 문장", True, t._get_prompt_version_hash()
-        )
-        self.assertIsNone(lookup.result)
-        self.assertEqual(lookup.source, "skipped")
-        t._memory.db_lookup.assert_not_called()
-
-
 class TestMaxTranslateCharsGuard(unittest.TestCase):
     """#6 — oversized inputs must be rejected before reaching any engine."""
 
@@ -4975,7 +4741,7 @@ class TestSttTemplateFragmentSanitizer(unittest.TestCase):
         self.assertEqual(t._engines[0].translate.call_args.args[0], self._SANITIZED)
         t._engines[1].translate.assert_not_called()
 
-    def test_sanitizer_db_stores_sanitized_key(self):
+    def test_sanitizer_records_sanitized_key(self):
         t = _make_translator()
         t._record_success = MagicMock()
 
@@ -5402,54 +5168,11 @@ if __name__ == "__main__":
 class TestDbCacheGating(unittest.TestCase):
     """Live mode skips the SQLite cache (0.45% measured hit rate); clip keeps it."""
 
-    def _translator_with_db_spies(self):
-        t = _make_translator()
-        t._engines[0].translate.return_value = "你好"
-        t._memory.db_lookup = MagicMock(return_value=None)
-        t._memory.db_store = MagicMock()
-        return t
-
     def _set_mode(self, mode):
         from config import cfg
         original = cfg.translation.translation_mode
         object.__setattr__(cfg.translation, "translation_mode", mode)
         return original
-
-    def test_live_mode_skips_db_lookup_and_store(self):
-        original = self._set_mode("live")
-        try:
-            t = self._translator_with_db_spies()
-            outcome = t.translate_event("안녕하세요 방송 시작합니다")
-            self.assertEqual(outcome.status, "success")
-            t._memory.db_lookup.assert_not_called()
-            t._memory.db_store.assert_not_called()
-        finally:
-            self._set_mode(original)
-
-    def test_clip_mode_uses_db_cache(self):
-        original = self._set_mode("clip")
-        try:
-            t = self._translator_with_db_spies()
-            outcome = t.translate_event("안녕하세요 방송 시작합니다")
-            self.assertEqual(outcome.status, "success")
-            t._memory.db_lookup.assert_called_once()
-            t._memory.db_store.assert_called_once()
-        finally:
-            self._set_mode(original)
-
-    def test_live_mode_flag_reenables_db_cache(self):
-        from config import cfg
-        original = self._set_mode("live")
-        original_flag = cfg.database.live_db_cache
-        object.__setattr__(cfg.database, "live_db_cache", True)
-        try:
-            t = self._translator_with_db_spies()
-            t.translate_event("안녕하세요 방송 시작합니다")
-            t._memory.db_lookup.assert_called_once()
-            t._memory.db_store.assert_called_once()
-        finally:
-            object.__setattr__(cfg.database, "live_db_cache", original_flag)
-            self._set_mode(original)
 
     def test_request_protection_identity_is_part_of_cache_fingerprint(self):
         translator = _make_translator()

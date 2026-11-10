@@ -26,7 +26,6 @@ Core scripts worth checking first:
   margins. It never activates an alias or modifies the registry; every
   candidate remains manual-review-only.
 - `scripts/analyze_groq_error_bursts.py`
-- `scripts/analyze_cache.py`
 - `scripts/check_translator_core.py`
 - `scripts/evaluate_translations.py`
 - `scripts/suggest_corrections.py`
@@ -149,17 +148,6 @@ observed total. Legacy previews and provider calls without returned cost can
 make the combined figure a lower bound. This
 is the post-cutover owner; do not add a separate guard analyzer.
 
-Cache analysis:
-```powershell
-.\live-subtitle-env\Scripts\python.exe scripts\analyze_cache.py `
-  --db logs\live_translate.db `
-  --top 10
-```
-
-Use this for cache inspection. It opens SQLite read-only and reports
-engine/model/prompt buckets, daily inserts, top cache hits, output-length
-outliers, and suspicious untranslated rows.
-
 Translator maintenance checks:
 ```powershell
 .\live-subtitle-env\Scripts\python.exe scripts\check_translator_core.py --skip-pytest
@@ -265,7 +253,8 @@ scouts, `gemini_live_translate_probe.py`, `compare_stt_language_modes.py` and
 `data/t25_higedan_assisted_listen_annotations_20260812.json`) are kept.
 
 Removed legacy/ad-hoc scripts:
-- `scripts/check_db.py` was removed; use `scripts/analyze_cache.py`.
+- `scripts/check_db.py` and `scripts/analyze_cache.py` were removed with the
+  translation cache (2026-11-10).
 - `scripts/database/check_db_schema.py` was removed; it was an ad-hoc schema
   dump and failed on Windows console Unicode output.
 - `scripts/database/check_token_len.py` was removed; it had an old

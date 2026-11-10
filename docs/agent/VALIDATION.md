@@ -230,7 +230,6 @@ an unconstrained "latest" run.
   actual device/host API, requested format, and stream-ready latency;
 - latency attribution: `scripts/analyze_latency_tail.py`;
 - Groq STT error bursts: `scripts/analyze_groq_error_bursts.py`;
-- SQLite behavior/corpus: `scripts/analyze_cache.py`;
 - offline correction mining: `scripts/suggest_corrections.py`;
 - optional LLM-assisted offline QA: `scripts/llm_quality_reviewer.py`
   (`--dry-run` avoids API calls);

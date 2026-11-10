@@ -17,7 +17,6 @@ from modules.translation_engines import (
 )
 from modules.translation_request import TranslationRequest, freeze_route_request
 from modules.translation_runtime import FallbackState, call_with_fallback
-from modules.translation_runtime import cache_key
 from modules.translator import Translator
 
 
@@ -86,9 +85,7 @@ def test_temperature_changes_contract_and_provisional_identity_but_frozen_body_s
     changed_prompt_version = translator._prompt_version_for_engine(
         engine, prompt, route_request=changed
     )
-    assert cache_key(source, False, first_prompt_version, "deepseek", engine.model_name) != (
-        cache_key(source, False, changed_prompt_version, "deepseek", engine.model_name)
-    )
+    assert first_prompt_version != changed_prompt_version
     common = dict(
         prepared_source=source, source_utterance_ids=("u1",),
         evidence_source_utterance_ids=("u1",), profile_id="",
