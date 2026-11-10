@@ -1748,7 +1748,7 @@ Ordered cards:
     falsification gates are recorded in
     `docs/agent/T25_EVIDENCE_20260802.md`.
     A second 2026-08-02 intake is recorded in
-    `docs/agent/T25_RUNTIME_AUDIO_EVIDENCE_20260802.md`: 95 losslessly
+    `archive/experiments/T25_RUNTIME_AUDIO_EVIDENCE_20260802.md`: 95 losslessly
     preserved annotations join four effective runs with 657 successful-STT WAV
     files. Its separate provenance manifest now resolves all eight
     multi-candidate timestamps by frozen text evidence. A later attribution
@@ -1809,7 +1809,7 @@ Ordered cards:
     explicitly chose to keep both. Current/evidence text stays separate and
     ASR candidates are secondary evidence, not transcripts. Full case analysis
     and reproducibility limits are in
-    `docs/agent/T25_DUAL_ASR_REPLAY_20260802.md`.
+    `archive/experiments/T25_DUAL_ASR_REPLAY_20260802.md`.
   - A focused source-attribution audit is recorded in
     `docs/agent/T25_ATTRIBUTION_AUDIT_20260802.md`. Existing propagation tests
     pass 23/23. T25-056 is intentional forced-prefix residual carry with
@@ -1880,7 +1880,7 @@ Ordered cards:
       3/3. This changes no live STT path;
     - decision remains live no-go and no broad labeling task is opened. Full
       method, hashes, performance, and limitations are in
-      `docs/agent/T25_WEAK_SIGNAL_DUAL_ASR_20260803.md`.
+      `archive/experiments/T25_WEAK_SIGNAL_DUAL_ASR_20260803.md`.
     - the owner then completed the single requested hidden-candidate blind
       listen for T25-092 / `utt-281` and labeled it `ok` as
       `어차피 스토리 밀다보면 얘 뽑을 수 있어요? 질문하시면 지금 못 뽑아요 답변 올거에요`.

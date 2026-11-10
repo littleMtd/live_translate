@@ -91,8 +91,6 @@ Situational scripts:
   runtime/STT/WAV provenance refresh for the already-frozen 2026-08-02
   annotation selections; `--check` is read-only, while `--output` writes the
   requested manifest path.
-- `scripts/compare_stt_language_modes.py`: fixed-Korean versus auto-detect
-  Groq STT on the same dumped WAVs; record-only, but calls Groq.
 - `scripts/llm_quality_reviewer.py`: offline semantic-fidelity discovery and
   triage over current runtime-event translations. It reconstructs only prior
   published same-cohort history (explicitly approximate), retains immutable
@@ -218,29 +216,6 @@ runtime rows. Its `--output` mode is an explicit artifact mutation. The separate
 `data/semantic_quality_eval_20260802.json` contains 16 reviewed bounded
 contrasts: references pass 16/16 and captured current outputs fail 16/16.
 
-The same batch has a frozen 21-case audio manifest and dual local-ASR outputs:
-`data/t25_stt_replay_manifest_20260802.json`,
-`data/t25_sensevoice_shadow_20260802.json`, and
-`data/t25_faster_whisper_shadow_20260802.json`.
-`replay_phase0_stt_candidates.py` runs faster-whisper for new output and keeps
-the shared `verify_audio_asset` fingerprint check. Historical SenseVoice JSON
-remains available for read-only comparison. Current and evidence audio must
-remain separately aggregated. These
-outputs are secondary evidence, not reference transcripts or production
-configuration. Details are in
-`docs/agent/T25_DUAL_ASR_REPLAY_20260802.md`.
-
-The bounded weak-signal follow-up uses
-`scripts/evaluate_weak_signal_dual_asr.py` to build a deterministic 10+10
-matched manifest from the four T25 run summaries and to compare the two
-separately generated replay files. It extends rather than replaces
-`replay_phase0_stt_candidates.py`; the replay driver now fixes
-faster-whisper `temperature=0.0` and records Python/package/runtime versions.
-Canonical artifacts are `data/t25_weak_signal_*_20260803.json`; interpretation
-limits and hashes are in
-`docs/agent/T25_WEAK_SIGNAL_DUAL_ASR_20260803.md`. Agreement and repetition
-flags are triage signals, not correctness labels.
-
 The existing collection/sampling tools still reject schema-v3 input because
 they target schema v2, so they cannot certify this batch as sampling-ready
 without a separately reviewed upgrade.
@@ -270,13 +245,6 @@ Audio/STT evaluation helpers:
 .\live-subtitle-env\Scripts\python.exe scripts\download_audio.py <youtube-url> --out audio\sample.wav
 ```
 
-For retained Phase 0/T25 chunks, prefer
-`scripts/replay_phase0_stt_candidates.py` rather than adding another replay
-driver. It runs faster-whisper; store new experiment output under `scratch/analysis`
-until its inputs, settings, and limitations are reviewed for preservation.
-The optional ASR dependencies may live in an external disposable environment;
-do not add them to production requirements solely to run offline evidence.
-
 `download_audio.py` uses `yt_dlp` and network access. The SenseVoice scout,
 CAM++ speaker-similarity replay, and STT completeness checker were removed;
 their historical artifacts remain available for read-only analysis.
@@ -284,6 +252,17 @@ their historical artifacts remain available for read-only analysis.
 Removed in Phase 3a: `scripts/scout_sensevoice_historical.py`,
 `scripts/replay_phase0_speaker_similarity.py`, and
 `scripts/stt_completeness_check.py`. Their historical results remain intact.
+
+Removed 2026-11-10 with their tests and machine-generated data: the Phase 0
+routing-span, alert-shadow and short-overlap-dedupe tools, the T25 local
+dual-ASR replay (`replay_phase0_stt_candidates.py`,
+`build_phase0_replay_manifest.py`, `evaluate_weak_signal_dual_asr.py` and the
+`data/t25_*` SenseVoice/faster-whisper outputs and manifests), the OCR gate
+scouts, `gemini_live_translate_probe.py`, `compare_stt_language_modes.py` and
+`cluster_name_variants.py`. Their experiments had closed; the reports are in
+`archive/experiments/` and the code in git history. Owner-heard annotations
+(`data/manual_quality_annotations_*`, `data/t25_092_blind_listen*`,
+`data/t25_higedan_assisted_listen_annotations_20260812.json`) are kept.
 
 Removed legacy/ad-hoc scripts:
 - `scripts/check_db.py` was removed; use `scripts/analyze_cache.py`.

@@ -164,16 +164,6 @@ Its references must pass 16/16. Supplying each row's captured
 the frozen contrasts, not that a production candidate fixes them. Suggested
 full translations and rules remain proposals.
 
-The 21 audio-required cases are frozen in
-`data/t25_stt_replay_manifest_20260802.json`: 31 current WAVs plus three
-separate evidence WAVs. Preserved dual-engine outputs are
-`data/t25_sensevoice_shadow_20260802.json` and
-`data/t25_faster_whisper_shadow_20260802.json`. Validate all 34 fingerprints,
-the current/evidence separation, manifest SHA, engine metadata, and non-empty
-case outputs; do not compute WER/CER because there is no reference transcript.
-See `docs/agent/T25_RUNTIME_AUDIO_EVIDENCE_20260802.md` and
-`docs/agent/T25_DUAL_ASR_REPLAY_20260802.md`.
-
 ### Runtime and failure analysis
 
 Portable one-run evidence can be created with:
@@ -242,7 +232,6 @@ an unconstrained "latest" run.
 - Groq STT error bursts: `scripts/analyze_groq_error_bursts.py`;
 - SQLite behavior/corpus: `scripts/analyze_cache.py`;
 - offline correction mining: `scripts/suggest_corrections.py`;
-- name-variant clustering: `scripts/cluster_name_variants.py`;
 - optional LLM-assisted offline QA: `scripts/llm_quality_reviewer.py`
   (`--dry-run` avoids API calls);
 - wrapper: `scripts/post_run_quality_loop.py` (use
@@ -268,17 +257,7 @@ without source/context/root-cause verification and matched negative controls.
 
 - collection joins/readiness: `collection_sanity_report.py`;
 - sampling/UI: `sample_labeling_cases.py`, `labeling_review_server.py`;
-- Phase 0 sampling/freeze: `build_phase0_eval_candidates.py`,
-  `build_phase0_replay_manifest.py`;
-- routing spans: `routing_span_annotations.py`,
-  `routing_span_review_server.py`, `summarize_phase0_routing_spans.py`;
-- local faster-whisper/alert replay: `replay_phase0_stt_candidates.py`,
-  `build_phase0_alert_shadow_dataset.py`,
-  `evaluate_phase0_alert_shadow.py`;
-- overlap dedupe: `evaluate_short_overlap_dedupe_shadow.py`,
-  `evaluate_short_overlap_surgical.py`,
-  `short_overlap_dedupe_review_server.py`;
-- language-mode comparison: `compare_stt_language_modes.py`;
+- Phase 0 sampling: `build_phase0_eval_candidates.py`;
 - input preparation: `download_audio.py`.
 
 The SenseVoice scout, CAM++ speaker-similarity replay, and STT completeness
@@ -290,24 +269,16 @@ runtime events are schema v6. Until those tools are upgraded and tested, do not
 claim a schema-v6 run is “ready for sampling” merely because the runtime analyzer can
 read it.
 
-`replay_phase0_stt_candidates.py` runs faster-whisper for new replay output.
-Historical SenseVoice JSON remains a read-only comparison input. Engine-neutral `candidate_*` fields are
-the comparison surface. Evidence assets must stay out of
-`candidate_current_text`. Model/package versions and artifact hashes identify
-an evidence run, but the owner decision does not permanently pin the external
-ASR environment; after an update, write a new result instead of overwriting a
-baseline.
-
-For the T25 weak-signal cohort, build and analyze with
-`scripts/evaluate_weak_signal_dual_asr.py`; new replay runs use faster-whisper
-while the frozen SenseVoice JSON is read-only. The frozen selector uses
-the four provenance run summaries, comparison-safe single-WAV Groq alignment,
-and fail-closed 1:1 control calipers. Faster-whisper replay explicitly uses
-`temperature=0.0`; do not compare a default-temperature result with this
-baseline. Validate manifest/result SHA links, all WAV fingerprints, 20/20
-non-empty local outputs, the six-per-cohort three-way denominators, and the
-three-case exact repeat. Similarity/repetition signals prioritize evidence;
-they are not WER, correctness, or authorization for live behavior.
+Removed 2026-11-10 with their tests and machine-generated data: the Phase 0
+routing-span, alert-shadow and short-overlap-dedupe tools, the T25 local
+dual-ASR replay (`replay_phase0_stt_candidates.py`,
+`build_phase0_replay_manifest.py`, `evaluate_weak_signal_dual_asr.py` and the
+`data/t25_*` SenseVoice/faster-whisper outputs and manifests), the OCR gate
+scouts, `gemini_live_translate_probe.py`, `compare_stt_language_modes.py` and
+`cluster_name_variants.py`. Their experiments had closed; the reports are in
+`archive/experiments/` and the code in git history. Owner-heard annotations
+(`data/manual_quality_annotations_*`, `data/t25_092_blind_listen*`,
+`data/t25_higedan_assisted_listen_annotations_20260812.json`) are kept.
 
 The later single-case T25-092 blind adjudication is preserved as
 `data/t25_092_blind_listen_20260803.json` plus
@@ -329,8 +300,6 @@ controls.
   `evaluate_translation_prompt_benchmark.py --production-runtime-baseline` or
   `--results <json>`; it is offline-only and contains no retired experiment
   variants;
-- Gemini live audio experiment: `gemini_live_translate_probe.py` (external API);
-- OCR gates: `gate1_ocr_scout.py`, `gate2_exclusivity.py`.
 
 ### Test/build matrix
 
