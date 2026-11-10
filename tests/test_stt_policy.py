@@ -9,7 +9,6 @@ from modules.stt_policy import (
     normalize_prompt_text,
     segment_stats,
     should_reject_language,
-    is_japanese_code,
     should_reject_segments,
 )
 
@@ -23,20 +22,6 @@ class TestSttPolicy(unittest.TestCase):
 
     def test_is_hallucinated_rejects_japanese_kana_over_threshold(self):
         self.assertTrue(is_hallucinated("こんにちは", max_japanese_chars=2))
-
-    def test_is_hallucinated_allows_explicitly_detected_japanese(self):
-        self.assertFalse(
-            is_hallucinated("今日は楽しかったです", max_japanese_chars=2, allow_japanese=True)
-        )
-
-    def test_japanese_allowance_does_not_disable_repetition_filter(self):
-        self.assertTrue(
-            is_hallucinated(
-                "今日は とても 楽しい 今日は とても 楽しい 今日は とても 楽しい",
-                max_japanese_chars=2,
-                allow_japanese=True,
-            )
-        )
 
     def test_is_hallucinated_rejects_repetition_loop(self):
         self.assertTrue(is_hallucinated("one two three one two three one two three", max_japanese_chars=2))
@@ -72,13 +57,6 @@ class TestSttPolicy(unittest.TestCase):
 
     def test_should_reject_language_rejects_japanese(self):
         self.assertTrue(should_reject_language("ja", "こんにちは", logging.getLogger("test")))
-
-    def test_should_reject_language_allows_japanese_when_policy_enabled(self):
-        self.assertFalse(
-            should_reject_language(
-                "ja", "こんにちは", logging.getLogger("test"), allow_japanese=True
-            )
-        )
 
     def test_should_reject_language_allows_unexpected_non_japanese(self):
         self.assertFalse(should_reject_language("en", "hello", logging.getLogger("test")))
@@ -272,5 +250,4 @@ def test_scribe_iso639_3_codes_are_recognized(caplog):
         assert should_reject_language("kor", "안녕", logger) is False
     assert "unexpected lang" not in caplog.text
     assert should_reject_language("jpn", "こんにちは", logger) is True
-    assert should_reject_language("jpn", "こんにちは", logger, allow_japanese=True) is False
-    assert is_japanese_code("JPN") and is_japanese_code("ja") and not is_japanese_code("kor")
+    assert should_reject_language("JPN", "こんにちは", logger) is True

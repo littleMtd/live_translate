@@ -76,14 +76,13 @@ def is_hallucinated(
     logger=log,
     *,
     max_repeat_ratio: float = 0.7,
-    allow_japanese: bool = False,
 ) -> bool:
     chars = [char for char in text if not char.isspace()]
     if not chars:
         return True
 
     japanese = sum(1 for char in chars if "\u3040" <= char <= "\u309f" or "\u30a0" <= char <= "\u30ff")
-    if not allow_japanese and japanese > max_japanese_chars:
+    if japanese > max_japanese_chars:
         logger.debug("STT rejected (Japanese kana=%d): %s", japanese, text[:40])
         return True
 
@@ -123,25 +122,16 @@ _KOREAN_CODES = frozenset({"ko", "kor", "korean"})
 _JAPANESE_CODES = frozenset({"ja", "jpn", "japanese"})
 
 
-def is_japanese_code(detected_lang: str | None) -> bool:
-    return str(detected_lang or "").lower() in _JAPANESE_CODES
-
-
 def should_reject_language(
     detected_lang: str | None,
     text: str,
     logger=log,
-    *,
-    allow_japanese: bool = False,
 ) -> bool:
     if not detected_lang:
         return False
 
     lang_lower = detected_lang.lower()
     if lang_lower in _JAPANESE_CODES:
-        if allow_japanese:
-            logger.info("STT accepted coherent foreign speech (lang=%s)", detected_lang)
-            return False
         logger.warning("STT rejected (lang=%s)", detected_lang)
         return True
 

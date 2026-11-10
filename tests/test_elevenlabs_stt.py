@@ -43,7 +43,6 @@ def _engine(text: str = "안녕하세요") -> STTEngine:
     engine._elevenlabs_retry_after = 0.0
     engine._last_elevenlabs_keyterm_count = 0
     engine._last_detected_language = ""
-    engine._last_foreign_speech_allowed = False
     return engine
 
 
@@ -55,7 +54,6 @@ def _cfg() -> MagicMock:
     config.audio.stt_normalize_enabled = False
     config.active_streamer_profile = "irise"
     config.translation.current_activity = ""
-    config.translation.translate_coherent_foreign_speech = False
     config.stt.elevenlabs_model = "scribe_v2"
     config.stt.elevenlabs_timeout = 6.0
     config.stt.elevenlabs_max_keyterms = 100

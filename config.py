@@ -241,11 +241,6 @@ class _Translation:
         "근데", "그런데", "그래서", "그러니까", "그리고", "아니", "맞아",
         "그러면", "그럼", "그게", "그러네", "그렇지",
     )
-    # Latent multilingual policy. Production Groq STT currently pins
-    # language="ko", so Japanese detection cannot be reached honestly yet.
-    # Keep disabled until the separate KO-vs-auto-detect replay gate passes;
-    # confidence/repetition filtering remains mandatory if later enabled.
-    translate_coherent_foreign_speech: bool = False
     # Safety cap on per-input length. Oversized inputs are almost always STT
     # hallucinations (repeated phrases, chunk-boundary glitches). Rejecting them
     # at the policy layer prevents a single bad input from burning a day's

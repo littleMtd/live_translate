@@ -43,7 +43,6 @@ from modules.stt_policy import (
     segment_rejection_reason,
     segment_stats,
     should_reject_language,
-    is_japanese_code,
 )
 
 log = get_logger("stt")
@@ -118,13 +117,12 @@ def _http_status_code(exc: Exception) -> int | None:
     return status if isinstance(status, int) and not isinstance(status, bool) else None
 
 
-def _is_hallucinated(text: str, *, allow_japanese: bool = False) -> bool:
+def _is_hallucinated(text: str) -> bool:
     return is_hallucinated(
         text,
         cfg.stt.max_japanese_chars,
         log,
         max_repeat_ratio=cfg.stt.max_repeat_ratio,
-        allow_japanese=allow_japanese,
     )
 
 
@@ -368,7 +366,6 @@ class STTEngine:
         self._last_detected_language = ""
         self._last_language_probability: float | None = None
         self._last_transcription_id = ""
-        self._last_foreign_speech_allowed = False
         if self._use_elevenlabs:
             self._init_elevenlabs()
             # Groq remains a same-chunk fallback for provider failures.
@@ -581,7 +578,6 @@ class STTEngine:
         self._last_detected_language = ""
         self._last_language_probability = None
         self._last_transcription_id = ""
-        self._last_foreign_speech_allowed = False
         self._last_elevenlabs_keyterm_count = 0
         self._last_elevenlabs_keyterms = ()
         self._last_elevenlabs_keyterm_manifest = ()
@@ -714,23 +710,17 @@ class STTEngine:
             )
             detected_lang = getattr(resp, "language_code", None)
             self._last_detected_language = str(detected_lang or "")
-            allow_detected_japanese = (
-                bool(cfg.translation.translate_coherent_foreign_speech)
-                and is_japanese_code(self._last_detected_language)
-            )
-            self._last_foreign_speech_allowed = allow_detected_japanese
             if should_reject_language(
                 detected_lang,
                 text,
                 log,
-                allow_japanese=allow_detected_japanese,
             ):
                 self._clear_context_transcript("filtered_language")
                 reason = "language"
             elif not text:
                 self._clear_context_transcript("filtered_empty")
                 reason = "empty"
-            elif _is_hallucinated(text, allow_japanese=allow_detected_japanese):
+            elif _is_hallucinated(text):
                 self._clear_context_transcript("filtered_hallucinated")
                 reason = "hallucinated"
             else:
@@ -856,7 +846,6 @@ class STTEngine:
         self._last_detected_language = ""
         self._last_language_probability = None
         self._last_transcription_id = ""
-        self._last_foreign_speech_allowed = False
         primary_ready = self._groq_client is not None and started >= self._groq_rate_limited_until
         fallback_ready = (
             self._groq_fallback_client is not None
@@ -949,11 +938,6 @@ class STTEngine:
             # Language sanity — only reject if clearly Japanese (the dominant hallucination lang)
             detected_lang = getattr(resp, "language", None)
             self._last_detected_language = str(detected_lang or "")
-            allow_detected_japanese = (
-                bool(cfg.translation.translate_coherent_foreign_speech)
-                and is_japanese_code(self._last_detected_language)
-            )
-            self._last_foreign_speech_allowed = allow_detected_japanese
             text = (getattr(resp, "text", "") or "").strip()
             segments = getattr(resp, "segments", None) or []
             self._last_provider_raw_text = text
@@ -1001,7 +985,6 @@ class STTEngine:
                 detected_lang,
                 text,
                 log,
-                allow_japanese=allow_detected_japanese,
             ):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
@@ -1057,10 +1040,9 @@ class STTEngine:
                     audio_stats=audio_stats,
                 )
                 return None
-            # A response explicitly detected as Japanese may contain kana and
-            # is still subject to the segment confidence/repetition filters.
-            # Kana in a Korean-detected response remains a hallucination.
-            if _is_hallucinated(text, allow_japanese=allow_detected_japanese):
+            # Kana beyond max_japanese_chars is a hallucination: live STT is
+            # Korean-only (the foreign-speech switch was removed 2026-11-10).
+            if _is_hallucinated(text):
                 self._last_avg_logprob = None
                 self._last_no_speech_prob = None
                 self._clear_context_transcript("filtered_hallucinated")
@@ -1503,7 +1485,7 @@ class STTEngine:
             context_gated=bool(getattr(self, "_last_prompt_context_gated", False)) if request_sent else False,
             context_gate_reason=getattr(self, "_last_prompt_context_gate_reason", "") if request_sent else "",
             detected_language=str(getattr(self, "_last_detected_language", "")) if request_sent else "",
-            foreign_speech_allowed=bool(getattr(self, "_last_foreign_speech_allowed", False)) if request_sent else False,
+            foreign_speech_allowed=False,
         )
 
     def _emit_elevenlabs_runtime_event(
@@ -1605,11 +1587,7 @@ class STTEngine:
             detected_language=(
                 str(getattr(self, "_last_detected_language", "")) if request_sent else ""
             ),
-            foreign_speech_allowed=(
-                bool(getattr(self, "_last_foreign_speech_allowed", False))
-                if request_sent
-                else False
-            ),
+            foreign_speech_allowed=False,
         )
 
 
