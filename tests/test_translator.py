@@ -1415,15 +1415,11 @@ class TestBuildBasePrompt(unittest.TestCase):
     def test_get_translation_profile_unknown_returns_empty(self):
         self.assertEqual(get_translation_profile("unknown"), "")
 
-    def test_get_translation_profile_supports_qwen_profiles(self):
-        self.assertTrue(get_translation_profile("hades_chxxnnx", qwen=True))
-
     def test_translation_profile_ids_match_streamer_registry(self):
         from modules.streamer_profiles import known_profile_ids
 
         expected = known_profile_ids() - {""}
         self.assertEqual(translation_profile_ids(), expected)
-        self.assertEqual(translation_profile_ids(qwen=True), expected)
 
     def test_translator_uses_translation_profile_helper(self):
         translator = _make_translator()

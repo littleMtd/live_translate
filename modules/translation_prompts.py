@@ -19,35 +19,28 @@ def _string_profile_map(value: Any, field_name: str) -> dict[str, str]:
     return dict(value)
 
 
-def _load_translation_profiles(path: Path = _PROFILE_DATA_PATH) -> tuple[dict[str, str], dict[str, str]]:
+def _load_translation_profiles(path: Path = _PROFILE_DATA_PATH) -> dict[str, str]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("translation profile data must be a JSON object")
-
-    standard_profiles = _string_profile_map(data.get("standard"), "standard")
-    qwen_profiles = _string_profile_map(data.get("qwen"), "qwen")
-    if set(standard_profiles) != set(qwen_profiles):
-        raise ValueError("standard and qwen translation profiles must use the same ids")
-
-    return standard_profiles, qwen_profiles
+    return _string_profile_map(data.get("profiles"), "profiles")
 
 
-_STREAMER_PROFILES, _STREAMER_PROFILES_QWEN = _load_translation_profiles()
+_STREAMER_PROFILES = _load_translation_profiles()
 
 
-def get_translation_profile(profile_id: str, qwen: bool = False) -> str:
-    profiles = _STREAMER_PROFILES_QWEN if qwen else _STREAMER_PROFILES
-    return profiles.get(canonical_profile_id(profile_id), "")
+def get_translation_profile(profile_id: str) -> str:
+    """The one hand-written profile: glossary, background notes and examples."""
+    return _STREAMER_PROFILES.get(canonical_profile_id(profile_id), "")
 
 
 def get_translation_profile_facts(profile_id: str) -> str:
-    """Return the compact glossary block shared with fallback contexts.
+    """Return the profile's glossary block for the compact fallback prompts.
 
-    Profile files put exact mappings before the first blank line and examples
-    afterwards. Reusing that block keeps the active provider contracts aligned
-    without introducing another hand-maintained fact table.
+    Profiles put exact mappings before the first blank line and notes and
+    examples afterwards; the Groq and offline prompts take only the mappings.
     """
-    profile = get_translation_profile(profile_id, qwen=True).strip()
+    profile = get_translation_profile(profile_id).strip()
     return profile.split("\n\n", 1)[0].strip() if profile else ""
 
 
@@ -169,9 +162,8 @@ def get_translation_profile_mappings(profile_id: str) -> tuple[tuple[tuple[str, 
     return tuple(mappings)
 
 
-def translation_profile_ids(qwen: bool = False) -> frozenset[str]:
-    profiles = _STREAMER_PROFILES_QWEN if qwen else _STREAMER_PROFILES
-    return frozenset(profiles)
+def translation_profile_ids() -> frozenset[str]:
+    return frozenset(_STREAMER_PROFILES)
 
 
 

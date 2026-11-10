@@ -188,8 +188,9 @@ Translation:
 - `modules/translation_memory.py`: in-memory translation LRU, optional SQLite
   read/write-through, and invalidation. Compatibility methods delegate recent
   context to the shared `ConversationHistory` owner.
-- `modules/translation_prompts.py`: standard/Qwen prompt construction and
-  JSON profile loading.
+- `modules/translation_prompts.py`: prompt construction and JSON profile
+  loading. DeepSeek receives the whole profile; the compact Groq and offline
+  prompts receive its glossary block (the text before the first blank line).
 - `modules/entity_registry.py`: pre-indexed exact reviewed entity retrieval.
   One request-local activation result owns the entity capsule, resolved source
   spans, canonical publication obligations, and source-gated target repair;
@@ -354,7 +355,7 @@ for actual repairs.
 - `modules/semantic_terminology.py`: production semantic terminology rules;
   intentionally separate from canonical names and unknown-name escrow.
 - `data/streamer_profiles.json`: profile IDs/aliases and STT glossary terms.
-- `data/translation_profiles.json`: standard and Qwen prompt-profile text.
+- `data/translation_profiles.json`: one hand-written prompt profile per streamer profile.
 - `data/entity_registry.json`: reviewed exact entity aliases, canonical targets,
   and the only production source for required entity publication obligations.
   Identity OCR variants require manual review and the `identity_ocr` scope;

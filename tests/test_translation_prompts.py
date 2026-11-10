@@ -19,7 +19,7 @@ from modules.translation_prompts import (
 from scripts.update_translation_profile_snapshot import canonical_json_hash
 
 
-_TRANSLATION_PROFILE_DATA_HASH = "4bc4885021f72d6c74ab9abefac7b3290f097ed45366d12e0c3e9dbae8dd9124"
+_TRANSLATION_PROFILE_DATA_HASH = "5c807f9a8c3f90511b99235b398aea5a36053511e2f0c039c55d11c736ab5a35"
 
 
 def test_translation_profile_data_snapshot_hash():
@@ -27,27 +27,15 @@ def test_translation_profile_data_snapshot_hash():
 
 
 def test_translation_profile_data_matches_streamer_registry():
-    standard_profiles, qwen_profiles = _load_translation_profiles(_PROFILE_DATA_PATH)
+    profiles = _load_translation_profiles(_PROFILE_DATA_PATH)
     expected_ids = known_profile_ids() - {""}
 
-    assert frozenset(standard_profiles) == expected_ids
-    assert frozenset(qwen_profiles) == expected_ids
+    assert frozenset(profiles) == expected_ids
     assert translation_profile_ids() == expected_ids
-    assert translation_profile_ids(qwen=True) == expected_ids
 
 
 def test_unknown_translation_profile_returns_empty():
     assert get_translation_profile("unknown") == ""
-    assert get_translation_profile("unknown", qwen=True) == ""
-
-
-def test_url_qwen_profile_is_compact_but_keeps_core_facts():
-    profile = get_translation_profile("url", qwen=True)
-
-    assert len(profile) < 900
-    assert profile.count("\ninput:") == 2
-    for term in ("UR:L", "유아렐", "URL", "모카", "솜먕", "Wish Me Love", "사계"):
-        assert term in profile
 
 
 def test_compact_profile_facts_exclude_examples():
@@ -125,40 +113,36 @@ def test_hades_translation_profiles_contain_glossary_mappings():
         "Planet B",
     )
 
-    for qwen in (False, True):
-        profile = get_translation_profile("hades_chxxnnx", qwen=qwen)
-        for term in required_terms:
-            assert term in profile
+    profile = get_translation_profile("hades_chxxnnx")
+    for term in required_terms:
+        assert term in profile
 
 
 def test_hades_translation_profile_alias_uses_canonical_profile():
-    for qwen in (False, True):
-        assert get_translation_profile("hades", qwen=qwen) == \
-            get_translation_profile("hades_chxxnnx", qwen=qwen)
+    assert get_translation_profile("hades") == \
+        get_translation_profile("hades_chxxnnx")
 
 
 def test_hades_translation_profile_examples_follow_canonical_names():
     forbidden_in_outputs = ("챈나", "솜펀치", "연초록", "큐마", "싱귤")
 
-    for qwen in (False, True):
-        profile = get_translation_profile("hades_chxxnnx", qwen=qwen)
-        output_lines = [
-            line for line in profile.splitlines()
-            if line.startswith("output:")
-        ]
-        for line in output_lines:
-            for forbidden in forbidden_in_outputs:
-                assert forbidden not in line
+    profile = get_translation_profile("hades_chxxnnx")
+    output_lines = [
+        line for line in profile.splitlines()
+        if line.startswith("output:")
+    ]
+    for line in output_lines:
+        for forbidden in forbidden_in_outputs:
+            assert forbidden not in line
 
 
 def test_isegye_translation_profiles_contain_official_romanization():
-    for qwen in (False, True):
-        profile = get_translation_profile("isegye_lilpa", qwen=qwen)
-        assert "Gosegu" in profile
-        assert "Jururu" in profile
-        assert "Lilpa" in profile
-        assert "히게단" in profile
-        assert "Official髭男dism" in profile
+    profile = get_translation_profile("isegye_lilpa")
+    assert "Gosegu" in profile
+    assert "Jururu" in profile
+    assert "Lilpa" in profile
+    assert "히게단" in profile
+    assert "Official髭男dism" in profile
 
 
 def test_isegye_group_profile_preserve_terms_are_source_names():
@@ -166,12 +150,10 @@ def test_isegye_group_profile_preserve_terms_are_source_names():
     assert {"이세계아이돌", "이파리", "둘기", "박쥐단", "주폭도", "세균단"} <= terms
     assert not {"똥강아지", "라니", "이세돌", "李世乭", "관"} & terms
     standard = get_translation_profile("isegye_lilpa")
-    qwen = get_translation_profile("isegye_lilpa", qwen=True)
     assert all(f"例 {n}" in standard for n in range(62, 74))
-    assert sum(f"例 {n}" in qwen for n in range(62, 74)) == 6
 
 
-def test_isegye_production_prompts_include_compact_glossary():
+def test_isegye_production_prompts_include_the_profile():
     capsule = _deepseek_capsule_prompt("isegye_lilpa")
     for term in (
         "Official髭男dism",
@@ -179,29 +161,25 @@ def test_isegye_production_prompts_include_compact_glossary():
         "李世乭",
         "세구땅",
         "Smile For You",
+        "input:",  # DeepSeek gets the examples too
     ):
         assert term in capsule
-    assert "라니(" not in capsule
-    assert capsule.count("똥강아지/라니 only when clearly fans") == 1
 
     digest = _compact_profile_digest("isegye_lilpa")
-    assert len(digest) < 600
+    assert len(digest) < 1100
     assert "Official髭男dism" in digest
-    for prompt in (capsule, digest):
-        assert "with 바둑/9단 it is Go player 李世乭" in prompt
-        assert "이세계아이돌/이세돌" not in prompt
+    assert "input:" not in digest  # Groq gets the glossary block only
 
 
 def test_stellive_translation_profiles_contain_official_romanization():
-    for qwen in (False, True):
-        profile = get_translation_profile("stellive_hina", qwen=qwen)
-        assert "Shirayuki Hina" in profile
-        assert "해둥이" in profile
-        assert "Yuni" in profile
-        assert "楓之谷" in profile
-        assert "투니버스 메들리" in profile
-        for name in ("Shizuki Toa", "Kogane Lang", "Hanayo Hiyori", "Tokino Meri", "ABYSS"):
-            assert name in profile
+    profile = get_translation_profile("stellive_hina")
+    assert "Shirayuki Hina" in profile
+    assert "해둥이" in profile
+    assert "Yuni" in profile
+    assert "楓之谷" in profile
+    assert "투니버스 메들리" in profile
+    for name in ("Shizuki Toa", "Kogane Lang", "Hanayo Hiyori", "Tokino Meri", "ABYSS"):
+        assert name in profile
 
 
 def test_url_translation_profiles_contain_official_group_terms():
@@ -228,10 +206,9 @@ def test_url_translation_profiles_contain_official_group_terms():
         "사계",
     )
 
-    for qwen in (False, True):
-        profile = get_translation_profile("url", qwen=qwen)
-        for term in required_terms:
-            assert term in profile
+    profile = get_translation_profile("url")
+    for term in required_terms:
+        assert term in profile
 
 
 def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
@@ -253,13 +230,12 @@ def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
         "Heart Crush",
     )
 
-    for qwen in (False, True):
-        profile = get_translation_profile("irise", qwen=qwen)
-        for term in required_terms:
-            assert term in profile
-        assert "이제 여러분들도 많이 기다려" in profile
-        assert "output:現在各位應該也等了很久" in profile
-        assert "never add" in profile or "must never leak" in profile
+    profile = get_translation_profile("irise")
+    for term in required_terms:
+        assert term in profile
+    assert "이제 여러분들도 많이 기다려" in profile
+    assert "output:現在各位應該也等了很久" in profile
+    assert "never add" in profile or "must never leak" in profile
 
     output_terms = get_translation_profile_output_terms("irise")
     assert {"IRISÉ", "KIIRI", "TIZ", "IZÉ", "Parable Entertainment", "Wings"} <= output_terms
@@ -267,70 +243,12 @@ def test_irise_translation_profiles_keep_names_and_fandom_collision_safe():
     assert not any("only in clear fandom" in term for term in output_terms)
 
 
-def test_standard_and_qwen_profile_glossary_facts_stay_in_sync():
-    """standard/qwen are two hand-written renderings of the same facts.
-
-    Nothing else guarantees they teach the same proper nouns, so compare the
-    Hangul terms on glossary/mapping lines (before the first example) and
-    require exact agreement. Example sentences may differ freely."""
-    import re
-
-    standard_profiles, qwen_profiles = _load_translation_profiles(_PROFILE_DATA_PATH)
-    example_marker = re.compile(r"^(例\s?\d|\d+\.\s)")
-    hangul_term = re.compile(r"[가-힣]{2,}")
-
-    def glossary_hangul_terms(text: str) -> set[str]:
-        terms: set[str] = set()
-        for line in text.splitlines():
-            if example_marker.match(line.strip()):
-                break
-            low = line.lower()
-            if "->" in line or "=" in line or "keep" in low or "renderings" in low or "names:" in low:
-                terms.update(hangul_term.findall(line))
-        return terms
-
-    for profile_id, standard_text in standard_profiles.items():
-        standard_terms = glossary_hangul_terms(standard_text)
-        qwen_terms = glossary_hangul_terms(qwen_profiles[profile_id])
-        if profile_id == "isegye_lilpa":
-            assert "이세계아이돌/이세돌" not in qwen_profiles[profile_id].split("\n\n", 1)[0]
-            # The production Qwen capsule intentionally keeps selected titles
-            # while the full standard glossary carries the longer title list.
-            assert standard_terms - qwen_terms == {
-                "고양이가", "구한다", "넘어", "마법소녀", "세상을",
-                "아이돌", "이세계", "차원을", "페스티벌",
-            }
-            assert qwen_terms - standard_terms == {"바둑", "이세돌"}
-            continue
-        assert standard_terms == qwen_terms, (
-            f"{profile_id} glossary drift — only standard: "
-            f"{sorted(standard_terms - qwen_terms)}, only qwen: {sorted(qwen_terms - standard_terms)}"
-        )
-
-
-def test_translation_profile_loader_rejects_mismatched_ids(tmp_path):
-    data_file = tmp_path / "translation_profiles.json"
-    data_file.write_text(
-        json.dumps(
-            {
-                "standard": {"profile_a": "text"},
-                "qwen": {"profile_b": "text"},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="same ids"):
-        _load_translation_profiles(data_file)
-
-
 def test_translation_profile_loader_rejects_non_string_values(tmp_path):
     data_file = tmp_path / "translation_profiles.json"
     data_file.write_text(
         json.dumps(
             {
-                "standard": {"profile_a": ["not text"]},
-                "qwen": {"profile_a": "text"},
+                "profiles": {"profile_a": ["not text"]},
             }
         ),
         encoding="utf-8",
