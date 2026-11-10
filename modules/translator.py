@@ -755,9 +755,6 @@ class Translator:
     ) -> TranslationOutcome:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
             cfg.translation.current_activity,
-            automatic_enabled=bool(
-                cfg.scene.publish_translation_activity
-            ),
             source_text=text,
         )
         with bind_activity_snapshot(snapshot):
@@ -1262,9 +1259,6 @@ class Translator:
         if snapshot is None:
             snapshot = capture_effective_activity_snapshot(
                 cfg.translation.current_activity,
-                automatic_enabled=bool(
-                    cfg.scene.publish_translation_activity
-                ),
             )
         if route_request is not None and route_request.body:
             effective_prompt = route_request.messages[0][1]
@@ -1614,9 +1608,6 @@ class Translator:
     def _get_prompt_version_hash(self) -> str:
         snapshot = bound_activity_snapshot() or capture_effective_activity_snapshot(
             cfg.translation.current_activity,
-            automatic_enabled=bool(
-                cfg.scene.publish_translation_activity
-            ),
         )
         with bind_activity_snapshot(snapshot):
             return self._prompt_version_for_engine(

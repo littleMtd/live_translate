@@ -2274,68 +2274,6 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
         self.assertEqual(fields["activity_source"], "manual")
         self.assertEqual(fields["activity_context_schema_version"], 3)
 
-    def test_translation_worker_uses_published_auto_only_when_enabled(self):
-        from modules.activity_context import (
-            AutomaticActivityPublication,
-            activity_publication_store,
-        )
-
-        outcome = TranslationOutcome(
-            source_text="자동 활동 테스트",
-            target_text="自動活動測試",
-            status="success",
-            result_source="api",
-            cache_status="miss",
-            incomplete=False,
-            engine="fake",
-            model="fake-model",
-        )
-        original_manual = translator_module.cfg.translation.current_activity
-        original_enabled = (
-            translator_module.cfg.scene.publish_translation_activity
-        )
-        activity_publication_store.replace(
-            AutomaticActivityPublication(
-                activity_id="minecraft",
-                display_label="Minecraft",
-                confirmed_at_utc="2026-07-26T00:00:00+00:00",
-                fresh_until_monotonic=time.monotonic() + 60,
-                confidence=1.0,
-                evidence_count=2,
-                activity_kind="game",
-            )
-        )
-        object.__setattr__(
-            translator_module.cfg.translation,
-            "current_activity",
-            "",
-        )
-        object.__setattr__(
-            translator_module.cfg.scene,
-            "publish_translation_activity",
-            True,
-        )
-        try:
-            fields = self._emit_outcome_with_stale_nvidia_diagnostics(outcome)
-        finally:
-            object.__setattr__(
-                translator_module.cfg.scene,
-                "publish_translation_activity",
-                original_enabled,
-            )
-            object.__setattr__(
-                translator_module.cfg.translation,
-                "current_activity",
-                original_manual,
-            )
-            activity_publication_store.replace(None)
-
-        self.assertEqual(fields["current_activity"], "Minecraft")
-        self.assertEqual(fields["activity_id"], "minecraft")
-        self.assertEqual(fields["activity_source"], "automatic")
-        self.assertEqual(fields["activity_context_schema_version"], 3)
-        self.assertEqual(fields["activity_kind"], "game")
-
     def test_translation_workers_share_translator_state(self):
         sentence_q = queue.Queue()
         subtitle_q = queue.Queue()

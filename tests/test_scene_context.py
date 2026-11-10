@@ -15,7 +15,6 @@ from PIL import Image
 import pytest
 
 from config import cfg
-from modules.activity_context import ActivityPublicationStore
 from modules.profile_context import ProfileState, profile_state
 import modules.scene_context as scene_context
 from modules.scene_context import (
@@ -224,10 +223,6 @@ def make_updater(
         utc_now=lambda: datetime(2026, 7, 25, tzinfo=timezone.utc),
         event_sink=sink,
         manual_activity_getter=lambda: manual_box["value"],
-        publication_store=kwargs.pop(
-            "publication_store",
-            ActivityPublicationStore(clock=clock),
-        ),
         profile_resolution_enabled=kwargs.pop("profile_resolution_enabled", False),
         identity_roi_store=kwargs.pop(
             "identity_roi_store",
@@ -1415,7 +1410,6 @@ def test_window_invalid_emits_bounded_reason_without_window_identity():
         event_sink=lambda event_type, **fields: events.append(
             {"event_type": event_type, **fields}
         ),
-        publication_store=ActivityPublicationStore(),
         profile_resolution_enabled=False,
     )
 

@@ -9,7 +9,7 @@ import time
 from typing import Callable
 
 from config import cfg
-from modules.activity_context import activity_publication_store, normalize_activity
+from modules.activity_context import normalize_activity
 from modules.profile_context import (
     ProfileState,
     profile_resolution_status,
@@ -66,14 +66,8 @@ class ProfileControlWatcher:
         payload = self._state.current().as_metadata()
         payload.update(profile_resolution_status.current())
         manual_activity = normalize_activity(cfg.translation.current_activity)
-        automatic_activity = activity_publication_store.current()
-        payload["activity"] = (
-            manual_activity
-            or (automatic_activity.display_label if automatic_activity is not None else "")
-        )
-        payload["activity_source"] = (
-            "manual" if manual_activity else "automatic" if automatic_activity else "none"
-        )
+        payload["activity"] = manual_activity
+        payload["activity_source"] = "manual" if manual_activity else "none"
         if payload == self._last_status_payload:
             return
         self._last_status_payload = dict(payload)

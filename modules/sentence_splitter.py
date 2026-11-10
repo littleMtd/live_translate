@@ -157,9 +157,6 @@ class _SentenceSplitterCoordinator:
         profile_id = profile_snapshot.effective_profile_id
         activity_snapshot = capture_effective_activity_snapshot(
             cfg.translation.current_activity,
-            automatic_enabled=bool(
-                cfg.scene.publish_translation_activity
-            ),
             source_text=cut.text,
         )
         cohort_identity = _activity_cohort_identity(activity_snapshot)
@@ -313,9 +310,6 @@ class _SentenceSplitterCoordinator:
                 assert source is not None
                 activity_snapshot = capture_effective_activity_snapshot(
                     cfg.translation.current_activity,
-                    automatic_enabled=bool(
-                        cfg.scene.publish_translation_activity
-                    ),
                     source_text=provisional.text,
                 )
                 prospective_identity = _activity_cohort_identity(activity_snapshot)

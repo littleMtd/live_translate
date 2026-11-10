@@ -118,9 +118,6 @@ def _start_fallback_probe_thread(
             probe_started = time.monotonic()
             activity_snapshot = capture_effective_activity_snapshot(
                 core.cfg.translation.current_activity,
-                automatic_enabled=bool(
-                    core.cfg.scene.publish_translation_activity
-                ),
             )
             with bind_activity_snapshot(activity_snapshot), bind_profile_snapshot(core.profile_state.current()):
                 system_prompt = _build_probe_system_prompt(shared_state)
@@ -783,17 +780,11 @@ class _FinalWorker:
                 if isinstance(event_snapshot, ActivitySnapshot)
                 else capture_effective_activity_snapshot(
                     core.cfg.translation.current_activity,
-                    automatic_enabled=bool(
-                        core.cfg.scene.publish_translation_activity
-                    ),
                     source_text=text,
                 )
             )
             worker_observed_snapshot = capture_effective_activity_snapshot(
                 core.cfg.translation.current_activity,
-                automatic_enabled=bool(
-                    core.cfg.scene.publish_translation_activity
-                ),
             )
             profile_snapshot = (
                 event_profile_snapshot

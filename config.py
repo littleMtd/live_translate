@@ -415,15 +415,11 @@ class _Scene:
     """
     # Enabled after the complete activity/correctness runtime gate passed.
     enabled:              bool  = True
-    # T13-B activation switch. Manual activity remains authoritative, and a
-    # fresh confirmed automatic snapshot may affect translation context only.
-    # Off since 2026-10-07: a paid ablation showed no fix for activity-sensitive
-    # errors, and run 20261007T111648Z-12404 showed game-flavoured invention on
-    # garbled STT (e.g. "핀드트" -> "以太晶蝶").
-    publish_translation_activity: bool = False
-    # The automatic activity detector this switch fed was removed on
-    # 2026-11-10 (off since 2026-10-11). The dashboard and local_settings.toml
-    # still carry the field, so it stays as an inert setting.
+    # Automatic activity detection and publication were removed on 2026-11-10
+    # (publication off since 2026-10-07: a paid ablation showed no fix for
+    # activity-sensitive errors and garbled STT drew game-flavoured invention).
+    # The dashboard and local_settings.toml still carry this field, so it
+    # stays as an inert setting.
     publish_open_set_activity: bool = True
     check_interval_sec:   float = 5.0     # bounded fast profile discovery cadence
     # Capture only the livestream browser window. Full-screen capture polluted
@@ -523,12 +519,8 @@ class _Scene:
             raise ValueError("cfg.scene vision routes must be unique")
         if self.vision_max_retries != 0:
             raise ValueError("cfg.scene.vision_max_retries must remain zero")
-        for field_name in (
-            "publish_translation_activity",
-            "publish_open_set_activity",
-        ):
-            if not isinstance(getattr(self, field_name), bool):
-                raise ValueError(f"cfg.scene.{field_name} must be boolean")
+        if not isinstance(self.publish_open_set_activity, bool):
+            raise ValueError("cfg.scene.publish_open_set_activity must be boolean")
         if (
             isinstance(self.vision_timeout, bool)
             or not isinstance(self.vision_timeout, (int, float))

@@ -32,8 +32,6 @@ from ctypes import wintypes
 
 from config import cfg
 from modules.activity_context import (
-    ActivityPublicationStore,
-    activity_publication_store,
     capture_activity_snapshot,
     normalize_activity,
 )
@@ -649,7 +647,6 @@ class SceneContextUpdater:
         utc_now: Callable[[], datetime] | None = None,
         event_sink: Callable[..., None] = runtime_events.emit,
         manual_activity_getter: Callable[[], object] | None = None,
-        publication_store: ActivityPublicationStore = activity_publication_store,
         stop_requested: Callable[[], bool] | None = None,
         pause_requested: Callable[[], bool] | None = None,
     ):
@@ -728,8 +725,6 @@ class SceneContextUpdater:
         self._manual_getter = manual_activity_getter or (
             lambda: cfg.translation.current_activity
         )
-        # The store stays empty: nothing publishes automatic activity any more.
-        self._publication_store = publication_store
         self._stop_requested = stop_requested
         self._pause_requested = pause_requested
         self.resolver_generation = 0
@@ -767,8 +762,7 @@ class SceneContextUpdater:
         if effective_changed:
             self.effective_generation += 1
             self._last_effective_identity = effective_identity
-        publication_changed = self._publication_store.replace(None)
-        if not emit or not (publication_changed or effective_changed):
+        if not emit or not effective_changed:
             return
         effective_source, effective_activity_id = effective_identity
         self._event_sink(

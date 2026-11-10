@@ -150,13 +150,8 @@ class TestConfig(unittest.TestCase):
         scene = _Scene()
         self.assertTrue(scene.publish_open_set_activity)
 
-        for field_name in (
-            "publish_translation_activity",
-            "publish_open_set_activity",
-        ):
-            with self.subTest(field_name=field_name):
-                with self.assertRaisesRegex(ValueError, "must be boolean"):
-                    _Scene(**{field_name: "yes"})
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            _Scene(publish_open_set_activity="yes")
 
     def test_scene_cadence_values_are_finite_and_bounded(self):
         from config import _Scene
