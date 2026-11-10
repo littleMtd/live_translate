@@ -8,10 +8,9 @@ real benchmark sentence, expected answer, known failure, or case verdict.
 Where activated by the persisted source and frozen request, production must:
 
 - preserve required source-grounded canonical occurrences;
-- protect and restore exact source-grounded unknown-name spans under the current
-  escrow rules rather than granting a global script allowance;
-- apply narrow reviewed terminology ownership only when its source conditions
-  are met;
+- reject provider output that contains `__LT_UNK`/`__LT_SEM` placeholders
+  (runs before 2026-11-10 also issued such placeholders for reviewed unknown
+  names and semantic terms; that policy has been removed);
 - preserve required occurrence counts and reject missing protected obligations;
 - enforce source-aware script, meta-text, and content publication guards;
 - keep one frozen obligation/context mapping across provider fallback;

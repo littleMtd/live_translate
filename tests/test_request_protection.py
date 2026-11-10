@@ -4,47 +4,14 @@ from modules.request_protection import (
 )
 
 
-def test_one_request_contract_owns_resolved_unresolved_and_semantic_spans():
-    source = "랑코가 키야라는 멤버와 막 명조 막 이런 거면 그럴 수 있지"
-    protection = resolve_request_protection(
-        source,
-        resolved_spans=(ProtectedSourceSpan(
-            owner="resolved_entity",
-            source_text="랑코",
-            source_spans=((0, 2),),
-            rendering="랑코",
-            rule_id="entity:rangko",
-        ),),
-        known_source_spans=((0, 2),),
-    )
-
-    assert [span.owner for span in protection.spans] == [
-        "resolved_entity",
-        "unresolved_referent",
-        "semantic_term",
-    ]
-    assert "랑코" in protection.provider_source
-    assert "키야" not in protection.provider_source
-    assert "명조" not in protection.provider_source
-    assert protection.provider_source.count("__LT_UNK_1__") == 1
-    assert protection.provider_source.count("__LT_SEM_1__") == 1
-
-    evaluation = protection.evaluate_provider_candidate(
-        "랑코和__LT_UNK_1__一起玩__LT_SEM_1__。"
-    )
-    assert evaluation.passed
-    assert evaluation.restored_candidate == "랑코和키야一起玩鳴潮。"
-    assert protection.evaluate_final(evaluation.restored_candidate).passed
-
-
-def test_request_contract_rejects_loss_and_has_mapping_sensitive_identity():
+def test_provider_source_is_the_original_and_identity_tracks_mapping():
     source = "키야라는 멤버가 왔어요"
     first = resolve_request_protection(source)
     second = resolve_request_protection(source)
 
     assert first.identity == second.identity
-    assert not first.evaluate_provider_candidate("有位新成員來了。").passed
-    assert not first.evaluate_final("有位新成員來了。").passed
+    assert first.provider_source == source
+    assert first.evaluate_provider_candidate("有位新成員來了。").passed
 
     resolved = resolve_request_protection(
         source,
@@ -55,10 +22,25 @@ def test_request_contract_rejects_loss_and_has_mapping_sensitive_identity():
             rendering="Reviewed Target",
             rule_id="entity:reviewed",
         ),),
-        known_source_spans=((0, 2),),
     )
     assert resolved.identity != first.identity
-    assert not resolved.requires_provider_protection
+    assert resolved.provider_source == source
+
+
+def test_invented_placeholders_are_rejected_without_any_issued():
+    protection = resolve_request_protection("두빠님 별풍선 감사합니다.")
+
+    for candidate, reason in (
+        ("謝謝__LT_UNK_0__的星星氣球。", "unknown_name_invented_placeholder"),
+        ("謝謝「__LT_UNK_n__」。", "unknown_name_invented_placeholder"),
+        ("我變成__LT_SEM_1__了", "semantic_terminology_placeholder_cardinality"),
+    ):
+        provider = protection.evaluate_provider_candidate(candidate)
+        assert not provider.passed
+        assert provider.reason == reason
+        final = protection.evaluate_final(candidate)
+        assert not final.passed
+        assert final.reason == reason
 
 
 def test_ordinary_text_has_no_request_specific_cache_identity():
@@ -80,7 +62,6 @@ def test_resolved_entity_owns_source_proven_adjacent_honorific_residue():
             rendering="랑코",
             rule_id="entity:url_ranko",
         ),),
-        known_source_spans=((0, 2),),
     )
 
     assert protection.spans[0].source_honorifics == ("님",)
@@ -103,7 +84,6 @@ def test_entity_honorific_normalization_is_source_gated_and_count_bounded():
     without_honorific = resolve_request_protection(
         source,
         resolved_spans=(span,),
-        known_source_spans=((0, 2),),
     )
     assert without_honorific.evaluate_provider_candidate(
         "랑코님보다 낫다"
@@ -118,7 +98,6 @@ def test_entity_honorific_normalization_is_source_gated_and_count_bounded():
             rendering="랑코",
             rule_id="entity:url_ranko",
         ),),
-        known_source_spans=((0, 2), (5, 7)),
     )
     assert with_honorific.evaluate_provider_candidate(
         "랑코님和랑코님來了"
@@ -131,14 +110,12 @@ def test_entity_honorific_normalization_is_source_gated_and_count_bounded():
     lexical_continuation = resolve_request_protection(
         "랑코씨앗을 심었어요",
         resolved_spans=(span,),
-        known_source_spans=((0, 2),),
     )
     assert lexical_continuation.spans[0].source_honorifics == ()
 
     particle_prefix_continuation = resolve_request_protection(
         "랑코님이상하다",
         resolved_spans=(span,),
-        known_source_spans=((0, 2),),
     )
     assert particle_prefix_continuation.spans[0].source_honorifics == ()
 
@@ -157,7 +134,6 @@ def test_non_hangul_canonical_is_not_rewritten_by_honorific_finalization():
             rendering="Lilpa",
             rule_id="entity:isegye_lilpa",
         ),),
-        known_source_spans=((0, 2),),
     )
 
     assert protection.spans[0].source_honorifics == ("님",)

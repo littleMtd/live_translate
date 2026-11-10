@@ -323,9 +323,6 @@ def _adjudicate_translation_candidate(
     engine_name = str(getattr(engine, "engine_name", "") or "")
     is_deepseek = engine_name == "deepseek"
     protection_evaluation = request_protection.evaluate_provider_candidate(result)
-    terminology_passed = protection_evaluation.semantic_passed
-    terminology_reason = protection_evaluation.semantic_reason
-    escrow_evaluation = protection_evaluation.unresolved_evaluation
     restored_result = protection_evaluation.restored_candidate
     if record_corrections:
         corrected = _apply_source_aware_corrections(source, restored_result)
@@ -369,7 +366,6 @@ def _adjudicate_translation_candidate(
     approved_terms.update(_source_activated_name_canonicals(source))
     # What the glossary tells the model to keep in Korean, once this source has it.
     approved_terms.update(_source_proven_profile_keep_terms(profile_id, source))
-    approved_terms.update(request_protection.approved_hangul_terms)
     approved_terms = frozenset(approved_terms)
     obligation_evaluation = evaluate_canonical_obligations(corrected, obligations)
     raw_quality = translation_quality(
@@ -446,11 +442,8 @@ def _adjudicate_translation_candidate(
         # filtered as model output even when it also violates another invariant.
         reason = "meta_garbage_output"
         rejection_owner = "model_output"
-    elif not terminology_passed:
-        reason = terminology_reason
-        rejection_owner = "request_protection"
-    elif not escrow_evaluation.passed:
-        reason = escrow_evaluation.reason
+    elif not protection_evaluation.passed:
+        reason = protection_evaluation.reason
         rejection_owner = "request_protection"
     elif not final_protection_evaluation.passed:
         reason = final_protection_evaluation.reason
@@ -501,8 +494,7 @@ def _adjudicate_translation_candidate(
             failed_invariants.append({"reason": failure_reason, "owner": owner})
 
     add_failure(publication_meta_rejection, "meta_garbage_output", "model_output")
-    add_failure(not terminology_passed, terminology_reason, "request_protection")
-    add_failure(not escrow_evaluation.passed, escrow_evaluation.reason, "request_protection")
+    add_failure(not protection_evaluation.passed, protection_evaluation.reason, "request_protection")
     add_failure(not final_protection_evaluation.passed, final_protection_evaluation.reason, "request_protection")
     add_failure(bool(unactivated_entity_targets), "unactivated_entity_target", "entity_provenance")
     add_failure(len(simplified_chinese_spans) >= _MIN_SIMPLIFIED_SCRIPT_EVIDENCE, "simplified_chinese", "script_safety")
@@ -538,23 +530,21 @@ def _adjudicate_translation_candidate(
         "canonical_obligations": obligation_evaluation.as_dict(),
         "unactivated_entity_targets": list(unactivated_entity_targets),
         "simplified_chinese_spans": list(simplified_chinese_spans),
+        # Both placeholder policies were removed (2026-11-10); the keys stay
+        # so old and new runtime records share one evidence shape.
         "semantic_terminology": {
-            "active": request_protection.semantic_terms.active,
-            "rule_ids": [
-                term.rule_id for term in request_protection.semantic_terms.terms
-            ],
-            "passed": terminology_passed,
+            "active": False,
+            "rule_ids": [],
+            "passed": not protection_evaluation.reason.startswith("semantic_terminology_"),
         },
         "unknown_name_escrow": {
-            "active": request_protection.unresolved_referents.active,
-            "expected": list(escrow_evaluation.expected),
-            "missing": list(escrow_evaluation.missing),
-            "duplicated": list(escrow_evaluation.duplicated),
-            "mutated_placeholder": escrow_evaluation.mutated_placeholder,
-            "invented_aliases": list(escrow_evaluation.invented_aliases),
-            "approved_hangul_terms": list(
-                request_protection.approved_hangul_terms
-            ),
+            "active": False,
+            "expected": [],
+            "missing": [],
+            "duplicated": [],
+            "mutated_placeholder": protection_evaluation.reason.startswith("unknown_name_"),
+            "invented_aliases": [],
+            "approved_hangul_terms": [],
         },
         "request_protection": {
             "identity": request_protection.identity,

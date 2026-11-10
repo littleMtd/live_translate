@@ -626,23 +626,6 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             adjudication.evidence,
         )
 
-    def test_candidate_adjudication_restores_before_publication_decision(self):
-        source = "랑콘님 고마워요."
-        protection = resolve_request_protection(source)
-        engine = MagicMock()
-        engine.engine_name = "deepseek"
-
-        adjudication = _adjudicate_translation_candidate(
-            engine,
-            "__LT_UNK_1__，謝謝你。",
-            source,
-            request_protection=protection,
-            publication=True,
-        )
-
-        self.assertTrue(adjudication.accepted)
-        self.assertEqual(adjudication.candidate_output, "랑콘，謝謝你。")
-
     def test_source_honorific_names_may_stay_in_hangul(self):
         # Run 20260919T123830Z-28460 seq 56 lost the whole subtitle because
         # both DeepSeek and Groq kept 랑코님 in Hangul as the prompt requires.
@@ -740,7 +723,7 @@ class TestTranslationOutcomeQualityClassifications(unittest.TestCase):
             for source, candidate in cases:
                 with self.subTest(engine=engine_name, source=source):
                     protection = resolve_request_protection(source)
-                    self.assertFalse(protection.unresolved_referents.active)
+                    self.assertEqual(protection.provider_source, source)
                     adjudication = _adjudicate_translation_candidate(
                         engine, candidate, source,
                         request_protection=protection, publication=True,
@@ -1610,86 +1593,6 @@ class TestGroqTranslationEngine(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 class TestTranslationFallbackChain(unittest.TestCase):
-    def test_unknown_name_escrow_rejects_invention_and_reuses_mapping_on_fallback(self):
-        primary = _route_engine("deepseek", "這件事跟師玉老師談的話。")
-        fallback = _route_engine(
-            "groq",
-            "這件事跟__LT_UNK_1__談的話，他會說你還不行。",
-        )
-        translator = _make_translator()
-        translator._engines = [primary, fallback]
-        translation_engines_module.reset_translation_call_trace()
-
-        outcome = translator.translate_event(
-            "\uadf8\ub7f0 \uac70\ub97c \uc0ac\uc625\uc324\uc774\ub791 \uc598\uae30\ud558\uba74 \ub10c \uc544\uc9c1 \uc548 \ub3fc",
-            False,
-        )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "groq")
-        self.assertIn("\uc0ac\uc625\uc324", outcome.target_text)
-        self.assertNotIn("師玉", outcome.target_text)
-        attempts = translation_engines_module.get_translation_attempts()
-        self.assertEqual(attempts[0]["status"], "rejected_output")
-        self.assertEqual(
-            attempts[0]["output_guard"]["reason"],
-            "unknown_name_placeholder_invalid",
-        )
-        self.assertEqual(attempts[1]["status"], "success")
-        self.assertEqual(translator._active_idx, 0)
-        current_message = fallback.translate_messages.call_args.args[0][-1][1]
-        self.assertIn("__LT_UNK_1__", current_message)
-        self.assertNotIn("\uc0ac\uc625\uc324", current_message)
-
-    def test_member_referent_protection_survives_primary_rejection_and_fallback(self):
-        primary = _route_engine("deepseek", "有位叫키야的成員加入了。")
-        fallback = _route_engine(
-            "groq", "有位叫__LT_UNK_1__的成員加入了。"
-        )
-        translator = _make_translator()
-        translator._engines = [primary, fallback]
-        translation_engines_module.reset_translation_call_trace()
-
-        with _active_translation_profile("url"):
-            history_before = translator._history_cohort()
-            outcome = translator.translate_event(
-                "키야라는 멤버가 새로 들어왔어요", False
-            )
-            history_after = translator._history_cohort()
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "groq")
-        self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
-        self.assertEqual(history_before, history_after)
-        for engine in (primary, fallback):
-            current_message = engine.translate_messages.call_args.args[0][-1][1]
-            self.assertIn("__LT_UNK_1__", current_message)
-            self.assertNotIn("키야", current_message)
-        attempts = translation_engines_module.get_translation_attempts()
-        self.assertEqual(
-            attempts[0]["output_guard"]["reason"],
-            "unknown_name_placeholder_invalid",
-        )
-        self.assertEqual(attempts[1]["status"], "success")
-
-    def test_fallback_api_derives_provider_source_from_request_protection(self):
-        engine = _route_engine(
-            "deepseek", "有位叫__LT_UNK_1__的成員加入了。"
-        )
-        translator = _make_translator()
-        translator._engines = [engine]
-        protection = resolve_request_protection("키야라는 멤버가 새로 들어왔어요")
-
-        result, used_engine = translator._call_with_fallback(
-            protection, "system prompt", False
-        )
-
-        self.assertEqual(result, "有位叫__LT_UNK_1__的成員加入了。")
-        self.assertIs(used_engine, engine)
-        current_message = engine.translate_messages.call_args.args[0][-1][1]
-        self.assertIn("__LT_UNK_1__", current_message)
-        self.assertNotIn("키야", current_message)
-
     def test_fallback_api_emits_exact_request_contract_and_links_attempt(self):
         engine = _route_engine("deepseek", "translated")
         translator = _make_translator()
@@ -1722,20 +1625,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
             fields["request_contract_id"],
         )
 
-    def test_protected_member_referent_is_restored(self):
-        translator = _make_translator()
-        engine = _route_engine(
-            "deepseek", "有位叫__LT_UNK_1__的成員加入了。"
-        )
-        translator._engines = [engine]
-
-        outcome = translator.translate_event(
-            "키야라는 멤버가 새로 들어왔어요", False
-        )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "有位叫키야的成員加入了。")
-
     def test_excluded_common_member_noun_keeps_unexpected_hangul_guard(self):
         # The guard still rejects the copied common noun. Since rescue v2
         # (owner decision 2026-10-11) the last-resort rescue publishes it
@@ -1754,116 +1643,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
         self.assertEqual(outcome.status, "success")
         self.assertEqual(outcome.result_source, "guard_rescue")
 
-    def test_mixed_known_canonical_and_unknown_escrow_both_remain_required(self):
-        translator = _make_translator()
-        translator._engines = [
-            _route_engine(
-                "deepseek",
-                "랑코和__LT_UNK_1__今天都吃了牛肉。",
-            )
-        ]
-
-        with _active_translation_profile("url"):
-            outcome = translator.translate_event(
-                "랑코가 푸코도 오늘 소 먹었네요",
-                False,
-            )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "랑코和푸코今天都吃了牛肉。")
-        self.assertEqual(
-            outcome.canonical_obligation_evaluation.satisfied,
-            ("랑코",),
-        )
-        event = outcome.as_event_fields(
-            1.0,
-            {"profile_id": "url", "profile_applied": True},
-        )
-        self.assertEqual(event["target_unknown_name_escrow_terms"], ["푸코"])
-        self.assertNotIn(
-            "target_has_unexpected_hangul",
-            event["quality_classifications"],
-        )
-
-    def test_all_placeholder_mutations_fail_without_weakening_script_guard(self):
-        translator = _make_translator()
-        translator._engines = [
-            _route_engine("deepseek", "得去找莫奇。"),
-            _route_engine("groq", "得去找Mochi。"),
-            _route_engine("deepl", "得去找__LT_UNKNOWN_1__。"),
-            _route_engine("groq", "得去找__LT_UNK_1____LT_UNK_1__。"),
-        ]
-        translation_engines_module.reset_translation_call_trace()
-
-        outcome = translator.translate_event("모찌한테 가야 돼", False)
-
-        self.assertEqual(outcome.status, "failed")
-        self.assertIsNone(outcome.target_text)
-        attempts = translation_engines_module.get_translation_attempts()
-        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
-        self.assertTrue(
-            all(
-                row["output_guard"]["reason"]
-                == "unknown_name_placeholder_invalid"
-                for row in attempts
-            )
-        )
-
-    def test_confirmed_unknown_name_matrix_restores_exact_source_spelling(self):
-        cases = (
-            ("그런 거를 사옥쌤이랑 얘기하면", "跟__LT_UNK_1__說的話", "사옥쌤"),
-            ("푸코도 같이 가요", "__LT_UNK_1__也一起去", "푸코"),
-            ("저는 푸순이에요", "我是__LT_UNK_1__", "푸순"),
-            ("모찌한테 가야 돼", "得去找__LT_UNK_1__", "모찌"),
-            ("근데 랑콘님은 저는 사실", "可是__LT_UNK_1__，我其實", "랑콘"),
-            (
-                "아채리. 아채리가 말했어요",
-                "__LT_UNK_1__。__LT_UNK_1__說了。",
-                "아채리",
-            ),
-        )
-        for source, candidate, expected_name in cases:
-            with self.subTest(source=source):
-                translator = _make_translator()
-                translator._engines = [_route_engine("deepseek", candidate)]
-
-                outcome = translator.translate_event(source, False)
-
-                self.assertEqual(outcome.status, "success")
-                self.assertIn(expected_name, outcome.target_text)
-                self.assertNotIn("__LT_", outcome.target_text)
-
-    def test_explicit_unknown_identity_is_restored_and_approved_sentence_locally(self):
-        translator = _make_translator()
-        translator._engines = [
-            _route_engine("deepseek", "我的暱稱是__LT_UNK_1__。")
-        ]
-
-        outcome = translator.translate_event("제 닉네임은 새봄이에요", False)
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "我的暱稱是새봄。")
-        event = outcome.as_event_fields(1.0, {"profile_id": "url"})
-        self.assertEqual(event["target_unknown_name_escrow_terms"], ["새봄"])
-        self.assertNotIn(
-            "target_has_unexpected_hangul", event["quality_classifications"]
-        )
-
-    def test_known_registry_identity_declaration_bypasses_unknown_escrow(self):
-        translator = _make_translator()
-        engine = _route_engine("deepseek", "我的暱稱是랑코。")
-        translator._engines = [engine]
-
-        with _active_translation_profile("hades_chxxnnx"):
-            outcome = translator.translate_event("제 닉네임은 랑코예요", False)
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "我的暱稱是랑코。")
-        self.assertEqual(outcome.unknown_name_approved_terms, ())
-        current_message = engine.translate_messages.call_args.args[0][-1][1]
-        self.assertIn("랑코", current_message)
-        self.assertNotIn("__LT_UNK_", current_message)
-
     def test_unactivated_common_noun_does_not_weaken_hangul_guard(self):
         # Guard unchanged (unexpected_hangul). Rescue v2 does not take pieces of a
         # predicate-like source word, so 학생 from 학생이에요 is still not published.
@@ -1876,24 +1655,6 @@ class TestTranslationFallbackChain(unittest.TestCase):
         self.assertIsNone(outcome.target_text)
         attempt = translation_engines_module.get_translation_attempts()[-1]
         self.assertEqual(attempt["output_guard"]["reason"], "unexpected_hangul")
-
-    def test_placeholder_plus_invented_alias_is_content_rejection(self):
-        translator = _make_translator()
-        translator._engines = [
-            _route_engine("deepseek", "去找__LT_UNK_1__，也叫Mochi。"),
-            _route_engine("groq", "去找__LT_UNK_1__，也叫莫奇。"),
-        ]
-        translation_engines_module.reset_translation_call_trace()
-
-        outcome = translator.translate_event("모찌한테 가야 돼", False)
-
-        self.assertEqual(outcome.status, "failed")
-        attempts = translation_engines_module.get_translation_attempts()
-        self.assertTrue(all(row["status"] == "rejected_output" for row in attempts))
-        self.assertEqual(
-            [row["output_guard"]["unknown_name_escrow"]["invented_aliases"] for row in attempts],
-            [["Mochi"], ["莫奇"]],
-        )
 
     def test_canonical_obligation_rejects_primary_and_accepts_fallback_without_health_change(self):
         primary = _route_engine("deepseek", "她來了。")
@@ -3056,49 +2817,6 @@ class TestRuntimeRetryAttribution(unittest.TestCase):
                 self.assertEqual(
                     event["subtitle_suppressed_reason"], "final_script_invariant"
                 )
-
-    def test_final_publication_allows_explicit_source_grounded_hangul(self):
-        sentence_q = queue.Queue()
-        subtitle_q = queue.Queue()
-        stop = threading.Event()
-        committed = MagicMock()
-
-        class _ApprovedTranslator:
-            def __init__(self, shared_state=None):
-                pass
-
-            def translate_event(
-                self, text: str, incomplete: bool = False, *, repetition_evidence=None
-            ) -> TranslationOutcome:
-                return TranslationOutcome(
-                    source_text=text,
-                    target_text="모카來了。",
-                    status="success",
-                    result_source="api",
-                    cache_status="miss",
-                    incomplete=incomplete,
-                    engine="fake",
-                    model="fake-model",
-                    unknown_name_approved_terms=("모카",),
-                    deferred_success=committed,
-                )
-
-        with patch.object(
-            translator_module, "Translator", _ApprovedTranslator
-        ), patch.object(translator_module, "runtime_events") as events:
-            thread = translator_module.start(sentence_q, subtitle_q, stop)
-            try:
-                sentence_q.put({"text": "모카가 왔어요.", "incomplete": False})
-                deadline = time.monotonic() + 3
-                while not events.emit.called and time.monotonic() < deadline:
-                    stop.wait(0.005)
-            finally:
-                stop.set()
-                thread.join(timeout=2)
-
-        self.assertEqual(subtitle_q.get_nowait(), "모카來了。")
-        committed.assert_called_once_with()
-        self.assertTrue(events.emit.call_args.kwargs["subtitle_emitted"])
 
     def test_all_provider_canonical_rejection_outcome_emits_no_subtitle(self):
         sentence_q = queue.Queue()
@@ -5722,84 +5440,7 @@ class TestProvisionalPromotion(unittest.TestCase):
         self.assertEqual(outcome.target_text, "\ubaa8\uce74\u4f86\u4e86")
         engine.translate_messages.assert_not_called()
 
-    def test_unknown_name_placeholder_promotes_and_restores_exact_hangul(self):
-        translator = _make_translator()
-        engine = _route_engine("deepseek", "不應呼叫")
-        translator._engines = [engine]
-        source = "모찌한테 가야 돼"
-        snapshot = capture_activity_snapshot("chatting", source="manual")
-
-        with _active_translation_profile("hades_chxxnnx"), bind_activity_snapshot(snapshot):
-            candidate = self._candidate(
-                translator,
-                source,
-                "得去找__LT_UNK_1__。",
-            )
-            outcome = translator.translate_event(
-                source,
-                True,
-                provisional_candidate=candidate,
-                source_utterance_ids=("utt-preview",),
-                evidence_source_utterance_ids=("utt-preview",),
-            )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.result_source, "provisional_promotion")
-        self.assertEqual(outcome.target_text, "得去找모찌。")
-        engine.translate_messages.assert_not_called()
-
-    def test_semantic_terminology_placeholder_promotes_and_restores(self):
-        translator = _make_translator()
-        engine = _route_engine("deepseek", "不應呼叫")
-        translator._engines = [engine]
-        source = "내가 좀 사패가 되는 것 같아"
-        snapshot = capture_activity_snapshot("chatting", source="manual")
-
-        with _active_translation_profile("url"), bind_activity_snapshot(snapshot):
-            candidate = self._candidate(
-                translator,
-                source,
-                "我好像變得很__LT_SEM_1__了",
-            )
-            outcome = translator.translate_event(
-                source,
-                True,
-                provisional_candidate=candidate,
-                source_utterance_ids=("utt-preview",),
-                evidence_source_utterance_ids=("utt-preview",),
-            )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.result_source, "provisional_promotion")
-        self.assertEqual(outcome.target_text, "我好像變得很反社會人格了")
-        engine.translate_messages.assert_not_called()
-
-
-class TestSemanticTerminologyIntegration(unittest.TestCase):
-    def test_runtime_lol_ultimate_is_restored_before_publication(self):
-        translator = _make_translator()
-        engine = _route_engine(
-            "deepseek",
-            "加里歐來了。我可以用一次__LT_SEM_1__。",
-        )
-        translator._engines = [engine]
-        source = "갈리오 왔다. 나 궁 한 개 가능."
-        snapshot = capture_effective_activity_snapshot(
-            "",
-            automatic_enabled=False,
-            source_text=source,
-        )
-
-        with bind_activity_snapshot(snapshot):
-            outcome = translator.translate_event(source)
-
-        self.assertEqual(snapshot.activity_id, "league_of_legends")
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "加里歐來了。我可以用一次大招。")
-        sent = engine.translate_messages.call_args.args[0][-1][1]
-        self.assertIn("__LT_SEM_1__", sent)
-        self.assertNotIn("궁", sent)
-
+class TestFinalProtectionRejection(unittest.TestCase):
     def test_final_terminology_rejection_allows_identical_input_retry(self):
         translator = _make_translator()
         engine = _route_engine("deepseek", "我變成__LT_SEM_1__了")
@@ -5819,76 +5460,6 @@ class TestSemanticTerminologyIntegration(unittest.TestCase):
         self.assertEqual(first.status, "failed")
         self.assertEqual(second.status, "failed")
         self.assertEqual(engine.translate_messages.call_count, 2)
-
-    def test_confirmed_semantics_are_restored_before_publication(self):
-        cases = (
-            ("내가 좀 사패가 되는 것 같아", "我好像變得很__LT_SEM_1__了", "反社會人格"),
-            ("닉, 닉값 하시면 안 되나요?", "不可以__LT_SEM_1__嗎？", "名副其實"),
-            ("준회가 짬 때린 것 같으면 연락해", "如果俊會像是__LT_SEM_1__就聯絡我", "把事情丟給別人"),
-        )
-        for source, provider_output, expected in cases:
-            translator = _make_translator()
-            engine = _route_engine("deepseek", provider_output)
-            translator._engines = [engine]
-
-            outcome = translator.translate_event(source)
-
-            self.assertEqual(outcome.status, "success")
-            self.assertIn(expected, outcome.target_text)
-            sent = engine.translate_messages.call_args.args[0][-1][1]
-            self.assertIn("__LT_SEM_1__", sent)
-            self.assertNotIn(expected, sent)
-
-    def test_semantics_share_frozen_mapping_across_fallback(self):
-        translator = _make_translator()
-        primary = _route_engine("deepseek", "我變成小廢物了")
-        fallback = _route_engine("groq", "我變成__LT_SEM_1__了")
-        translator._engines = [primary, fallback]
-
-        outcome = translator.translate_event("我看了之後有點 사패가 되는 것 같아")
-
-        self.assertEqual(outcome.target_text, "我變成反社會人格了")
-        self.assertEqual(outcome.engine, "groq")
-        self.assertIn(
-            "__LT_SEM_1__", fallback.translate_messages.call_args.args[0][-1][1]
-        )
-
-    def test_action_direction_anchor_survives_name_rejection_and_fallback(self):
-        translator = _make_translator()
-        primary = _route_engine(
-            "deepseek",
-            "打賢님按右鍵後__LT_SEM_1__即可。",
-        )
-        fallback = _route_engine(
-            "groq",
-            "塔賢按右鍵後__LT_SEM_1__即可。",
-        )
-        translator._engines = [primary, fallback]
-
-        outcome = translator.translate_event(
-            "타현님 우클릭 누르셔서 증폭 풀어주시면 풀어주시면 됩니다."
-        )
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.engine, "groq")
-        self.assertEqual(outcome.target_text, "塔賢按右鍵後解除增幅即可。")
-        for engine in (primary, fallback):
-            sent = engine.translate_messages.call_args.args[0][-1][1]
-            self.assertIn("__LT_SEM_1__", sent)
-            self.assertNotIn("증폭 풀어주시면", sent)
-
-    def test_known_canonical_unknown_name_and_terminology_are_independent(self):
-        translator = _make_translator()
-        engine = _route_engine(
-            "deepseek", "모카和__LT_UNK_1__都很__LT_SEM_1__"
-        )
-        translator._engines = [engine]
-
-        with _active_translation_profile("url"):
-            outcome = translator.translate_event("모카와 모찌한테 좀 사패가 됐다고 했어")
-
-        self.assertEqual(outcome.status, "success")
-        self.assertEqual(outcome.target_text, "모카和모찌都很反社會人格")
 
 class TestDaemonWorkerPool(unittest.TestCase):
     def test_running_provider_call_cannot_keep_process_alive(self):

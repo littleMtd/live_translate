@@ -194,7 +194,6 @@ _FORENSIC_ARTIFACT_PATHS = (
     "data/streamer_profiles.json",
     "data/translation_profiles.json",
     "data/translation_corrections.json",
-    "data/unknown_name_escrow.json",
 )
 
 
@@ -281,7 +280,6 @@ class TranslationOutcome:
     prompt_version: str = ""
     filter_reason: str = ""
     canonical_obligation_evaluation: CanonicalObligationEvaluation | None = None
-    unknown_name_approved_terms: tuple[str, ...] = ()
     corrections: tuple[dict, ...] = ()
     provider_options: tuple[tuple[str, str], ...] = ()
     system_fingerprint: str = ""
@@ -317,9 +315,7 @@ class TranslationOutcome:
                 obligation_evaluation.obligations
             ),
         )
-        approved_terms = frozenset(
-            set(approved_terms) | set(self.unknown_name_approved_terms)
-        )
+        approved_terms = frozenset(approved_terms)
         quality = translation_quality(
             self.source_text,
             self.target_text,
@@ -374,9 +370,7 @@ class TranslationOutcome:
             "request_contract_id": self.request_contract_id,
             "cache_lookup_contract": cache_contract,
             "filter_reason": self.filter_reason,
-            "target_unknown_name_escrow_terms": list(
-                self.unknown_name_approved_terms
-            ),
+            "target_unknown_name_escrow_terms": [],
             "guard_rescue": dict(self.guard_rescue) if self.guard_rescue else None,
             "latency_ms": round(latency_ms, 2),
             **metadata,
@@ -851,14 +845,7 @@ class Translator:
         )
         provider_text = request_protection.provider_source
 
-        # Direct paths predate escrow and cannot preserve its provider token.
-        # Keep them unavailable for the narrowly escrowed sentences rather than
-        # allowing a cache/slang result to bypass the final identity invariant.
-        slang_result = (
-            None
-            if request_protection.requires_provider_protection
-            else self._translate_slang(text, incomplete)
-        )
+        slang_result = self._translate_slang(text, incomplete)
         if slang_result:
             slang_guard = _translation_output_guard(
                 None,
@@ -1152,8 +1139,6 @@ class Translator:
             metric = (
                 "translation.unknown_name_escrow.final_rejected"
                 if reason.startswith("unknown_name_")
-                else "translation.semantic_terminology.final_rejected"
-                if reason.startswith("semantic_terminology_")
                 else metric_by_owner.get(
                     adjudication.rejection_owner,
                     "translation.publication_invariant.final_rejected",
@@ -1197,7 +1182,6 @@ class Translator:
             provider_options=provider_options,
             system_fingerprint=system_fingerprint,
             canonical_obligation_evaluation=final_obligation_evaluation,
-            unknown_name_approved_terms=request_protection.approved_hangul_terms,
             guard_rescue=(
                 {**guard_rescue, "kept_hangul": sorted(set(_GUARD_RESCUE_HANGUL_RUN.findall(result or "")))}
                 if rescued else None

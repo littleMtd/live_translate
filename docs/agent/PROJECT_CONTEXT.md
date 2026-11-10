@@ -197,11 +197,9 @@ Translation:
   One request-local activation result owns the entity capsule, resolved source
   spans, canonical publication obligations, and source-gated target repair;
   profile identity is not part of translation-source activation.
-- `modules/unknown_name_escrow.py`: exact reviewed source-grounded unknown-name
-  placeholder mapping, restoration, and cardinality validation. Known
-  canonical source spans are excluded before detection.
-- `modules/semantic_terminology.py`: exact/narrow source-grounded semantic
-  terminology placeholder mapping, restoration, and cardinality validation.
+- `modules/request_protection.py`: resolved-entity spans and their source
+  honorifics, plus rejection of `__LT_UNK`/`__LT_SEM` placeholders a provider
+  invents (the prompt still names them; nothing issues them since 2026-11-10).
 - `modules/provisional_subtitles.py`: one-shot provisional candidate storage,
   closure, and exact fingerprint contract.
 - `modules/translation_corrections.py`: validates and loads deterministic
@@ -352,8 +350,6 @@ for actual repairs.
   `live_translate_config.exported.json`) are applied and saved into
   `local_settings.toml` at the next start (`settings_store.py`).
 - `data/default_slang.json`: exact direct translations for short slang.
-- `modules/semantic_terminology.py`: production semantic terminology rules;
-  intentionally separate from canonical names and unknown-name escrow.
 - `data/streamer_profiles.json`: profile IDs/aliases and STT glossary terms.
 - `data/translation_profiles.json`: one hand-written prompt profile per streamer profile.
 - `data/entity_registry.json`: reviewed exact entity aliases, canonical targets,

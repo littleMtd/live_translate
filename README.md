@@ -11,7 +11,7 @@ VB-CABLE / sounddevice
   → sentence assembly
       → optional one-shot provisional translation
   → source normalization
-  → reviewed entity / unresolved referent / semantic terminology protection
+  → reviewed entity protection
   → DeepSeek V4 Flash
       → Groq translation fallback
   → deterministic restore and corrections
@@ -87,8 +87,6 @@ Auto mode 啟動時是 neutral；畫面上的 `profile=general` 表示尚未取�
 
 - `modules/entity_registry.py`：reviewed global entity data 與 exact alias activation。
 - `modules/request_protection.py`：request-local protected source spans 的統一契約。
-- `modules/unknown_name_escrow.py`：未解析但 source-grounded referent 的 exact preservation。
-- `modules/semantic_terminology.py`：reviewed semantic terminology 的 deterministic rendering。
 - `modules/translation_corrections.py`：source normalization、canonical obligations 與 deterministic target corrections。
 - `modules/translator.py`：request construction、fallback、cache/history、provisional promotion、adjudication 與 ordered publication。
 - `modules/provisional_subtitles.py`：one-shot provisional candidate 與 exact fingerprint。

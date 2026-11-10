@@ -1,8 +1,7 @@
 """One request-local ownership contract for deterministic source spans.
 
-Resolved entities, unresolved source-grounded referents, and reviewed semantic
-terms all enter this contract before a provider request is built.  Provider
-placeholders are resolved once and then reused unchanged by every route.
+Resolved entities enter this contract before a provider request is built and
+are reused unchanged by every route.
 """
 
 from __future__ import annotations
@@ -11,16 +10,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
-
-from modules.semantic_terminology import (
-    SemanticTerminologyEscrow,
-    resolve_semantic_terminology,
-)
-from modules.unknown_name_escrow import (
-    UnknownNameEscrow,
-    UnknownNameEscrowEvaluation,
-    resolve_unknown_name_escrow,
-)
 
 
 PROTECTION_POLICY_VERSION = "request-source-protection-v2"
@@ -31,6 +20,21 @@ _SOURCE_HONORIFIC_BOUNDARY = (
     rf"(?=$|[^\uac00-\ud7a3]|{_HONORIFIC_PARTICLE}{_NON_HANGUL_OR_END})"
 )
 _OPTIONAL_HONORIFIC_PARTICLE = rf"{_HONORIFIC_PARTICLE}?"
+# The provider prompt still names ``__LT_UNK_n__``/``__LT_SEM_n__`` and models
+# occasionally imitate that syntax (runs 20260916/20260920/20261009).  Nothing
+# issues placeholders any more, so any such residue is unrestorable.  Loose on
+# purpose: index 0, the literal ``n``, ``LT_UNKNOWN`` and stripped underscores.
+_INVENTED_UNKNOWN_PLACEHOLDER_RE = re.compile(r"(?<![A-Za-z])LT_UNK")
+_INVENTED_UNKNOWN_PLACEHOLDER_REASON = "unknown_name_invented_placeholder"
+_INVENTED_SEMANTIC_PLACEHOLDER_REASON = "semantic_terminology_placeholder_cardinality"
+
+
+def _invented_placeholder_reason(value: str) -> str:
+    if "__LT_SEM_" in value:
+        return _INVENTED_SEMANTIC_PLACEHOLDER_REASON
+    if _INVENTED_UNKNOWN_PLACEHOLDER_RE.search(value):
+        return _INVENTED_UNKNOWN_PLACEHOLDER_REASON
+    return ""
 
 
 def _contains_hangul_syllable(value: str) -> bool:
@@ -66,9 +70,6 @@ class ProviderProtectionEvaluation:
     passed: bool
     reason: str
     restored_candidate: str
-    semantic_passed: bool
-    semantic_reason: str
-    unresolved_evaluation: UnknownNameEscrowEvaluation
 
 
 @dataclass(frozen=True)
@@ -84,8 +85,6 @@ class RequestProtection:
     original_source: str
     provider_source: str
     spans: tuple[ProtectedSourceSpan, ...]
-    unresolved_referents: UnknownNameEscrow
-    semantic_terms: SemanticTerminologyEscrow
     identity: str
 
     @property
@@ -93,16 +92,8 @@ class RequestProtection:
         return bool(self.spans)
 
     @property
-    def requires_provider_protection(self) -> bool:
-        return self.unresolved_referents.active or self.semantic_terms.active
-
-    @property
     def fingerprint_identity(self) -> str:
         return self.identity if self.active else ""
-
-    @property
-    def approved_hangul_terms(self) -> tuple[str, ...]:
-        return self.unresolved_referents.approved_hangul_terms
 
     def _normalize_resolved_entity_honorifics(self, candidate: str) -> str:
         """Remove only source-proven Korean honorific residue from canonicals.
@@ -134,42 +125,16 @@ class RequestProtection:
         self, candidate: str | None
     ) -> ProviderProtectionEvaluation:
         value = self._normalize_resolved_entity_honorifics(candidate or "")
-        semantic_passed, semantic_reason = (
-            self.semantic_terms.evaluate_provider_candidate(value)
-        )
-        semantic_restored = (
-            self.semantic_terms.restore_provider_candidate(value)
-            if semantic_passed
-            else value
-        )
-        unresolved = self.unresolved_referents.evaluate_provider_candidate(
-            semantic_restored
-        )
-        restored = (
-            self.unresolved_referents.restore_provider_candidate(semantic_restored)
-            if semantic_passed and unresolved.passed
-            else semantic_restored
-        )
-        reason = semantic_reason if not semantic_passed else unresolved.reason
+        reason = _invented_placeholder_reason(value)
         return ProviderProtectionEvaluation(
-            passed=semantic_passed and unresolved.passed,
+            passed=not reason,
             reason=reason,
-            restored_candidate=restored,
-            semantic_passed=semantic_passed,
-            semantic_reason=semantic_reason,
-            unresolved_evaluation=unresolved,
+            restored_candidate=value,
         )
-
-    def restore_provider_candidate(self, candidate: str) -> str:
-        restored = self.unresolved_referents.restore_provider_candidate(candidate)
-        return self.semantic_terms.restore_provider_candidate(restored)
 
     def evaluate_final(self, candidate: str | None) -> FinalProtectionEvaluation:
-        unresolved = self.unresolved_referents.evaluate_final(candidate)
-        if not unresolved.passed:
-            return FinalProtectionEvaluation(False, unresolved.reason)
-        semantic_passed, semantic_reason = self.semantic_terms.evaluate_final(candidate)
-        return FinalProtectionEvaluation(semantic_passed, semantic_reason)
+        reason = _invented_placeholder_reason(candidate or "")
+        return FinalProtectionEvaluation(not reason, reason)
 
 
 def _protection_identity(
@@ -191,7 +156,6 @@ def resolve_request_protection(
     source: str,
     *,
     resolved_spans: tuple[ProtectedSourceSpan, ...] = (),
-    known_source_spans: tuple[tuple[int, int], ...] = (),
 ) -> RequestProtection:
     """Resolve every deterministic rendering owner before any provider call."""
     resolved_with_morphology: list[ProtectedSourceSpan] = []
@@ -213,40 +177,10 @@ def resolve_request_protection(
             placeholder=span.placeholder,
             source_honorifics=tuple(honorifics),
         ))
-    unresolved = resolve_unknown_name_escrow(
-        source,
-        known_source_spans=known_source_spans,
-    )
-    semantic = resolve_semantic_terminology(unresolved.provider_source)
-
-    protected: list[ProtectedSourceSpan] = resolved_with_morphology
-    protected.extend(
-        ProtectedSourceSpan(
-            owner="unresolved_referent",
-            source_text=entry.source_name,
-            source_spans=entry.source_spans,
-            rendering=entry.source_name,
-            rule_id="unknown_name_escrow",
-            placeholder=entry.placeholder,
-        )
-        for entry in unresolved.entries
-    )
-    for term in semantic.terms:
-        protected.append(ProtectedSourceSpan(
-            owner="semantic_term",
-            source_text=term.source_text,
-            source_spans=term.source_spans,
-            rendering=term.target_text,
-            rule_id=term.rule_id,
-            placeholder=term.placeholder,
-        ))
-
-    spans = tuple(protected)
+    spans = tuple(resolved_with_morphology)
     return RequestProtection(
         original_source=source,
-        provider_source=semantic.provider_source,
+        provider_source=source,
         spans=spans,
-        unresolved_referents=unresolved,
-        semantic_terms=semantic,
-        identity=_protection_identity(semantic.provider_source, spans),
+        identity=_protection_identity(source, spans),
     )

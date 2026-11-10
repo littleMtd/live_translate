@@ -260,14 +260,7 @@ def _request_protection_for(
             rendering=obligation.canonical_target,
             rule_id=obligation.rule_id,
         ))
-    known_source_spans = tuple(dict.fromkeys(
-        span for item in resolved for span in item.source_spans
-    ))
-    return resolve_request_protection(
-        source,
-        resolved_spans=tuple(resolved),
-        known_source_spans=known_source_spans,
-    )
+    return resolve_request_protection(source, resolved_spans=tuple(resolved))
 
 
 

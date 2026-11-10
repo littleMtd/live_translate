@@ -147,8 +147,10 @@ def test_deterministic_owners_are_reported_separately():
     ownership = tool.deterministic_ownership(
         case, case["production_observation"]["target_text"]
     )
-    assert ownership["semantic_terminology_active"]
-    assert ownership["semantic_terminology_rule_ids"] == ["sapa_antisocial"]
+    # Placeholder policies were removed on 2026-11-10; the fields stay inert.
+    assert ownership["semantic_terminology_active"] is False
+    assert ownership["semantic_terminology_rule_ids"] == []
+    assert ownership["unknown_name_escrow_active"] is False
     assert "target_correction_changed" in ownership
 
 

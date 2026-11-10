@@ -21,13 +21,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modules.activity_context import bind_profile_id
-from modules.semantic_terminology import resolve_semantic_terminology
 from modules.translator import (
     _apply_source_aware_corrections,
     _normalize_source_before_matching,
-    _resolve_active_canonical_obligations,
 )
-from modules.unknown_name_escrow import resolve_unknown_name_escrow
 from utils.runtime_events import translation_quality
 
 
@@ -220,22 +217,15 @@ def deterministic_ownership(case: dict[str, Any], target_text: str | None) -> di
     target = str(target_text or "")
     with bind_profile_id(str(case.get("profile_id") or "")):
         normalized = _normalize_source_before_matching(source)
-        obligations = _resolve_active_canonical_obligations(normalized)
-        known_source_spans = tuple(
-            span for obligation in obligations for span in obligation.source_spans
-        )
-        unknown = resolve_unknown_name_escrow(
-            normalized, known_source_spans=known_source_spans
-        )
-        terminology = resolve_semantic_terminology(unknown.provider_source)
         corrected = _apply_source_aware_corrections(normalized, target) if target else target
     return {
         "source_normalization_changed": normalized != source,
         "normalized_source": normalized,
-        "unknown_name_escrow_active": unknown.active,
-        "unknown_name_terms": list(unknown.approved_hangul_terms),
-        "semantic_terminology_active": terminology.active,
-        "semantic_terminology_rule_ids": [term.rule_id for term in terminology.terms],
+        # Placeholder policies removed 2026-11-10; fields kept for old reports.
+        "unknown_name_escrow_active": False,
+        "unknown_name_terms": [],
+        "semantic_terminology_active": False,
+        "semantic_terminology_rule_ids": [],
         "target_correction_changed": corrected != target,
         "corrected_target": corrected or None,
     }
