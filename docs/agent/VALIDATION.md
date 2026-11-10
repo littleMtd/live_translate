@@ -12,7 +12,7 @@ maintenance command:
 1. Search the repository first:
    `rg --files | rg -i "replay|eval|harness|benchmark|analy|sample|review|gate|scout"`.
 2. Search script descriptions and call sites:
-   `rg -n "ArgumentParser|replay_eval|check_translator_core|post_run_quality_loop" scripts tests AGENTS.md docs/agent`.
+   `rg -n "ArgumentParser|replay_eval|check_translator_core" scripts tests AGENTS.md docs/agent`.
 3. Read the relevant script and its tests, then run its `--help` or a
    non-mutating baseline command.
 4. Extend the existing tool when its responsibility already matches the task.
@@ -29,9 +29,6 @@ Important mutation boundaries:
 - `scripts/replay_eval.py run` is read-only; `--update` rewrites
   `data/replay_eval_snapshot.jsonl` and is allowed only when intentionally
   accepting reviewed deterministic behavior changes.
-- `scripts/post_run_quality_loop.py` updates the replay snapshot by default.
-  Use `--skip-replay-update` for analysis unless snapshot acceptance is
-  explicitly in scope.
 - `scripts/update_translation_profile_snapshot.py --check` is read-only.
   Running it without `--check` edits the stored prompt-profile hash.
 - Comparison, LLM-review, Groq replay, and Gemini probe tools may call external
@@ -135,21 +132,8 @@ annotation-68 gap by retaining its live evidence IDs `utt-26,utt-27`; selected
 missing-provenance count is zero. Frozen timestamp selections are not
 recomputed during provenance rebuilding.
 
-Validate the canonical artifact without modifying it:
-
-```powershell
-.\live-subtitle-env\Scripts\python.exe `
-  scripts\rebuild_semantic_quality_provenance.py --check
-```
-
-The rebuild command is intentionally explicit and mutating; use it only when
-the frozen runtime joins are being refreshed and reviewed:
-
-```powershell
-.\live-subtitle-env\Scripts\python.exe `
-  scripts\rebuild_semantic_quality_provenance.py `
-  --output data\semantic_quality_evidence_20260802.json
-```
+The tool that rebuilt this manifest (`rebuild_semantic_quality_provenance.py`)
+was removed on 2026-11-11; the frozen manifest stays as evidence.
 
 The separately reviewed bounded evaluator is executable:
 
@@ -174,10 +158,9 @@ Portable one-run evidence can be created with:
 ```
 
 `CHATGPT_PROJECT_README.md` and `manifest.json` are derived indexes; the
-sanitized `runtime_events*.jsonl` parts remain the source of truth. Both
-`analyze_runtime_events.py --events <bundle-directory>` and
-`llm_quality_reviewer.py --events <bundle-directory>` resolve the ordered parts
-from the manifest, so validation must prove they work after the original daily
+sanitized `runtime_events*.jsonl` parts remain the source of truth.
+`analyze_runtime_events.py --events <bundle-directory>` resolves the ordered
+parts from the manifest, so validation must prove it works after the original daily
 logs are unavailable. Export tests must cover exact-run filtering, recursive
 secret/header redaction, raw-event preservation, part ordering, provenance,
 optional/missing WAVs, and screenshot exclusion.
@@ -227,46 +210,23 @@ an unconstrained "latest" run.
   handed to the prompt budget, not the raw accepted transcript length;
 - Windows capture startup is summarized under `audio_startup_summary`, separate
   from VAD chunk counts under `audio_summary`; use the startup fields to verify
-  actual device/host API, requested format, and stream-ready latency;
-- latency attribution: `scripts/analyze_latency_tail.py`;
-- Groq STT error bursts: `scripts/analyze_groq_error_bursts.py`;
-- offline correction mining: `scripts/suggest_corrections.py`;
-- optional LLM-assisted offline QA: `scripts/llm_quality_reviewer.py`
-  (`--dry-run` avoids API calls);
-- wrapper: `scripts/post_run_quality_loop.py` (use
-  `--skip-replay-update` unless accepting the snapshot is explicitly intended).
-
-The LLM reviewer is the semantic discovery/triage owner, not a confidence gate
-or regression oracle. For current schema-v6 runs, use `--mode broad` when the
-goal is to inspect every published translation rather than only deterministic
-anomalies. Schema-v6 `translation_request_contract` rows retain the exact
-selected history and provider messages; older runs remain approximate. Future
-subtitles are never supplied as context.
-Review output is fail-closed and requires one strict semantic verdict per case.
-`summary.json` records reviewer calls/model, tokens, reported cost, latency,
-coverage, suspicious rate, and category counts. `--calibration-cases` builds
-blinded reference/current contrasts only from cases with bounded expected or
-forbidden assertions and reports known-failure recall, known-good false-positive
-rate, and top-K precision. Labels are attached only after review. Use
-`--case-offset` for bounded/resumable slices when provider budgets require it.
-Do not promote triage results into the 75-case suite or production corrections
-without source/context/root-cause verification and matched negative controls.
+  actual device/host API, requested format, and stream-ready latency.
 
 ### STT/audio/routing harnesses
 
-- collection joins/readiness: `collection_sanity_report.py`;
-- sampling/UI: `sample_labeling_cases.py`, `labeling_review_server.py`;
-- Phase 0 sampling: `build_phase0_eval_candidates.py`;
 - input preparation: `download_audio.py`.
 
 The SenseVoice scout, CAM++ speaker-similarity replay, and STT completeness
 checker were removed with the retired local STT provider. Their historical
 artifacts remain available for read-only analysis.
 
-The collection/sampling scripts currently hard-code target schema v2 while live
-runtime events are schema v6. Until those tools are upgraded and tested, do not
-claim a schema-v6 run is “ready for sampling” merely because the runtime analyzer can
-read it.
+Removed 2026-11-11 as unused, with their tests: the schema-v2 labeling workflow (`collection_sanity_report.py`,
+`sample_labeling_cases.py`, `labeling_review_server.py`,
+`build_phase0_eval_candidates.py`), `analyze_groq_error_bursts.py`,
+`analyze_latency_tail.py`, `suggest_corrections.py`, `llm_quality_reviewer.py`,
+`post_run_quality_loop.py`, `rebuild_semantic_quality_provenance.py` and
+`data/fan_terms.json`. None had a caller or a recent run; the code is in git
+history.
 
 Removed 2026-11-10 with their tests and machine-generated data: the Phase 0
 routing-span, alert-shadow and short-overlap-dedupe tools, the T25 local
@@ -343,63 +303,3 @@ stack before handoff.
 - `.gitignore` retains defensive patterns for legacy pytest artifacts, but
   ignored output in the repository is still pollution and should not be used
   as the normal workflow.
-
-## Labeling / Collection Workflow
-
-Use these scripts for the STT-vs-translation labeling workflow. They were
-verified on 2026-05-31 with:
-`python -m pytest` (`585 passed, 4 skipped`)
-
-This is a historical schema-v2 workflow. The current live writer emits schema
-v3, while `collection_sanity_report.py` and `sample_labeling_cases.py` still set
-`TARGET_SCHEMA_VERSION = 2`. Upgrade and retest those tools before using this
-section on new runtime logs.
-
-Recommended order:
-1. Validate a collected run before sampling.
-2. Sample only from a run where `ready_for_sampling` is `yes`.
-3. Open the browser labeling UI for the generated sample.
-
-Collection sanity report:
-```powershell
-.\live-subtitle-env\Scripts\python.exe scripts\collection_sanity_report.py `
-  --events logs\runtime_events_YYYYMMDD.jsonl `
-  --audio-root logs\audio_dump `
-  --run-id <run_id> `
-  --fail-on-not-ready
-```
-
-This checks schema_version 2 translation population, profile consistency,
-source_utterance_ids, STT event joins, wav joins, confidence fields, multi-chunk
-coverage, duplicate source ids, empty text, long text, repeated source text, and
-glossary/prompt echo candidates.
-
-Random labeling sample:
-```powershell
-.\live-subtitle-env\Scripts\python.exe scripts\sample_labeling_cases.py `
-  --events logs\runtime_events_YYYYMMDD.jsonl `
-  --audio-root logs\audio_dump `
-  --run-id <run_id> `
-  --samples 60 `
-  --seed <seed>
-```
-
-This samples uniformly from `schema_version == 2` and `event_type ==
-"translation"`, joins every `source_utterance_ids` entry back to STT evidence
-and wav paths, classifies each source chunk as `primary`, `supporting`, or
-`prior_overlap`, and fails by default if replay evidence is missing.
-
-Browser labeling UI:
-```powershell
-.\live-subtitle-env\Scripts\python.exe scripts\labeling_review_server.py `
-  logs\labeling_sample_YYYYMMDD_HHMMSS.json `
-  --host 127.0.0.1 `
-  --port 8765
-```
-
-Open `http://127.0.0.1:8765/`. The UI plays each source wav chunk, shows source
-text, romanization, translation, chunk roles, overlap warnings, STT confidence
-fields, and writes annotations with optional context tags to
-`logs\labeling_sample_YYYYMMDD_HHMMSS.annotations.json`. Keyboard labels:
-`1=a_translation_error`, `2=b_stt_error`, `3=both`, `4=ok`, `5=unclear`;
-space toggles the first audio chunk, arrow keys move between samples.

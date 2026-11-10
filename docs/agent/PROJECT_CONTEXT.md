@@ -356,7 +356,6 @@ for actual repairs.
   profile-scoped boundary-aware source aliases, entity references, and legacy
   repair-only name-rendering rules.
 - `data/scene_stt_terms.json`: activity-specific STT vocabulary.
-- `data/fan_terms.json`: reviewed terminology/reference inventory.
 - `data/eval_cases.json`: small offline output-quality fixtures.
 - `data/replay_eval_snapshot.jsonl`: frozen real-runtime deterministic golden
   set; changes require explicit replay review.

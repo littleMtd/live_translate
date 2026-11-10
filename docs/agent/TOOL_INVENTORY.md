@@ -14,23 +14,15 @@ They are not all daily-use tools; prefer the "core" scripts first, and use the
 
 Core scripts worth checking first:
 - `scripts/replay_eval.py`
-- `scripts/collection_sanity_report.py`
-- `scripts/sample_labeling_cases.py`
-- `scripts/labeling_review_server.py`
 - `scripts/analyze_runtime_events.py`
 - `scripts/analyze_forensics_bundle.py`
-- `scripts/analyze_latency_tail.py`
 - `scripts/suggest_identity_ocr_aliases.py`: mines only persisted calibrated
   identity-ROI observations, ranks repeated exact OCR strings against reviewed
   member aliases, and emits advisory JSON/Markdown candidates with collision
   margins. It never activates an alias or modifies the registry; every
   candidate remains manual-review-only.
-- `scripts/analyze_groq_error_bursts.py`
 - `scripts/check_translator_core.py`
 - `scripts/evaluate_translations.py`
-- `scripts/suggest_corrections.py`
-- `scripts/post_run_quality_loop.py` (snapshot-mutating by default; see the
-  mutation boundaries in `docs/agent/VALIDATION.md`)
 - `scripts/update_translation_profile_snapshot.py`
 - `scripts/debug_pipeline.py`
 - `scripts/export_chatgpt_bundle.py`: exports every persisted event for one
@@ -53,11 +45,6 @@ Core scripts worth checking first:
   `translation_request_id` in runtime JSONL and requires its complete route
   event set; v1 contracts expose recorded messages while unavailable options
   and body bytes remain unknown. It has no provider send mode.
-- `scripts/analyze_latency_tail.py`: accepts successful translation events
-  from runtime schema v2 onward. Aggregate latency remains available for legacy
-  rows; timeout attribution requires a per-attempt ledger with its recorded
-  timeout. The analyzer does not infer current timeouts from repository
-  defaults or apply retired-provider assumptions to current runs.
 
 Identity OCR alias candidate report:
 ```powershell
@@ -86,19 +73,6 @@ Situational scripts:
   `--production-runtime-baseline` for frozen traces or `--results` for a
   complete external result set. It has no provider execution or retired
   prompt/model experiment modes.
-- `scripts/rebuild_semantic_quality_provenance.py`: fail-closed schema-v3
-  runtime/STT/WAV provenance refresh for the already-frozen 2026-08-02
-  annotation selections; `--check` is read-only, while `--output` writes the
-  requested manifest path.
-- `scripts/llm_quality_reviewer.py`: offline semantic-fidelity discovery and
-  triage over current runtime-event translations. It reconstructs only prior
-  published same-cohort history (explicitly approximate), retains immutable
-  profile/activity/provider/attempt/publication evidence, combines deterministic
-  hard signals with a strict structured semantic review, and emits ranked JSONL,
-  Markdown, token/cost/latency metrics, and blinded bounded-contrast calibration.
-  OpenRouter and Groq reviewer routes are supported; use `--dry-run` for no API
-  call. This is not the frozen 75-case regression scorer and never promotes a
-  reviewer suspicion into regression or production rules automatically.
 - `scripts/download_audio.py`: useful only when preparing offline audio files
   from YouTube.
 
@@ -195,12 +169,9 @@ limitations are in `docs/agent/T25_EVIDENCE_20260802.md`.
 
 The 2026-08-02 audio-retained intake is stored separately as
 `data/manual_quality_annotations_20260802.json` plus the non-evaluator
-`data/semantic_quality_evidence_20260802.json` provenance manifest. Validate
-that provenance manifest with
-`scripts/rebuild_semantic_quality_provenance.py --check`; do not route it
-through `evaluate_translations.py`. The tool preserves frozen timestamp
-selection decisions and rebuilds current/evidence attribution from schema-v3
-runtime rows. Its `--output` mode is an explicit artifact mutation. The separate
+`data/semantic_quality_evidence_20260802.json` provenance manifest (built by the
+`rebuild_semantic_quality_provenance.py` tool removed on 2026-11-11); do not
+route it through `evaluate_translations.py`. The separate
 `data/semantic_quality_eval_20260802.json` contains 16 reviewed bounded
 contrasts: references pass 16/16 and captured current outputs fail 16/16.
 
@@ -253,6 +224,13 @@ scouts, `gemini_live_translate_probe.py`, `compare_stt_language_modes.py` and
 `data/t25_higedan_assisted_listen_annotations_20260812.json`) are kept.
 
 Removed legacy/ad-hoc scripts:
+- Removed 2026-11-11 as unused, with their tests: the schema-v2 labeling workflow (`collection_sanity_report.py`,
+  `sample_labeling_cases.py`, `labeling_review_server.py`,
+  `build_phase0_eval_candidates.py`), `analyze_groq_error_bursts.py`,
+  `analyze_latency_tail.py`, `suggest_corrections.py`, `llm_quality_reviewer.py`,
+  `post_run_quality_loop.py`, `rebuild_semantic_quality_provenance.py` and
+  `data/fan_terms.json`. None had a caller or a recent run; the code is in git
+  history.
 - `scripts/check_db.py` and `scripts/analyze_cache.py` were removed with the
   translation cache (2026-11-10).
 - `scripts/database/check_db_schema.py` was removed; it was an ad-hoc schema

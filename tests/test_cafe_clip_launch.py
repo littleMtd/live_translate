@@ -6,10 +6,7 @@ import pytest
 import main
 
 from scripts.analyze_runtime_events import analyze_runtime_events, parse_args
-from scripts.collection_sanity_report import build_collection_sanity_report
-from scripts.post_run_quality_loop import _prepare_event_input
 from scripts.replay_eval import iter_translation_events
-from scripts.sample_labeling_cases import read_runtime_rows, translation_population
 from utils import config_export
 from utils.chatgpt_bundle import list_runs
 from utils.runtime_events import RuntimeEventWriter
@@ -63,16 +60,6 @@ def test_mixed_daily_events_are_selected_by_run_kind(tmp_path):
     assert parse_args(["--run-kind", "cafe_clip"]).run_kind == "cafe_clip"
     assert [e["run_id"] for e in iter_translation_events([str(path)])] == ["live-run"]
     assert [e["run_id"] for e in iter_translation_events([str(path)], "cafe_clip")] == ["cafe-run"]
-    rows = read_runtime_rows(path)
-    assert [r["event"]["run_id"] for r in translation_population(rows)] == ["live-run"]
-    assert [r["event"]["run_id"] for r in translation_population(rows, run_kind="cafe_clip")] == ["cafe-run"]
-    live_report = build_collection_sanity_report(events_path=path, audio_root=tmp_path, min_population=0)
-    cafe_report = build_collection_sanity_report(events_path=path, audio_root=tmp_path,
-                                                 min_population=0, run_kind="cafe_clip")
-    assert [item["value"] for item in live_report["profiles"]] == ["unknown"]
-    assert live_report["counts"]["translation_events"] == cafe_report["counts"]["translation_events"] == 1
-    combined = _prepare_event_input([str(path)], tmp_path)
-    assert [json.loads(line)["run_id"] for line in combined.read_text(encoding="utf-8").splitlines()] == ["live-run"]
     assert {run["run_kind"] for run in list_runs(tmp_path)} == {"legacy-live", "cafe_clip"}
 
 
@@ -148,17 +135,8 @@ def test_five_kinds_preserve_each_consumer_policy(tmp_path):
     for kind in ("test", "replay", "benchmark", "cafe_clip"):
         assert analyze_runtime_events(path, run_kind=kind)["run_ids"] == [kind]
     assert {e["run_id"] for e in iter_translation_events([str(path)])} == expected
-    assert {r["event"]["run_id"] for r in translation_population(read_runtime_rows(path))} == expected
-    assert build_collection_sanity_report(events_path=path, audio_root=tmp_path,
-                                          min_population=0)["counts"]["translation_events"] == 5
-    combined = _prepare_event_input([str(path)], tmp_path)
-    assert {json.loads(l)["run_id"] for l in combined.read_text(encoding="utf-8").splitlines()} == expected
     for kind, count in (("cafe_clip", 1), ("all", 6)):
         assert len(list(iter_translation_events([str(path)], kind))) == count
-        assert len(translation_population(read_runtime_rows(path), run_kind=kind)) == count
-        assert build_collection_sanity_report(events_path=path, audio_root=tmp_path,
-                                              min_population=0, run_kind=kind)["counts"]["translation_events"] == count
-        assert len(_prepare_event_input([str(path)], tmp_path, kind).read_text(encoding="utf-8").splitlines()) == count
 
 
 def test_config_export_cleans_only_old_owned_temps(tmp_path, monkeypatch):
@@ -218,16 +196,6 @@ def test_truncated_utf8_record_does_not_hide_following_event(tmp_path):
     path.write_bytes(b'{"source_text":"' + "中".encode("utf-8")[:2])
     writer.emit("translation", schema_version=2, source_text="正常", target_text="正常")
     assert analyze_runtime_events(path)["run_ids"] == ["valid"]
-    from scripts.collection_sanity_report import read_runtime_rows as collection_rows
-    for reader in (read_runtime_rows, collection_rows):
-        rows = reader(path)
-        assert len(rows) == 1
-        assert rows[0]["line_no"] == 2
-        assert rows[0]["event"]["run_id"] == "valid"
-    assert build_collection_sanity_report(events_path=path, audio_root=tmp_path,
-                                          min_population=0)["counts"]["translation_events"] == 1
-    combined = _prepare_event_input([str(path)], tmp_path)
-    assert [json.loads(l)["run_id"] for l in combined.read_text(encoding="utf-8").splitlines()] == ["valid"]
 
 
 def test_requested_profile_drives_probe_and_stt_when_cfg_differs(monkeypatch):

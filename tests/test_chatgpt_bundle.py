@@ -4,7 +4,6 @@ import wave
 from pathlib import Path
 
 from scripts.analyze_runtime_events import analyze_runtime_events
-from scripts.llm_quality_reviewer import iter_translation_events, resolve_event_paths
 from utils.chatgpt_bundle import SourceEvent, _subtitle_rows, bundle_event_paths, export_bundle, list_runs, sanitize_value
 
 
@@ -190,17 +189,13 @@ def test_large_log_splits_deterministically_without_truncation(tmp_path):
     assert exported == expected
 
 
-def test_bundle_can_be_read_without_original_logs_by_analyzer_and_harness(tmp_path):
+def test_bundle_can_be_read_without_original_logs_by_analyzer(tmp_path):
     project, bundle, _, _ = _export(tmp_path)
     for path in (project / "logs").glob("runtime_events_*.jsonl"):
         path.unlink()
     report = analyze_runtime_events(bundle, run_id="run-a")
     assert report["available"] is True
     assert report["total_events"] == 3
-    paths = resolve_event_paths([str(bundle)])
-    translations = list(iter_translation_events(paths, run_ids={"run-a"}))
-    assert len(translations) == 1
-    assert translations[0]["target_text"] == "你好"
 
 
 def test_list_runs_filters_malformed_lines_and_reports_observed_bounds(tmp_path):
