@@ -107,14 +107,11 @@ class TestTokenUsageCapture(unittest.TestCase):
     def test_effective_prompt_uses_groq_compact_prompt(self):
         from config import cfg
 
-        original_compact = cfg.translation.groq_translation_compact_prompt
         original_profile = cfg.translation.use_profile
-        object.__setattr__(cfg.translation, "groq_translation_compact_prompt", True)
         object.__setattr__(cfg.translation, "use_profile", False)
         try:
             prompt = effective_system_prompt_for_engine("groq", "FULL PRIMARY PROMPT")
         finally:
-            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
             object.__setattr__(cfg.translation, "use_profile", original_profile)
 
         self.assertNotEqual(prompt, "FULL PRIMARY PROMPT")
@@ -127,8 +124,6 @@ class TestTokenUsageCapture(unittest.TestCase):
         from config import cfg
 
         original_mode = cfg.translation.translation_mode
-        original_compact = cfg.translation.groq_translation_compact_prompt
-        object.__setattr__(cfg.translation, "groq_translation_compact_prompt", True)
         try:
             for engine in ("deepseek", "groq"):
                 object.__setattr__(cfg.translation, "translation_mode", "live")
@@ -141,36 +136,32 @@ class TestTokenUsageCapture(unittest.TestCase):
                 self.assertNotIn("Aim for at most 28 Traditional Chinese characters", clip_prompt)
         finally:
             object.__setattr__(cfg.translation, "translation_mode", original_mode)
-            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
 
     def test_live_model_self_check_reaches_primary_and_fallback_requests(self):
         from config import cfg
 
         original_mode = cfg.translation.translation_mode
-        original_compact = cfg.translation.groq_translation_compact_prompt
         source = "잠깐만. 반대 골반을 빼면 안 된다. 골반을 안 빼고 어떻게 추지?"
         try:
             object.__setattr__(cfg.translation, "translation_mode", "live")
-            for compact in (True, False):
-                object.__setattr__(cfg.translation, "groq_translation_compact_prompt", compact)
-                for engine, build_messages in (
-                    ("deepseek", build_effective_deepseek_messages),
-                    ("groq", build_effective_groq_messages),
-                ):
-                    prompt = effective_system_prompt_for_engine(
-                        engine, "FULL PRIMARY PROMPT"
-                    )
-                    messages = build_messages(source, "FULL PRIMARY PROMPT", True, [])
-                    self.assertEqual(messages[0], ("system", prompt))
-                    if engine == "deepseek":
-                        self.assertIn("Preserve who does what, negation, direction", prompt)
-                        self.assertIn("Keep uncertainty and genuine contradictions", prompt)
-                        self.assertIn("Never cut off a clause", prompt)
-                    else:
-                        self.assertIn("compare the complete Chinese translation", prompt)
-                        self.assertIn("negation scope", prompt)
-                        self.assertIn("Preserve genuine source contradictions", prompt)
-                        self.assertIn("Meaning takes priority over the subtitle length", prompt)
+            for engine, build_messages in (
+                ("deepseek", build_effective_deepseek_messages),
+                ("groq", build_effective_groq_messages),
+            ):
+                prompt = effective_system_prompt_for_engine(
+                    engine, "FULL PRIMARY PROMPT"
+                )
+                messages = build_messages(source, "FULL PRIMARY PROMPT", True, [])
+                self.assertEqual(messages[0], ("system", prompt))
+                if engine == "deepseek":
+                    self.assertIn("Preserve who does what, negation, direction", prompt)
+                    self.assertIn("Keep uncertainty and genuine contradictions", prompt)
+                    self.assertIn("Never cut off a clause", prompt)
+                else:
+                    self.assertIn("compare the complete Chinese translation", prompt)
+                    self.assertIn("negation scope", prompt)
+                    self.assertIn("Preserve genuine source contradictions", prompt)
+                    self.assertIn("Meaning takes priority over the subtitle length", prompt)
 
             object.__setattr__(cfg.translation, "translation_mode", "clip")
             for engine, build_messages in (
@@ -181,7 +172,6 @@ class TestTokenUsageCapture(unittest.TestCase):
                 self.assertNotIn("compare the complete Chinese translation", prompt)
         finally:
             object.__setattr__(cfg.translation, "translation_mode", original_mode)
-            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
 
 
 class TestCompactProfileDigest(unittest.TestCase):
@@ -192,21 +182,15 @@ class TestCompactProfileDigest(unittest.TestCase):
     def _compact_prompt(engine: str, profile: str, use_profile: bool) -> str:
         from config import cfg
 
-        compact_field = "groq_translation_compact_prompt" if engine == "groq" else None
         original = {
-            "compact": getattr(cfg.translation, compact_field) if compact_field else None,
             "profile": cfg.translation.streamer_profile,
             "use_profile": cfg.translation.use_profile,
         }
-        if compact_field:
-            object.__setattr__(cfg.translation, compact_field, True)
         object.__setattr__(cfg.translation, "streamer_profile", profile)
         object.__setattr__(cfg.translation, "use_profile", use_profile)
         try:
             return effective_system_prompt_for_engine(engine, "FULL PRIMARY PROMPT")
         finally:
-            if compact_field:
-                object.__setattr__(cfg.translation, compact_field, original["compact"])
             object.__setattr__(cfg.translation, "streamer_profile", original["profile"])
             object.__setattr__(cfg.translation, "use_profile", original["use_profile"])
 

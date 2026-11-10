@@ -14,19 +14,16 @@ from pathlib import Path
 
 from config import cfg
 from modules.activity_context import (
-    activity_prompt_capsule,
     activity_snapshot_metadata,
     bind_activity_snapshot,
     bound_activity_snapshot,
     capture_effective_activity_snapshot,
-    effective_activity_value,
     effective_profile_id,
     normalize_activity,
 )
 from modules.conversation_history import ConversationHistory
 from modules.profile_context import (
     bound_profile_snapshot,
-    effective_profile_applied,
     profile_state,
 )
 from modules.session_context import HistoryCohort, LiveSessionSnapshot
@@ -41,11 +38,6 @@ from modules.provisional_subtitles import (
     ProvisionalCandidate,
     deepseek_provisional_eligible,
     provisional_fingerprint,
-)
-from modules.translation_prompts import (
-    _BASE_PROMPT,
-    _BASE_PROMPT_TAIL,
-    get_translation_profile,
 )
 from modules.translation_engines import (
     TranslationEngine,
@@ -1634,35 +1626,15 @@ class Translator:
 
 
 def _compose_system_prompt(entity_capsule: str = "") -> str:
-    """Shared between Translator._build_system_prompt and the probe thread (L5).
+    """Request-local prompt sections handed to the engine adapters.
 
-    Pure function of config since PromptEvolver was removed (2026-06-12):
-    prompt_ver is now stable for a given base prompt + profile selection.
+    Each provider builds its own system prompt (``effective_system_prompt_for_engine``:
+    DeepSeek's capsule prompt, Groq's compact prompt) and adds the profile,
+    live concision and manual activity itself. Only the request entity capsule
+    travels through here. The 10 KB shared base prompt that used to sit in
+    front of it reached no provider and was removed on 2026-11-10.
     """
-    system_prompt = _BASE_PROMPT
-
-    if effective_profile_applied(cfg.translation.use_profile):
-        profile_id = effective_profile_id(cfg.active_streamer_profile)
-        streamer_profile = get_translation_profile(profile_id)
-        if streamer_profile:
-            system_prompt += "\n\n" + streamer_profile
-            log.debug("Appended streamer profile: %s", profile_id)
-
-    # Manual session state (orthogonal to profiles, applies even with
-    # use_profile=False): one labeled background line, never source text.
-    activity_capsule = activity_prompt_capsule(
-        effective_activity_value(cfg.translation.current_activity)
-    )
-    if activity_capsule:
-        system_prompt += "\n\n" + activity_capsule
-
-    if entity_capsule:
-        system_prompt += "\n\n" + entity_capsule
-
-    # Output rules go last so profile/background sections never sit after the
-    # final instruction the model is supposed to obey.
-    system_prompt += _BASE_PROMPT_TAIL
-    return system_prompt
+    return entity_capsule
 
 
 if __name__ == "__main__":

@@ -164,8 +164,6 @@ from modules.provisional_subtitles import (
     provisional_fingerprint,
 )
 from modules.translation_prompts import (
-    _BASE_PROMPT,
-    _build_base_prompt,
     get_translation_profile,
     translation_profile_ids,
 )
@@ -1232,10 +1230,6 @@ def _claude_resp(text: str) -> MagicMock:
     return r
 
 
-def _sys_prompt(t: "Translator") -> str:
-    return _BASE_PROMPT
-
-
 @contextmanager
 def _active_translation_profile(profile_id: str, use_profile: bool = True):
     from config import cfg
@@ -1329,46 +1323,7 @@ class TestCorrectionRecording(unittest.TestCase):
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-class TestBuildBasePrompt(unittest.TestCase):
-
-    def test_contains_target_lang(self):
-        from config import cfg
-        self.assertIn(cfg.translation.target_lang, _build_base_prompt())
-
-    def test_contains_all_slang(self):
-        from config import cfg
-        prompt = _build_base_prompt()
-        for ko, zh in cfg.translation.slang.items():
-            self.assertIn(ko, prompt)
-            self.assertIn(zh, prompt)
-
-    def test_contains_rules(self):
-        prompt = _build_base_prompt()
-        self.assertIn("Output the translation only", prompt)
-        self.assertIn("Preserve As-Is", prompt)
-        self.assertIn("STT", prompt)
-
-    def test_live_mode_stt_section(self):
-        from config import cfg
-        orig = cfg.translation.translation_mode
-        object.__setattr__(cfg.translation, "translation_mode", "live")
-        try:
-            prompt = _build_base_prompt()
-            self.assertIn("STT Correction - Live Mode", prompt)
-            self.assertNotIn("STT Correction - Clip Mode", prompt)
-        finally:
-            object.__setattr__(cfg.translation, "translation_mode", orig)
-
-    def test_clip_mode_stt_section(self):
-        from config import cfg
-        orig = cfg.translation.translation_mode
-        object.__setattr__(cfg.translation, "translation_mode", "clip")
-        try:
-            prompt = _build_base_prompt()
-            self.assertIn("STT Correction - Clip Mode", prompt)
-            self.assertNotIn("STT Correction - Live Mode", prompt)
-        finally:
-            object.__setattr__(cfg.translation, "translation_mode", orig)
+class TestTranslationProfileHelpers(unittest.TestCase):
 
     def test_get_translation_profile_returns_profile_text(self):
         self.assertTrue(get_translation_profile("hades_chxxnnx"))
@@ -1381,31 +1336,6 @@ class TestBuildBasePrompt(unittest.TestCase):
 
         expected = known_profile_ids() - {""}
         self.assertEqual(translation_profile_ids(), expected)
-
-    def test_translator_uses_translation_profile_helper(self):
-        translator = _make_translator()
-
-        with patch("modules.translator.get_translation_profile", return_value="PROFILE TEXT") as helper:
-            prompt = translator._build_system_prompt()
-
-        self.assertIn("PROFILE TEXT", prompt)
-        helper.assert_called_once()
-
-    def test_translator_skips_profile_helper_when_profiles_disabled(self):
-        from config import cfg
-
-        translator = _make_translator()
-        orig = cfg.translation.use_profile
-        object.__setattr__(cfg.translation, "use_profile", False)
-        try:
-            with patch("modules.translator.get_translation_profile") as helper:
-                prompt = translator._build_system_prompt()
-        finally:
-            object.__setattr__(cfg.translation, "use_profile", orig)
-
-        self.assertNotIn("PROFILE TEXT", prompt)
-        helper.assert_not_called()
-
 
 class TestBuildUserMessage(unittest.TestCase):
 
@@ -4240,15 +4170,12 @@ class TestTranslateOptimizations(unittest.TestCase):
 
         t = _make_translator()
         groq = _mock_engine("groq")
-        original_compact = cfg.translation.groq_translation_compact_prompt
         original_profile = cfg.translation.use_profile
-        object.__setattr__(cfg.translation, "groq_translation_compact_prompt", True)
         object.__setattr__(cfg.translation, "use_profile", False)
         try:
             base_hash = t._prompt_version("FULL PRIMARY PROMPT")
             groq_hash = t._prompt_version_for_engine(groq, "FULL PRIMARY PROMPT")
         finally:
-            object.__setattr__(cfg.translation, "groq_translation_compact_prompt", original_compact)
             object.__setattr__(cfg.translation, "use_profile", original_profile)
 
         self.assertNotEqual(base_hash, groq_hash)
@@ -4284,6 +4211,7 @@ class TestTranslateOptimizations(unittest.TestCase):
 
     def test_profile_prompt_version_changes_between_profiles(self):
         t = _make_translator()
+        t._engines = [_mock_engine("deepseek")]
 
         with _active_translation_profile("hades_chxxnnx"):
             hades_prompt_version = t._get_prompt_version_hash()

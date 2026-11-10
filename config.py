@@ -195,8 +195,6 @@ class _Translation:
     # use low to avoid spending latency on hidden reasoning.
     groq_translation_reasoning_effort: str = "low"
     groq_translation_timeout: int = 12
-    # Keep Groq fallback below on-demand TPM limits.
-    groq_translation_compact_prompt: bool = True
     groq_translation_max_tokens: int = 512
     groq_translation_retry_max_tokens: int = 256
     groq_translation_context_window: int = 2
@@ -258,10 +256,10 @@ class _Translation:
     # Missing confidence, forced cuts and short/Jamo loops remain fail-closed.
     repetition_confidence_exempt_enabled: bool = True
     max_subtitle_output_delay_ms: int = 30000
-    # Translation mode — controls the STT correction section in the system prompt.
-    # Options: "live" (default, real-time STT noise handling), "clip" (conservative, preserves structure)
+    # Translation mode. "live" (default) adds the subtitle-length and self-check
+    # sections to the DeepSeek and Groq prompts; "clip" leaves them out.
     translation_mode: str        = "live"
-    # Streamer-specific few-shot profile appended to base prompt.
+    # Streamer profile: DeepSeek gets the whole profile, Groq its glossary block.
     # Options: "" (general only), "stellive_hina", "isegye_lilpa" (Isegye Idol group), "hades_chxxnnx", "mwmeu", "irise", "url"
     streamer_profile: str        = "mwmeu"
     use_profile:      bool       = True   # set False to strip profile regardless of streamer_profile

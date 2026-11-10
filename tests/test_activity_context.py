@@ -27,7 +27,7 @@ from modules.translation_engines import (
     effective_system_prompt_for_engine,
     engine_chain_config_key,
 )
-from modules.translator import Translator, _compose_system_prompt
+from modules.translator import Translator
 
 
 def test_normalize_activity_is_one_bounded_unicode_line():
@@ -460,7 +460,7 @@ def test_bound_snapshot_wins_over_inflight_global_manual_change():
     try:
         with bind_activity_snapshot(snapshot):
             object.__setattr__(cfg.translation, "current_activity", "Hades")
-            prompt = _compose_system_prompt()
+            prompt = effective_system_prompt_for_engine("deepseek", "")
 
         assert effective_activity_value(cfg.translation.current_activity) == "Hades"
     finally:
@@ -475,8 +475,8 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
     seen = {}
 
     class SwitchingEngine:
-        engine_name = "nvidia"
-        model_name = "fake-nvidia"
+        engine_name = "deepseek"
+        model_name = "fake-deepseek"
         available = True
 
         def translate(self, text, system_prompt, incomplete, history=None):
@@ -498,7 +498,6 @@ def test_translate_event_keeps_prompt_engine_signature_and_cache_version_on_snap
         object.__setattr__(cfg.translation, "current_activity", original)
 
     assert outcome.status == "success"
-    assert "StarCraft" in seen["system_prompt"]
     assert "Hades" not in seen["system_prompt"]
     assert "StarCraft" in seen["effective_prompt"]
     assert "Hades" not in seen["effective_prompt"]

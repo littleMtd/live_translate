@@ -734,8 +734,6 @@ def _append_live_semantic_self_check(prompt: str) -> str:
 
 
 def _groq_system_prompt(system_prompt: str) -> str:
-    if not bool(cfg.translation.groq_translation_compact_prompt):
-        return _append_live_semantic_self_check(system_prompt)
     profile_id = effective_profile_id(getattr(cfg, "active_streamer_profile", ""))
     prompt = _COMPACT_SYSTEM_PROMPT
     if cfg.translation.translation_mode == "live":

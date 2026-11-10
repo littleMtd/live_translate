@@ -2930,12 +2930,12 @@ def test_shadow_timeout_event_uses_bounded_provider_error_fields():
 
 def test_automatic_shadow_cannot_change_translation_capsule_or_stt_terms():
     from modules.scene_stt_terms import terms_for_activity
-    from modules.translator import _compose_system_prompt
+    from modules.translation_engines import effective_system_prompt_for_engine
 
     original = cfg.translation.current_activity
     object.__setattr__(cfg.translation, "current_activity", "Minecraft")
     try:
-        prompt_before = _compose_system_prompt()
+        prompt_before = effective_system_prompt_for_engine("deepseek", "")
         terms_before = terms_for_activity(cfg.translation.current_activity)
         updater, *_ = make_updater(
             frames=[frame(20), frame(90)],
@@ -2946,7 +2946,7 @@ def test_automatic_shadow_cannot_change_translation_capsule_or_stt_terms():
         assert updater.tick() is not None
 
         assert cfg.translation.current_activity == "Minecraft"
-        assert _compose_system_prompt() == prompt_before
+        assert effective_system_prompt_for_engine("deepseek", "") == prompt_before
         assert terms_for_activity(cfg.translation.current_activity) == terms_before
     finally:
         object.__setattr__(cfg.translation, "current_activity", original)

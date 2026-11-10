@@ -234,7 +234,8 @@ def test_requested_profile_drives_probe_and_stt_when_cfg_differs(monkeypatch):
     import threading
     from modules import translator, stt
     from modules.profile_context import ProfileState, bound_profile_snapshot, build_registry_stt_glossary
-    from modules.translator import get_translation_profile
+    from modules.translation_prompts import get_translation_profile
+    from modules.translation_engines import effective_system_prompt_for_engine
     state = ProfileState(main.profile_state.registry, source_profile_id=main.cfg.active_streamer_profile)
     for module in (main, translator, stt):
         monkeypatch.setattr(module, "profile_state", state)
@@ -256,7 +257,7 @@ def test_requested_profile_drives_probe_and_stt_when_cfg_differs(monkeypatch):
     monkeypatch.setattr(translator, "_build_engine_chain", lambda: [])
     def probe(engines, fallback, text, system_prompt, *args, **kwargs):
         seen["snapshot"] = bound_profile_snapshot()
-        seen["prompt"] = system_prompt
+        seen["prompt"] = effective_system_prompt_for_engine("deepseek", system_prompt)
         reached.set()
         stop.set()
     monkeypatch.setattr(translator, "probe_primary_recovery", probe)
